@@ -44,6 +44,8 @@ public struct BubbleWorld: Sendable {
     private var bubbleOrder: [BubbleID] = []
     private var broadPhase = BroadPhase()
     private var contactGraph = ContactGraph()
+    private var polygons: [PolygonID: RigidPolygon] = [:]
+    private var polygonOrder: [PolygonID] = []
 
     public init(configuration: WorldConfiguration, bounds: AABB? = nil) {
         self.configuration = configuration
@@ -113,6 +115,12 @@ public struct BubbleWorld: Sendable {
         queuedCommands.append(command)
     }
 
+    public mutating func addRigidPolygon(_ polygon: RigidPolygon) {
+        precondition(polygons[polygon.id] == nil)
+        polygons[polygon.id] = polygon
+        polygonOrder.append(polygon.id)
+    }
+
     @discardableResult
     public mutating func step() -> WorldStepReport {
         let commands = queuedCommands
@@ -125,6 +133,10 @@ public struct BubbleWorld: Sendable {
                 gravity = value
             case let .applyForce(id, force):
                 forces[id] = (forces[id] ?? .zero) + force
+            case let .setKinematicTransform(id, position, angleRadians, linearVelocity, angularVelocity):
+                guard var polygon = polygons[id] else { continue }
+                polygon.setKinematicTransform(position: position, angleRadians: angleRadians, linearVelocity: linearVelocity, angularVelocity: angularVelocity)
+                polygons[id] = polygon
             }
         }
 
@@ -199,6 +211,7 @@ public struct BubbleWorld: Sendable {
                     constraint.project(particles: &particles, timeStep: configuration.fixedTimeStep)
                 }
             }
+            solvePolygonContacts()
         }
         contactGraph.synchronizeContacts(with: activeContacts)
     }
@@ -211,6 +224,27 @@ public struct BubbleWorld: Sendable {
         contactGraph.synchronize(with: broadPhase.candidatePairs)
     }
 
+    private mutating func solvePolygonContacts() {
+        for polygonID in polygonOrder {
+            guard let polygon = polygons[polygonID], let polygonBounds = polygon.worldBounds else { continue }
+            for bubbleID in bubbleOrder {
+                guard let state = states[bubbleID],
+                      let bubbleBounds = AABB.enclosing(state.boundaryIndices.map({ particles[$0].position })),
+                      bubbleBounds.intersects(polygonBounds)
+                else { continue }
+                let contacts = PolygonContactGenerator.contacts(bubble: topology(for: state, id: bubbleID), polygon: polygon)
+                for contact in contacts {
+                    PolygonContactConstraint(
+                        particleIndex: state.boundaryIndices[contact.bubbleVertex],
+                        normal: contact.normal,
+                        penetration: contact.penetration,
+                        surfaceVelocity: contact.surfaceVelocity
+                    ).project(particles: &particles, timeStep: configuration.fixedTimeStep)
+                }
+            }
+        }
+    }
+
     private func topology(for state: BubbleState, id: BubbleID) -> BubbleTopology {
         BubbleTopology(
             id: id,
@@ -218,5 +252,11 @@ public struct BubbleWorld: Sendable {
             restArea: state.restArea,
             boundaryPoints: state.boundaryIndices.map { particles[$0].position }
         )
+    }
+}
+
+private extension AABB {
+    func intersects(_ other: AABB) -> Bool {
+        minimum.x <= other.maximum.x && maximum.x >= other.minimum.x && minimum.y <= other.maximum.y && maximum.y >= other.minimum.y
     }
 }

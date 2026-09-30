@@ -30,6 +30,17 @@ public struct RigidPolygon: Sendable {
         localVertices.map(transformToWorld)
     }
 
+    public var worldBoundaryEdges: [Segment] {
+        let vertices = worldVertices
+        return vertices.indices.map { index in
+            Segment(start: vertices[index], end: vertices[(index + 1) % vertices.count])
+        }
+    }
+
+    public var worldBounds: AABB? {
+        AABB.enclosing(worldVertices)
+    }
+
     public static func make(id: PolygonID, vertices: [Vector2], mode: RigidPolygonMode = .static) throws -> RigidPolygon {
         guard vertices.count >= 3 else { throw RigidPolygonError.tooFewVertices }
         guard Set(vertices).count == vertices.count else { throw RigidPolygonError.repeatedVertex }
