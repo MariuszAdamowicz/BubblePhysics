@@ -1,0 +1,20 @@
+name: BubblePhysicsBench
+options:
+  bundleIdPrefix: com.mariuszadamowicz
+packages:
+  BubblePhysics:
+    path: ../../..
+targets:
+  BubblePhysicsBench:
+    type: application
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      - App
+    dependencies:
+      - package: BubblePhysics
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.mariuszadamowicz.BubblePhysicsBench
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: 5.0
