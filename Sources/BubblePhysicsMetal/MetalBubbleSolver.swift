@@ -2,9 +2,23 @@ import Foundation
 import Metal
 import BubblePhysics
 
+public enum MetalShaderLibraryOrigin: Equatable, Sendable {
+    case compiledBundle
+    case runtimeSource
+}
+
+private struct ShaderLibraries {
+    let shape: MTLLibrary
+    let lbvh: MTLLibrary
+    let contact: MTLLibrary
+    let polygon: MTLLibrary
+    let origin: MetalShaderLibraryOrigin
+}
+
 public final class MetalBubbleSolver {
     public let device: MTLDevice
     public let loadedFunctionNames: Set<String>
+    public let shaderLibraryOrigin: MetalShaderLibraryOrigin
     private let capacityManager: MetalCapacityManager
     private let commandQueue: MTLCommandQueue
     private let predictionPipeline: MTLComputePipelineState
@@ -32,32 +46,25 @@ public final class MetalBubbleSolver {
         device: MTLDevice? = MTLCreateSystemDefaultDevice(),
         capacities: MetalBufferCapacities = .init()
     ) {
-        guard let device,
-              let shaderURL = Bundle.module.url(forResource: "BubblePhysicsKernels", withExtension: "metal"),
-              let source = try? String(contentsOf: shaderURL),
-              let library = try? device.makeLibrary(source: source, options: nil),
+        guard let device, let libraries = Self.loadShaderLibraries(device: device) else { return nil }
+        let library = libraries.shape
+        let lbvhLibrary = libraries.lbvh
+        let contactLibrary = libraries.contact
+        let polygonLibrary = libraries.polygon
+        guard
               let predictionFunction = library.makeFunction(name: "predictParticles"),
               let shapeFunction = library.makeFunction(name: "solveBubbleShape"),
               let boundsFunction = library.makeFunction(name: "solveWorldBounds"),
-              let lbvhURL = Bundle.module.url(forResource: "LBVHKernels", withExtension: "metal"),
-              let lbvhSource = try? String(contentsOf: lbvhURL),
-              let lbvhLibrary = try? device.makeLibrary(source: lbvhSource, options: nil),
               let aabbFunction = lbvhLibrary.makeFunction(name: "computeBubbleAABBs"),
               let pairFunction = lbvhLibrary.makeFunction(name: "emitCandidatePairs"),
               let keyFunction = lbvhLibrary.makeFunction(name: "encodeMortonKeys"),
               let sortFunction = lbvhLibrary.makeFunction(name: "radixSortMortonKeys"),
               let buildFunction = lbvhLibrary.makeFunction(name: "buildLBVH"),
-              let contactURL = Bundle.module.url(forResource: "ContactKernels", withExtension: "metal"),
-              let contactSource = try? String(contentsOf: contactURL),
-              let contactLibrary = try? device.makeLibrary(source: contactSource, options: nil),
               let reductionFunction = contactLibrary.makeFunction(name: "reduceCorrections"),
               let contactFunction = contactLibrary.makeFunction(name: "generateBubbleContacts"),
               let applyCorrectionFunction = contactLibrary.makeFunction(name: "applyCorrections"),
               let correctionSortFunction = contactLibrary.makeFunction(name: "sortCorrectionsByParticle"),
               let correctionGatherFunction = contactLibrary.makeFunction(name: "gatherCorrections"),
-              let polygonURL = Bundle.module.url(forResource: "PolygonKernels", withExtension: "metal"),
-              let polygonSource = try? String(contentsOf: polygonURL),
-              let polygonLibrary = try? device.makeLibrary(source: polygonSource, options: nil),
               let polygonFunction = polygonLibrary.makeFunction(name: "generatePolygonContacts"),
               let grabFunction = polygonLibrary.makeFunction(name: "applyGrabConstraint"),
               let commandQueue = device.makeCommandQueue(),
@@ -79,6 +86,7 @@ public final class MetalBubbleSolver {
         else { return nil }
 
         self.device = device
+        shaderLibraryOrigin = libraries.origin
         loadedFunctionNames = ["predictParticles", "solveBubbleShape", "solveWorldBounds", "computeBubbleAABBs", "emitCandidatePairs"]
         capacityManager = MetalCapacityManager(capacities: capacities)
         self.commandQueue = commandQueue
@@ -97,6 +105,24 @@ public final class MetalBubbleSolver {
         self.correctionGatherPipeline = correctionGatherPipeline
         self.polygonPipeline = polygonPipeline
         self.grabPipeline = grabPipeline
+    }
+
+    private static func loadShaderLibraries(device: MTLDevice) -> ShaderLibraries? {
+        if let compiled = try? device.makeDefaultLibrary(bundle: Bundle.module) {
+            return ShaderLibraries(shape: compiled, lbvh: compiled, contact: compiled, polygon: compiled, origin: .compiledBundle)
+        }
+        func sourceLibrary(_ name: String) -> MTLLibrary? {
+            guard let url = Bundle.module.url(forResource: name, withExtension: "metal"),
+                  let source = try? String(contentsOf: url)
+            else { return nil }
+            return try? device.makeLibrary(source: source, options: nil)
+        }
+        guard let shape = sourceLibrary("BubblePhysicsKernels"),
+              let lbvh = sourceLibrary("LBVHKernels"),
+              let contact = sourceLibrary("ContactKernels"),
+              let polygon = sourceLibrary("PolygonKernels")
+        else { return nil }
+        return ShaderLibraries(shape: shape, lbvh: lbvh, contact: contact, polygon: polygon, origin: .runtimeSource)
     }
 
     public func candidatePairs(snapshot: MetalWorldSnapshot) async throws -> [MetalBubblePair] {

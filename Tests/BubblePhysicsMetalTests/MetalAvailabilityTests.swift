@@ -7,5 +7,10 @@ final class MetalAvailabilityTests: XCTestCase {
 
         XCTAssertTrue(solver.isAvailable)
         XCTAssertTrue(solver.loadedFunctionNames.contains("predictParticles"))
+#if os(iOS)
+        XCTAssertEqual(solver.shaderLibraryOrigin, .compiledBundle)
+#else
+        XCTAssertEqual(solver.shaderLibraryOrigin, .runtimeSource)
+#endif
     }
 }
