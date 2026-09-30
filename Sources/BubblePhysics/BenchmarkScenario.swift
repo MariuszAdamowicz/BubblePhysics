@@ -1,0 +1,58 @@
+import Foundation
+
+public struct BenchmarkBubbleSeed: Equatable, Sendable {
+    public let id: BubbleID
+    public let center: Vector2
+    public let restArea: Float
+}
+
+public struct BenchmarkScenario: Sendable {
+    public let configuration: WorldConfiguration
+    public let bounds: AABB
+    public let seeds: [BenchmarkBubbleSeed]
+
+    public static let iPhoneX: BenchmarkScenario = {
+        let configuration = WorldConfiguration.default
+        let bounds = AABB(minimum: .zero, maximum: Vector2(x: 375, y: 812))
+        let seeds = (0..<300).map { index in
+            let column = index % 15
+            let row = index / 15
+            let center = Vector2(x: 12.5 + Float(column) * 25, y: 20 + Float(row) * 40)
+            let radius: Float = index % 3 == 0 ? 14 : (index % 3 == 1 ? 16 : 18)
+            return BenchmarkBubbleSeed(id: BubbleID(rawValue: index + 1), center: center, restArea: .pi * radius * radius)
+        }
+        return BenchmarkScenario(configuration: configuration, bounds: bounds, seeds: seeds)
+    }()
+
+    public func makeWorld() -> BubbleWorld {
+        var world = BubbleWorld(configuration: configuration, bounds: bounds)
+        for seed in seeds {
+            let allocated = world.addBubble(center: seed.center, restArea: seed.restArea)
+            precondition(allocated == seed.id)
+        }
+        return world
+    }
+}
+
+public struct BenchmarkReport: Equatable, Sendable {
+    public let stepCount: Int
+    public let p50Milliseconds: Double
+    public let p95Milliseconds: Double
+    public let finalDiagnostics: WorldDiagnostics
+
+    public static func measure(scenario: BenchmarkScenario = .iPhoneX, steps: Int) -> BenchmarkReport {
+        precondition(steps > 0)
+        var world = scenario.makeWorld()
+        var samples: [Double] = []
+        samples.reserveCapacity(steps)
+        for _ in 0..<steps {
+            let start = Date()
+            _ = world.step()
+            samples.append(Date().timeIntervalSince(start) * 1_000)
+        }
+        let sorted = samples.sorted()
+        let p50 = sorted[sorted.count / 2]
+        let p95 = sorted[min(sorted.count - 1, Int(Double(sorted.count - 1) * 0.95))]
+        return BenchmarkReport(stepCount: steps, p50Milliseconds: p50, p95Milliseconds: p95, finalDiagnostics: world.step().diagnostics)
+    }
+}
