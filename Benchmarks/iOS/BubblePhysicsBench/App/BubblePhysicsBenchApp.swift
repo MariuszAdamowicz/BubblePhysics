@@ -47,12 +47,15 @@ private struct BenchmarkView: View {
                 }
                 await MainActor.run {
                     result = String(
-                        format: "METAL · p50 %.2f ms · p95 %.2f ms\nKształt %.2f · kontakty %.2f · interakcje %.2f ms\nCząstki %d · kandydaci %d · kontakty %d\nOverflow %@ · non-finite %@",
+                        format: "METAL · p50 %.2f ms · p95 %.2f ms\nKształt %.2f · kontakty %.2f · interakcje %.2f ms\n↳ broad %.2f · prep CPU %.2f · solve GPU %.2f ms\nCząstki %d · kandydaci %d · kontakty %d\nOverflow %@ · non-finite %@",
                         report.p50Milliseconds,
                         report.p95Milliseconds,
                         report.shapeMilliseconds,
                         report.contactMilliseconds,
                         report.interactionMilliseconds,
+                        report.contactBroadPhaseMilliseconds,
+                        report.contactPreparationMilliseconds,
+                        report.contactSolveMilliseconds,
                         report.particleCount,
                         report.candidatePairCount,
                         report.contactCount,

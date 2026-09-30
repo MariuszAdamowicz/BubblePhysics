@@ -248,8 +248,21 @@ public final class MetalBubbleSolver {
     }
 
     public func solveContacts(snapshot: MetalWorldSnapshot, configuration: WorldConfiguration) async throws -> MetalContactStepResult {
+        let broadPhaseStart = ProcessInfo.processInfo.systemUptime
         let pairs = try await candidatePairs(snapshot: snapshot)
-        guard !pairs.isEmpty else { return contactResult(particles: snapshot.particles, ranges: snapshot.bubbleRanges, candidatePairCount: 0, commandPassCount: 0) }
+        let broadPhaseMilliseconds = (ProcessInfo.processInfo.systemUptime - broadPhaseStart) * 1_000
+        guard !pairs.isEmpty else {
+            return contactResult(
+                particles: snapshot.particles,
+                ranges: snapshot.bubbleRanges,
+                candidatePairCount: 0,
+                commandPassCount: 0,
+                broadPhaseMilliseconds: broadPhaseMilliseconds,
+                preparationMilliseconds: 0,
+                solveMilliseconds: 0
+            )
+        }
+        let preparationStart = ProcessInfo.processInfo.systemUptime
         let preparation: ContactPreparation
         if let cachedContactPreparation,
            cachedContactPreparation.pairs == pairs,
@@ -260,6 +273,7 @@ public final class MetalBubbleSolver {
             cachedContactPreparation = preparation
             contactPreparationBuildCount += 1
         }
+        let preparationMilliseconds = (ProcessInfo.processInfo.systemUptime - preparationStart) * 1_000
         let pairIndices = preparation.pairIndices
         let pairWork = preparation.pairWork
         let correctionTemplates = preparation.correctionTemplates
@@ -268,6 +282,7 @@ public final class MetalBubbleSolver {
         let sortedCorrectionCount = preparation.sortedCorrectionCount
         let emptySortedCorrections = (0..<sortedCorrectionCount).map { MetalCorrection(particleIndex: .max, sourceIndex: UInt32($0), delta: .zero) }
         _ = capacityManager.ensureCapacity(for: MetalBufferRequirements(pairs: pairs.count, contacts: pairs.count, corrections: correctionCapacity))
+        let solveStart = ProcessInfo.processInfo.systemUptime
         guard let particleBuffer = makeBuffer(snapshot.particles), let rangeBuffer = makeBuffer(snapshot.bubbleRanges), let pairBuffer = makeBuffer(pairWork), let distanceBuffer = makeBuffer(snapshot.distanceConstraints, minimumCount: 1), let areaBuffer = makeBuffer(snapshot.areaConstraints, minimumCount: 1), let correctionBuffer = makeBuffer(correctionTemplates), let gatherOrderBuffer = makeBuffer(gatherOrder), let sortedCorrectionBuffer = makeBuffer(emptySortedCorrections), let reducedBuffer = device.makeBuffer(length: snapshot.particles.count * MemoryLayout<SIMD2<Float>>.stride, options: .storageModeShared), let commandBuffer = commandQueue.makeCommandBuffer() else { throw MetalSolverError.bufferAllocationFailed }
         reducedBuffer.contents().initializeMemory(as: UInt8.self, repeating: 0, count: reducedBuffer.length)
         var pairCount = UInt32(pairIndices.count); var encodedCorrectionCount = UInt32(sortedCorrectionCount); var activeCorrectionCount = UInt32(correctionCapacity); var particleCount = UInt32(snapshot.particles.count)
@@ -295,8 +310,17 @@ public final class MetalBubbleSolver {
         }
         commandBuffer.commit(); await commandBuffer.completed()
         guard commandBuffer.status == .completed else { throw MetalSolverError.commandExecutionFailed }
+        let solveMilliseconds = (ProcessInfo.processInfo.systemUptime - solveStart) * 1_000
         let pointer = particleBuffer.contents().bindMemory(to: MetalParticle.self, capacity: snapshot.particles.count)
-        return contactResult(particles: Array(UnsafeBufferPointer(start: pointer, count: snapshot.particles.count)), ranges: snapshot.bubbleRanges, candidatePairCount: pairs.count, commandPassCount: configuration.solverIterations * 5)
+        return contactResult(
+            particles: Array(UnsafeBufferPointer(start: pointer, count: snapshot.particles.count)),
+            ranges: snapshot.bubbleRanges,
+            candidatePairCount: pairs.count,
+            commandPassCount: configuration.solverIterations * 5,
+            broadPhaseMilliseconds: broadPhaseMilliseconds,
+            preparationMilliseconds: preparationMilliseconds,
+            solveMilliseconds: solveMilliseconds
+        )
     }
 
     private func makeContactPreparation(pairs: [MetalBubblePair], ranges: [MetalBubbleRange]) -> ContactPreparation {
@@ -339,7 +363,15 @@ public final class MetalBubbleSolver {
         )
     }
 
-    private func contactResult(particles: [MetalParticle], ranges: [MetalBubbleRange], candidatePairCount: Int, commandPassCount: Int) -> MetalContactStepResult {
+    private func contactResult(
+        particles: [MetalParticle],
+        ranges: [MetalBubbleRange],
+        candidatePairCount: Int,
+        commandPassCount: Int,
+        broadPhaseMilliseconds: Double,
+        preparationMilliseconds: Double,
+        solveMilliseconds: Double
+    ) -> MetalContactStepResult {
         let centers = ranges.map { particles[Int($0.centerIndex)].position }
         let separation = centers.count >= 2 ? centers[1] - centers[0] : .zero
         let distance = sqrt(separation.x * separation.x + separation.y * separation.y)
@@ -353,7 +385,16 @@ public final class MetalBubbleSolver {
             }
             return abs(doubleArea) * 0.5
         }
-        return MetalContactStepResult(particles: particles, centerDistance: distance, areas: areas, candidatePairCount: candidatePairCount, commandPassCount: commandPassCount)
+        return MetalContactStepResult(
+            particles: particles,
+            centerDistance: distance,
+            areas: areas,
+            candidatePairCount: candidatePairCount,
+            commandPassCount: commandPassCount,
+            broadPhaseMilliseconds: broadPhaseMilliseconds,
+            preparationMilliseconds: preparationMilliseconds,
+            solveMilliseconds: solveMilliseconds
+        )
     }
 
     public func solveInteractions(snapshot: MetalWorldSnapshot, configuration: WorldConfiguration) async throws -> MetalInteractionStepResult {
@@ -560,6 +601,9 @@ public struct MetalContactStepResult: Equatable, Sendable {
     public let areas: [Float]
     public let candidatePairCount: Int
     public let commandPassCount: Int
+    public let broadPhaseMilliseconds: Double
+    public let preparationMilliseconds: Double
+    public let solveMilliseconds: Double
 }
 
 public struct MetalInteractionStepResult: Equatable, Sendable { public let particles: [MetalParticle] }

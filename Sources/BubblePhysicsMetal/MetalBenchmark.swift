@@ -7,6 +7,9 @@ public struct MetalBenchmarkReport: Equatable, Sendable {
     public let p95Milliseconds: Double
     public let shapeMilliseconds: Double
     public let contactMilliseconds: Double
+    public let contactBroadPhaseMilliseconds: Double
+    public let contactPreparationMilliseconds: Double
+    public let contactSolveMilliseconds: Double
     public let interactionMilliseconds: Double
     public let particleCount: Int
     public let candidatePairCount: Int
@@ -24,6 +27,7 @@ public struct MetalBenchmarkReport: Equatable, Sendable {
         var snapshot = MetalWorldSnapshot(world: scenario.makeWorld())
         var samples: [Double] = []
         var shapeTotal = 0.0, contactTotal = 0.0, interactionTotal = 0.0
+        var contactBroadPhaseTotal = 0.0, contactPreparationTotal = 0.0, contactSolveTotal = 0.0
         var candidates = 0
         for index in 0..<steps {
             let stepStart = Date()
@@ -34,6 +38,9 @@ public struct MetalBenchmarkReport: Equatable, Sendable {
             let contactStart = Date()
             let contacts = try await solver.solveContacts(snapshot: snapshot, configuration: scenario.configuration)
             contactTotal += Date().timeIntervalSince(contactStart) * 1_000
+            contactBroadPhaseTotal += contacts.broadPhaseMilliseconds
+            contactPreparationTotal += contacts.preparationMilliseconds
+            contactSolveTotal += contacts.solveMilliseconds
             candidates = contacts.candidatePairCount
             snapshot = snapshot.replacingParticles(contacts.particles)
             if !snapshot.polygons.isEmpty || !snapshot.grabs.isEmpty {
@@ -53,6 +60,9 @@ public struct MetalBenchmarkReport: Equatable, Sendable {
             p95Milliseconds: sorted[min(sorted.count - 1, Int(Double(sorted.count - 1) * 0.95))],
             shapeMilliseconds: shapeTotal / divisor,
             contactMilliseconds: contactTotal / divisor,
+            contactBroadPhaseMilliseconds: contactBroadPhaseTotal / divisor,
+            contactPreparationMilliseconds: contactPreparationTotal / divisor,
+            contactSolveMilliseconds: contactSolveTotal / divisor,
             interactionMilliseconds: interactionTotal / divisor,
             particleCount: snapshot.particles.count,
             candidatePairCount: candidates,

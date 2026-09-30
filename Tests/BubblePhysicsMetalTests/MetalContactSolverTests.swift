@@ -73,6 +73,9 @@ final class MetalContactSolverTests: XCTestCase {
         )
 
         XCTAssertLessThanOrEqual(result.commandPassCount, WorldConfiguration.default.solverIterations * 5)
+        XCTAssertGreaterThanOrEqual(result.broadPhaseMilliseconds, 0)
+        XCTAssertGreaterThanOrEqual(result.preparationMilliseconds, 0)
+        XCTAssertGreaterThanOrEqual(result.solveMilliseconds, 0)
     }
 
     func testUnchangedCandidatePairsReuseContactPreparation() async throws {
