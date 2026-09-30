@@ -16,11 +16,12 @@ public struct BubblePair: Hashable, Comparable, Sendable {
 public struct ContactGraph: Sendable {
     private var activePairs: Set<BubblePair> = []
     private var activeContactPairs: Set<BubblePair> = []
+    private(set) var orderedPairs: [BubblePair] = []
 
     public init() {}
 
     public var pairs: [BubblePair] {
-        activePairs.sorted()
+        orderedPairs
     }
 
     public var contacts: [BubblePair] {
@@ -29,6 +30,7 @@ public struct ContactGraph: Sendable {
 
     public mutating func synchronize(with candidates: [BubblePair]) {
         activePairs = Set(candidates)
+        orderedPairs = activePairs.sorted()
         activeContactPairs.formIntersection(activePairs)
     }
 

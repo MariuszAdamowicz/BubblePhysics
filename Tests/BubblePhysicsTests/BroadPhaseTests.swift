@@ -65,6 +65,16 @@ final class BroadPhaseTests: XCTestCase {
         XCTAssertTrue(graph.pairs.isEmpty)
     }
 
+    func testContactGraphCachesOrderedPairsAtSynchronization() {
+        let first = BubblePair(BubbleID(rawValue: 1), BubbleID(rawValue: 3))
+        let second = BubblePair(BubbleID(rawValue: 1), BubbleID(rawValue: 2))
+        var graph = ContactGraph()
+
+        graph.synchronize(with: [first, second])
+
+        XCTAssertEqual(graph.orderedPairs, [second, first])
+    }
+
     func testCandidatePairsHaveStableIdentifierOrder() {
         var phase = BroadPhase()
         phase.upsert(BubbleID(rawValue: 3), bounds: box(0, 0, 10, 10))

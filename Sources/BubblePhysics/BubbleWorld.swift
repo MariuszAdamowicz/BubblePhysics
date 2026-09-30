@@ -310,6 +310,7 @@ public struct BubbleWorld: Sendable {
         timings.shapeMilliseconds += Date().timeIntervalSince(resetStart) * 1_000
 
         var activeContacts: Set<BubblePair> = []
+        let candidatePairs = contactGraph.pairs
         for _ in 0..<configuration.solverIterations {
             let shapeStart = Date()
             for id in bubbleOrder {
@@ -326,7 +327,7 @@ public struct BubbleWorld: Sendable {
             timings.shapeMilliseconds += Date().timeIntervalSince(shapeStart) * 1_000
 
             let bubbleContactStart = Date()
-            for pair in contactGraph.pairs {
+            for pair in candidatePairs {
                 guard let first = states[pair.first], let second = states[pair.second] else { continue }
                 let contacts = BubbleContactGenerator.contacts(
                     firstCenter: particles[first.centerIndex].position,
