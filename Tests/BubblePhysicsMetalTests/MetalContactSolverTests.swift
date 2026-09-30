@@ -72,7 +72,7 @@ final class MetalContactSolverTests: XCTestCase {
             configuration: .default
         )
 
-        XCTAssertLessThanOrEqual(result.commandPassCount, WorldConfiguration.default.solverIterations * 5)
+        XCTAssertEqual(result.commandPassCount, WorldConfiguration.default.solverIterations * 3)
         XCTAssertGreaterThanOrEqual(result.broadPhaseMilliseconds, 0)
         XCTAssertGreaterThanOrEqual(result.preparationMilliseconds, 0)
         XCTAssertGreaterThanOrEqual(result.solveMilliseconds, 0)

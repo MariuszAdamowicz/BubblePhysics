@@ -28,17 +28,20 @@ public final class MetalBubbleSolver {
     private let pairPipeline: MTLComputePipelineState
     private let keyPipeline: MTLComputePipelineState
     private let sortPipeline: MTLComputePipelineState
+    private let threadgroupSortPipeline: MTLComputePipelineState
     private let buildPipeline: MTLComputePipelineState
     private let reductionPipeline: MTLComputePipelineState
     private let contactPipeline: MTLComputePipelineState
     private let applyCorrectionPipeline: MTLComputePipelineState
     private let correctionSortPipeline: MTLComputePipelineState
     private let correctionGatherPipeline: MTLComputePipelineState
+    private let gatheredApplyPipeline: MTLComputePipelineState
     private let polygonPipeline: MTLComputePipelineState
     private let grabPipeline: MTLComputePipelineState
     private var cachedContactPreparation: ContactPreparation?
 
     public private(set) var lastBroadPhaseComparisonCount = 0
+    public private(set) var lastBroadPhaseCommandPassCount = 0
     public private(set) var contactPreparationBuildCount = 0
 
     public var isAvailable: Bool { true }
@@ -61,12 +64,14 @@ public final class MetalBubbleSolver {
               let pairFunction = lbvhLibrary.makeFunction(name: "emitCandidatePairs"),
               let keyFunction = lbvhLibrary.makeFunction(name: "encodeMortonKeys"),
               let sortFunction = lbvhLibrary.makeFunction(name: "radixSortMortonKeys"),
+              let threadgroupSortFunction = lbvhLibrary.makeFunction(name: "sortMortonKeysInThreadgroup"),
               let buildFunction = lbvhLibrary.makeFunction(name: "buildLBVH"),
               let reductionFunction = contactLibrary.makeFunction(name: "reduceCorrections"),
               let contactFunction = contactLibrary.makeFunction(name: "generateBubbleContacts"),
               let applyCorrectionFunction = contactLibrary.makeFunction(name: "applyCorrections"),
               let correctionSortFunction = contactLibrary.makeFunction(name: "sortCorrectionsByParticle"),
               let correctionGatherFunction = contactLibrary.makeFunction(name: "gatherCorrections"),
+              let gatheredApplyFunction = contactLibrary.makeFunction(name: "applyGatheredCorrections"),
               let polygonFunction = polygonLibrary.makeFunction(name: "generatePolygonContacts"),
               let grabFunction = polygonLibrary.makeFunction(name: "applyGrabConstraint"),
               let commandQueue = device.makeCommandQueue(),
@@ -77,12 +82,14 @@ public final class MetalBubbleSolver {
               let pairPipeline = try? device.makeComputePipelineState(function: pairFunction),
               let keyPipeline = try? device.makeComputePipelineState(function: keyFunction),
               let sortPipeline = try? device.makeComputePipelineState(function: sortFunction)
+              , let threadgroupSortPipeline = try? device.makeComputePipelineState(function: threadgroupSortFunction)
               , let buildPipeline = try? device.makeComputePipelineState(function: buildFunction),
               let reductionPipeline = try? device.makeComputePipelineState(function: reductionFunction),
               let contactPipeline = try? device.makeComputePipelineState(function: contactFunction),
               let applyCorrectionPipeline = try? device.makeComputePipelineState(function: applyCorrectionFunction)
               , let correctionSortPipeline = try? device.makeComputePipelineState(function: correctionSortFunction)
               , let correctionGatherPipeline = try? device.makeComputePipelineState(function: correctionGatherFunction)
+              , let gatheredApplyPipeline = try? device.makeComputePipelineState(function: gatheredApplyFunction)
               , let polygonPipeline = try? device.makeComputePipelineState(function: polygonFunction),
               let grabPipeline = try? device.makeComputePipelineState(function: grabFunction)
         else { return nil }
@@ -99,12 +106,14 @@ public final class MetalBubbleSolver {
         self.pairPipeline = pairPipeline
         self.keyPipeline = keyPipeline
         self.sortPipeline = sortPipeline
+        self.threadgroupSortPipeline = threadgroupSortPipeline
         self.buildPipeline = buildPipeline
         self.reductionPipeline = reductionPipeline
         self.contactPipeline = contactPipeline
         self.applyCorrectionPipeline = applyCorrectionPipeline
         self.correctionSortPipeline = correctionSortPipeline
         self.correctionGatherPipeline = correctionGatherPipeline
+        self.gatheredApplyPipeline = gatheredApplyPipeline
         self.polygonPipeline = polygonPipeline
         self.grabPipeline = grabPipeline
     }
@@ -165,23 +174,41 @@ public final class MetalBubbleSolver {
         dispatch(keyEncoder, pipeline: keyPipeline, count: bubbleCount)
         keyEncoder.endEncoding()
         var encodedSortCount = UInt32(sortCount)
-        var stage = 2
-        while stage <= sortCount {
-            var strideValue = stage / 2
-            while strideValue > 0 {
-                var encodedStage = UInt32(stage)
-                var encodedStride = UInt32(strideValue)
-                guard let sortEncoder = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
-                sortEncoder.setComputePipelineState(sortPipeline)
-                sortEncoder.setBuffer(keyBuffer, offset: 0, index: 0)
-                sortEncoder.setBytes(&encodedSortCount, length: MemoryLayout<UInt32>.stride, index: 1)
-                sortEncoder.setBytes(&encodedStage, length: MemoryLayout<UInt32>.stride, index: 2)
-                sortEncoder.setBytes(&encodedStride, length: MemoryLayout<UInt32>.stride, index: 3)
-                dispatch(sortEncoder, pipeline: sortPipeline, count: sortCount)
-                sortEncoder.endEncoding()
-                strideValue /= 2
+        var sortPassCount = 0
+        let sortMemoryLength = sortCount * MemoryLayout<SIMD2<UInt32>>.stride
+        if sortMemoryLength <= device.maxThreadgroupMemoryLength {
+            guard let sortEncoder = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
+            sortEncoder.setComputePipelineState(threadgroupSortPipeline)
+            sortEncoder.setBuffer(keyBuffer, offset: 0, index: 0)
+            sortEncoder.setBytes(&encodedSortCount, length: MemoryLayout<UInt32>.stride, index: 1)
+            sortEncoder.setThreadgroupMemoryLength(sortMemoryLength, index: 0)
+            let threadCount = min(sortCount, threadgroupSortPipeline.maxTotalThreadsPerThreadgroup)
+            sortEncoder.dispatchThreadgroups(
+                MTLSize(width: 1, height: 1, depth: 1),
+                threadsPerThreadgroup: MTLSize(width: threadCount, height: 1, depth: 1)
+            )
+            sortEncoder.endEncoding()
+            sortPassCount = 1
+        } else {
+            var stage = 2
+            while stage <= sortCount {
+                var strideValue = stage / 2
+                while strideValue > 0 {
+                    var encodedStage = UInt32(stage)
+                    var encodedStride = UInt32(strideValue)
+                    guard let sortEncoder = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
+                    sortEncoder.setComputePipelineState(sortPipeline)
+                    sortEncoder.setBuffer(keyBuffer, offset: 0, index: 0)
+                    sortEncoder.setBytes(&encodedSortCount, length: MemoryLayout<UInt32>.stride, index: 1)
+                    sortEncoder.setBytes(&encodedStage, length: MemoryLayout<UInt32>.stride, index: 2)
+                    sortEncoder.setBytes(&encodedStride, length: MemoryLayout<UInt32>.stride, index: 3)
+                    dispatch(sortEncoder, pipeline: sortPipeline, count: sortCount)
+                    sortEncoder.endEncoding()
+                    sortPassCount += 1
+                    strideValue /= 2
+                }
+                stage *= 2
             }
-            stage *= 2
         }
         var leafBase = UInt32(sortCount)
         var levelStart = UInt32(sortCount)
@@ -198,6 +225,7 @@ public final class MetalBubbleSolver {
         dispatch(leafEncoder, pipeline: buildPipeline, count: sortCount)
         leafEncoder.endEncoding()
         var parentCount = sortCount / 2
+        var treePassCount = 1
         while parentCount > 0 {
             levelStart = UInt32(parentCount)
             levelCount = UInt32(parentCount)
@@ -212,6 +240,7 @@ public final class MetalBubbleSolver {
             treeEncoder.setBytes(&levelCount, length: MemoryLayout<UInt32>.stride, index: 6)
             dispatch(treeEncoder, pipeline: buildPipeline, count: parentCount)
             treeEncoder.endEncoding()
+            treePassCount += 1
             parentCount /= 2
         }
         guard let pairEncoder = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
@@ -233,6 +262,7 @@ public final class MetalBubbleSolver {
         guard commandBuffer.status == .completed else { throw MetalSolverError.commandExecutionFailed }
         let count = Int(countBuffer.contents().bindMemory(to: UInt32.self, capacity: 1).pointee)
         lastBroadPhaseComparisonCount = Int(comparisonBuffer.contents().bindMemory(to: UInt32.self, capacity: 1).pointee)
+        lastBroadPhaseCommandPassCount = 3 + sortPassCount + treePassCount
         guard count <= capacities.pairs else { throw MetalSolverError.candidatePairOverflow }
         let records = pairBuffer.contents().bindMemory(to: SIMD2<UInt32>.self, capacity: count)
         return Array(UnsafeBufferPointer(start: records, count: count)).map { MetalBubblePair(firstID: $0.x, secondID: $0.y) }.sorted()
@@ -278,25 +308,26 @@ public final class MetalBubbleSolver {
         let pairWork = preparation.pairWork
         let correctionTemplates = preparation.correctionTemplates
         let gatherOrder = preparation.gatherOrder
+        let particleGatherRanges = preparation.particleGatherRanges
         let correctionCapacity = correctionTemplates.count
-        let sortedCorrectionCount = preparation.sortedCorrectionCount
-        let emptySortedCorrections = (0..<sortedCorrectionCount).map { MetalCorrection(particleIndex: .max, sourceIndex: UInt32($0), delta: .zero) }
         _ = capacityManager.ensureCapacity(for: MetalBufferRequirements(pairs: pairs.count, contacts: pairs.count, corrections: correctionCapacity))
         let solveStart = ProcessInfo.processInfo.systemUptime
-        guard let particleBuffer = makeBuffer(snapshot.particles), let rangeBuffer = makeBuffer(snapshot.bubbleRanges), let pairBuffer = makeBuffer(pairWork), let distanceBuffer = makeBuffer(snapshot.distanceConstraints, minimumCount: 1), let areaBuffer = makeBuffer(snapshot.areaConstraints, minimumCount: 1), let correctionBuffer = makeBuffer(correctionTemplates), let gatherOrderBuffer = makeBuffer(gatherOrder), let sortedCorrectionBuffer = makeBuffer(emptySortedCorrections), let reducedBuffer = device.makeBuffer(length: snapshot.particles.count * MemoryLayout<SIMD2<Float>>.stride, options: .storageModeShared), let commandBuffer = commandQueue.makeCommandBuffer() else { throw MetalSolverError.bufferAllocationFailed }
-        reducedBuffer.contents().initializeMemory(as: UInt8.self, repeating: 0, count: reducedBuffer.length)
-        var pairCount = UInt32(pairIndices.count); var encodedCorrectionCount = UInt32(sortedCorrectionCount); var activeCorrectionCount = UInt32(correctionCapacity); var particleCount = UInt32(snapshot.particles.count)
+        guard let particleBuffer = makeBuffer(snapshot.particles), let rangeBuffer = makeBuffer(snapshot.bubbleRanges), let pairBuffer = makeBuffer(pairWork), let distanceBuffer = makeBuffer(snapshot.distanceConstraints, minimumCount: 1), let areaBuffer = makeBuffer(snapshot.areaConstraints, minimumCount: 1), let correctionBuffer = makeBuffer(correctionTemplates), let gatherOrderBuffer = makeBuffer(gatherOrder), let particleGatherRangeBuffer = makeBuffer(particleGatherRanges), let commandBuffer = commandQueue.makeCommandBuffer() else { throw MetalSolverError.bufferAllocationFailed }
+        var pairCount = UInt32(pairIndices.count); var particleCount = UInt32(snapshot.particles.count)
         var bubbleCount = UInt32(snapshot.bubbleRanges.count)
         var timeStep = configuration.fixedTimeStep
         for _ in 0..<configuration.solverIterations {
             guard let contactEncoder = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
             contactEncoder.setComputePipelineState(contactPipeline); contactEncoder.setBuffer(particleBuffer, offset: 0, index: 0); contactEncoder.setBuffer(rangeBuffer, offset: 0, index: 1); contactEncoder.setBuffer(pairBuffer, offset: 0, index: 2); contactEncoder.setBuffer(correctionBuffer, offset: 0, index: 3); contactEncoder.setBytes(&pairCount, length: 4, index: 4); dispatch(contactEncoder, pipeline: contactPipeline, count: pairIndices.count); contactEncoder.endEncoding()
-            guard let gatherEncoder = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
-            gatherEncoder.setComputePipelineState(correctionGatherPipeline); gatherEncoder.setBuffer(correctionBuffer, offset: 0, index: 0); gatherEncoder.setBuffer(gatherOrderBuffer, offset: 0, index: 1); gatherEncoder.setBuffer(sortedCorrectionBuffer, offset: 0, index: 2); gatherEncoder.setBytes(&activeCorrectionCount, length: 4, index: 3); dispatch(gatherEncoder, pipeline: correctionGatherPipeline, count: correctionCapacity); gatherEncoder.endEncoding()
-            guard let reduceEncoder = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
-            reduceEncoder.setComputePipelineState(reductionPipeline); reduceEncoder.setBuffer(sortedCorrectionBuffer, offset: 0, index: 0); reduceEncoder.setBuffer(reducedBuffer, offset: 0, index: 1); reduceEncoder.setBytes(&encodedCorrectionCount, length: 4, index: 2); dispatch(reduceEncoder, pipeline: reductionPipeline, count: sortedCorrectionCount); reduceEncoder.endEncoding()
             guard let applyEncoder = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
-            applyEncoder.setComputePipelineState(applyCorrectionPipeline); applyEncoder.setBuffer(particleBuffer, offset: 0, index: 0); applyEncoder.setBuffer(reducedBuffer, offset: 0, index: 1); applyEncoder.setBytes(&particleCount, length: 4, index: 2); dispatch(applyEncoder, pipeline: applyCorrectionPipeline, count: snapshot.particles.count); applyEncoder.endEncoding()
+            applyEncoder.setComputePipelineState(gatheredApplyPipeline)
+            applyEncoder.setBuffer(correctionBuffer, offset: 0, index: 0)
+            applyEncoder.setBuffer(gatherOrderBuffer, offset: 0, index: 1)
+            applyEncoder.setBuffer(particleGatherRangeBuffer, offset: 0, index: 2)
+            applyEncoder.setBuffer(particleBuffer, offset: 0, index: 3)
+            applyEncoder.setBytes(&particleCount, length: 4, index: 4)
+            dispatch(applyEncoder, pipeline: gatheredApplyPipeline, count: snapshot.particles.count)
+            applyEncoder.endEncoding()
             guard let shapeEncoder = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
             shapeEncoder.setComputePipelineState(shapePipeline)
             shapeEncoder.setBuffer(particleBuffer, offset: 0, index: 0)
@@ -316,7 +347,7 @@ public final class MetalBubbleSolver {
             particles: Array(UnsafeBufferPointer(start: pointer, count: snapshot.particles.count)),
             ranges: snapshot.bubbleRanges,
             candidatePairCount: pairs.count,
-            commandPassCount: configuration.solverIterations * 5,
+            commandPassCount: configuration.solverIterations * 3,
             broadPhaseMilliseconds: broadPhaseMilliseconds,
             preparationMilliseconds: preparationMilliseconds,
             solveMilliseconds: solveMilliseconds
@@ -352,6 +383,19 @@ public final class MetalBubbleSolver {
         let gatherOrder = correctionTemplates.sorted {
             $0.particleIndex == $1.particleIndex ? $0.sourceIndex < $1.sourceIndex : $0.particleIndex < $1.particleIndex
         }.map(\.sourceIndex)
+        var particleGatherRanges = Array(repeating: SIMD2<UInt32>.zero, count: ranges.reduce(0) { partial, range in
+            max(partial, Int(range.boundaryStart + range.boundaryCount))
+        })
+        var cursor = 0
+        while cursor < gatherOrder.count {
+            let particleIndex = correctionTemplates[Int(gatherOrder[cursor])].particleIndex
+            let start = cursor
+            while cursor < gatherOrder.count,
+                  correctionTemplates[Int(gatherOrder[cursor])].particleIndex == particleIndex {
+                cursor += 1
+            }
+            particleGatherRanges[Int(particleIndex)] = SIMD2(UInt32(start), UInt32(cursor - start))
+        }
         return ContactPreparation(
             pairs: pairs,
             ranges: ranges,
@@ -359,7 +403,7 @@ public final class MetalBubbleSolver {
             pairWork: pairWork,
             correctionTemplates: correctionTemplates,
             gatherOrder: gatherOrder,
-            sortedCorrectionCount: nextPowerOfTwo(max(1, correctionTemplates.count))
+            particleGatherRanges: particleGatherRanges
         )
     }
 
@@ -634,7 +678,7 @@ private struct ContactPreparation {
     let pairWork: [MetalContactPairWork]
     let correctionTemplates: [MetalCorrection]
     let gatherOrder: [UInt32]
-    let sortedCorrectionCount: Int
+    let particleGatherRanges: [SIMD2<UInt32>]
 }
 
 public enum MetalSolverError: Error {

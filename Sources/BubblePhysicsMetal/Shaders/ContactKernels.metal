@@ -106,3 +106,21 @@ kernel void applyCorrections(
     particles[particleIndex].previousPosition += reduced[particleIndex];
     reduced[particleIndex] = float2(0.0f);
 }
+
+kernel void applyGatheredCorrections(
+    device const MetalCorrection *corrections [[buffer(0)]],
+    device const uint *sourceIndices [[buffer(1)]],
+    device const uint2 *particleRanges [[buffer(2)]],
+    device MetalParticle *particles [[buffer(3)]],
+    constant uint &particleCount [[buffer(4)]],
+    uint particleIndex [[thread_position_in_grid]]
+) {
+    if (particleIndex >= particleCount) { return; }
+    const uint2 range = particleRanges[particleIndex];
+    float2 sum = float2(0.0f);
+    for (uint offset = 0; offset < range.y; ++offset) {
+        sum += corrections[sourceIndices[range.x + offset]].delta;
+    }
+    particles[particleIndex].position += sum;
+    particles[particleIndex].previousPosition += sum;
+}

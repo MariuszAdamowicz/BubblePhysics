@@ -40,4 +40,13 @@ final class MetalBroadPhaseTests: XCTestCase {
 
         XCTAssertLessThan(solver.lastBroadPhaseComparisonCount, 6)
     }
+
+    func testThreeHundredBubbleBroadPhaseUsesOneSortPass() async throws {
+        guard let solver = MetalBubbleSolver() else { throw XCTSkip("Metal unavailable") }
+        let snapshot = MetalWorldSnapshot(world: BenchmarkScenario.iPhoneX.makeWorld())
+
+        _ = try await solver.candidatePairs(snapshot: snapshot)
+
+        XCTAssertLessThanOrEqual(solver.lastBroadPhaseCommandPassCount, 16)
+    }
 }
