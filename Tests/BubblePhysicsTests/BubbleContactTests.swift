@@ -28,6 +28,25 @@ final class BubbleContactTests: XCTestCase {
         XCTAssertTrue(contacts.contains { $0.penetration > 0 })
     }
 
+    func testIndexedContactsMatchTopologyContacts() {
+        let first = square(id: 1, center: Vector2(x: 0, y: 0), halfExtent: 5)
+        let second = square(id: 2, center: Vector2(x: 7, y: 0), halfExtent: 5)
+        var particles = ParticleStore()
+        let firstIndices = first.boundaryPoints.map { particles.append(Particle(position: $0)) }
+        let secondIndices = second.boundaryPoints.map { particles.append(Particle(position: $0)) }
+
+        let topologyContacts = BubbleContactGenerator.contacts(between: first, and: second)
+        let indexedContacts = BubbleContactGenerator.contacts(
+            firstCenter: first.center,
+            firstBoundaryIndices: firstIndices,
+            secondCenter: second.center,
+            secondBoundaryIndices: secondIndices,
+            particles: particles.particles
+        )
+
+        XCTAssertEqual(indexedContacts, topologyContacts)
+    }
+
     func testOverlappingBubblesSeparateWithoutLosingRestArea() {
         var world = BubbleWorld(configuration: .default)
         let first = world.addBubble(center: Vector2(x: 0, y: 0), restArea: .pi * 100)

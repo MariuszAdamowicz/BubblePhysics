@@ -328,7 +328,13 @@ public struct BubbleWorld: Sendable {
             let bubbleContactStart = Date()
             for pair in contactGraph.pairs {
                 guard let first = states[pair.first], let second = states[pair.second] else { continue }
-                let contacts = BubbleContactGenerator.contacts(between: topology(for: first, id: pair.first), and: topology(for: second, id: pair.second))
+                let contacts = BubbleContactGenerator.contacts(
+                    firstCenter: particles[first.centerIndex].position,
+                    firstBoundaryIndices: first.boundaryIndices,
+                    secondCenter: particles[second.centerIndex].position,
+                    secondBoundaryIndices: second.boundaryIndices,
+                    particles: particles.particles
+                )
                 guard !contacts.isEmpty else { continue }
                 activeContacts.insert(pair)
                 for contact in contacts {
