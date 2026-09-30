@@ -37,4 +37,24 @@ final class MetalContactSolverTests: XCTestCase {
 
         XCTAssertEqual(correction[2], SIMD2<Float>(1, 2))
     }
+
+    func testMetalDenseContactsRemainFiniteAndDeterministic() async throws {
+        guard let firstSolver = MetalBubbleSolver(), let secondSolver = MetalBubbleSolver() else {
+            throw XCTSkip("Metal unavailable")
+        }
+        var world = BubbleWorld(configuration: .default)
+        for row in 0..<3 {
+            for column in 0..<4 {
+                world.addBubble(center: Vector2(x: Float(column) * 7, y: Float(row) * 7), restArea: .pi * 25)
+            }
+        }
+        let snapshot = MetalWorldSnapshot(world: world)
+
+        let first = try await firstSolver.solveContacts(snapshot: snapshot, configuration: .default)
+        let second = try await secondSolver.solveContacts(snapshot: snapshot, configuration: .default)
+
+        XCTAssertEqual(first.particles, second.particles)
+        XCTAssertTrue(first.particles.allSatisfy { $0.position.x.isFinite && $0.position.y.isFinite })
+        XCTAssertTrue(first.areas.allSatisfy(\.isFinite))
+    }
 }

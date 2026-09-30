@@ -95,10 +95,12 @@ public struct MetalBubblePair: Equatable, Sendable, Comparable {
 
 public struct MetalCorrection: Equatable, Sendable {
     public let particleIndex: UInt32
+    public let sourceIndex: UInt32
     public let delta: SIMD2<Float>
 
-    public init(particleIndex: UInt32, delta: SIMD2<Float>) {
+    public init(particleIndex: UInt32, sourceIndex: UInt32 = 0, delta: SIMD2<Float>) {
         self.particleIndex = particleIndex
+        self.sourceIndex = sourceIndex
         self.delta = delta
     }
 }
