@@ -23,13 +23,25 @@ public struct BroadPhase: Sendable {
     }
 
     public mutating func upsert(_ bubbleID: BubbleID, bounds: AABB) {
-        let changed = boundsByBubble[bubbleID] != bounds
-        guard changed else { return }
+        guard index(bubbleID, bounds: bounds) else { return }
+        rebuildCandidates()
+    }
+
+    public mutating func upsert(_ updates: [(BubbleID, AABB)]) {
+        for (bubbleID, bounds) in updates {
+            _ = index(bubbleID, bounds: bounds)
+        }
+        guard !dirtyBodies.isEmpty else { return }
+        rebuildCandidates()
+    }
+
+    private mutating func index(_ bubbleID: BubbleID, bounds: AABB) -> Bool {
+        guard boundsByBubble[bubbleID] != bounds else { return false }
         boundsByBubble[bubbleID] = bounds
         xIndex.upsert(bubbleID, minimum: bounds.minimum.x, maximum: bounds.maximum.x)
         yIndex.upsert(bubbleID, minimum: bounds.minimum.y, maximum: bounds.maximum.y)
         dirtyBodies.insert(bubbleID)
-        rebuildCandidates()
+        return true
     }
 
     public mutating func remove(_ bubbleID: BubbleID) {

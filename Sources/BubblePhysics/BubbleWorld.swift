@@ -326,10 +326,13 @@ public struct BubbleWorld: Sendable {
     }
 
     private mutating func synchronizeBroadPhase() {
+        var updates: [(BubbleID, AABB)] = []
+        updates.reserveCapacity(bubbleOrder.count)
         for id in bubbleOrder {
             guard let state = states[id], let bounds = AABB.enclosing(state.boundaryIndices.map { particles[$0].position }) else { continue }
-            broadPhase.upsert(id, bounds: bounds)
+            updates.append((id, bounds))
         }
+        broadPhase.upsert(updates)
         contactGraph.synchronize(with: broadPhase.candidatePairs)
     }
 

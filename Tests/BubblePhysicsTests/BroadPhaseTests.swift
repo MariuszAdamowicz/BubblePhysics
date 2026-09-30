@@ -34,6 +34,20 @@ final class BroadPhaseTests: XCTestCase {
         XCTAssertEqual(phase.candidatePairs, [BubblePair(large, small)])
     }
 
+    func testBatchUpdateBuildsCandidatesAfterAllBoundsAreIndexed() {
+        let first = BubbleID(rawValue: 1)
+        let second = BubbleID(rawValue: 2)
+        var phase = BroadPhase()
+
+        phase.upsert([
+            (first, box(0, 0, 10, 10)),
+            (second, box(5, 5, 15, 15))
+        ])
+
+        XCTAssertEqual(phase.candidatePairs, [BubblePair(first, second)])
+        XCTAssertEqual(phase.diagnostics.dirtyBodyCount, 2)
+    }
+
     func testRemovingBodyRemovesCandidateAndPersistentGraphRecord() {
         var phase = BroadPhase()
         let first = BubbleID(rawValue: 1)
