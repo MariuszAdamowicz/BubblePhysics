@@ -1,0 +1,64 @@
+import simd
+
+public struct MetalParticle: Equatable, Sendable {
+    public var position: SIMD2<Float>
+    public var previousPosition: SIMD2<Float>
+    public var inverseMass: Float
+    public var bubbleIndex: UInt32
+    public var padding: SIMD2<Float> = .zero
+
+    public init(position: SIMD2<Float>, previousPosition: SIMD2<Float>, inverseMass: Float, bubbleIndex: UInt32) {
+        self.position = position
+        self.previousPosition = previousPosition
+        self.inverseMass = inverseMass
+        self.bubbleIndex = bubbleIndex
+    }
+}
+
+public struct MetalBubbleRange: Equatable, Sendable {
+    public var id: UInt32
+    public var centerIndex: UInt32
+    public var boundaryStart: UInt32
+    public var boundaryCount: UInt32
+    public var restArea: Float
+    public var padding: SIMD3<Float> = .zero
+
+    public init(id: UInt32, centerIndex: UInt32, boundaryStart: UInt32, boundaryCount: UInt32, restArea: Float) {
+        self.id = id
+        self.centerIndex = centerIndex
+        self.boundaryStart = boundaryStart
+        self.boundaryCount = boundaryCount
+        self.restArea = restArea
+    }
+}
+
+public struct MetalDistanceConstraint: Equatable, Sendable {
+    public var firstIndex: UInt32
+    public var secondIndex: UInt32
+    public var restLength: Float
+    public var compliance: Float
+}
+
+public struct MetalAreaConstraint: Equatable, Sendable {
+    public var boundaryStart: UInt32
+    public var boundaryCount: UInt32
+    public var restArea: Float
+    public var compliance: Float
+}
+
+public struct MetalPolygonRange: Equatable, Sendable {
+    public var vertexStart: UInt32
+    public var vertexCount: UInt32
+    public var triangleStart: UInt32
+    public var triangleCount: UInt32
+}
+
+public struct MetalEncodedWorldBuffers: Equatable, Sendable {
+    public let particles: [MetalParticle]
+    public let bubbleRanges: [MetalBubbleRange]
+
+    public init(particles: [MetalParticle], bubbleRanges: [MetalBubbleRange]) {
+        self.particles = particles
+        self.bubbleRanges = bubbleRanges
+    }
+}

@@ -139,6 +139,27 @@ public struct BubbleWorld: Sendable {
         )
     }
 
+    public func simulationSnapshot() -> SimulationWorldSnapshot {
+        SimulationWorldSnapshot(
+            particles: particles.particles.map {
+                SimulationParticleSnapshot(
+                    position: $0.position,
+                    previousPosition: $0.previousPosition,
+                    inverseMass: $0.inverseMass
+                )
+            },
+            bubbles: bubbleOrder.compactMap { id in
+                guard let state = states[id] else { return nil }
+                return SimulationBubbleSnapshot(
+                    id: id,
+                    centerIndex: state.centerIndex,
+                    boundaryIndices: state.boundaryIndices,
+                    restArea: state.restArea
+                )
+            }
+        )
+    }
+
     public func currentArea(of id: BubbleID) -> Float? {
         guard let topology = bubble(id), topology.boundaryPoints.count >= 3 else { return nil }
         var doubleArea: Float = 0
