@@ -54,9 +54,11 @@ Pamięć GPU używa układu structure-of-arrays:
 - narrow phase: rekordy kontaktów, rekordy poprawek i indeksy redukcji;
 - telemetria: liczniki, flagi przepełnienia i flagi błędów numerycznych.
 
-Bufory są alokowane długotrwale. Jeżeli GPU zgłosi przepełnienie par, kontaktów
-lub poprawek, bieżący krok kończy się bez cichego pominięcia danych, a CPU przed
-następnym krokiem zwiększa odpowiedni bufor i ponawia krok. Pojemność nie jest
+Bufory są alokowane długotrwale. Stan kroku używa buforów wejścia i wyjścia,
+więc przepełnienie nie uszkadza ostatniego zatwierdzonego stanu. Jeżeli GPU
+zgłosi przepełnienie par, kontaktów lub poprawek, bieżący krok kończy się bez
+cichego pominięcia danych, a CPU przed następnym krokiem zwiększa odpowiedni
+bufor i ponawia krok z niezmienionego bufora wejścia. Pojemność nie jest
 traktowana jako limit projektowy.
 
 ## Krok fizyki GPU
