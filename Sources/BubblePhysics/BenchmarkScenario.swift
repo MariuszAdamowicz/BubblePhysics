@@ -40,19 +40,34 @@ public struct BenchmarkReport: Equatable, Sendable {
     public let p95Milliseconds: Double
     public let finalDiagnostics: WorldDiagnostics
 
-    public static func measure(scenario: BenchmarkScenario = .iPhoneX, steps: Int) -> BenchmarkReport {
+    public static func measure(
+        scenario: BenchmarkScenario = .iPhoneX,
+        steps: Int,
+        onProgress: ((BenchmarkProgress) -> Void)? = nil
+    ) -> BenchmarkReport {
         precondition(steps > 0)
         var world = scenario.makeWorld()
         var samples: [Double] = []
         samples.reserveCapacity(steps)
-        for _ in 0..<steps {
+        for index in 0..<steps {
             let start = Date()
             _ = world.step()
             samples.append(Date().timeIntervalSince(start) * 1_000)
+            onProgress?(BenchmarkProgress(completedSteps: index + 1, totalSteps: steps))
         }
         let sorted = samples.sorted()
         let p50 = sorted[sorted.count / 2]
         let p95 = sorted[min(sorted.count - 1, Int(Double(sorted.count - 1) * 0.95))]
         return BenchmarkReport(stepCount: steps, p50Milliseconds: p50, p95Milliseconds: p95, finalDiagnostics: world.step().diagnostics)
+    }
+}
+
+public struct BenchmarkProgress: Equatable, Sendable {
+    public let completedSteps: Int
+    public let totalSteps: Int
+
+    public init(completedSteps: Int, totalSteps: Int) {
+        self.completedSteps = completedSteps
+        self.totalSteps = totalSteps
     }
 }

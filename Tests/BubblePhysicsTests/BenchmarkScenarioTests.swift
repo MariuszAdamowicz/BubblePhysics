@@ -19,4 +19,16 @@ final class BenchmarkScenarioTests: XCTestCase {
             XCTAssertEqual(first.bubble(seed.id)!.boundaryPoints.count, expected)
         }
     }
+
+    func testMeasurementReportsEveryCompletedStep() {
+        var progress: [BenchmarkProgress] = []
+
+        let report = BenchmarkReport.measure(steps: 3) {
+            progress.append($0)
+        }
+
+        XCTAssertEqual(progress.map(\.completedSteps), [1, 2, 3])
+        XCTAssertTrue(progress.allSatisfy { $0.totalSteps == 3 })
+        XCTAssertEqual(report.stepCount, 3)
+    }
 }
