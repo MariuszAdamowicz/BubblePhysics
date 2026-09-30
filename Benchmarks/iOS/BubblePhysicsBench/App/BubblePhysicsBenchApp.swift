@@ -44,7 +44,16 @@ private struct BenchmarkView: View {
                 }
             }
             await MainActor.run {
-                result = String(format: "p50 %.2f ms · p95 %.2f ms · kandydaci %d", report.p50Milliseconds, report.p95Milliseconds, report.finalDiagnostics.candidatePairCount)
+                let timings = report.finalStepTimings
+                result = String(
+                    format: "p50 %.2f ms · p95 %.2f ms\nPredykcja %.2f · ograniczenia %.2f · broad phase %.2f ms\nKandydaci %d",
+                    report.p50Milliseconds,
+                    report.p95Milliseconds,
+                    timings.predictionMilliseconds,
+                    timings.constraintMilliseconds,
+                    timings.broadPhaseMilliseconds,
+                    report.finalDiagnostics.candidatePairCount
+                )
                 running = false
             }
         }

@@ -59,4 +59,16 @@ final class BubbleWorldTests: XCTestCase {
         XCTAssertEqual(report.diagnostics.candidatePairCount, 1)
         XCTAssertEqual(report.diagnostics.contactPairCount, 1)
     }
+
+    func testWorldStepReportsNonNegativePhaseTimings() {
+        var world = BubbleWorld(configuration: .default)
+        world.addBubble(center: Vector2(x: 0, y: 0), restArea: .pi * 100)
+
+        let timings = world.step().timings
+
+        XCTAssertGreaterThanOrEqual(timings.predictionMilliseconds, 0)
+        XCTAssertGreaterThanOrEqual(timings.constraintMilliseconds, 0)
+        XCTAssertGreaterThanOrEqual(timings.broadPhaseMilliseconds, 0)
+        XCTAssertGreaterThanOrEqual(timings.totalMilliseconds, timings.predictionMilliseconds + timings.constraintMilliseconds + timings.broadPhaseMilliseconds)
+    }
 }

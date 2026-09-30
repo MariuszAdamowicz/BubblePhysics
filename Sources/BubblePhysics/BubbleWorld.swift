@@ -18,11 +18,33 @@ public struct WorldStepReport: Equatable, Sendable {
     public let fixedTimeStep: Float
     public let appliedCommandCount: Int
     public let diagnostics: WorldDiagnostics
+    public let timings: WorldStepTimings
 
-    public init(fixedTimeStep: Float, appliedCommandCount: Int, diagnostics: WorldDiagnostics) {
+    public init(fixedTimeStep: Float, appliedCommandCount: Int, diagnostics: WorldDiagnostics, timings: WorldStepTimings) {
         self.fixedTimeStep = fixedTimeStep
         self.appliedCommandCount = appliedCommandCount
         self.diagnostics = diagnostics
+        self.timings = timings
+    }
+
+    public static func == (lhs: WorldStepReport, rhs: WorldStepReport) -> Bool {
+        lhs.fixedTimeStep == rhs.fixedTimeStep &&
+            lhs.appliedCommandCount == rhs.appliedCommandCount &&
+            lhs.diagnostics == rhs.diagnostics
+    }
+}
+
+public struct WorldStepTimings: Equatable, Sendable {
+    public let predictionMilliseconds: Double
+    public let constraintMilliseconds: Double
+    public let broadPhaseMilliseconds: Double
+    public let totalMilliseconds: Double
+
+    public init(predictionMilliseconds: Double, constraintMilliseconds: Double, broadPhaseMilliseconds: Double, totalMilliseconds: Double) {
+        self.predictionMilliseconds = predictionMilliseconds
+        self.constraintMilliseconds = constraintMilliseconds
+        self.broadPhaseMilliseconds = broadPhaseMilliseconds
+        self.totalMilliseconds = totalMilliseconds
     }
 }
 
@@ -197,6 +219,7 @@ public struct BubbleWorld: Sendable {
 
     @discardableResult
     public mutating func step() -> WorldStepReport {
+        let totalStart = Date()
         let commands = queuedCommands
         queuedCommands.removeAll(keepingCapacity: true)
         var forces = Dictionary(uniqueKeysWithValues: bubbleOrder.map { ($0, Vector2.zero) })
@@ -214,9 +237,13 @@ public struct BubbleWorld: Sendable {
             }
         }
 
+        let predictionStart = Date()
         predictPositions(forces: forces)
+        let constraintStart = Date()
         solveConstraints()
+        let broadPhaseStart = Date()
         synchronizeBroadPhase()
+        let totalEnd = Date()
 
         let diagnostics = WorldDiagnostics(
             bubbleCount: bubbleOrder.count,
@@ -224,10 +251,17 @@ public struct BubbleWorld: Sendable {
             candidatePairCount: broadPhase.diagnostics.candidatePairCount,
             contactPairCount: contactGraph.contacts.count
         )
+        let timings = WorldStepTimings(
+            predictionMilliseconds: constraintStart.timeIntervalSince(predictionStart) * 1_000,
+            constraintMilliseconds: broadPhaseStart.timeIntervalSince(constraintStart) * 1_000,
+            broadPhaseMilliseconds: totalEnd.timeIntervalSince(broadPhaseStart) * 1_000,
+            totalMilliseconds: totalEnd.timeIntervalSince(totalStart) * 1_000
+        )
         return WorldStepReport(
             fixedTimeStep: configuration.fixedTimeStep,
             appliedCommandCount: commands.count,
-            diagnostics: diagnostics
+            diagnostics: diagnostics,
+            timings: timings
         )
     }
 

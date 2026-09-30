@@ -31,4 +31,11 @@ final class BenchmarkScenarioTests: XCTestCase {
         XCTAssertTrue(progress.allSatisfy { $0.totalSteps == 3 })
         XCTAssertEqual(report.stepCount, 3)
     }
+
+    func testMeasurementExposesTimingsFromItsLastMeasuredStep() {
+        let report = BenchmarkReport.measure(steps: 1)
+
+        XCTAssertGreaterThanOrEqual(report.finalStepTimings.totalMilliseconds, 0)
+        XCTAssertGreaterThanOrEqual(report.finalStepTimings.totalMilliseconds, report.finalStepTimings.predictionMilliseconds + report.finalStepTimings.constraintMilliseconds + report.finalStepTimings.broadPhaseMilliseconds)
+    }
 }

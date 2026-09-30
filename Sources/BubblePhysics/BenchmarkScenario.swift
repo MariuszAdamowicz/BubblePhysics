@@ -39,6 +39,7 @@ public struct BenchmarkReport: Equatable, Sendable {
     public let p50Milliseconds: Double
     public let p95Milliseconds: Double
     public let finalDiagnostics: WorldDiagnostics
+    public let finalStepTimings: WorldStepTimings
 
     public static func measure(
         scenario: BenchmarkScenario = .iPhoneX,
@@ -49,16 +50,24 @@ public struct BenchmarkReport: Equatable, Sendable {
         var world = scenario.makeWorld()
         var samples: [Double] = []
         samples.reserveCapacity(steps)
+        var lastStepReport: WorldStepReport?
         for index in 0..<steps {
             let start = Date()
-            _ = world.step()
+            lastStepReport = world.step()
             samples.append(Date().timeIntervalSince(start) * 1_000)
             onProgress?(BenchmarkProgress(completedSteps: index + 1, totalSteps: steps))
         }
         let sorted = samples.sorted()
         let p50 = sorted[sorted.count / 2]
         let p95 = sorted[min(sorted.count - 1, Int(Double(sorted.count - 1) * 0.95))]
-        return BenchmarkReport(stepCount: steps, p50Milliseconds: p50, p95Milliseconds: p95, finalDiagnostics: world.step().diagnostics)
+        let finalStepReport = lastStepReport!
+        return BenchmarkReport(
+            stepCount: steps,
+            p50Milliseconds: p50,
+            p95Milliseconds: p95,
+            finalDiagnostics: finalStepReport.diagnostics,
+            finalStepTimings: finalStepReport.timings
+        )
     }
 }
 
