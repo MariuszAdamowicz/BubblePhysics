@@ -28,4 +28,16 @@ final class MetalBroadPhaseTests: XCTestCase {
 
         XCTAssertEqual(pairs, [])
     }
+
+    func testMetalBroadPhaseStopsAfterXIntervalCloses() async throws {
+        guard let solver = MetalBubbleSolver() else { throw XCTSkip("Metal unavailable") }
+        var world = BubbleWorld(configuration: .default)
+        for x in stride(from: Float(0), through: 120, by: 40) {
+            world.addBubble(center: Vector2(x: x, y: 0), restArea: .pi * 4)
+        }
+
+        _ = try await solver.candidatePairs(snapshot: MetalWorldSnapshot(world: world))
+
+        XCTAssertLessThan(solver.lastBroadPhaseComparisonCount, 6)
+    }
 }
