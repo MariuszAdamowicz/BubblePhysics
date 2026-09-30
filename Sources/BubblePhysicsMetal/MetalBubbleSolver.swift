@@ -14,6 +14,7 @@ public final class MetalBubbleSolver {
     private let pairPipeline: MTLComputePipelineState
     private let keyPipeline: MTLComputePipelineState
     private let sortPipeline: MTLComputePipelineState
+    private let buildPipeline: MTLComputePipelineState
 
     public private(set) var lastBroadPhaseComparisonCount = 0
 
@@ -38,6 +39,7 @@ public final class MetalBubbleSolver {
               let pairFunction = lbvhLibrary.makeFunction(name: "emitCandidatePairs"),
               let keyFunction = lbvhLibrary.makeFunction(name: "encodeMortonKeys"),
               let sortFunction = lbvhLibrary.makeFunction(name: "radixSortMortonKeys"),
+              let buildFunction = lbvhLibrary.makeFunction(name: "buildLBVH"),
               let commandQueue = device.makeCommandQueue(),
               let predictionPipeline = try? device.makeComputePipelineState(function: predictionFunction),
               let shapePipeline = try? device.makeComputePipelineState(function: shapeFunction),
@@ -46,6 +48,7 @@ public final class MetalBubbleSolver {
               let pairPipeline = try? device.makeComputePipelineState(function: pairFunction),
               let keyPipeline = try? device.makeComputePipelineState(function: keyFunction),
               let sortPipeline = try? device.makeComputePipelineState(function: sortFunction)
+              , let buildPipeline = try? device.makeComputePipelineState(function: buildFunction)
         else { return nil }
 
         self.device = device
@@ -59,6 +62,7 @@ public final class MetalBubbleSolver {
         self.pairPipeline = pairPipeline
         self.keyPipeline = keyPipeline
         self.sortPipeline = sortPipeline
+        self.buildPipeline = buildPipeline
     }
 
     public func candidatePairs(snapshot: MetalWorldSnapshot) async throws -> [MetalBubblePair] {
@@ -70,6 +74,7 @@ public final class MetalBubbleSolver {
               let rangeBuffer = makeBuffer(snapshot.bubbleRanges),
               let aabbBuffer = device.makeBuffer(length: bubbleCount * MemoryLayout<SIMD4<Float>>.stride, options: .storageModeShared),
               let keyBuffer = device.makeBuffer(length: nextPowerOfTwo(bubbleCount) * MemoryLayout<SIMD2<UInt32>>.stride, options: .storageModeShared),
+              let treeBuffer = device.makeBuffer(length: nextPowerOfTwo(bubbleCount) * 2 * MemoryLayout<SIMD4<Float>>.stride, options: .storageModeShared),
               let pairBuffer = device.makeBuffer(length: max(1, capacities.pairs) * MemoryLayout<SIMD2<UInt32>>.stride, options: .storageModeShared),
               let countBuffer = device.makeBuffer(length: MemoryLayout<UInt32>.stride, options: .storageModeShared),
               let comparisonBuffer = device.makeBuffer(length: MemoryLayout<UInt32>.stride, options: .storageModeShared),
@@ -116,6 +121,37 @@ public final class MetalBubbleSolver {
             }
             stage *= 2
         }
+        var leafBase = UInt32(sortCount)
+        var levelStart = UInt32(sortCount)
+        var levelCount = UInt32(sortCount)
+        guard let leafEncoder = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
+        leafEncoder.setComputePipelineState(buildPipeline)
+        leafEncoder.setBuffer(aabbBuffer, offset: 0, index: 0)
+        leafEncoder.setBuffer(keyBuffer, offset: 0, index: 1)
+        leafEncoder.setBuffer(treeBuffer, offset: 0, index: 2)
+        leafEncoder.setBytes(&encodedCount, length: MemoryLayout<UInt32>.stride, index: 3)
+        leafEncoder.setBytes(&leafBase, length: MemoryLayout<UInt32>.stride, index: 4)
+        leafEncoder.setBytes(&levelStart, length: MemoryLayout<UInt32>.stride, index: 5)
+        leafEncoder.setBytes(&levelCount, length: MemoryLayout<UInt32>.stride, index: 6)
+        dispatch(leafEncoder, pipeline: buildPipeline, count: sortCount)
+        leafEncoder.endEncoding()
+        var parentCount = sortCount / 2
+        while parentCount > 0 {
+            levelStart = UInt32(parentCount)
+            levelCount = UInt32(parentCount)
+            guard let treeEncoder = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
+            treeEncoder.setComputePipelineState(buildPipeline)
+            treeEncoder.setBuffer(aabbBuffer, offset: 0, index: 0)
+            treeEncoder.setBuffer(keyBuffer, offset: 0, index: 1)
+            treeEncoder.setBuffer(treeBuffer, offset: 0, index: 2)
+            treeEncoder.setBytes(&encodedCount, length: MemoryLayout<UInt32>.stride, index: 3)
+            treeEncoder.setBytes(&leafBase, length: MemoryLayout<UInt32>.stride, index: 4)
+            treeEncoder.setBytes(&levelStart, length: MemoryLayout<UInt32>.stride, index: 5)
+            treeEncoder.setBytes(&levelCount, length: MemoryLayout<UInt32>.stride, index: 6)
+            dispatch(treeEncoder, pipeline: buildPipeline, count: parentCount)
+            treeEncoder.endEncoding()
+            parentCount /= 2
+        }
         guard let pairEncoder = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
         pairEncoder.setComputePipelineState(pairPipeline)
         pairEncoder.setBuffer(aabbBuffer, offset: 0, index: 0)
@@ -124,8 +160,10 @@ public final class MetalBubbleSolver {
         pairEncoder.setBuffer(pairBuffer, offset: 0, index: 3)
         pairEncoder.setBuffer(countBuffer, offset: 0, index: 4)
         pairEncoder.setBuffer(comparisonBuffer, offset: 0, index: 5)
-        pairEncoder.setBytes(&encodedCount, length: MemoryLayout<UInt32>.stride, index: 6)
-        pairEncoder.setBytes(&pairCapacity, length: MemoryLayout<UInt32>.stride, index: 7)
+        pairEncoder.setBuffer(treeBuffer, offset: 0, index: 6)
+        pairEncoder.setBytes(&encodedCount, length: MemoryLayout<UInt32>.stride, index: 7)
+        pairEncoder.setBytes(&pairCapacity, length: MemoryLayout<UInt32>.stride, index: 8)
+        pairEncoder.setBytes(&leafBase, length: MemoryLayout<UInt32>.stride, index: 9)
         dispatch(pairEncoder, pipeline: pairPipeline, count: bubbleCount)
         pairEncoder.endEncoding()
         commandBuffer.commit()
