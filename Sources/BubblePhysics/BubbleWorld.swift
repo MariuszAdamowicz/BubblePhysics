@@ -136,7 +136,7 @@ public struct BubbleWorld: Sendable {
             bubbleCount: bubbleOrder.count,
             appliedCommandCount: commands.count,
             candidatePairCount: broadPhase.diagnostics.candidatePairCount,
-            contactPairCount: contactGraph.pairs.count
+            contactPairCount: contactGraph.contacts.count
         )
         return WorldStepReport(
             fixedTimeStep: configuration.fixedTimeStep,
@@ -171,6 +171,7 @@ public struct BubbleWorld: Sendable {
             states[id] = state
         }
 
+        var activeContacts: Set<BubblePair> = []
         for _ in 0..<configuration.solverIterations {
             for id in bubbleOrder {
                 guard var state = states[id] else { continue }
@@ -183,7 +184,23 @@ public struct BubbleWorld: Sendable {
                 }
                 states[id] = state
             }
+            for pair in contactGraph.pairs {
+                guard let first = states[pair.first], let second = states[pair.second] else { continue }
+                let contacts = BubbleContactGenerator.contacts(between: topology(for: first, id: pair.first), and: topology(for: second, id: pair.second))
+                guard !contacts.isEmpty else { continue }
+                activeContacts.insert(pair)
+                for contact in contacts {
+                    var constraint = ContactConstraint(
+                        first: first.boundaryIndices[contact.firstVertex],
+                        second: second.boundaryIndices[contact.secondVertex],
+                        normal: contact.normal,
+                        penetration: contact.penetration
+                    )
+                    constraint.project(particles: &particles, timeStep: configuration.fixedTimeStep)
+                }
+            }
         }
+        contactGraph.synchronizeContacts(with: activeContacts)
     }
 
     private mutating func synchronizeBroadPhase() {
@@ -192,5 +209,14 @@ public struct BubbleWorld: Sendable {
             broadPhase.upsert(id, bounds: bounds)
         }
         contactGraph.synchronize(with: broadPhase.candidatePairs)
+    }
+
+    private func topology(for state: BubbleState, id: BubbleID) -> BubbleTopology {
+        BubbleTopology(
+            id: id,
+            center: particles[state.centerIndex].position,
+            restArea: state.restArea,
+            boundaryPoints: state.boundaryIndices.map { particles[$0].position }
+        )
     }
 }
