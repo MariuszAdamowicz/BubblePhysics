@@ -10,6 +10,8 @@ public final class MetalBubbleSolver {
     private let predictionPipeline: MTLComputePipelineState
     private let shapePipeline: MTLComputePipelineState
     private let boundsPipeline: MTLComputePipelineState
+    private let aabbPipeline: MTLComputePipelineState
+    private let pairPipeline: MTLComputePipelineState
 
     public var isAvailable: Bool { true }
     public var capacities: MetalBufferCapacities { capacityManager.capacities }
@@ -25,19 +27,70 @@ public final class MetalBubbleSolver {
               let predictionFunction = library.makeFunction(name: "predictParticles"),
               let shapeFunction = library.makeFunction(name: "solveBubbleShape"),
               let boundsFunction = library.makeFunction(name: "solveWorldBounds"),
+              let lbvhURL = Bundle.module.url(forResource: "LBVHKernels", withExtension: "metal"),
+              let lbvhSource = try? String(contentsOf: lbvhURL),
+              let lbvhLibrary = try? device.makeLibrary(source: lbvhSource, options: nil),
+              let aabbFunction = lbvhLibrary.makeFunction(name: "computeBubbleAABBs"),
+              let pairFunction = lbvhLibrary.makeFunction(name: "emitCandidatePairs"),
               let commandQueue = device.makeCommandQueue(),
               let predictionPipeline = try? device.makeComputePipelineState(function: predictionFunction),
               let shapePipeline = try? device.makeComputePipelineState(function: shapeFunction),
-              let boundsPipeline = try? device.makeComputePipelineState(function: boundsFunction)
+              let boundsPipeline = try? device.makeComputePipelineState(function: boundsFunction),
+              let aabbPipeline = try? device.makeComputePipelineState(function: aabbFunction),
+              let pairPipeline = try? device.makeComputePipelineState(function: pairFunction)
         else { return nil }
 
         self.device = device
-        loadedFunctionNames = ["predictParticles", "solveBubbleShape", "solveWorldBounds"]
+        loadedFunctionNames = ["predictParticles", "solveBubbleShape", "solveWorldBounds", "computeBubbleAABBs", "emitCandidatePairs"]
         capacityManager = MetalCapacityManager(capacities: capacities)
         self.commandQueue = commandQueue
         self.predictionPipeline = predictionPipeline
         self.shapePipeline = shapePipeline
         self.boundsPipeline = boundsPipeline
+        self.aabbPipeline = aabbPipeline
+        self.pairPipeline = pairPipeline
+    }
+
+    public func candidatePairs(snapshot: MetalWorldSnapshot) async throws -> [MetalBubblePair] {
+        let bubbleCount = snapshot.bubbleRanges.count
+        guard bubbleCount > 1 else { return [] }
+        let requirements = MetalBufferRequirements(pairs: bubbleCount * (bubbleCount - 1) / 2, contacts: 0, corrections: 0)
+        _ = capacityManager.ensureCapacity(for: requirements)
+        guard let particleBuffer = makeBuffer(snapshot.particles),
+              let rangeBuffer = makeBuffer(snapshot.bubbleRanges),
+              let aabbBuffer = device.makeBuffer(length: bubbleCount * MemoryLayout<SIMD4<Float>>.stride, options: .storageModeShared),
+              let pairBuffer = device.makeBuffer(length: max(1, capacities.pairs) * MemoryLayout<SIMD2<UInt32>>.stride, options: .storageModeShared),
+              let countBuffer = device.makeBuffer(length: MemoryLayout<UInt32>.stride, options: .storageModeShared),
+              let commandBuffer = commandQueue.makeCommandBuffer()
+        else { throw MetalSolverError.bufferAllocationFailed }
+        countBuffer.contents().bindMemory(to: UInt32.self, capacity: 1).pointee = 0
+        var encodedCount = UInt32(bubbleCount)
+        var pairCapacity = UInt32(capacities.pairs)
+        guard let aabbEncoder = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
+        aabbEncoder.setComputePipelineState(aabbPipeline)
+        aabbEncoder.setBuffer(particleBuffer, offset: 0, index: 0)
+        aabbEncoder.setBuffer(rangeBuffer, offset: 0, index: 1)
+        aabbEncoder.setBuffer(aabbBuffer, offset: 0, index: 2)
+        aabbEncoder.setBytes(&encodedCount, length: MemoryLayout<UInt32>.stride, index: 3)
+        dispatch(aabbEncoder, pipeline: aabbPipeline, count: bubbleCount)
+        aabbEncoder.endEncoding()
+        guard let pairEncoder = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
+        pairEncoder.setComputePipelineState(pairPipeline)
+        pairEncoder.setBuffer(aabbBuffer, offset: 0, index: 0)
+        pairEncoder.setBuffer(rangeBuffer, offset: 0, index: 1)
+        pairEncoder.setBuffer(pairBuffer, offset: 0, index: 2)
+        pairEncoder.setBuffer(countBuffer, offset: 0, index: 3)
+        pairEncoder.setBytes(&encodedCount, length: MemoryLayout<UInt32>.stride, index: 4)
+        pairEncoder.setBytes(&pairCapacity, length: MemoryLayout<UInt32>.stride, index: 5)
+        dispatch(pairEncoder, pipeline: pairPipeline, count: bubbleCount)
+        pairEncoder.endEncoding()
+        commandBuffer.commit()
+        await commandBuffer.completed()
+        guard commandBuffer.status == .completed else { throw MetalSolverError.commandExecutionFailed }
+        let count = Int(countBuffer.contents().bindMemory(to: UInt32.self, capacity: 1).pointee)
+        guard count <= capacities.pairs else { throw MetalSolverError.candidatePairOverflow }
+        let records = pairBuffer.contents().bindMemory(to: SIMD2<UInt32>.self, capacity: count)
+        return Array(UnsafeBufferPointer(start: records, count: count)).map { MetalBubblePair(firstID: $0.x, secondID: $0.y) }.sorted()
     }
 
     public func step(snapshot: MetalWorldSnapshot, commands: [WorldCommand]) async throws -> MetalStepTelemetry {
@@ -155,4 +208,5 @@ public enum MetalSolverError: Error {
     case bufferAllocationFailed
     case commandEncodingFailed
     case commandExecutionFailed
+    case candidatePairOverflow
 }

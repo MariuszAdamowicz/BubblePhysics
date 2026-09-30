@@ -79,6 +79,20 @@ public struct MetalPolygonRange: Equatable, Sendable {
     public var triangleCount: UInt32
 }
 
+public struct MetalBubblePair: Equatable, Sendable, Comparable {
+    public let firstID: UInt32
+    public let secondID: UInt32
+
+    public init(firstID: UInt32, secondID: UInt32) {
+        self.firstID = min(firstID, secondID)
+        self.secondID = max(firstID, secondID)
+    }
+
+    public static func < (lhs: MetalBubblePair, rhs: MetalBubblePair) -> Bool {
+        lhs.firstID == rhs.firstID ? lhs.secondID < rhs.secondID : lhs.firstID < rhs.firstID
+    }
+}
+
 public struct MetalEncodedWorldBuffers: Equatable, Sendable {
     public let particles: [MetalParticle]
     public let bubbleRanges: [MetalBubbleRange]
