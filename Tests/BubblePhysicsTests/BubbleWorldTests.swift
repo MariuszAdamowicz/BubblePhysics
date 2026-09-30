@@ -2,6 +2,22 @@ import XCTest
 @testable import BubblePhysics
 
 final class BubbleWorldTests: XCTestCase {
+    func testBackendDiagnosticsDescribeCPUWithoutFallback() {
+        let diagnostics = SimulationBackendDiagnostics(
+            backend: .cpu,
+            didFallbackToCPU: false,
+            particleCount: 12,
+            candidatePairCount: 5,
+            contactCount: 3,
+            didOverflow: false
+        )
+
+        XCTAssertEqual(diagnostics.backend, .cpu)
+        XCTAssertFalse(diagnostics.didFallbackToCPU)
+        XCTAssertEqual(diagnostics.particleCount, 12)
+        XCTAssertFalse(diagnostics.didOverflow)
+    }
+
     func testVectorArithmeticProducesExpectedComponents() {
         let left = Vector2(x: 3, y: -2)
         let right = Vector2(x: -1, y: 5)
