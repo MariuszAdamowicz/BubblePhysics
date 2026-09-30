@@ -1,10 +1,14 @@
 public struct WorldDiagnostics: Equatable, Sendable {
     public let bubbleCount: Int
     public let appliedCommandCount: Int
+    public let candidatePairCount: Int
+    public let contactPairCount: Int
 
-    public init(bubbleCount: Int, appliedCommandCount: Int) {
+    public init(bubbleCount: Int, appliedCommandCount: Int, candidatePairCount: Int = 0, contactPairCount: Int = 0) {
         self.bubbleCount = bubbleCount
         self.appliedCommandCount = appliedCommandCount
+        self.candidatePairCount = candidatePairCount
+        self.contactPairCount = contactPairCount
     }
 }
 
@@ -38,6 +42,8 @@ public struct BubbleWorld: Sendable {
     private var particles = ParticleStore()
     private var states: [BubbleID: BubbleState] = [:]
     private var bubbleOrder: [BubbleID] = []
+    private var broadPhase = BroadPhase()
+    private var contactGraph = ContactGraph()
 
     public init(configuration: WorldConfiguration, bounds: AABB? = nil) {
         self.configuration = configuration
@@ -78,6 +84,7 @@ public struct BubbleWorld: Sendable {
             areaConstraint: AreaConstraint(indices: boundaryIndices, restArea: restArea)
         )
         bubbleOrder.append(id)
+        synchronizeBroadPhase()
         return id
     }
 
@@ -123,8 +130,14 @@ public struct BubbleWorld: Sendable {
 
         predictPositions(forces: forces)
         solveConstraints()
+        synchronizeBroadPhase()
 
-        let diagnostics = WorldDiagnostics(bubbleCount: bubbleOrder.count, appliedCommandCount: commands.count)
+        let diagnostics = WorldDiagnostics(
+            bubbleCount: bubbleOrder.count,
+            appliedCommandCount: commands.count,
+            candidatePairCount: broadPhase.diagnostics.candidatePairCount,
+            contactPairCount: contactGraph.pairs.count
+        )
         return WorldStepReport(
             fixedTimeStep: configuration.fixedTimeStep,
             appliedCommandCount: commands.count,
@@ -171,5 +184,13 @@ public struct BubbleWorld: Sendable {
                 states[id] = state
             }
         }
+    }
+
+    private mutating func synchronizeBroadPhase() {
+        for id in bubbleOrder {
+            guard let state = states[id], let bounds = AABB.enclosing(state.boundaryIndices.map { particles[$0].position }) else { continue }
+            broadPhase.upsert(id, bounds: bounds)
+        }
+        contactGraph.synchronize(with: broadPhase.candidatePairs)
     }
 }

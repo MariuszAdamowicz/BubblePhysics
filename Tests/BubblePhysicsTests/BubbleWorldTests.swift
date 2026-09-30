@@ -48,4 +48,15 @@ final class BubbleWorldTests: XCTestCase {
         XCTAssertEqual(first.step(), second.step())
         XCTAssertEqual(first.gravity, second.gravity)
     }
+
+    func testWorldReportsBroadPhaseCandidatesForOverlappingBubbleBounds() {
+        var world = BubbleWorld(configuration: .default)
+        world.addBubble(center: Vector2(x: 0, y: 0), restArea: .pi * 100)
+        world.addBubble(center: Vector2(x: 5, y: 0), restArea: .pi * 100)
+
+        let report = world.step()
+
+        XCTAssertEqual(report.diagnostics.candidatePairCount, 1)
+        XCTAssertEqual(report.diagnostics.contactPairCount, 1)
+    }
 }
