@@ -25,6 +25,16 @@ kernel void generateBubbleContacts(
     const float firstRadius = sqrt(first.restArea / M_PI_F);
     const float secondRadius = sqrt(second.restArea / M_PI_F);
     const float penetration = firstRadius + secondRadius - distance;
+    corrections[pair.correctionStart] = { first.centerIndex, pair.correctionStart, float2(0.0f) };
+    corrections[pair.correctionStart + 1] = { second.centerIndex, pair.correctionStart + 1, float2(0.0f) };
+    for (uint offset = 0; offset < first.boundaryCount; ++offset) {
+        const uint slot = pair.correctionStart + 2 + offset;
+        corrections[slot] = { first.boundaryStart + offset, slot, float2(0.0f) };
+    }
+    for (uint offset = 0; offset < second.boundaryCount; ++offset) {
+        const uint slot = pair.correctionStart + 2 + first.boundaryCount + offset;
+        corrections[slot] = { second.boundaryStart + offset, slot, float2(0.0f) };
+    }
     if (penetration <= 0.0f) { return; }
     const float2 normal = distance > 0.00001f ? separation / distance : float2(1.0f, 0.0f);
     MetalCorrection firstCenterCorrection = { first.centerIndex, pair.correctionStart, -normal * penetration * 0.5f };
@@ -36,7 +46,7 @@ kernel void generateBubbleContacts(
         const float2 radial = particles[particle].position - secondCenter;
         const float radialLength = length(radial);
         const uint slot = pair.correctionStart + 2 + offset;
-        if (radialLength >= secondRadius) { corrections[slot] = { UINT_MAX, slot, float2(0.0f) }; continue; }
+        if (radialLength >= secondRadius) { corrections[slot] = { particle, slot, float2(0.0f) }; continue; }
         const float2 delta = (radialLength > 0.00001f ? radial / radialLength : -normal) * (secondRadius - radialLength + 0.01f);
         corrections[slot] = { particle, slot, delta };
     }
@@ -45,10 +55,20 @@ kernel void generateBubbleContacts(
         const float2 radial = particles[particle].position - firstCenter;
         const float radialLength = length(radial);
         const uint slot = pair.correctionStart + 2 + first.boundaryCount + offset;
-        if (radialLength >= firstRadius) { corrections[slot] = { UINT_MAX, slot, float2(0.0f) }; continue; }
+        if (radialLength >= firstRadius) { corrections[slot] = { particle, slot, float2(0.0f) }; continue; }
         const float2 delta = (radialLength > 0.00001f ? radial / radialLength : normal) * (firstRadius - radialLength + 0.01f);
         corrections[slot] = { particle, slot, delta };
     }
+}
+
+kernel void gatherCorrections(
+    device const MetalCorrection *source [[buffer(0)]],
+    device const uint *sourceIndices [[buffer(1)]],
+    device MetalCorrection *sorted [[buffer(2)]],
+    constant uint &count [[buffer(3)]],
+    uint index [[thread_position_in_grid]]
+) {
+    if (index < count) { sorted[index] = source[sourceIndices[index]]; }
 }
 
 kernel void sortCorrectionsByParticle(device MetalCorrection *corrections [[buffer(0)]], constant uint &count [[buffer(1)]], constant uint &stage [[buffer(2)]], constant uint &stride [[buffer(3)]], uint index [[thread_position_in_grid]]) {
@@ -77,11 +97,12 @@ kernel void reduceCorrections(
 
 kernel void applyCorrections(
     device MetalParticle *particles [[buffer(0)]],
-    device const float2 *reduced [[buffer(1)]],
+    device float2 *reduced [[buffer(1)]],
     constant uint &particleCount [[buffer(2)]],
     uint particleIndex [[thread_position_in_grid]]
 ) {
     if (particleIndex >= particleCount) { return; }
     particles[particleIndex].position += reduced[particleIndex];
     particles[particleIndex].previousPosition += reduced[particleIndex];
+    reduced[particleIndex] = float2(0.0f);
 }

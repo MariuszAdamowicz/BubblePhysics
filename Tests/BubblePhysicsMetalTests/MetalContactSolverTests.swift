@@ -57,4 +57,21 @@ final class MetalContactSolverTests: XCTestCase {
         XCTAssertTrue(first.particles.allSatisfy { $0.position.x.isFinite && $0.position.y.isFinite })
         XCTAssertTrue(first.areas.allSatisfy(\.isFinite))
     }
+
+    func testDenseContactStepUsesBoundedCommandPassCount() async throws {
+        guard let solver = MetalBubbleSolver() else { throw XCTSkip("Metal unavailable") }
+        var world = BubbleWorld(configuration: .default)
+        for row in 0..<10 {
+            for column in 0..<10 {
+                world.addBubble(center: Vector2(x: Float(column) * 7, y: Float(row) * 7), restArea: .pi * 25)
+            }
+        }
+
+        let result = try await solver.solveContacts(
+            snapshot: MetalWorldSnapshot(world: world),
+            configuration: .default
+        )
+
+        XCTAssertLessThanOrEqual(result.commandPassCount, WorldConfiguration.default.solverIterations * 5)
+    }
 }
