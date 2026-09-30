@@ -6,6 +6,24 @@ public struct MetalWorldSnapshot: Equatable, Sendable {
     public let bubbleRanges: [MetalBubbleRange]
     public let distanceConstraints: [MetalDistanceConstraint]
     public let areaConstraints: [MetalAreaConstraint]
+    public let polygons: [SimulationPolygonSnapshot]
+    public let grabs: [SimulationGrabSnapshot]
+    public let configuration: WorldConfiguration
+
+    public init(
+        particles: [MetalParticle], bubbleRanges: [MetalBubbleRange],
+        distanceConstraints: [MetalDistanceConstraint], areaConstraints: [MetalAreaConstraint],
+        polygons: [SimulationPolygonSnapshot] = [], grabs: [SimulationGrabSnapshot] = [],
+        configuration: WorldConfiguration = .default
+    ) {
+        self.particles = particles
+        self.bubbleRanges = bubbleRanges
+        self.distanceConstraints = distanceConstraints
+        self.areaConstraints = areaConstraints
+        self.polygons = polygons
+        self.grabs = grabs
+        self.configuration = configuration
+    }
 
     public init(world: BubbleWorld) {
         self.init(snapshot: world.simulationSnapshot())
@@ -75,6 +93,9 @@ public struct MetalWorldSnapshot: Equatable, Sendable {
         bubbleRanges = ranges
         distanceConstraints = encodedDistanceConstraints
         areaConstraints = encodedAreaConstraints
+        polygons = snapshot.polygons
+        grabs = snapshot.grabs
+        configuration = snapshot.configuration
     }
 
     public func encodedBuffers() -> MetalEncodedWorldBuffers {

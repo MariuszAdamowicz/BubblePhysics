@@ -176,7 +176,14 @@ public struct BubbleWorld: Sendable {
                 )
             },
             configuration: configuration,
-            bounds: bounds
+            bounds: bounds,
+            polygons: polygonOrder.compactMap { id in
+                guard let polygon = polygons[id] else { return nil }
+                return SimulationPolygonSnapshot(id: id, mode: polygon.mode, worldVertices: polygon.worldVertices, position: polygon.position, linearVelocity: polygon.linearVelocity, angularVelocity: polygon.angularVelocity)
+            },
+            grabs: grabs.values.sorted { $0.id.rawValue < $1.id.rawValue }.map {
+                SimulationGrabSnapshot(id: $0.id, bubbleID: $0.bubbleID, target: $0.target, resistance: $0.resistance)
+            }
         )
     }
 

@@ -79,6 +79,23 @@ public struct MetalPolygonRange: Equatable, Sendable {
     public var triangleCount: UInt32
 }
 
+public struct MetalInteractionPolygon: Equatable, Sendable {
+    public var vertexStart: UInt32
+    public var vertexCount: UInt32
+    public var position: SIMD2<Float>
+    public var linearVelocity: SIMD2<Float>
+    public var angularVelocity: Float
+    public var padding: Float = 0
+}
+
+public struct MetalGrab: Equatable, Sendable {
+    public var particleIndex: UInt32
+    public var padding: UInt32 = 0
+    public var target: SIMD2<Float>
+    public var maximumCorrection: Float
+    public var trailingPadding: SIMD3<Float> = .zero
+}
+
 public struct MetalBubblePair: Equatable, Sendable, Comparable {
     public let firstID: UInt32
     public let secondID: UInt32

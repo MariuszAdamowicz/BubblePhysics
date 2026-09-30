@@ -80,6 +80,22 @@ public struct SimulationAreaConstraintSnapshot: Equatable, Sendable {
     }
 }
 
+public struct SimulationPolygonSnapshot: Equatable, Sendable {
+    public let id: PolygonID
+    public let mode: RigidPolygonMode
+    public let worldVertices: [Vector2]
+    public let position: Vector2
+    public let linearVelocity: Vector2
+    public let angularVelocity: Float
+}
+
+public struct SimulationGrabSnapshot: Equatable, Sendable {
+    public let id: GrabID
+    public let bubbleID: BubbleID
+    public let target: Vector2
+    public let resistance: Float
+}
+
 public struct SimulationWorldSnapshot: Equatable, Sendable {
     public let particles: [SimulationParticleSnapshot]
     public let bubbles: [SimulationBubbleSnapshot]
@@ -87,6 +103,8 @@ public struct SimulationWorldSnapshot: Equatable, Sendable {
     public let areaConstraints: [SimulationAreaConstraintSnapshot]
     public let configuration: WorldConfiguration
     public let bounds: AABB?
+    public let polygons: [SimulationPolygonSnapshot]
+    public let grabs: [SimulationGrabSnapshot]
 
     public init(
         particles: [SimulationParticleSnapshot],
@@ -94,7 +112,9 @@ public struct SimulationWorldSnapshot: Equatable, Sendable {
         distanceConstraints: [SimulationDistanceConstraintSnapshot] = [],
         areaConstraints: [SimulationAreaConstraintSnapshot] = [],
         configuration: WorldConfiguration = .default,
-        bounds: AABB? = nil
+        bounds: AABB? = nil,
+        polygons: [SimulationPolygonSnapshot] = [],
+        grabs: [SimulationGrabSnapshot] = []
     ) {
         self.particles = particles
         self.bubbles = bubbles
@@ -102,5 +122,7 @@ public struct SimulationWorldSnapshot: Equatable, Sendable {
         self.areaConstraints = areaConstraints
         self.configuration = configuration
         self.bounds = bounds
+        self.polygons = polygons
+        self.grabs = grabs
     }
 }

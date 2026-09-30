@@ -19,6 +19,8 @@ public final class MetalBubbleSolver {
     private let contactPipeline: MTLComputePipelineState
     private let applyCorrectionPipeline: MTLComputePipelineState
     private let correctionSortPipeline: MTLComputePipelineState
+    private let polygonPipeline: MTLComputePipelineState
+    private let grabPipeline: MTLComputePipelineState
 
     public private(set) var lastBroadPhaseComparisonCount = 0
 
@@ -51,6 +53,11 @@ public final class MetalBubbleSolver {
               let contactFunction = contactLibrary.makeFunction(name: "generateBubbleContacts"),
               let applyCorrectionFunction = contactLibrary.makeFunction(name: "applyCorrections"),
               let correctionSortFunction = contactLibrary.makeFunction(name: "sortCorrectionsByParticle"),
+              let polygonURL = Bundle.module.url(forResource: "PolygonKernels", withExtension: "metal"),
+              let polygonSource = try? String(contentsOf: polygonURL),
+              let polygonLibrary = try? device.makeLibrary(source: polygonSource, options: nil),
+              let polygonFunction = polygonLibrary.makeFunction(name: "generatePolygonContacts"),
+              let grabFunction = polygonLibrary.makeFunction(name: "applyGrabConstraint"),
               let commandQueue = device.makeCommandQueue(),
               let predictionPipeline = try? device.makeComputePipelineState(function: predictionFunction),
               let shapePipeline = try? device.makeComputePipelineState(function: shapeFunction),
@@ -64,6 +71,8 @@ public final class MetalBubbleSolver {
               let contactPipeline = try? device.makeComputePipelineState(function: contactFunction),
               let applyCorrectionPipeline = try? device.makeComputePipelineState(function: applyCorrectionFunction)
               , let correctionSortPipeline = try? device.makeComputePipelineState(function: correctionSortFunction)
+              , let polygonPipeline = try? device.makeComputePipelineState(function: polygonFunction),
+              let grabPipeline = try? device.makeComputePipelineState(function: grabFunction)
         else { return nil }
 
         self.device = device
@@ -82,6 +91,8 @@ public final class MetalBubbleSolver {
         self.contactPipeline = contactPipeline
         self.applyCorrectionPipeline = applyCorrectionPipeline
         self.correctionSortPipeline = correctionSortPipeline
+        self.polygonPipeline = polygonPipeline
+        self.grabPipeline = grabPipeline
     }
 
     public func candidatePairs(snapshot: MetalWorldSnapshot) async throws -> [MetalBubblePair] {
@@ -282,6 +293,87 @@ public final class MetalBubbleSolver {
         return MetalContactStepResult(particles: particles, centerDistance: distance, areas: areas)
     }
 
+    public func solveInteractions(snapshot: MetalWorldSnapshot, configuration: WorldConfiguration) async throws -> MetalInteractionStepResult {
+        var vertices: [SIMD2<Float>] = []
+        var polygons: [MetalInteractionPolygon] = []
+        for polygon in snapshot.polygons {
+            let start = vertices.count
+            vertices.append(contentsOf: polygon.worldVertices.map { SIMD2($0.x, $0.y) })
+            polygons.append(MetalInteractionPolygon(vertexStart: UInt32(start), vertexCount: UInt32(polygon.worldVertices.count), position: SIMD2(polygon.position.x, polygon.position.y), linearVelocity: SIMD2(polygon.linearVelocity.x, polygon.linearVelocity.y), angularVelocity: polygon.angularVelocity))
+        }
+        let rangeByID = Dictionary(uniqueKeysWithValues: snapshot.bubbleRanges.map { ($0.id, $0) })
+        let grabs = snapshot.grabs.compactMap { grab -> MetalGrab? in
+            guard let range = rangeByID[UInt32(grab.bubbleID.rawValue)] else { return nil }
+            return MetalGrab(particleIndex: range.centerIndex, target: SIMD2(grab.target.x, grab.target.y), maximumCorrection: 1.5)
+        }
+        guard let particleBuffer = makeBuffer(snapshot.particles), let vertexBuffer = makeBuffer(vertices, minimumCount: 1), let polygonBuffer = makeBuffer(polygons, minimumCount: 1), let grabBuffer = makeBuffer(grabs, minimumCount: 1), let commandBuffer = commandQueue.makeCommandBuffer() else { throw MetalSolverError.bufferAllocationFailed }
+        var particleCount = UInt32(snapshot.particles.count); var polygonCount = UInt32(polygons.count); var grabCount = UInt32(grabs.count); var timeStep = configuration.fixedTimeStep
+        if !polygons.isEmpty {
+            guard let encoder = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
+            encoder.setComputePipelineState(polygonPipeline); encoder.setBuffer(particleBuffer, offset: 0, index: 0); encoder.setBuffer(vertexBuffer, offset: 0, index: 1); encoder.setBuffer(polygonBuffer, offset: 0, index: 2); encoder.setBytes(&particleCount, length: 4, index: 3); encoder.setBytes(&polygonCount, length: 4, index: 4); encoder.setBytes(&timeStep, length: 4, index: 5); dispatch(encoder, pipeline: polygonPipeline, count: snapshot.particles.count); encoder.endEncoding()
+        }
+        if !grabs.isEmpty {
+            guard let encoder = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
+            encoder.setComputePipelineState(grabPipeline); encoder.setBuffer(particleBuffer, offset: 0, index: 0); encoder.setBuffer(grabBuffer, offset: 0, index: 1); encoder.setBytes(&grabCount, length: 4, index: 2); dispatch(encoder, pipeline: grabPipeline, count: grabs.count); encoder.endEncoding()
+        }
+        commandBuffer.commit(); await commandBuffer.completed()
+        guard commandBuffer.status == .completed else { throw MetalSolverError.commandExecutionFailed }
+        let pointer = particleBuffer.contents().bindMemory(to: MetalParticle.self, capacity: snapshot.particles.count)
+        return MetalInteractionStepResult(particles: Array(UnsafeBufferPointer(start: pointer, count: snapshot.particles.count)))
+    }
+
+    public func applyTopologyCommands(_ commands: [MetalTopologyCommand], to snapshot: MetalWorldSnapshot) throws -> MetalWorldSnapshot {
+        var bubbles = snapshot.bubbleRanges.map { range in
+            TopologyBubble(id: BubbleID(rawValue: Int(range.id)), center: snapshot.particles[Int(range.centerIndex)].position, restArea: range.restArea)
+        }
+        var nextID = (bubbles.map { $0.id.rawValue }.max() ?? 0) + 1
+        for command in commands {
+            switch command {
+            case let .resize(id, restArea):
+                guard let index = bubbles.firstIndex(where: { $0.id == id }), restArea > 0 else { throw MetalSolverError.invalidTopologyCommand }
+                bubbles[index].restArea = restArea
+            case let .merge(first, second):
+                guard let a = bubbles.first(where: { $0.id == first }), let b = bubbles.first(where: { $0.id == second }), first != second else { throw MetalSolverError.invalidTopologyCommand }
+                let area = a.restArea + b.restArea
+                let center = (a.center * a.restArea + b.center * b.restArea) / area
+                bubbles.removeAll { $0.id == first || $0.id == second }
+                bubbles.append(TopologyBubble(id: BubbleID(rawValue: nextID), center: center, restArea: area)); nextID += 1
+            case let .split(id):
+                guard let bubble = bubbles.first(where: { $0.id == id }) else { throw MetalSolverError.invalidTopologyCommand }
+                bubbles.removeAll { $0.id == id }
+                let area = bubble.restArea * 0.5; let offset = sqrt(area / .pi) * 0.5
+                bubbles.append(TopologyBubble(id: BubbleID(rawValue: nextID), center: bubble.center + SIMD2(-offset, 0), restArea: area)); nextID += 1
+                bubbles.append(TopologyBubble(id: BubbleID(rawValue: nextID), center: bubble.center + SIMD2(offset, 0), restArea: area)); nextID += 1
+            }
+        }
+        return rebuildTopology(bubbles, preserving: snapshot)
+    }
+
+    private func rebuildTopology(_ bubbles: [TopologyBubble], preserving snapshot: MetalWorldSnapshot) -> MetalWorldSnapshot {
+        var particles: [MetalParticle] = []; var ranges: [MetalBubbleRange] = []; var distances: [MetalDistanceConstraint] = []; var areas: [MetalAreaConstraint] = []
+        for (bubbleIndex, bubble) in bubbles.sorted(by: { $0.id < $1.id }).enumerated() {
+            let topology = BubbleTopology.regular(id: bubble.id, center: Vector2(x: bubble.center.x, y: bubble.center.y), restArea: bubble.restArea, maxBoundarySegmentLength: snapshot.configuration.maxBoundarySegmentLength)
+            let centerIndex = particles.count
+            particles.append(MetalParticle(position: bubble.center, previousPosition: bubble.center, inverseMass: 1, bubbleIndex: UInt32(bubbleIndex)))
+            let boundaryStart = particles.count
+            particles.append(contentsOf: topology.boundaryPoints.map { point in MetalParticle(position: SIMD2(point.x, point.y), previousPosition: SIMD2(point.x, point.y), inverseMass: 1, bubbleIndex: UInt32(bubbleIndex)) })
+            let constraintStart = distances.count
+            for offset in topology.boundaryPoints.indices {
+                let current = boundaryStart + offset, next = boundaryStart + (offset + 1) % topology.boundaryPoints.count, diagonal = boundaryStart + (offset + 2) % topology.boundaryPoints.count
+                distances.append(MetalDistanceConstraint(firstIndex: UInt32(centerIndex), secondIndex: UInt32(current), restLength: vectorDistance(particles[centerIndex].position, particles[current].position), compliance: 0))
+                distances.append(MetalDistanceConstraint(firstIndex: UInt32(current), secondIndex: UInt32(next), restLength: vectorDistance(particles[current].position, particles[next].position), compliance: 0))
+                distances.append(MetalDistanceConstraint(firstIndex: UInt32(current), secondIndex: UInt32(diagonal), restLength: vectorDistance(particles[current].position, particles[diagonal].position), compliance: 0))
+            }
+            ranges.append(MetalBubbleRange(id: UInt32(bubble.id.rawValue), centerIndex: UInt32(centerIndex), boundaryStart: UInt32(boundaryStart), boundaryCount: UInt32(topology.boundaryPoints.count), restArea: bubble.restArea, distanceConstraintStart: UInt32(constraintStart), distanceConstraintCount: UInt32(distances.count - constraintStart)))
+            areas.append(MetalAreaConstraint(boundaryStart: UInt32(boundaryStart), boundaryCount: UInt32(topology.boundaryPoints.count), restArea: bubble.restArea, compliance: 0))
+        }
+        return MetalWorldSnapshot(particles: particles, bubbleRanges: ranges, distanceConstraints: distances, areaConstraints: areas, polygons: snapshot.polygons, grabs: snapshot.grabs, configuration: snapshot.configuration)
+    }
+
+    private func vectorDistance(_ first: SIMD2<Float>, _ second: SIMD2<Float>) -> Float {
+        let delta = second - first; return sqrt(delta.x * delta.x + delta.y * delta.y)
+    }
+
     public func step(snapshot: MetalWorldSnapshot, commands: [WorldCommand]) async throws -> MetalStepTelemetry {
         let bubbleCount = snapshot.bubbleRanges.count
         let reservedPairCount = bubbleCount * max(0, bubbleCount - 1) / 2
@@ -405,6 +497,20 @@ public struct MetalContactStepResult: Equatable, Sendable {
     public let areas: [Float]
 }
 
+public struct MetalInteractionStepResult: Equatable, Sendable { public let particles: [MetalParticle] }
+
+public enum MetalTopologyCommand: Equatable, Sendable {
+    case resize(BubbleID, restArea: Float)
+    case merge(BubbleID, BubbleID)
+    case split(BubbleID)
+}
+
+private struct TopologyBubble {
+    let id: BubbleID
+    var center: SIMD2<Float>
+    var restArea: Float
+}
+
 private struct MetalContactPairWork {
     let first: UInt32
     let second: UInt32
@@ -417,4 +523,5 @@ public enum MetalSolverError: Error {
     case commandEncodingFailed
     case commandExecutionFailed
     case candidatePairOverflow
+    case invalidTopologyCommand
 }
