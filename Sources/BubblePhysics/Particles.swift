@@ -20,4 +20,9 @@ public struct ParticleStore: Sendable {
         particles.append(particle)
         return particles.count - 1
     }
+
+    subscript(index: Int) -> Particle {
+        get { particles[index] }
+        set { particles[index] = newValue }
+    }
 }

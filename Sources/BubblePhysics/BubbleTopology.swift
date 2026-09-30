@@ -8,8 +8,10 @@ public struct BubbleTopology: Sendable {
 
     public static func regular(id: BubbleID, center: Vector2, restArea: Float, maxBoundarySegmentLength: Float) -> BubbleTopology {
         precondition(restArea > 0 && maxBoundarySegmentLength > 0)
-        let radius = sqrt(restArea / .pi)
-        let count = max(8, Int(ceil(2 * .pi * radius / maxBoundarySegmentLength)))
+        let targetRadius = sqrt(restArea / .pi)
+        let count = max(8, Int(ceil(2 * .pi * targetRadius / maxBoundarySegmentLength)))
+        let polygonAreaFactor = Float(count) * sin(2 * .pi / Float(count)) * 0.5
+        let radius = sqrt(restArea / polygonAreaFactor)
         let points = (0..<count).map { index -> Vector2 in
             let angle = Float(index) * 2 * .pi / Float(count)
             return center + Vector2(x: cos(angle) * radius, y: sin(angle) * radius)
