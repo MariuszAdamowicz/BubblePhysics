@@ -68,6 +68,9 @@ final class BubbleWorldTests: XCTestCase {
 
         XCTAssertGreaterThanOrEqual(timings.predictionMilliseconds, 0)
         XCTAssertGreaterThanOrEqual(timings.constraintMilliseconds, 0)
+        XCTAssertGreaterThanOrEqual(timings.shapeConstraintMilliseconds, 0)
+        XCTAssertGreaterThanOrEqual(timings.bubbleContactMilliseconds, 0)
+        XCTAssertGreaterThanOrEqual(timings.auxiliaryConstraintMilliseconds, 0)
         XCTAssertGreaterThanOrEqual(timings.broadPhaseMilliseconds, 0)
         XCTAssertGreaterThanOrEqual(timings.totalMilliseconds, timings.predictionMilliseconds + timings.constraintMilliseconds + timings.broadPhaseMilliseconds)
     }

@@ -37,12 +37,18 @@ public struct WorldStepReport: Equatable, Sendable {
 public struct WorldStepTimings: Equatable, Sendable {
     public let predictionMilliseconds: Double
     public let constraintMilliseconds: Double
+    public let shapeConstraintMilliseconds: Double
+    public let bubbleContactMilliseconds: Double
+    public let auxiliaryConstraintMilliseconds: Double
     public let broadPhaseMilliseconds: Double
     public let totalMilliseconds: Double
 
-    public init(predictionMilliseconds: Double, constraintMilliseconds: Double, broadPhaseMilliseconds: Double, totalMilliseconds: Double) {
+    public init(predictionMilliseconds: Double, constraintMilliseconds: Double, shapeConstraintMilliseconds: Double, bubbleContactMilliseconds: Double, auxiliaryConstraintMilliseconds: Double, broadPhaseMilliseconds: Double, totalMilliseconds: Double) {
         self.predictionMilliseconds = predictionMilliseconds
         self.constraintMilliseconds = constraintMilliseconds
+        self.shapeConstraintMilliseconds = shapeConstraintMilliseconds
+        self.bubbleContactMilliseconds = bubbleContactMilliseconds
+        self.auxiliaryConstraintMilliseconds = auxiliaryConstraintMilliseconds
         self.broadPhaseMilliseconds = broadPhaseMilliseconds
         self.totalMilliseconds = totalMilliseconds
     }
@@ -54,6 +60,12 @@ private struct BubbleState: Sendable {
     let boundaryIndices: [Int]
     var distanceConstraints: [DistanceConstraint]
     var areaConstraint: AreaConstraint
+}
+
+private struct ConstraintPhaseTimings: Sendable {
+    var shapeMilliseconds: Double = 0
+    var bubbleContactMilliseconds: Double = 0
+    var auxiliaryMilliseconds: Double = 0
 }
 
 public struct BubbleWorld: Sendable {
@@ -240,7 +252,7 @@ public struct BubbleWorld: Sendable {
         let predictionStart = Date()
         predictPositions(forces: forces)
         let constraintStart = Date()
-        solveConstraints()
+        let constraintPhaseTimings = solveConstraints()
         let broadPhaseStart = Date()
         synchronizeBroadPhase()
         let totalEnd = Date()
@@ -254,6 +266,9 @@ public struct BubbleWorld: Sendable {
         let timings = WorldStepTimings(
             predictionMilliseconds: constraintStart.timeIntervalSince(predictionStart) * 1_000,
             constraintMilliseconds: broadPhaseStart.timeIntervalSince(constraintStart) * 1_000,
+            shapeConstraintMilliseconds: constraintPhaseTimings.shapeMilliseconds,
+            bubbleContactMilliseconds: constraintPhaseTimings.bubbleContactMilliseconds,
+            auxiliaryConstraintMilliseconds: constraintPhaseTimings.auxiliaryMilliseconds,
             broadPhaseMilliseconds: totalEnd.timeIntervalSince(broadPhaseStart) * 1_000,
             totalMilliseconds: totalEnd.timeIntervalSince(totalStart) * 1_000
         )
@@ -281,7 +296,9 @@ public struct BubbleWorld: Sendable {
         }
     }
 
-    private mutating func solveConstraints() {
+    private mutating func solveConstraints() -> ConstraintPhaseTimings {
+        var timings = ConstraintPhaseTimings()
+        let resetStart = Date()
         for id in bubbleOrder {
             guard var state = states[id] else { continue }
             for offset in state.distanceConstraints.indices {
@@ -290,9 +307,11 @@ public struct BubbleWorld: Sendable {
             state.areaConstraint.resetMultiplier()
             states[id] = state
         }
+        timings.shapeMilliseconds += Date().timeIntervalSince(resetStart) * 1_000
 
         var activeContacts: Set<BubblePair> = []
         for _ in 0..<configuration.solverIterations {
+            let shapeStart = Date()
             for id in bubbleOrder {
                 guard var state = states[id] else { continue }
                 for offset in state.distanceConstraints.indices {
@@ -304,6 +323,9 @@ public struct BubbleWorld: Sendable {
                 }
                 states[id] = state
             }
+            timings.shapeMilliseconds += Date().timeIntervalSince(shapeStart) * 1_000
+
+            let bubbleContactStart = Date()
             for pair in contactGraph.pairs {
                 guard let first = states[pair.first], let second = states[pair.second] else { continue }
                 let contacts = BubbleContactGenerator.contacts(between: topology(for: first, id: pair.first), and: topology(for: second, id: pair.second))
@@ -319,10 +341,15 @@ public struct BubbleWorld: Sendable {
                     constraint.project(particles: &particles, timeStep: configuration.fixedTimeStep)
                 }
             }
+            timings.bubbleContactMilliseconds += Date().timeIntervalSince(bubbleContactStart) * 1_000
+
+            let auxiliaryStart = Date()
             solvePolygonContacts()
             solveGrabs()
+            timings.auxiliaryMilliseconds += Date().timeIntervalSince(auxiliaryStart) * 1_000
         }
         contactGraph.synchronizeContacts(with: activeContacts)
+        return timings
     }
 
     private mutating func synchronizeBroadPhase() {
