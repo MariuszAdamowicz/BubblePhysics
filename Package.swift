@@ -16,7 +16,7 @@ let package = Package(
         .target(
             name: "BubblePhysicsMetal",
             dependencies: ["BubblePhysics"],
-            resources: [.copy("Shaders/BubblePhysicsKernels.metal"), .copy("Shaders/LBVHKernels.metal")]
+            resources: [.copy("Shaders/BubblePhysicsKernels.metal"), .copy("Shaders/LBVHKernels.metal"), .copy("Shaders/ContactKernels.metal")]
         ),
         .testTarget(name: "BubblePhysicsTests", dependencies: ["BubblePhysics"]),
         .testTarget(name: "BubblePhysicsMetalTests", dependencies: ["BubblePhysics", "BubblePhysicsMetal"])

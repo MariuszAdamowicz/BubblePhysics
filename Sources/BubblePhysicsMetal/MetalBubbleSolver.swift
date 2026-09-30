@@ -15,6 +15,9 @@ public final class MetalBubbleSolver {
     private let keyPipeline: MTLComputePipelineState
     private let sortPipeline: MTLComputePipelineState
     private let buildPipeline: MTLComputePipelineState
+    private let reductionPipeline: MTLComputePipelineState
+    private let contactPipeline: MTLComputePipelineState
+    private let applyCorrectionPipeline: MTLComputePipelineState
 
     public private(set) var lastBroadPhaseComparisonCount = 0
 
@@ -40,6 +43,12 @@ public final class MetalBubbleSolver {
               let keyFunction = lbvhLibrary.makeFunction(name: "encodeMortonKeys"),
               let sortFunction = lbvhLibrary.makeFunction(name: "radixSortMortonKeys"),
               let buildFunction = lbvhLibrary.makeFunction(name: "buildLBVH"),
+              let contactURL = Bundle.module.url(forResource: "ContactKernels", withExtension: "metal"),
+              let contactSource = try? String(contentsOf: contactURL),
+              let contactLibrary = try? device.makeLibrary(source: contactSource, options: nil),
+              let reductionFunction = contactLibrary.makeFunction(name: "reduceCorrections"),
+              let contactFunction = contactLibrary.makeFunction(name: "generateBubbleContacts"),
+              let applyCorrectionFunction = contactLibrary.makeFunction(name: "applyCorrections"),
               let commandQueue = device.makeCommandQueue(),
               let predictionPipeline = try? device.makeComputePipelineState(function: predictionFunction),
               let shapePipeline = try? device.makeComputePipelineState(function: shapeFunction),
@@ -48,7 +57,10 @@ public final class MetalBubbleSolver {
               let pairPipeline = try? device.makeComputePipelineState(function: pairFunction),
               let keyPipeline = try? device.makeComputePipelineState(function: keyFunction),
               let sortPipeline = try? device.makeComputePipelineState(function: sortFunction)
-              , let buildPipeline = try? device.makeComputePipelineState(function: buildFunction)
+              , let buildPipeline = try? device.makeComputePipelineState(function: buildFunction),
+              let reductionPipeline = try? device.makeComputePipelineState(function: reductionFunction),
+              let contactPipeline = try? device.makeComputePipelineState(function: contactFunction),
+              let applyCorrectionPipeline = try? device.makeComputePipelineState(function: applyCorrectionFunction)
         else { return nil }
 
         self.device = device
@@ -63,6 +75,9 @@ public final class MetalBubbleSolver {
         self.keyPipeline = keyPipeline
         self.sortPipeline = sortPipeline
         self.buildPipeline = buildPipeline
+        self.reductionPipeline = reductionPipeline
+        self.contactPipeline = contactPipeline
+        self.applyCorrectionPipeline = applyCorrectionPipeline
     }
 
     public func candidatePairs(snapshot: MetalWorldSnapshot) async throws -> [MetalBubblePair] {
@@ -174,6 +189,59 @@ public final class MetalBubbleSolver {
         guard count <= capacities.pairs else { throw MetalSolverError.candidatePairOverflow }
         let records = pairBuffer.contents().bindMemory(to: SIMD2<UInt32>.self, capacity: count)
         return Array(UnsafeBufferPointer(start: records, count: count)).map { MetalBubblePair(firstID: $0.x, secondID: $0.y) }.sorted()
+    }
+
+    public func reduceCorrectionsForTesting(_ corrections: [MetalCorrection]) async throws -> [Int: SIMD2<Float>] {
+        let particleCount = Int((corrections.map(\.particleIndex).max() ?? 0) + 1)
+        guard particleCount > 0, let correctionBuffer = makeBuffer(corrections), let resultBuffer = device.makeBuffer(length: particleCount * MemoryLayout<SIMD2<Float>>.stride, options: .storageModeShared), let commandBuffer = commandQueue.makeCommandBuffer(), let encoder = commandBuffer.makeComputeCommandEncoder() else { return [:] }
+        var count = UInt32(corrections.count); var particles = UInt32(particleCount)
+        encoder.setComputePipelineState(reductionPipeline); encoder.setBuffer(correctionBuffer, offset: 0, index: 0); encoder.setBuffer(resultBuffer, offset: 0, index: 1); encoder.setBytes(&count, length: 4, index: 2); encoder.setBytes(&particles, length: 4, index: 3); dispatch(encoder, pipeline: reductionPipeline, count: particleCount); encoder.endEncoding(); commandBuffer.commit(); await commandBuffer.completed()
+        let values = resultBuffer.contents().bindMemory(to: SIMD2<Float>.self, capacity: particleCount)
+        return Dictionary(uniqueKeysWithValues: (0..<particleCount).map { ($0, values[$0]) })
+    }
+
+    public func solveContacts(snapshot: MetalWorldSnapshot, configuration: WorldConfiguration) async throws -> MetalContactStepResult {
+        let pairs = try await candidatePairs(snapshot: snapshot)
+        guard !pairs.isEmpty else { return contactResult(particles: snapshot.particles, ranges: snapshot.bubbleRanges) }
+        let rangeByID = Dictionary(uniqueKeysWithValues: snapshot.bubbleRanges.enumerated().map { ($0.element.id, UInt32($0.offset)) })
+        let pairIndices = pairs.compactMap { pair -> SIMD2<UInt32>? in
+            guard let first = rangeByID[pair.firstID], let second = rangeByID[pair.secondID] else { return nil }
+            return SIMD2(first, second)
+        }
+        let correctionCapacity = pairIndices.reduce(0) { partial, pair in
+            partial + Int(snapshot.bubbleRanges[Int(pair.x)].boundaryCount + snapshot.bubbleRanges[Int(pair.y)].boundaryCount + 2)
+        }
+        _ = capacityManager.ensureCapacity(for: MetalBufferRequirements(pairs: pairs.count, contacts: pairs.count, corrections: correctionCapacity))
+        guard let particleBuffer = makeBuffer(snapshot.particles), let rangeBuffer = makeBuffer(snapshot.bubbleRanges), let pairBuffer = makeBuffer(pairIndices), let correctionBuffer = device.makeBuffer(length: max(1, correctionCapacity) * MemoryLayout<MetalCorrection>.stride, options: .storageModeShared), let correctionCountBuffer = device.makeBuffer(length: 4, options: .storageModeShared), let reducedBuffer = device.makeBuffer(length: snapshot.particles.count * MemoryLayout<SIMD2<Float>>.stride, options: .storageModeShared), let commandBuffer = commandQueue.makeCommandBuffer() else { throw MetalSolverError.bufferAllocationFailed }
+        correctionCountBuffer.contents().bindMemory(to: UInt32.self, capacity: 1).pointee = 0
+        var pairCount = UInt32(pairIndices.count); var capacity = UInt32(correctionCapacity); var particleCount = UInt32(snapshot.particles.count)
+        guard let contactEncoder = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
+        contactEncoder.setComputePipelineState(contactPipeline); contactEncoder.setBuffer(particleBuffer, offset: 0, index: 0); contactEncoder.setBuffer(rangeBuffer, offset: 0, index: 1); contactEncoder.setBuffer(pairBuffer, offset: 0, index: 2); contactEncoder.setBuffer(correctionBuffer, offset: 0, index: 3); contactEncoder.setBuffer(correctionCountBuffer, offset: 0, index: 4); contactEncoder.setBytes(&pairCount, length: 4, index: 5); contactEncoder.setBytes(&capacity, length: 4, index: 6); dispatch(contactEncoder, pipeline: contactPipeline, count: pairIndices.count); contactEncoder.endEncoding()
+        guard let reduceEncoder = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
+        reduceEncoder.setComputePipelineState(reductionPipeline); reduceEncoder.setBuffer(correctionBuffer, offset: 0, index: 0); reduceEncoder.setBuffer(reducedBuffer, offset: 0, index: 1); reduceEncoder.setBuffer(correctionCountBuffer, offset: 0, index: 2); reduceEncoder.setBytes(&particleCount, length: 4, index: 3); dispatch(reduceEncoder, pipeline: reductionPipeline, count: snapshot.particles.count); reduceEncoder.endEncoding()
+        guard let applyEncoder = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
+        applyEncoder.setComputePipelineState(applyCorrectionPipeline); applyEncoder.setBuffer(particleBuffer, offset: 0, index: 0); applyEncoder.setBuffer(reducedBuffer, offset: 0, index: 1); applyEncoder.setBytes(&particleCount, length: 4, index: 2); dispatch(applyEncoder, pipeline: applyCorrectionPipeline, count: snapshot.particles.count); applyEncoder.endEncoding()
+        commandBuffer.commit(); await commandBuffer.completed()
+        guard commandBuffer.status == .completed else { throw MetalSolverError.commandExecutionFailed }
+        let pointer = particleBuffer.contents().bindMemory(to: MetalParticle.self, capacity: snapshot.particles.count)
+        return contactResult(particles: Array(UnsafeBufferPointer(start: pointer, count: snapshot.particles.count)), ranges: snapshot.bubbleRanges)
+    }
+
+    private func contactResult(particles: [MetalParticle], ranges: [MetalBubbleRange]) -> MetalContactStepResult {
+        let centers = ranges.map { particles[Int($0.centerIndex)].position }
+        let separation = centers.count >= 2 ? centers[1] - centers[0] : .zero
+        let distance = sqrt(separation.x * separation.x + separation.y * separation.y)
+        let areas = ranges.map { range -> Float in
+            guard range.boundaryCount >= 3 else { return 0 }
+            var doubleArea: Float = 0
+            for offset in 0..<Int(range.boundaryCount) {
+                let current = particles[Int(range.boundaryStart) + offset].position
+                let next = particles[Int(range.boundaryStart) + (offset + 1) % Int(range.boundaryCount)].position
+                doubleArea += current.x * next.y - current.y * next.x
+            }
+            return abs(doubleArea) * 0.5
+        }
+        return MetalContactStepResult(particles: particles, centerDistance: distance, areas: areas)
     }
 
     public func step(snapshot: MetalWorldSnapshot, commands: [WorldCommand]) async throws -> MetalStepTelemetry {
@@ -291,6 +359,12 @@ public final class MetalBubbleSolver {
 
 public struct MetalShapeStepResult: Equatable, Sendable {
     public let particles: [MetalParticle]
+}
+
+public struct MetalContactStepResult: Equatable, Sendable {
+    public let particles: [MetalParticle]
+    public let centerDistance: Float
+    public let areas: [Float]
 }
 
 public enum MetalSolverError: Error {
