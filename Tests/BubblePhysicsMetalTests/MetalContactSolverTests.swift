@@ -74,4 +74,17 @@ final class MetalContactSolverTests: XCTestCase {
 
         XCTAssertLessThanOrEqual(result.commandPassCount, WorldConfiguration.default.solverIterations * 5)
     }
+
+    func testUnchangedCandidatePairsReuseContactPreparation() async throws {
+        guard let solver = MetalBubbleSolver() else { throw XCTSkip("Metal unavailable") }
+        var world = BubbleWorld(configuration: .default)
+        world.addBubble(center: Vector2(x: 40, y: 50), restArea: .pi * 100)
+        world.addBubble(center: Vector2(x: 50, y: 50), restArea: .pi * 100)
+        let snapshot = MetalWorldSnapshot(world: world)
+
+        _ = try await solver.solveContacts(snapshot: snapshot, configuration: .default)
+        _ = try await solver.solveContacts(snapshot: snapshot, configuration: .default)
+
+        XCTAssertEqual(solver.contactPreparationBuildCount, 1)
+    }
 }

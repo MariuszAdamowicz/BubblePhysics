@@ -31,4 +31,10 @@ final class MetalBackendIntegrationTests: XCTestCase {
         XCTAssertEqual(result.snapshot.bubbleRanges.count, 300)
         XCTAssertGreaterThan(result.diagnostics.particleCount, 300)
     }
+
+    func testBenchmarkSkipsEmptyInteractionPass() async throws {
+        let report = try await MetalBenchmarkReport.measure(scenario: .iPhoneX, steps: 1)
+
+        XCTAssertEqual(report.interactionMilliseconds, 0)
+    }
 }

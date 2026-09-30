@@ -36,8 +36,10 @@ public final class MetalBubbleSolver {
     private let correctionGatherPipeline: MTLComputePipelineState
     private let polygonPipeline: MTLComputePipelineState
     private let grabPipeline: MTLComputePipelineState
+    private var cachedContactPreparation: ContactPreparation?
 
     public private(set) var lastBroadPhaseComparisonCount = 0
+    public private(set) var contactPreparationBuildCount = 0
 
     public var isAvailable: Bool { true }
     public var capacities: MetalBufferCapacities { capacityManager.capacities }
@@ -248,38 +250,22 @@ public final class MetalBubbleSolver {
     public func solveContacts(snapshot: MetalWorldSnapshot, configuration: WorldConfiguration) async throws -> MetalContactStepResult {
         let pairs = try await candidatePairs(snapshot: snapshot)
         guard !pairs.isEmpty else { return contactResult(particles: snapshot.particles, ranges: snapshot.bubbleRanges, candidatePairCount: 0, commandPassCount: 0) }
-        let rangeByID = Dictionary(uniqueKeysWithValues: snapshot.bubbleRanges.enumerated().map { ($0.element.id, UInt32($0.offset)) })
-        let pairIndices = pairs.compactMap { pair -> SIMD2<UInt32>? in
-            guard let first = rangeByID[pair.firstID], let second = rangeByID[pair.secondID] else { return nil }
-            return SIMD2(first, second)
+        let preparation: ContactPreparation
+        if let cachedContactPreparation,
+           cachedContactPreparation.pairs == pairs,
+           cachedContactPreparation.ranges == snapshot.bubbleRanges {
+            preparation = cachedContactPreparation
+        } else {
+            preparation = makeContactPreparation(pairs: pairs, ranges: snapshot.bubbleRanges)
+            cachedContactPreparation = preparation
+            contactPreparationBuildCount += 1
         }
-        let correctionCapacity = pairIndices.reduce(0) { partial, pair in
-            partial + Int(snapshot.bubbleRanges[Int(pair.x)].boundaryCount + snapshot.bubbleRanges[Int(pair.y)].boundaryCount + 2)
-        }
-        var correctionStart = 0
-        let pairWork = pairIndices.map { pair -> MetalContactPairWork in
-            defer { correctionStart += Int(snapshot.bubbleRanges[Int(pair.x)].boundaryCount + snapshot.bubbleRanges[Int(pair.y)].boundaryCount + 2) }
-            return MetalContactPairWork(first: pair.x, second: pair.y, correctionStart: UInt32(correctionStart))
-        }
-        var correctionTemplates: [MetalCorrection] = []
-        correctionTemplates.reserveCapacity(correctionCapacity)
-        for work in pairWork {
-            let first = snapshot.bubbleRanges[Int(work.first)]
-            let second = snapshot.bubbleRanges[Int(work.second)]
-            let start = Int(work.correctionStart)
-            correctionTemplates.append(MetalCorrection(particleIndex: first.centerIndex, sourceIndex: UInt32(start), delta: .zero))
-            correctionTemplates.append(MetalCorrection(particleIndex: second.centerIndex, sourceIndex: UInt32(start + 1), delta: .zero))
-            for offset in 0..<Int(first.boundaryCount) {
-                correctionTemplates.append(MetalCorrection(particleIndex: first.boundaryStart + UInt32(offset), sourceIndex: UInt32(start + 2 + offset), delta: .zero))
-            }
-            for offset in 0..<Int(second.boundaryCount) {
-                correctionTemplates.append(MetalCorrection(particleIndex: second.boundaryStart + UInt32(offset), sourceIndex: UInt32(start + 2 + Int(first.boundaryCount) + offset), delta: .zero))
-            }
-        }
-        let gatherOrder = correctionTemplates.sorted {
-            $0.particleIndex == $1.particleIndex ? $0.sourceIndex < $1.sourceIndex : $0.particleIndex < $1.particleIndex
-        }.map(\.sourceIndex)
-        let sortedCorrectionCount = nextPowerOfTwo(max(1, correctionCapacity))
+        let pairIndices = preparation.pairIndices
+        let pairWork = preparation.pairWork
+        let correctionTemplates = preparation.correctionTemplates
+        let gatherOrder = preparation.gatherOrder
+        let correctionCapacity = correctionTemplates.count
+        let sortedCorrectionCount = preparation.sortedCorrectionCount
         let emptySortedCorrections = (0..<sortedCorrectionCount).map { MetalCorrection(particleIndex: .max, sourceIndex: UInt32($0), delta: .zero) }
         _ = capacityManager.ensureCapacity(for: MetalBufferRequirements(pairs: pairs.count, contacts: pairs.count, corrections: correctionCapacity))
         guard let particleBuffer = makeBuffer(snapshot.particles), let rangeBuffer = makeBuffer(snapshot.bubbleRanges), let pairBuffer = makeBuffer(pairWork), let distanceBuffer = makeBuffer(snapshot.distanceConstraints, minimumCount: 1), let areaBuffer = makeBuffer(snapshot.areaConstraints, minimumCount: 1), let correctionBuffer = makeBuffer(correctionTemplates), let gatherOrderBuffer = makeBuffer(gatherOrder), let sortedCorrectionBuffer = makeBuffer(emptySortedCorrections), let reducedBuffer = device.makeBuffer(length: snapshot.particles.count * MemoryLayout<SIMD2<Float>>.stride, options: .storageModeShared), let commandBuffer = commandQueue.makeCommandBuffer() else { throw MetalSolverError.bufferAllocationFailed }
@@ -311,6 +297,46 @@ public final class MetalBubbleSolver {
         guard commandBuffer.status == .completed else { throw MetalSolverError.commandExecutionFailed }
         let pointer = particleBuffer.contents().bindMemory(to: MetalParticle.self, capacity: snapshot.particles.count)
         return contactResult(particles: Array(UnsafeBufferPointer(start: pointer, count: snapshot.particles.count)), ranges: snapshot.bubbleRanges, candidatePairCount: pairs.count, commandPassCount: configuration.solverIterations * 5)
+    }
+
+    private func makeContactPreparation(pairs: [MetalBubblePair], ranges: [MetalBubbleRange]) -> ContactPreparation {
+        let rangeByID = Dictionary(uniqueKeysWithValues: ranges.enumerated().map { ($0.element.id, UInt32($0.offset)) })
+        let pairIndices = pairs.compactMap { pair -> SIMD2<UInt32>? in
+            guard let first = rangeByID[pair.firstID], let second = rangeByID[pair.secondID] else { return nil }
+            return SIMD2(first, second)
+        }
+        var correctionStart = 0
+        let pairWork = pairIndices.map { pair -> MetalContactPairWork in
+            defer { correctionStart += Int(ranges[Int(pair.x)].boundaryCount + ranges[Int(pair.y)].boundaryCount + 2) }
+            return MetalContactPairWork(first: pair.x, second: pair.y, correctionStart: UInt32(correctionStart))
+        }
+        var correctionTemplates: [MetalCorrection] = []
+        correctionTemplates.reserveCapacity(correctionStart)
+        for work in pairWork {
+            let first = ranges[Int(work.first)]
+            let second = ranges[Int(work.second)]
+            let start = Int(work.correctionStart)
+            correctionTemplates.append(MetalCorrection(particleIndex: first.centerIndex, sourceIndex: UInt32(start), delta: .zero))
+            correctionTemplates.append(MetalCorrection(particleIndex: second.centerIndex, sourceIndex: UInt32(start + 1), delta: .zero))
+            for offset in 0..<Int(first.boundaryCount) {
+                correctionTemplates.append(MetalCorrection(particleIndex: first.boundaryStart + UInt32(offset), sourceIndex: UInt32(start + 2 + offset), delta: .zero))
+            }
+            for offset in 0..<Int(second.boundaryCount) {
+                correctionTemplates.append(MetalCorrection(particleIndex: second.boundaryStart + UInt32(offset), sourceIndex: UInt32(start + 2 + Int(first.boundaryCount) + offset), delta: .zero))
+            }
+        }
+        let gatherOrder = correctionTemplates.sorted {
+            $0.particleIndex == $1.particleIndex ? $0.sourceIndex < $1.sourceIndex : $0.particleIndex < $1.particleIndex
+        }.map(\.sourceIndex)
+        return ContactPreparation(
+            pairs: pairs,
+            ranges: ranges,
+            pairIndices: pairIndices,
+            pairWork: pairWork,
+            correctionTemplates: correctionTemplates,
+            gatherOrder: gatherOrder,
+            sortedCorrectionCount: nextPowerOfTwo(max(1, correctionTemplates.count))
+        )
     }
 
     private func contactResult(particles: [MetalParticle], ranges: [MetalBubbleRange], candidatePairCount: Int, commandPassCount: Int) -> MetalContactStepResult {
@@ -555,6 +581,16 @@ private struct MetalContactPairWork {
     let second: UInt32
     let correctionStart: UInt32
     let padding: UInt32 = 0
+}
+
+private struct ContactPreparation {
+    let pairs: [MetalBubblePair]
+    let ranges: [MetalBubbleRange]
+    let pairIndices: [SIMD2<UInt32>]
+    let pairWork: [MetalContactPairWork]
+    let correctionTemplates: [MetalCorrection]
+    let gatherOrder: [UInt32]
+    let sortedCorrectionCount: Int
 }
 
 public enum MetalSolverError: Error {

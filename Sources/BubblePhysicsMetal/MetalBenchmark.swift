@@ -36,10 +36,12 @@ public struct MetalBenchmarkReport: Equatable, Sendable {
             contactTotal += Date().timeIntervalSince(contactStart) * 1_000
             candidates = contacts.candidatePairCount
             snapshot = snapshot.replacingParticles(contacts.particles)
-            let interactionStart = Date()
-            let interactions = try await solver.solveInteractions(snapshot: snapshot, configuration: scenario.configuration)
-            interactionTotal += Date().timeIntervalSince(interactionStart) * 1_000
-            snapshot = snapshot.replacingParticles(interactions.particles)
+            if !snapshot.polygons.isEmpty || !snapshot.grabs.isEmpty {
+                let interactionStart = Date()
+                let interactions = try await solver.solveInteractions(snapshot: snapshot, configuration: scenario.configuration)
+                interactionTotal += Date().timeIntervalSince(interactionStart) * 1_000
+                snapshot = snapshot.replacingParticles(interactions.particles)
+            }
             samples.append(Date().timeIntervalSince(stepStart) * 1_000)
             onProgress?(BenchmarkProgress(completedSteps: index + 1, totalSteps: steps))
         }
