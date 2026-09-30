@@ -1,3 +1,5 @@
+import Foundation
+
 public struct WorldDiagnostics: Equatable, Sendable {
     public let bubbleCount: Int
     public let appliedCommandCount: Int
@@ -25,7 +27,7 @@ public struct WorldStepReport: Equatable, Sendable {
 }
 
 private struct BubbleState: Sendable {
-    let restArea: Float
+    var restArea: Float
     let centerIndex: Int
     let boundaryIndices: [Int]
     var distanceConstraints: [DistanceConstraint]
@@ -46,6 +48,9 @@ public struct BubbleWorld: Sendable {
     private var contactGraph = ContactGraph()
     private var polygons: [PolygonID: RigidPolygon] = [:]
     private var polygonOrder: [PolygonID] = []
+    private var grabs: [GrabID: GrabState] = [:]
+    private var nextGrabIdentifier = 1
+    public private(set) var operationEvents: [BubbleOperationEvent] = []
 
     public init(configuration: WorldConfiguration, bounds: AABB? = nil) {
         self.configuration = configuration
@@ -119,6 +124,75 @@ public struct BubbleWorld: Sendable {
         precondition(polygons[polygon.id] == nil)
         polygons[polygon.id] = polygon
         polygonOrder.append(polygon.id)
+    }
+
+    @discardableResult
+    public mutating func beginGrab(bubbleID: BubbleID, target: Vector2) -> GrabID? {
+        guard states[bubbleID] != nil else { return nil }
+        let id = GrabID(rawValue: nextGrabIdentifier)
+        nextGrabIdentifier += 1
+        grabs[id] = GrabState(id: id, bubbleID: bubbleID, target: target)
+        return id
+    }
+
+    public mutating func moveGrabTarget(_ id: GrabID, to target: Vector2) {
+        guard var grab = grabs[id] else { return }
+        grab.update(target: target, resistance: grab.resistance)
+        grabs[id] = grab
+    }
+
+    public mutating func endGrab(_ id: GrabID) {
+        grabs.removeValue(forKey: id)
+    }
+
+    public func grabState(_ id: GrabID) -> GrabState? { grabs[id] }
+
+    @discardableResult
+    public mutating func resizeBubble(_ id: BubbleID, toRestArea restArea: Float) -> Bool {
+        guard restArea > 0, var state = states[id] else { return false }
+        let scale = sqrt(restArea / state.restArea)
+        let center = particles[state.centerIndex].position
+        for index in state.boundaryIndices {
+            var particle = particles[index]
+            particle.position = center + (particle.position - center) * scale
+            particle.previousPosition = center + (particle.previousPosition - center) * scale
+            particles[index] = particle
+        }
+        state.restArea = restArea
+        state.areaConstraint = AreaConstraint(indices: state.boundaryIndices, restArea: restArea)
+        states[id] = state
+        operationEvents.append(.resized(id, restArea: restArea))
+        synchronizeBroadPhase()
+        return true
+    }
+
+    @discardableResult
+    public mutating func merge(_ first: BubbleID, _ second: BubbleID) -> BubbleID? {
+        guard let firstState = states[first], let secondState = states[second], first != second else { return nil }
+        let firstCenter = particles[firstState.centerIndex].position
+        let secondCenter = particles[secondState.centerIndex].position
+        let area = firstState.restArea + secondState.restArea
+        let center = (firstCenter * firstState.restArea + secondCenter * secondState.restArea) * (1 / area)
+        removeBubble(first)
+        removeBubble(second)
+        let output = addBubble(center: center, restArea: area)
+        operationEvents.append(.merged(inputs: [min(first, second), max(first, second)], output: output))
+        return output
+    }
+
+    @discardableResult
+    public mutating func split(_ id: BubbleID) -> [BubbleID]? {
+        guard let state = states[id] else { return nil }
+        let center = particles[state.centerIndex].position
+        let area = state.restArea * 0.5
+        let offset = sqrt(area / .pi) * 0.5
+        removeBubble(id)
+        let outputs = [
+            addBubble(center: center + Vector2(x: -offset, y: 0), restArea: area),
+            addBubble(center: center + Vector2(x: offset, y: 0), restArea: area)
+        ]
+        operationEvents.append(.split(input: id, outputs: outputs))
+        return outputs
     }
 
     @discardableResult
@@ -212,6 +286,7 @@ public struct BubbleWorld: Sendable {
                 }
             }
             solvePolygonContacts()
+            solveGrabs()
         }
         contactGraph.synchronizeContacts(with: activeContacts)
     }
@@ -243,6 +318,26 @@ public struct BubbleWorld: Sendable {
                 }
             }
         }
+    }
+
+    private mutating func solveGrabs() {
+        for id in grabs.keys.sorted(by: { $0.rawValue < $1.rawValue }) {
+            guard var grab = grabs[id], let state = states[grab.bubbleID] else { continue }
+            let resistance = GrabConstraint(
+                particleIndex: state.centerIndex,
+                target: grab.target,
+                maximumCorrection: 1.5
+            ).project(particles: &particles)
+            grab.update(target: grab.target, resistance: resistance)
+            grabs[id] = grab
+        }
+    }
+
+    private mutating func removeBubble(_ id: BubbleID) {
+        states.removeValue(forKey: id)
+        bubbleOrder.removeAll { $0 == id }
+        broadPhase.remove(id)
+        grabs = grabs.filter { $0.value.bubbleID != id }
     }
 
     private func topology(for state: BubbleState, id: BubbleID) -> BubbleTopology {
