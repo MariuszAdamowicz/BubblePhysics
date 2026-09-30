@@ -1,4 +1,5 @@
 import BubblePhysics
+import BubblePhysicsMetal
 import SwiftUI
 
 @main
@@ -11,7 +12,7 @@ struct BubblePhysicsBenchApp: App {
 }
 
 private struct BenchmarkView: View {
-    @State private var result = "Gotowy: 300 baniek. Zacznij od szybkiego pomiaru jednego kroku."
+    @State private var result = "Gotowy: pełna ścieżka Metal, 300 deformowalnych baniek."
     @State private var running = false
 
     var body: some View {
@@ -20,13 +21,13 @@ private struct BenchmarkView: View {
                 .font(.largeTitle.bold())
             Text(result)
                 .multilineTextAlignment(.center)
-            Button("Szybki pomiar: 1 krok") {
-                run(steps: 1)
+            Button("Metal: szybki pomiar (3 kroki)") {
+                run(steps: 3)
             }
             .buttonStyle(.borderedProminent)
             .disabled(running)
 
-            Button("Pełny pomiar: 300 kroków") {
+            Button("Metal: pełny pomiar (300 kroków)") {
                 run(steps: 300)
             }
             .disabled(running)
@@ -36,28 +37,35 @@ private struct BenchmarkView: View {
 
     private func run(steps: Int) {
         running = true
-        result = "Przygotowanie sceny z 300 bańkami…"
+        result = "Przygotowanie sceny GPU z 300 bańkami…"
         Task.detached {
-            let report = BenchmarkReport.measure(steps: steps) { progress in
-                Task { @MainActor in
-                    result = "Pomiar: krok \(progress.completedSteps) / \(progress.totalSteps)"
+            do {
+                let report = try await MetalBenchmarkReport.measure(steps: steps) { progress in
+                    Task { @MainActor in
+                        result = "Metal: krok \(progress.completedSteps) / \(progress.totalSteps)"
+                    }
                 }
-            }
-            await MainActor.run {
-                let timings = report.finalStepTimings
-                result = String(
-                    format: "p50 %.2f ms · p95 %.2f ms\nPredykcja %.2f · ograniczenia %.2f · broad phase %.2f ms\nKształt %.2f · kontakty baniek %.2f · dodatkowe %.2f ms\nKandydaci %d",
-                    report.p50Milliseconds,
-                    report.p95Milliseconds,
-                    timings.predictionMilliseconds,
-                    timings.constraintMilliseconds,
-                    timings.broadPhaseMilliseconds,
-                    timings.shapeConstraintMilliseconds,
-                    timings.bubbleContactMilliseconds,
-                    timings.auxiliaryConstraintMilliseconds,
-                    report.finalDiagnostics.candidatePairCount
-                )
-                running = false
+                await MainActor.run {
+                    result = String(
+                        format: "METAL · p50 %.2f ms · p95 %.2f ms\nKształt %.2f · kontakty %.2f · interakcje %.2f ms\nCząstki %d · kandydaci %d · kontakty %d\nOverflow %@ · non-finite %@",
+                        report.p50Milliseconds,
+                        report.p95Milliseconds,
+                        report.shapeMilliseconds,
+                        report.contactMilliseconds,
+                        report.interactionMilliseconds,
+                        report.particleCount,
+                        report.candidatePairCount,
+                        report.contactCount,
+                        report.didOverflow ? "TAK" : "nie",
+                        report.hasNonFiniteState ? "TAK" : "nie"
+                    )
+                    running = false
+                }
+            } catch {
+                await MainActor.run {
+                    result = "Błąd benchmarku Metal: \(error)"
+                    running = false
+                }
             }
         }
     }

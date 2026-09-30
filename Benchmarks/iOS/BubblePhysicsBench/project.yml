@@ -13,6 +13,9 @@ targets:
       - App
     dependencies:
       - package: BubblePhysics
+        product: BubblePhysics
+      - package: BubblePhysics
+        product: BubblePhysicsMetal
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.mariuszadamowicz.BubblePhysicsBench

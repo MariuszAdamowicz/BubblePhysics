@@ -106,4 +106,8 @@ public struct MetalWorldSnapshot: Equatable, Sendable {
             areaConstraints: areaConstraints
         )
     }
+
+    public func replacingParticles(_ particles: [MetalParticle]) -> MetalWorldSnapshot {
+        MetalWorldSnapshot(particles: particles, bubbleRanges: bubbleRanges, distanceConstraints: distanceConstraints, areaConstraints: areaConstraints, polygons: polygons, grabs: grabs, configuration: configuration)
+    }
 }

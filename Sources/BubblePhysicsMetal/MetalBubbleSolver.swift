@@ -217,7 +217,7 @@ public final class MetalBubbleSolver {
 
     public func solveContacts(snapshot: MetalWorldSnapshot, configuration: WorldConfiguration) async throws -> MetalContactStepResult {
         let pairs = try await candidatePairs(snapshot: snapshot)
-        guard !pairs.isEmpty else { return contactResult(particles: snapshot.particles, ranges: snapshot.bubbleRanges) }
+        guard !pairs.isEmpty else { return contactResult(particles: snapshot.particles, ranges: snapshot.bubbleRanges, candidatePairCount: 0) }
         let rangeByID = Dictionary(uniqueKeysWithValues: snapshot.bubbleRanges.enumerated().map { ($0.element.id, UInt32($0.offset)) })
         let pairIndices = pairs.compactMap { pair -> SIMD2<UInt32>? in
             guard let first = rangeByID[pair.firstID], let second = rangeByID[pair.secondID] else { return nil }
@@ -273,10 +273,10 @@ public final class MetalBubbleSolver {
         commandBuffer.commit(); await commandBuffer.completed()
         guard commandBuffer.status == .completed else { throw MetalSolverError.commandExecutionFailed }
         let pointer = particleBuffer.contents().bindMemory(to: MetalParticle.self, capacity: snapshot.particles.count)
-        return contactResult(particles: Array(UnsafeBufferPointer(start: pointer, count: snapshot.particles.count)), ranges: snapshot.bubbleRanges)
+        return contactResult(particles: Array(UnsafeBufferPointer(start: pointer, count: snapshot.particles.count)), ranges: snapshot.bubbleRanges, candidatePairCount: pairs.count)
     }
 
-    private func contactResult(particles: [MetalParticle], ranges: [MetalBubbleRange]) -> MetalContactStepResult {
+    private func contactResult(particles: [MetalParticle], ranges: [MetalBubbleRange], candidatePairCount: Int) -> MetalContactStepResult {
         let centers = ranges.map { particles[Int($0.centerIndex)].position }
         let separation = centers.count >= 2 ? centers[1] - centers[0] : .zero
         let distance = sqrt(separation.x * separation.x + separation.y * separation.y)
@@ -290,7 +290,7 @@ public final class MetalBubbleSolver {
             }
             return abs(doubleArea) * 0.5
         }
-        return MetalContactStepResult(particles: particles, centerDistance: distance, areas: areas)
+        return MetalContactStepResult(particles: particles, centerDistance: distance, areas: areas, candidatePairCount: candidatePairCount)
     }
 
     public func solveInteractions(snapshot: MetalWorldSnapshot, configuration: WorldConfiguration) async throws -> MetalInteractionStepResult {
@@ -495,6 +495,7 @@ public struct MetalContactStepResult: Equatable, Sendable {
     public let particles: [MetalParticle]
     public let centerDistance: Float
     public let areas: [Float]
+    public let candidatePairCount: Int
 }
 
 public struct MetalInteractionStepResult: Equatable, Sendable { public let particles: [MetalParticle] }
@@ -524,4 +525,5 @@ public enum MetalSolverError: Error {
     case commandExecutionFailed
     case candidatePairOverflow
     case invalidTopologyCommand
+    case metalUnavailable
 }
