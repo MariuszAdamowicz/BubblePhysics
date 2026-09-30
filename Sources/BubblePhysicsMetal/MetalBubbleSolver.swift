@@ -212,15 +212,31 @@ public final class MetalBubbleSolver {
             partial + Int(snapshot.bubbleRanges[Int(pair.x)].boundaryCount + snapshot.bubbleRanges[Int(pair.y)].boundaryCount + 2)
         }
         _ = capacityManager.ensureCapacity(for: MetalBufferRequirements(pairs: pairs.count, contacts: pairs.count, corrections: correctionCapacity))
-        guard let particleBuffer = makeBuffer(snapshot.particles), let rangeBuffer = makeBuffer(snapshot.bubbleRanges), let pairBuffer = makeBuffer(pairIndices), let correctionBuffer = device.makeBuffer(length: max(1, correctionCapacity) * MemoryLayout<MetalCorrection>.stride, options: .storageModeShared), let correctionCountBuffer = device.makeBuffer(length: 4, options: .storageModeShared), let reducedBuffer = device.makeBuffer(length: snapshot.particles.count * MemoryLayout<SIMD2<Float>>.stride, options: .storageModeShared), let commandBuffer = commandQueue.makeCommandBuffer() else { throw MetalSolverError.bufferAllocationFailed }
-        correctionCountBuffer.contents().bindMemory(to: UInt32.self, capacity: 1).pointee = 0
+        guard let particleBuffer = makeBuffer(snapshot.particles), let rangeBuffer = makeBuffer(snapshot.bubbleRanges), let pairBuffer = makeBuffer(pairIndices), let distanceBuffer = makeBuffer(snapshot.distanceConstraints, minimumCount: 1), let areaBuffer = makeBuffer(snapshot.areaConstraints, minimumCount: 1), let correctionBuffer = device.makeBuffer(length: max(1, correctionCapacity) * MemoryLayout<MetalCorrection>.stride, options: .storageModeShared), let correctionCountBuffer = device.makeBuffer(length: 4, options: .storageModeShared), let reducedBuffer = device.makeBuffer(length: snapshot.particles.count * MemoryLayout<SIMD2<Float>>.stride, options: .storageModeShared), let commandBuffer = commandQueue.makeCommandBuffer() else { throw MetalSolverError.bufferAllocationFailed }
         var pairCount = UInt32(pairIndices.count); var capacity = UInt32(correctionCapacity); var particleCount = UInt32(snapshot.particles.count)
-        guard let contactEncoder = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
-        contactEncoder.setComputePipelineState(contactPipeline); contactEncoder.setBuffer(particleBuffer, offset: 0, index: 0); contactEncoder.setBuffer(rangeBuffer, offset: 0, index: 1); contactEncoder.setBuffer(pairBuffer, offset: 0, index: 2); contactEncoder.setBuffer(correctionBuffer, offset: 0, index: 3); contactEncoder.setBuffer(correctionCountBuffer, offset: 0, index: 4); contactEncoder.setBytes(&pairCount, length: 4, index: 5); contactEncoder.setBytes(&capacity, length: 4, index: 6); dispatch(contactEncoder, pipeline: contactPipeline, count: pairIndices.count); contactEncoder.endEncoding()
-        guard let reduceEncoder = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
-        reduceEncoder.setComputePipelineState(reductionPipeline); reduceEncoder.setBuffer(correctionBuffer, offset: 0, index: 0); reduceEncoder.setBuffer(reducedBuffer, offset: 0, index: 1); reduceEncoder.setBuffer(correctionCountBuffer, offset: 0, index: 2); reduceEncoder.setBytes(&particleCount, length: 4, index: 3); dispatch(reduceEncoder, pipeline: reductionPipeline, count: snapshot.particles.count); reduceEncoder.endEncoding()
-        guard let applyEncoder = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
-        applyEncoder.setComputePipelineState(applyCorrectionPipeline); applyEncoder.setBuffer(particleBuffer, offset: 0, index: 0); applyEncoder.setBuffer(reducedBuffer, offset: 0, index: 1); applyEncoder.setBytes(&particleCount, length: 4, index: 2); dispatch(applyEncoder, pipeline: applyCorrectionPipeline, count: snapshot.particles.count); applyEncoder.endEncoding()
+        var bubbleCount = UInt32(snapshot.bubbleRanges.count)
+        var timeStep = configuration.fixedTimeStep
+        for _ in 0..<configuration.solverIterations {
+            guard let clearEncoder = commandBuffer.makeBlitCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
+            clearEncoder.fill(buffer: correctionCountBuffer, range: 0..<4, value: 0)
+            clearEncoder.endEncoding()
+            guard let contactEncoder = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
+            contactEncoder.setComputePipelineState(contactPipeline); contactEncoder.setBuffer(particleBuffer, offset: 0, index: 0); contactEncoder.setBuffer(rangeBuffer, offset: 0, index: 1); contactEncoder.setBuffer(pairBuffer, offset: 0, index: 2); contactEncoder.setBuffer(correctionBuffer, offset: 0, index: 3); contactEncoder.setBuffer(correctionCountBuffer, offset: 0, index: 4); contactEncoder.setBytes(&pairCount, length: 4, index: 5); contactEncoder.setBytes(&capacity, length: 4, index: 6); dispatch(contactEncoder, pipeline: contactPipeline, count: pairIndices.count); contactEncoder.endEncoding()
+            guard let reduceEncoder = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
+            reduceEncoder.setComputePipelineState(reductionPipeline); reduceEncoder.setBuffer(correctionBuffer, offset: 0, index: 0); reduceEncoder.setBuffer(reducedBuffer, offset: 0, index: 1); reduceEncoder.setBuffer(correctionCountBuffer, offset: 0, index: 2); reduceEncoder.setBytes(&particleCount, length: 4, index: 3); dispatch(reduceEncoder, pipeline: reductionPipeline, count: snapshot.particles.count); reduceEncoder.endEncoding()
+            guard let applyEncoder = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
+            applyEncoder.setComputePipelineState(applyCorrectionPipeline); applyEncoder.setBuffer(particleBuffer, offset: 0, index: 0); applyEncoder.setBuffer(reducedBuffer, offset: 0, index: 1); applyEncoder.setBytes(&particleCount, length: 4, index: 2); dispatch(applyEncoder, pipeline: applyCorrectionPipeline, count: snapshot.particles.count); applyEncoder.endEncoding()
+            guard let shapeEncoder = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
+            shapeEncoder.setComputePipelineState(shapePipeline)
+            shapeEncoder.setBuffer(particleBuffer, offset: 0, index: 0)
+            shapeEncoder.setBuffer(rangeBuffer, offset: 0, index: 1)
+            shapeEncoder.setBuffer(distanceBuffer, offset: 0, index: 2)
+            shapeEncoder.setBuffer(areaBuffer, offset: 0, index: 3)
+            shapeEncoder.setBytes(&bubbleCount, length: 4, index: 4)
+            shapeEncoder.setBytes(&timeStep, length: 4, index: 5)
+            dispatch(shapeEncoder, pipeline: shapePipeline, count: snapshot.bubbleRanges.count)
+            shapeEncoder.endEncoding()
+        }
         commandBuffer.commit(); await commandBuffer.completed()
         guard commandBuffer.status == .completed else { throw MetalSolverError.commandExecutionFailed }
         let pointer = particleBuffer.contents().bindMemory(to: MetalParticle.self, capacity: snapshot.particles.count)

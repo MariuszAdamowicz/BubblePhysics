@@ -28,17 +28,27 @@ kernel void generateBubbleContacts(
     const float penetration = firstRadius + secondRadius - distance;
     if (penetration <= 0.0f) { return; }
     const float2 normal = distance > 0.00001f ? separation / distance : float2(1.0f, 0.0f);
-    const float2 firstDelta = -normal * penetration * 0.5f;
-    const float2 secondDelta = normal * penetration * 0.5f;
-    for (uint offset = 0; offset <= first.boundaryCount; ++offset) {
-        const uint particle = offset == 0 ? first.centerIndex : first.boundaryStart + offset - 1;
+    const uint firstCenterSlot = atomic_fetch_add_explicit(correctionCount, 1u, memory_order_relaxed);
+    if (firstCenterSlot < capacity) { MetalCorrection value; value.particleIndex = first.centerIndex; value.delta = -normal * penetration * 0.5f; corrections[firstCenterSlot] = value; }
+    const uint secondCenterSlot = atomic_fetch_add_explicit(correctionCount, 1u, memory_order_relaxed);
+    if (secondCenterSlot < capacity) { MetalCorrection value; value.particleIndex = second.centerIndex; value.delta = normal * penetration * 0.5f; corrections[secondCenterSlot] = value; }
+    for (uint offset = 0; offset < first.boundaryCount; ++offset) {
+        const uint particle = first.boundaryStart + offset;
+        const float2 radial = particles[particle].position - secondCenter;
+        const float radialLength = length(radial);
+        if (radialLength >= secondRadius) { continue; }
+        const float2 delta = (radialLength > 0.00001f ? radial / radialLength : -normal) * (secondRadius - radialLength + 0.01f);
         const uint slot = atomic_fetch_add_explicit(correctionCount, 1u, memory_order_relaxed);
-        if (slot < capacity) { corrections[slot] = { particle, firstDelta }; }
+        if (slot < capacity) { MetalCorrection value; value.particleIndex = particle; value.delta = delta; corrections[slot] = value; }
     }
-    for (uint offset = 0; offset <= second.boundaryCount; ++offset) {
-        const uint particle = offset == 0 ? second.centerIndex : second.boundaryStart + offset - 1;
+    for (uint offset = 0; offset < second.boundaryCount; ++offset) {
+        const uint particle = second.boundaryStart + offset;
+        const float2 radial = particles[particle].position - firstCenter;
+        const float radialLength = length(radial);
+        if (radialLength >= firstRadius) { continue; }
+        const float2 delta = (radialLength > 0.00001f ? radial / radialLength : normal) * (firstRadius - radialLength + 0.01f);
         const uint slot = atomic_fetch_add_explicit(correctionCount, 1u, memory_order_relaxed);
-        if (slot < capacity) { corrections[slot] = { particle, secondDelta }; }
+        if (slot < capacity) { MetalCorrection value; value.particleIndex = particle; value.delta = delta; corrections[slot] = value; }
     }
 }
 

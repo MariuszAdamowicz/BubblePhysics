@@ -15,6 +15,16 @@ final class MetalContactSolverTests: XCTestCase {
         XCTAssertGreaterThan(result.centerDistance, 10)
         XCTAssertEqual(result.areas[0], .pi * 100, accuracy: 2)
         XCTAssertEqual(result.areas[1], .pi * 100, accuracy: 2)
+        let range = snapshot.bubbleRanges[0]
+        let centerDelta = result.particles[Int(range.centerIndex)].position - snapshot.particles[Int(range.centerIndex)].position
+        let boundaryDeltas = (0..<Int(range.boundaryCount)).map { offset in
+            let index = Int(range.boundaryStart) + offset
+            return result.particles[index].position - snapshot.particles[index].position
+        }
+        XCTAssertTrue(boundaryDeltas.contains { delta in
+            let difference = delta - centerDelta
+            return difference.x * difference.x + difference.y * difference.y > 0.0001
+        })
     }
 
     func testMetalReductionAppliesBothCorrectionsToSharedParticle() async throws {
