@@ -21,14 +21,26 @@ public struct MetalBubbleRange: Equatable, Sendable {
     public var boundaryStart: UInt32
     public var boundaryCount: UInt32
     public var restArea: Float
-    public var padding: SIMD3<Float> = .zero
+    public var distanceConstraintStart: UInt32
+    public var distanceConstraintCount: UInt32
+    public var padding: Float = 0
 
-    public init(id: UInt32, centerIndex: UInt32, boundaryStart: UInt32, boundaryCount: UInt32, restArea: Float) {
+    public init(
+        id: UInt32,
+        centerIndex: UInt32,
+        boundaryStart: UInt32,
+        boundaryCount: UInt32,
+        restArea: Float,
+        distanceConstraintStart: UInt32 = 0,
+        distanceConstraintCount: UInt32 = 0
+    ) {
         self.id = id
         self.centerIndex = centerIndex
         self.boundaryStart = boundaryStart
         self.boundaryCount = boundaryCount
         self.restArea = restArea
+        self.distanceConstraintStart = distanceConstraintStart
+        self.distanceConstraintCount = distanceConstraintCount
     }
 }
 
@@ -37,6 +49,13 @@ public struct MetalDistanceConstraint: Equatable, Sendable {
     public var secondIndex: UInt32
     public var restLength: Float
     public var compliance: Float
+
+    public init(firstIndex: UInt32, secondIndex: UInt32, restLength: Float, compliance: Float) {
+        self.firstIndex = firstIndex
+        self.secondIndex = secondIndex
+        self.restLength = restLength
+        self.compliance = compliance
+    }
 }
 
 public struct MetalAreaConstraint: Equatable, Sendable {
@@ -44,6 +63,13 @@ public struct MetalAreaConstraint: Equatable, Sendable {
     public var boundaryCount: UInt32
     public var restArea: Float
     public var compliance: Float
+
+    public init(boundaryStart: UInt32, boundaryCount: UInt32, restArea: Float, compliance: Float) {
+        self.boundaryStart = boundaryStart
+        self.boundaryCount = boundaryCount
+        self.restArea = restArea
+        self.compliance = compliance
+    }
 }
 
 public struct MetalPolygonRange: Equatable, Sendable {
@@ -56,9 +82,18 @@ public struct MetalPolygonRange: Equatable, Sendable {
 public struct MetalEncodedWorldBuffers: Equatable, Sendable {
     public let particles: [MetalParticle]
     public let bubbleRanges: [MetalBubbleRange]
+    public let distanceConstraints: [MetalDistanceConstraint]
+    public let areaConstraints: [MetalAreaConstraint]
 
-    public init(particles: [MetalParticle], bubbleRanges: [MetalBubbleRange]) {
+    public init(
+        particles: [MetalParticle],
+        bubbleRanges: [MetalBubbleRange],
+        distanceConstraints: [MetalDistanceConstraint] = [],
+        areaConstraints: [MetalAreaConstraint] = []
+    ) {
         self.particles = particles
         self.bubbleRanges = bubbleRanges
+        self.distanceConstraints = distanceConstraints
+        self.areaConstraints = areaConstraints
     }
 }

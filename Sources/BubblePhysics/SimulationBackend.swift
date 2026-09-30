@@ -54,12 +54,53 @@ public struct SimulationBubbleSnapshot: Equatable, Sendable {
     }
 }
 
+public struct SimulationDistanceConstraintSnapshot: Equatable, Sendable {
+    public let firstIndex: Int
+    public let secondIndex: Int
+    public let restLength: Float
+    public let compliance: Float
+
+    public init(firstIndex: Int, secondIndex: Int, restLength: Float, compliance: Float) {
+        self.firstIndex = firstIndex
+        self.secondIndex = secondIndex
+        self.restLength = restLength
+        self.compliance = compliance
+    }
+}
+
+public struct SimulationAreaConstraintSnapshot: Equatable, Sendable {
+    public let boundaryIndices: [Int]
+    public let restArea: Float
+    public let compliance: Float
+
+    public init(boundaryIndices: [Int], restArea: Float, compliance: Float) {
+        self.boundaryIndices = boundaryIndices
+        self.restArea = restArea
+        self.compliance = compliance
+    }
+}
+
 public struct SimulationWorldSnapshot: Equatable, Sendable {
     public let particles: [SimulationParticleSnapshot]
     public let bubbles: [SimulationBubbleSnapshot]
+    public let distanceConstraints: [SimulationDistanceConstraintSnapshot]
+    public let areaConstraints: [SimulationAreaConstraintSnapshot]
+    public let configuration: WorldConfiguration
+    public let bounds: AABB?
 
-    public init(particles: [SimulationParticleSnapshot], bubbles: [SimulationBubbleSnapshot]) {
+    public init(
+        particles: [SimulationParticleSnapshot],
+        bubbles: [SimulationBubbleSnapshot],
+        distanceConstraints: [SimulationDistanceConstraintSnapshot] = [],
+        areaConstraints: [SimulationAreaConstraintSnapshot] = [],
+        configuration: WorldConfiguration = .default,
+        bounds: AABB? = nil
+    ) {
         self.particles = particles
         self.bubbles = bubbles
+        self.distanceConstraints = distanceConstraints
+        self.areaConstraints = areaConstraints
+        self.configuration = configuration
+        self.bounds = bounds
     }
 }

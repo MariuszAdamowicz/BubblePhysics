@@ -4,6 +4,8 @@ import simd
 public struct MetalWorldSnapshot: Equatable, Sendable {
     public let particles: [MetalParticle]
     public let bubbleRanges: [MetalBubbleRange]
+    public let distanceConstraints: [MetalDistanceConstraint]
+    public let areaConstraints: [MetalAreaConstraint]
 
     public init(world: BubbleWorld) {
         self.init(snapshot: world.simulationSnapshot())
@@ -12,7 +14,11 @@ public struct MetalWorldSnapshot: Equatable, Sendable {
     public init(snapshot: SimulationWorldSnapshot) {
         var bubbleIndices = Array(repeating: UInt32.max, count: snapshot.particles.count)
         var ranges: [MetalBubbleRange] = []
+        var encodedDistanceConstraints: [MetalDistanceConstraint] = []
+        var encodedAreaConstraints: [MetalAreaConstraint] = []
         ranges.reserveCapacity(snapshot.bubbles.count)
+        encodedAreaConstraints.reserveCapacity(snapshot.bubbles.count)
+        var distanceConstraintCursor = 0
 
         for (bubbleIndex, bubble) in snapshot.bubbles.enumerated() {
             let encodedBubbleIndex = UInt32(bubbleIndex)
@@ -20,12 +26,41 @@ public struct MetalWorldSnapshot: Equatable, Sendable {
             for index in bubble.boundaryIndices {
                 bubbleIndices[index] = encodedBubbleIndex
             }
+            let constraintCount = bubble.boundaryIndices.count * 3
+            let constraints = snapshot.distanceConstraints[
+                distanceConstraintCursor..<min(distanceConstraintCursor + constraintCount, snapshot.distanceConstraints.count)
+            ]
+            let constraintStart = encodedDistanceConstraints.count
+            encodedDistanceConstraints.append(contentsOf: constraints.map {
+                MetalDistanceConstraint(
+                    firstIndex: UInt32($0.firstIndex),
+                    secondIndex: UInt32($0.secondIndex),
+                    restLength: $0.restLength,
+                    compliance: $0.compliance
+                )
+            })
+            distanceConstraintCursor += constraints.count
             ranges.append(MetalBubbleRange(
                 id: UInt32(bubble.id.rawValue),
                 centerIndex: UInt32(bubble.centerIndex),
                 boundaryStart: UInt32(bubble.boundaryIndices.first ?? 0),
                 boundaryCount: UInt32(bubble.boundaryIndices.count),
-                restArea: bubble.restArea
+                restArea: bubble.restArea,
+                distanceConstraintStart: UInt32(constraintStart),
+                distanceConstraintCount: UInt32(constraints.count)
+            ))
+            let area = snapshot.areaConstraints.indices.contains(bubbleIndex)
+                ? snapshot.areaConstraints[bubbleIndex]
+                : SimulationAreaConstraintSnapshot(
+                    boundaryIndices: bubble.boundaryIndices,
+                    restArea: bubble.restArea,
+                    compliance: 0
+                )
+            encodedAreaConstraints.append(MetalAreaConstraint(
+                boundaryStart: UInt32(area.boundaryIndices.first ?? 0),
+                boundaryCount: UInt32(area.boundaryIndices.count),
+                restArea: area.restArea,
+                compliance: area.compliance
             ))
         }
 
@@ -38,9 +73,16 @@ public struct MetalWorldSnapshot: Equatable, Sendable {
             )
         }
         bubbleRanges = ranges
+        distanceConstraints = encodedDistanceConstraints
+        areaConstraints = encodedAreaConstraints
     }
 
     public func encodedBuffers() -> MetalEncodedWorldBuffers {
-        MetalEncodedWorldBuffers(particles: particles, bubbleRanges: bubbleRanges)
+        MetalEncodedWorldBuffers(
+            particles: particles,
+            bubbleRanges: bubbleRanges,
+            distanceConstraints: distanceConstraints,
+            areaConstraints: areaConstraints
+        )
     }
 }

@@ -156,7 +156,27 @@ public struct BubbleWorld: Sendable {
                     boundaryIndices: state.boundaryIndices,
                     restArea: state.restArea
                 )
-            }
+            },
+            distanceConstraints: bubbleOrder.compactMap { states[$0] }.flatMap { state in
+                return state.distanceConstraints.map {
+                    SimulationDistanceConstraintSnapshot(
+                        firstIndex: $0.first,
+                        secondIndex: $0.second,
+                        restLength: $0.restLength,
+                        compliance: $0.compliance
+                    )
+                }
+            },
+            areaConstraints: bubbleOrder.compactMap { id in
+                guard let state = states[id] else { return nil }
+                return SimulationAreaConstraintSnapshot(
+                    boundaryIndices: state.areaConstraint.indices,
+                    restArea: state.areaConstraint.restArea,
+                    compliance: state.areaConstraint.compliance
+                )
+            },
+            configuration: configuration,
+            bounds: bounds
         )
     }
 
