@@ -40,6 +40,12 @@ final class PrototypeSceneTests: XCTestCase {
         XCTAssertNotEqual(seeds.map { $0.id.rawValue }, seeds.map(\.value))
     }
 
+    func testLargestInspectionBubbleStartsAtTheCenterOfTheBoard() throws {
+        let largest = try XCTUnwrap(PrototypeSceneFactory.seeds(for: .inspection).max { $0.value < $1.value })
+
+        XCTAssertEqual(largest.center, Vector2(x: 187.5, y: 406))
+    }
+
     func testSceneFactoryIsDeterministic() throws {
         let first = try PrototypeSceneFactory.make(.inspection).simulationSnapshot()
         let second = try PrototypeSceneFactory.make(.inspection).simulationSnapshot()

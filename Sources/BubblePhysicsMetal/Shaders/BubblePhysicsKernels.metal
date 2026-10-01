@@ -65,3 +65,23 @@ kernel void solveWorldBounds(
     particle.previousPosition = clamped;
     particles[index] = particle;
 }
+
+kernel void recenterBubbleCenters(
+    device MetalParticle *particles [[buffer(0)]],
+    device const MetalBubbleRange *bubbleRanges [[buffer(1)]],
+    constant uint &bubbleCount [[buffer(2)]],
+    uint bubbleIndex [[thread_position_in_grid]]
+) {
+    if (bubbleIndex >= bubbleCount) { return; }
+    const MetalBubbleRange range = bubbleRanges[bubbleIndex];
+    if (range.boundaryCount == 0) { return; }
+    float2 centroid = float2(0.0f), previousCentroid = float2(0.0f);
+    for (uint offset = 0; offset < range.boundaryCount; ++offset) {
+        const MetalParticle boundary = particles[range.boundaryStart + offset];
+        centroid += boundary.position; previousCentroid += boundary.previousPosition;
+    }
+    MetalParticle center = particles[range.centerIndex];
+    center.position = centroid / float(range.boundaryCount);
+    center.previousPosition = previousCentroid / float(range.boundaryCount);
+    particles[range.centerIndex] = center;
+}

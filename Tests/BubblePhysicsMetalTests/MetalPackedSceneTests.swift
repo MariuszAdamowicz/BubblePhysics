@@ -55,10 +55,66 @@ final class MetalPackedSceneTests: XCTestCase {
         let clearanceBefore = meanClearanceNearTriangle(frame, center: occupied.position)
 
         let movedAway = KinematicTriangleMotion.default.sample(time: KinematicTriangleMotion.default.period / 2, isPaused: true)
-        for _ in 0..<48 { frame = try runFrame(session, queue: queue, triangle: movedAway) }
+        for _ in 0..<120 { frame = try runFrame(session, queue: queue, triangle: movedAway) }
         let clearanceAfter = meanClearanceNearTriangle(frame, center: occupied.position)
 
         XCTAssertLessThan(clearanceAfter, clearanceBefore)
+    }
+
+    func testRenderCentersTrackBoundaryCentroidsAfterCompression() throws {
+        let snapshot = MetalWorldSnapshot(world: try PrototypeSceneFactory.make(.inspection))
+        let (session, queue) = try makeSession(snapshot)
+        var frame: MetalFrameResources!
+        for _ in 0..<4 {
+            frame = try runFrame(session, queue: queue, triangle: KinematicTriangleMotion.default.sample(time: 0, isPaused: true))
+        }
+        let particles = readParticles(frame)
+
+        for range in snapshot.bubbleRanges {
+            let points = boundary(range, particles: particles)
+            let centroid = points.reduce(SIMD2<Float>.zero, +) / Float(points.count)
+            XCTAssertLessThan(simd_distance(particles[Int(range.centerIndex)].position, centroid), 0.5, "Bubble \(range.id) renders from a detached center")
+        }
+    }
+
+    func testInspectionSceneStillOccupiesTheBoardAfterCompression() throws {
+        let (session, queue) = try makeSession(.inspection)
+        var frame: MetalFrameResources!
+        for _ in 0..<4 {
+            frame = try runFrame(session, queue: queue, triangle: KinematicTriangleMotion.default.sample(time: 0, isPaused: true))
+        }
+        let positions = readParticles(frame).map(\.position)
+        let minimum = positions.reduce(SIMD2<Float>(repeating: .infinity)) { min($0, $1) }
+        let maximum = positions.reduce(SIMD2<Float>(repeating: -.infinity)) { max($0, $1) }
+
+        XCTAssertLessThan(minimum.x, 10, "Scene left margin is \(minimum.x)")
+        XCTAssertLessThan(minimum.y, 10, "Scene top margin is \(minimum.y)")
+        XCTAssertGreaterThan(maximum.x, 365, "Scene right edge is \(maximum.x)")
+        XCTAssertGreaterThan(maximum.y, 802, "Scene bottom edge is \(maximum.y)")
+    }
+
+    func testInspectionContactReductionHasLinearFrameCost() throws {
+        let (session, queue) = try makeSession(.inspection)
+        let triangle = KinematicTriangleMotion.default.sample(time: 0, isPaused: true)
+        _ = try runFrame(session, queue: queue, triangle: triangle)
+        let start = ProcessInfo.processInfo.systemUptime
+
+        _ = try runFrame(session, queue: queue, triangle: triangle)
+        _ = try runFrame(session, queue: queue, triangle: triangle)
+
+        XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - start, 0.20)
+    }
+
+    func testStressNarrowPhaseDoesNotSerializeWholeContourPairs() throws {
+        let (session, queue) = try makeSession(.stress)
+        let triangle = KinematicTriangleMotion.default.sample(time: 0, isPaused: true)
+        _ = try runFrame(session, queue: queue, triangle: triangle)
+        _ = try runFrame(session, queue: queue, triangle: triangle)
+        let start = ProcessInfo.processInfo.systemUptime
+
+        _ = try runFrame(session, queue: queue, triangle: triangle)
+
+        XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - start, 0.20)
     }
 
     private func makeSession(_ size: PrototypeSceneSize) throws -> (MetalSimulationSession, MTLCommandQueue) {

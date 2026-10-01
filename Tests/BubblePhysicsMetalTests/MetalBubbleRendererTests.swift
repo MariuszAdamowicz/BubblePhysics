@@ -21,6 +21,10 @@ final class MetalBubbleRendererTests: XCTestCase {
         XCTAssertNotEqual(MetalBubbleRenderer.color(for: 2), MetalBubbleRenderer.color(for: 2048))
     }
 
+    func testRendererUsesEvenOddFillForDeformableContours() throws {
+        XCTAssertEqual(try makeRenderer().fillRule, .evenOdd)
+    }
+
     func testAtlasContainsEveryLabelAndIsNotRebuiltForUnchangedScene() throws {
         let renderer = try makeRenderer()
         let ranges = [range(2), range(4), range(8)]

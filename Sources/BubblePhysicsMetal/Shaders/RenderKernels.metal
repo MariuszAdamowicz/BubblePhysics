@@ -12,6 +12,11 @@ vertex VertexOut bubbleVertex(uint id [[vertex_id]], device const MetalParticle 
     out.position = float4(clip, 0, 1);
     out.local = clip * float2(0.5, -0.5) + 0.5; return out;
 }
+vertex VertexOut fullScreenVertex(uint id [[vertex_id]]) {
+    constexpr float2 corners[6] = { {-1,-1}, {1,-1}, {-1,1}, {-1,1}, {1,-1}, {1,1} };
+    VertexOut out; out.position = float4(corners[id], 0, 1);
+    out.local = corners[id] * float2(0.5, -0.5) + 0.5; return out;
+}
 fragment float4 bubbleFragment(VertexOut in [[stage_in]], constant float4 &color [[buffer(0)]]) {
     float glow = 0.82 + 0.18 * (1.0 - in.local.y); return float4(color.rgb * glow, color.a);
 }

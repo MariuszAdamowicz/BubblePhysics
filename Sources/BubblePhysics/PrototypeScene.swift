@@ -94,14 +94,23 @@ public enum PrototypeSceneFactory {
     public static func seeds(for size: PrototypeSceneSize) -> [BenchmarkBubbleSeed] {
         switch size {
         case .inspection:
-            let values = BenchmarkScenario.expandedValues([2: 20, 4: 8, 8: 5, 16: 3, 32: 2, 64: 1, 512: 1])
+            let values = BenchmarkScenario.expandedValues([2: 20, 4: 8, 8: 5, 16: 3, 32: 2, 64: 1, 512: 1]).sorted(by: >)
             return values.enumerated().map { index, value in
-                let column = index % 5
-                let row = index / 5
+                if index == 0 {
+                    return BenchmarkBubbleSeed(
+                        id: BubbleID(rawValue: 1),
+                        value: value,
+                        center: Vector2(x: 187.5, y: 406),
+                        restArea: BenchmarkScenario.restArea(for: value)
+                    )
+                }
+                let packedIndex = index - 1
+                let column = packedIndex % 5
+                let row = packedIndex / 5
                 return BenchmarkBubbleSeed(
                     id: BubbleID(rawValue: index + 1),
                     value: value,
-                    center: Vector2(x: 48 + Float(column) * 70 + Float(row % 2) * 8, y: 72 + Float(row) * 92),
+                    center: Vector2(x: 48 + Float(column) * 70 + Float(row % 2) * 8, y: 72 + Float(row) * 104),
                     restArea: BenchmarkScenario.restArea(for: value)
                 )
             }

@@ -53,14 +53,21 @@ public struct MetalBubbleSceneStatistics: Equatable, Sendable {
     public let diagnosticPointCount: Int
 }
 
+public enum MetalBubbleFillRule: Equatable, Sendable { case evenOdd }
+
 public final class MetalBubbleRenderer: @unchecked Sendable {
     public private(set) var sceneStatistics = MetalBubbleSceneStatistics(bubbleCount: 0, fillIndexCount: 0, outlineIndexCount: 0, diagnosticPointCount: 0)
     public private(set) var atlasBuildCount = 0
+    public let fillRule: MetalBubbleFillRule = .evenOdd
     public var labelCount: Int { atlas?.entries.count ?? 0 }
 
     private let device: MTLDevice
     private let worldBounds: AABB
     private let pipeline: MTLRenderPipelineState
+    private let maskPipeline: MTLRenderPipelineState
+    private let coverPipeline: MTLRenderPipelineState
+    private let invertStencilState: MTLDepthStencilState
+    private let coverStencilState: MTLDepthStencilState
     private let labelPipeline: MTLRenderPipelineState
     private let polygonPipeline: MTLRenderPipelineState
     private var geometry: BubbleRenderGeometryBuffers?
@@ -89,23 +96,40 @@ public final class MetalBubbleRenderer: @unchecked Sendable {
         guard let library = MetalShaderLibrary.load(
                 device: device,
                 sourceName: "RenderKernels",
-                requiredFunctions: ["bubbleVertex", "bubbleFragment", "labelVertex", "labelFragment", "polygonVertex"]
+                requiredFunctions: ["bubbleVertex", "fullScreenVertex", "bubbleFragment", "labelVertex", "labelFragment", "polygonVertex"]
               ),
-              let vertex = library.makeFunction(name: "bubbleVertex"), let fragment = library.makeFunction(name: "bubbleFragment"),
+              let vertex = library.makeFunction(name: "bubbleVertex"), let fullScreenVertex = library.makeFunction(name: "fullScreenVertex"), let fragment = library.makeFunction(name: "bubbleFragment"),
               let labelVertex = library.makeFunction(name: "labelVertex"), let labelFragment = library.makeFunction(name: "labelFragment"),
               let polygonVertex = library.makeFunction(name: "polygonVertex")
         else { throw MetalSolverError.metalUnavailable }
         let descriptor = MTLRenderPipelineDescriptor(); descriptor.vertexFunction = vertex; descriptor.fragmentFunction = fragment
-        descriptor.colorAttachments[0].pixelFormat = pixelFormat
+        descriptor.colorAttachments[0].pixelFormat = pixelFormat; descriptor.stencilAttachmentPixelFormat = .stencil8
         descriptor.colorAttachments[0].isBlendingEnabled = true
         descriptor.colorAttachments[0].sourceRGBBlendFactor = .sourceAlpha; descriptor.colorAttachments[0].destinationRGBBlendFactor = .oneMinusSourceAlpha
         pipeline = try device.makeRenderPipelineState(descriptor: descriptor)
+        let maskDescriptor = MTLRenderPipelineDescriptor(); maskDescriptor.vertexFunction = vertex
+        maskDescriptor.colorAttachments[0].pixelFormat = pixelFormat; maskDescriptor.colorAttachments[0].writeMask = []
+        maskDescriptor.stencilAttachmentPixelFormat = .stencil8
+        maskPipeline = try device.makeRenderPipelineState(descriptor: maskDescriptor)
+        let coverDescriptor = MTLRenderPipelineDescriptor(); coverDescriptor.vertexFunction = fullScreenVertex; coverDescriptor.fragmentFunction = fragment
+        coverDescriptor.colorAttachments[0].pixelFormat = pixelFormat; coverDescriptor.stencilAttachmentPixelFormat = .stencil8
+        coverDescriptor.colorAttachments[0].isBlendingEnabled = true
+        coverDescriptor.colorAttachments[0].sourceRGBBlendFactor = .sourceAlpha; coverDescriptor.colorAttachments[0].destinationRGBBlendFactor = .oneMinusSourceAlpha
+        coverPipeline = try device.makeRenderPipelineState(descriptor: coverDescriptor)
+        let invertStencil = MTLStencilDescriptor(); invertStencil.stencilCompareFunction = .always; invertStencil.depthStencilPassOperation = .invert
+        let invertDescriptor = MTLDepthStencilDescriptor(); invertDescriptor.frontFaceStencil = invertStencil; invertDescriptor.backFaceStencil = invertStencil
+        guard let invertState = device.makeDepthStencilState(descriptor: invertDescriptor) else { throw MetalSolverError.metalUnavailable }
+        invertStencilState = invertState
+        let coverStencil = MTLStencilDescriptor(); coverStencil.stencilCompareFunction = .notEqual; coverStencil.depthStencilPassOperation = .keep
+        let coverStateDescriptor = MTLDepthStencilDescriptor(); coverStateDescriptor.frontFaceStencil = coverStencil; coverStateDescriptor.backFaceStencil = coverStencil
+        guard let coverState = device.makeDepthStencilState(descriptor: coverStateDescriptor) else { throw MetalSolverError.metalUnavailable }
+        coverStencilState = coverState
         let labelDescriptor = MTLRenderPipelineDescriptor(); labelDescriptor.vertexFunction = labelVertex; labelDescriptor.fragmentFunction = labelFragment
-        labelDescriptor.colorAttachments[0].pixelFormat = pixelFormat; labelDescriptor.colorAttachments[0].isBlendingEnabled = true
+        labelDescriptor.colorAttachments[0].pixelFormat = pixelFormat; labelDescriptor.stencilAttachmentPixelFormat = .stencil8; labelDescriptor.colorAttachments[0].isBlendingEnabled = true
         labelDescriptor.colorAttachments[0].sourceRGBBlendFactor = .sourceAlpha; labelDescriptor.colorAttachments[0].destinationRGBBlendFactor = .oneMinusSourceAlpha
         labelPipeline = try device.makeRenderPipelineState(descriptor: labelDescriptor)
         let polygonDescriptor = MTLRenderPipelineDescriptor(); polygonDescriptor.vertexFunction = polygonVertex; polygonDescriptor.fragmentFunction = fragment
-        polygonDescriptor.colorAttachments[0].pixelFormat = pixelFormat; polygonDescriptor.colorAttachments[0].isBlendingEnabled = true
+        polygonDescriptor.colorAttachments[0].pixelFormat = pixelFormat; polygonDescriptor.stencilAttachmentPixelFormat = .stencil8; polygonDescriptor.colorAttachments[0].isBlendingEnabled = true
         polygonDescriptor.colorAttachments[0].sourceRGBBlendFactor = .sourceAlpha; polygonDescriptor.colorAttachments[0].destinationRGBBlendFactor = .oneMinusSourceAlpha
         polygonPipeline = try device.makeRenderPipelineState(descriptor: polygonDescriptor)
     }
@@ -138,12 +162,18 @@ public final class MetalBubbleRenderer: @unchecked Sendable {
             viewport.worldToClipOffset.x,
             viewport.worldToClipOffset.y
         )
-        encoder.setRenderPipelineState(pipeline); encoder.setVertexBuffer(frame.particleBuffer, offset: 0, index: 0); encoder.setVertexBytes(&uniforms, length: MemoryLayout<SIMD4<Float>>.stride, index: 1)
+        encoder.setVertexBuffer(frame.particleBuffer, offset: 0, index: 0); encoder.setVertexBytes(&uniforms, length: MemoryLayout<SIMD4<Float>>.stride, index: 1)
         for span in geometry.bubbles {
             var color = Self.color(for: span.bubbleID)
+            encoder.setRenderPipelineState(maskPipeline); encoder.setDepthStencilState(invertStencilState); encoder.setStencilReferenceValue(0)
+            encoder.drawIndexedPrimitives(type: .triangle, indexCount: span.fillIndexRange.count, indexType: .uint32, indexBuffer: fillBuffer, indexBufferOffset: span.fillIndexRange.lowerBound * 4)
+            encoder.setRenderPipelineState(coverPipeline); encoder.setDepthStencilState(coverStencilState)
             encoder.setFragmentBytes(&color, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
+            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
+            encoder.setRenderPipelineState(maskPipeline); encoder.setDepthStencilState(invertStencilState)
             encoder.drawIndexedPrimitives(type: .triangle, indexCount: span.fillIndexRange.count, indexType: .uint32, indexBuffer: fillBuffer, indexBufferOffset: span.fillIndexRange.lowerBound * 4)
         }
+        encoder.setDepthStencilState(nil); encoder.setRenderPipelineState(pipeline)
         if let outlineBuffer {
             var color = SIMD4<Float>(0.08, 0.12, 0.2, 0.85); encoder.setFragmentBytes(&color, length: 16, index: 0)
             encoder.drawIndexedPrimitives(type: .line, indexCount: sceneStatistics.outlineIndexCount, indexType: .uint32, indexBuffer: outlineBuffer, indexBufferOffset: 0)

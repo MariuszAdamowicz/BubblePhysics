@@ -15,6 +15,9 @@ struct MetalContourContact {
 struct MetalParticle { float2 position; float2 previousPosition; float inverseMass; uint bubbleIndex; float2 padding; };
 struct MetalBubbleRange { uint id; uint centerIndex; uint boundaryStart; uint boundaryCount; float restArea; uint springStart; uint springCount; float padding; };
 struct MetalCorrection { uint particleIndex; uint sourceIndex; float2 delta; };
+struct AtomicCorrection { atomic_int x; atomic_int y; atomic_uint count; uint padding; };
+constant float correctionFixedPointScale = 4096.0f;
+constant float maximumContactCorrectionPerIteration = 4.0f;
 
 float cross2(float2 a, float2 b) { return a.x * b.y - a.y * b.x; }
 
@@ -91,6 +94,165 @@ MetalContourContact pointEdgeContact(uint pointIndex, MetalBubbleRange edgeRange
     return output;
 }
 
+kernel void resetAtomicContourContactGeneration(
+    device atomic_uint &contactCount [[buffer(0)]],
+    device atomic_uint &overflow [[buffer(1)]],
+    uint index [[thread_position_in_grid]]
+) {
+    if (index != 0) { return; }
+    atomic_store_explicit(&contactCount, 0u, memory_order_relaxed);
+    atomic_store_explicit(&overflow, 0u, memory_order_relaxed);
+}
+
+kernel void resetPairContactFlags(
+    device atomic_uint *pairContactFlags [[buffer(0)]],
+    constant uint &pairCapacity [[buffer(1)]],
+    uint pairIndex [[thread_position_in_grid]]
+) {
+    if (pairIndex < pairCapacity) { atomic_store_explicit(&pairContactFlags[pairIndex], 0u, memory_order_relaxed); }
+}
+
+void appendContourContact(
+    MetalContourContact contact,
+    device MetalContourContact *contacts,
+    device atomic_uint &contactCount,
+    device atomic_uint &overflow,
+    uint capacity
+) {
+    const uint slot = atomic_fetch_add_explicit(&contactCount, 1u, memory_order_relaxed);
+    if (slot < capacity) { contacts[slot] = contact; }
+    else { atomic_store_explicit(&overflow, 1u, memory_order_relaxed); }
+}
+
+kernel void generateContourContactsAtomic(
+    device const MetalParticle *particles [[buffer(0)]],
+    device const MetalBubbleRange *ranges [[buffer(1)]],
+    device const uint2 *pairs [[buffer(2)]],
+    device const atomic_uint &pairCount [[buffer(3)]],
+    device MetalContourContact *contacts [[buffer(4)]],
+    device atomic_uint &contactCount [[buffer(5)]],
+    device atomic_uint &overflow [[buffer(6)]],
+    constant uint &pairCapacity [[buffer(7)]],
+    constant uint &contactCapacity [[buffer(8)]],
+    uint pairIndex [[thread_position_in_grid]]
+) {
+    if (pairIndex >= min(atomic_load_explicit(&pairCount, memory_order_relaxed), pairCapacity)) { return; }
+    const uint2 pair = pairs[pairIndex];
+    const MetalBubbleRange first = ranges[pair.x], second = ranges[pair.y];
+    for (uint point = 0; point < first.boundaryCount; ++point) {
+        const uint pointIndex = first.boundaryStart + point;
+        if (pointInside(particles[pointIndex].position, second, particles)) {
+            appendContourContact(pointEdgeContact(pointIndex, second, pairIndex, 0, point, particles), contacts, contactCount, overflow, contactCapacity);
+        }
+    }
+    for (uint point = 0; point < second.boundaryCount; ++point) {
+        const uint pointIndex = second.boundaryStart + point;
+        if (pointInside(particles[pointIndex].position, first, particles)) {
+            appendContourContact(pointEdgeContact(pointIndex, first, pairIndex, 1, point, particles), contacts, contactCount, overflow, contactCapacity);
+        }
+    }
+    for (uint a = 0; a < first.boundaryCount; ++a) {
+        const uint aNext = (a + 1) % first.boundaryCount;
+        const float2 a0 = particles[first.boundaryStart + a].position;
+        const float2 a1 = particles[first.boundaryStart + aNext].position;
+        for (uint b = 0; b < second.boundaryCount; ++b) {
+            float t;
+            if (!edgeIntersection(a0, a1, particles[second.boundaryStart + b].position, particles[second.boundaryStart + (b + 1) % second.boundaryCount].position, t)) { continue; }
+            const float2 intersection = mix(particles[second.boundaryStart + b].position, particles[second.boundaryStart + (b + 1) % second.boundaryCount].position, t);
+            const bool useStart = dot(a0 - intersection, a0 - intersection) <= dot(a1 - intersection, a1 - intersection);
+            const uint pointIndex = first.boundaryStart + (useStart ? a : aNext);
+            MetalContourContact contact = pointEdgeContact(pointIndex, second, pairIndex, 2, a * second.boundaryCount + b, particles);
+            contact.penetration += 0.01f;
+            appendContourContact(contact, contacts, contactCount, overflow, contactCapacity);
+        }
+    }
+}
+
+kernel void prepareContourPointDispatch(
+    device const atomic_uint &pairCount [[buffer(0)]],
+    device uint *arguments [[buffer(1)]],
+    constant uint &pairCapacity [[buffer(2)]],
+    constant uint &maximumBoundaryCount [[buffer(3)]],
+    constant uint &threadsPerThreadgroup [[buffer(4)]],
+    uint index [[thread_position_in_grid]]
+) {
+    if (index != 0) { return; }
+    const uint pairs = min(atomic_load_explicit(&pairCount, memory_order_relaxed), pairCapacity);
+    const uint workItems = pairs * maximumBoundaryCount * 2u;
+    arguments[0] = (workItems + threadsPerThreadgroup - 1u) / threadsPerThreadgroup;
+    arguments[1] = 1u;
+    arguments[2] = 1u;
+}
+
+kernel void generateContourPointContacts(
+    device const MetalParticle *particles [[buffer(0)]],
+    device const MetalBubbleRange *ranges [[buffer(1)]],
+    device const uint2 *pairs [[buffer(2)]],
+    device const atomic_uint &pairCount [[buffer(3)]],
+    device MetalContourContact *contacts [[buffer(4)]],
+    device atomic_uint &contactCount [[buffer(5)]],
+    device atomic_uint &overflow [[buffer(6)]],
+    constant uint &pairCapacity [[buffer(7)]],
+    constant uint &contactCapacity [[buffer(8)]],
+    constant uint &maximumBoundaryCount [[buffer(9)]],
+    device atomic_uint *pairContactFlags [[buffer(10)]],
+    uint workIndex [[thread_position_in_grid]]
+) {
+    const uint workPerPair = maximumBoundaryCount * 2u;
+    const uint pairIndex = workIndex / workPerPair;
+    if (pairIndex >= min(atomic_load_explicit(&pairCount, memory_order_relaxed), pairCapacity)) { return; }
+    const uint local = workIndex - pairIndex * workPerPair;
+    const uint direction = local / maximumBoundaryCount;
+    const uint point = local - direction * maximumBoundaryCount;
+    const uint2 pair = pairs[pairIndex];
+    const MetalBubbleRange pointRange = direction == 0 ? ranges[pair.x] : ranges[pair.y];
+    const MetalBubbleRange edgeRange = direction == 0 ? ranges[pair.y] : ranges[pair.x];
+    if (point >= pointRange.boundaryCount) { return; }
+    const uint pointIndex = pointRange.boundaryStart + point;
+    if (!pointInside(particles[pointIndex].position, edgeRange, particles)) { return; }
+    atomic_store_explicit(&pairContactFlags[pairIndex], 1u, memory_order_relaxed);
+    appendContourContact(
+        pointEdgeContact(pointIndex, edgeRange, pairIndex, direction, point, particles),
+        contacts, contactCount, overflow, contactCapacity
+    );
+}
+
+kernel void generateCrossingContactsForEmptyPairs(
+    device const MetalParticle *particles [[buffer(0)]],
+    device const MetalBubbleRange *ranges [[buffer(1)]],
+    device const uint2 *pairs [[buffer(2)]],
+    device const atomic_uint &pairCount [[buffer(3)]],
+    device MetalContourContact *contacts [[buffer(4)]],
+    device atomic_uint &contactCount [[buffer(5)]],
+    device atomic_uint &overflow [[buffer(6)]],
+    constant uint &pairCapacity [[buffer(7)]],
+    constant uint &contactCapacity [[buffer(8)]],
+    device const atomic_uint *pairContactFlags [[buffer(9)]],
+    uint pairIndex [[thread_position_in_grid]]
+) {
+    if (pairIndex >= min(atomic_load_explicit(&pairCount, memory_order_relaxed), pairCapacity) ||
+        atomic_load_explicit(&pairContactFlags[pairIndex], memory_order_relaxed) != 0u) { return; }
+    const uint2 pair = pairs[pairIndex];
+    const MetalBubbleRange first = ranges[pair.x], second = ranges[pair.y];
+    for (uint a = 0; a < first.boundaryCount; ++a) {
+        const uint aNext = (a + 1) % first.boundaryCount;
+        const float2 a0 = particles[first.boundaryStart + a].position;
+        const float2 a1 = particles[first.boundaryStart + aNext].position;
+        for (uint b = 0; b < second.boundaryCount; ++b) {
+            float t;
+            if (!edgeIntersection(a0, a1, particles[second.boundaryStart + b].position,
+                                  particles[second.boundaryStart + (b + 1) % second.boundaryCount].position, t)) { continue; }
+            const float2 crossing = mix(particles[second.boundaryStart + b].position,
+                                        particles[second.boundaryStart + (b + 1) % second.boundaryCount].position, t);
+            const bool useStart = dot(a0 - crossing, a0 - crossing) <= dot(a1 - crossing, a1 - crossing);
+            MetalContourContact contact = pointEdgeContact(first.boundaryStart + (useStart ? a : aNext), second,
+                                                           pairIndex, 2u, a * second.boundaryCount + b, particles);
+            contact.penetration += 0.01f;
+            appendContourContact(contact, contacts, contactCount, overflow, contactCapacity);
+        }
+    }
+}
+
 kernel void writeContourContactFeatures(
     device const MetalParticle *particles [[buffer(0)]], device const MetalBubbleRange *ranges [[buffer(1)]],
     device const uint2 *pairs [[buffer(2)]], device const atomic_uint &pairCount [[buffer(3)]],
@@ -144,6 +306,66 @@ kernel void applyContourCorrections(
         if (corrections[index].particleIndex == particleIndex) { total += corrections[index].delta; }
     }
     particles[particleIndex].position += total;
+}
+
+kernel void resetAtomicContourCorrections(
+    device AtomicCorrection *corrections [[buffer(0)]],
+    constant uint &particleCount [[buffer(1)]],
+    uint particleIndex [[thread_position_in_grid]]
+) {
+    if (particleIndex >= particleCount) { return; }
+    atomic_store_explicit(&corrections[particleIndex].x, 0, memory_order_relaxed);
+    atomic_store_explicit(&corrections[particleIndex].y, 0, memory_order_relaxed);
+    atomic_store_explicit(&corrections[particleIndex].count, 0u, memory_order_relaxed);
+}
+
+void addAtomicCorrection(device AtomicCorrection *corrections, uint particleIndex, float2 delta) {
+    const int2 encoded = int2(round(delta * correctionFixedPointScale));
+    atomic_fetch_add_explicit(&corrections[particleIndex].x, encoded.x, memory_order_relaxed);
+    atomic_fetch_add_explicit(&corrections[particleIndex].y, encoded.y, memory_order_relaxed);
+    atomic_fetch_add_explicit(&corrections[particleIndex].count, 1u, memory_order_relaxed);
+}
+
+kernel void accumulateContourContactCorrections(
+    device const MetalParticle *particles [[buffer(0)]],
+    device const MetalContourContact *contacts [[buffer(1)]],
+    device const uint &contactCount [[buffer(2)]],
+    device const uint &overflow [[buffer(3)]],
+    device AtomicCorrection *corrections [[buffer(4)]],
+    constant uint &contactCapacity [[buffer(5)]],
+    uint contactIndex [[thread_position_in_grid]]
+) {
+    if (overflow != 0 || contactIndex >= min(contactCount, contactCapacity)) { return; }
+    const MetalContourContact contact = contacts[contactIndex];
+    const float t = contact.barycentric;
+    const float wp = particles[contact.pointIndex].inverseMass;
+    const float wa = particles[contact.edgeStartIndex].inverseMass;
+    const float wb = particles[contact.edgeEndIndex].inverseMass;
+    const float denominator = wp + wa * (1.0f - t) * (1.0f - t) + wb * t * t;
+    if (denominator <= 1e-12f) { return; }
+    const float scale = contact.penetration / denominator;
+    addAtomicCorrection(corrections, contact.pointIndex, contact.normal * (wp * scale));
+    addAtomicCorrection(corrections, contact.edgeStartIndex, -contact.normal * (wa * (1.0f - t) * scale));
+    addAtomicCorrection(corrections, contact.edgeEndIndex, -contact.normal * (wb * t * scale));
+}
+
+kernel void applyAtomicContourCorrections(
+    device MetalParticle *particles [[buffer(0)]],
+    device AtomicCorrection *corrections [[buffer(1)]],
+    constant uint &particleCount [[buffer(2)]],
+    uint particleIndex [[thread_position_in_grid]]
+) {
+    if (particleIndex >= particleCount) { return; }
+    const int x = atomic_load_explicit(&corrections[particleIndex].x, memory_order_relaxed);
+    const int y = atomic_load_explicit(&corrections[particleIndex].y, memory_order_relaxed);
+    const uint count = atomic_load_explicit(&corrections[particleIndex].count, memory_order_relaxed);
+    if (count > 0u) {
+        const float2 averaged = float2(x, y) / (correctionFixedPointScale * float(count));
+        const float magnitude = length(averaged);
+        particles[particleIndex].position += magnitude > maximumContactCorrectionPerIteration
+            ? averaged * (maximumContactCorrectionPerIteration / magnitude)
+            : averaged;
+    }
 }
 
 kernel void solveContourSelfIntersections(

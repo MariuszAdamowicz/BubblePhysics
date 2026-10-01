@@ -22,8 +22,19 @@ Po co najmniej 300 ustabilizowanych klatkach przepisz wartości z ekranu:
 
 | Scena | FPS | p50 [ms] | p95 [ms] | Overflow | Non-finite | Uwagi |
 |---|---:|---:|---:|---|---|---|
-| 40 baniek | — | — | — | — | — | oczekuje na pomiar urządzenia |
-| 300 baniek | — | — | — | — | — | oczekuje na pomiar urządzenia |
+| 40 baniek — build `6a911d4` | 7 | 137,12 | 880,61 | nie | nie | wynik odrzucony: wycinki kół zamiast konturów, zawieszenie po pewnym czasie; kontur 267,06 ms, render 0,93 ms, 921 punktów, 881 segmentów, 19 kontaktów |
+| 300 baniek — build `6a911d4` | — | — | — | — | — | zawieszenie natychmiast po przełączeniu; brak wiarygodnego pomiaru |
+| 40 baniek — build po naprawie | — | — | — | — | — | oczekuje na ponowny pomiar urządzenia |
+| 300 baniek — build po naprawie | — | — | — | — | — | oczekuje na ponowny pomiar urządzenia |
+
+## Diagnoza pierwszego uruchomienia
+
+- centrum używane przez renderer odrywało się od środka konturu, co tworzyło bardzo długie trójkąty;
+- wachlarz trójkątów nie był poprawnym sposobem wypełniania mocno wklęsłych konturów;
+- liczenie kontaktów wykonywało zbyt dużo pracy seryjnej, a korekty wielu kontaktów były sumowane bez uśrednienia;
+- aplikacja mogła wysłać kilka klatek jednocześnie do tych samych trwałych buforów GPU.
+
+Build do ponownej próby używa równoległego narrow phase, uśrednionych i ograniczonych korekt kontaktów, wypełniania konturów regułą parzystości przez stencil oraz najwyżej jednej klatki w locie.
 
 ## Kryterium
 
