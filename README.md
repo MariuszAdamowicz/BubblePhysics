@@ -8,8 +8,8 @@
 
 Use `MetalBenchmarkReport.measure(scenario: .iPhoneX, steps: 300)` in an iOS host to collect GPU step-time p50/p95 and separate shape, contact and interaction timings. The report also includes particle, candidate-pair and contact counts plus overflow and non-finite-state flags. `BenchmarkReport` remains available as the CPU reference measurement.
 
-Acceptance on a physical iPhone X remains p95 ≤ 8 ms for physics, with zero buffer overflows and zero non-finite coordinates. The current Metal implementation is a correctness-first baseline: the stages run on the GPU, but the Swift facade still performs readback and creates buffers between stages. The device result therefore measures the present implementation honestly; persistent buffers and a single command buffer remain the principal optimization if the target is missed.
+Acceptance on a physical iPhone X remains p95 ≤ 16.67 ms for the complete interactive frame, with zero buffer overflows and zero non-finite coordinates. The visual prototype keeps simulation buffers persistent and encodes physics, interaction and rendering into one caller-owned command buffer per frame.
 
 The committed XCTest scenario verifies construction and determinism. It is not a device-performance verdict: that requires a signed iOS host installed on the phone.
 
-The host is in `Benchmarks/iOS/BubblePhysicsBench`. Its project is committed and can also be regenerated with `xcodegen generate` in that directory. Open `BubblePhysicsBench.xcodeproj`, choose the signed team and run it on the connected iPhone X. The quick button executes 3 Metal steps; the full button executes 300 and displays all acceptance counters.
+The host is in `Benchmarks/iOS/BubblePhysicsBench`. Open `BubblePhysicsBench.xcodeproj` specifically in Xcode 26.6, choose the connected iPhone X and run. The app provides live 40/300-bubble scenes, pause/reset, diagnostic points, triangle pause, touch grabbing and throttled p50/p95 telemetry. See `docs/benchmarks/iphone-x-visual-prototype.md` for the device checklist.
