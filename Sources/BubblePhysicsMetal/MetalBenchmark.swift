@@ -31,12 +31,13 @@ public struct MetalBenchmarkReport: Equatable, Sendable {
         var candidates = 0
         for index in 0..<steps {
             let stepStart = Date()
-            let shapeStart = Date()
-            let shape = try await solver.solveShape(snapshot: snapshot, gravity: .zero, bounds: scenario.bounds, configuration: scenario.configuration)
-            shapeTotal += Date().timeIntervalSince(shapeStart) * 1_000
-            snapshot = snapshot.replacingParticles(shape.particles)
             let contactStart = Date()
-            let contacts = try await solver.solveContacts(snapshot: snapshot, configuration: scenario.configuration)
+            let contacts = try await solver.solveFrame(
+                snapshot: snapshot,
+                gravity: .zero,
+                bounds: scenario.bounds,
+                configuration: scenario.configuration
+            )
             contactTotal += Date().timeIntervalSince(contactStart) * 1_000
             contactBroadPhaseTotal += contacts.broadPhaseMilliseconds
             contactPreparationTotal += contacts.preparationMilliseconds

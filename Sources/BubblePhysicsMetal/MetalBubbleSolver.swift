@@ -270,6 +270,34 @@ public final class MetalBubbleSolver {
     }
 
     public func solveContacts(snapshot: MetalWorldSnapshot, configuration: WorldConfiguration) async throws -> MetalContactStepResult {
+        try await solveContactPipeline(
+            snapshot: snapshot,
+            gravity: nil,
+            bounds: nil,
+            configuration: configuration
+        )
+    }
+
+    public func solveFrame(
+        snapshot: MetalWorldSnapshot,
+        gravity: Vector2,
+        bounds: AABB?,
+        configuration: WorldConfiguration
+    ) async throws -> MetalContactStepResult {
+        try await solveContactPipeline(
+            snapshot: snapshot,
+            gravity: gravity,
+            bounds: bounds,
+            configuration: configuration
+        )
+    }
+
+    private func solveContactPipeline(
+        snapshot: MetalWorldSnapshot,
+        gravity: Vector2?,
+        bounds: AABB?,
+        configuration: WorldConfiguration
+    ) async throws -> MetalContactStepResult {
         let solveStart = ProcessInfo.processInfo.systemUptime
         let bubbleCountValue = snapshot.bubbleRanges.count
         guard bubbleCountValue > 1 else {
@@ -316,6 +344,20 @@ public final class MetalBubbleSolver {
         var particleCount = UInt32(snapshot.particles.count)
         var bubbleCount = UInt32(snapshot.bubbleRanges.count)
         var timeStep = configuration.fixedTimeStep
+
+        if let gravity {
+            var gravityValue = SIMD2<Float>(gravity.x, gravity.y)
+            var damping = configuration.linearDamping
+            guard let predictionEncoder = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
+            predictionEncoder.setComputePipelineState(predictionPipeline)
+            predictionEncoder.setBuffer(particleBuffer, offset: 0, index: 0)
+            predictionEncoder.setBytes(&particleCount, length: 4, index: 1)
+            predictionEncoder.setBytes(&gravityValue, length: MemoryLayout<SIMD2<Float>>.stride, index: 2)
+            predictionEncoder.setBytes(&timeStep, length: 4, index: 3)
+            predictionEncoder.setBytes(&damping, length: 4, index: 4)
+            dispatch(predictionEncoder, pipeline: predictionPipeline, count: snapshot.particles.count)
+            predictionEncoder.endEncoding()
+        }
 
         guard let aabbEncoder = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
         aabbEncoder.setComputePipelineState(aabbPipeline)
@@ -416,6 +458,8 @@ public final class MetalBubbleSolver {
         dispatch(neighborEncoder, pipeline: neighborWritePipeline, count: pairCapacityValue)
         neighborEncoder.endEncoding()
 
+        var boundsMinimum = SIMD2<Float>(bounds?.minimum.x ?? -.infinity, bounds?.minimum.y ?? -.infinity)
+        var boundsMaximum = SIMD2<Float>(bounds?.maximum.x ?? .infinity, bounds?.maximum.y ?? .infinity)
         for _ in 0..<configuration.solverIterations {
             guard let contactEncoder = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
             contactEncoder.setComputePipelineState(adjacencyContactPipeline)
@@ -444,6 +488,16 @@ public final class MetalBubbleSolver {
             shapeEncoder.setBytes(&timeStep, length: 4, index: 5)
             dispatch(shapeEncoder, pipeline: shapePipeline, count: snapshot.bubbleRanges.count)
             shapeEncoder.endEncoding()
+            if bounds != nil {
+                guard let boundsEncoder = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
+                boundsEncoder.setComputePipelineState(boundsPipeline)
+                boundsEncoder.setBuffer(particleBuffer, offset: 0, index: 0)
+                boundsEncoder.setBytes(&particleCount, length: 4, index: 1)
+                boundsEncoder.setBytes(&boundsMinimum, length: MemoryLayout<SIMD2<Float>>.stride, index: 2)
+                boundsEncoder.setBytes(&boundsMaximum, length: MemoryLayout<SIMD2<Float>>.stride, index: 3)
+                dispatch(boundsEncoder, pipeline: boundsPipeline, count: snapshot.particles.count)
+                boundsEncoder.endEncoding()
+            }
         }
         commandBuffer.commit(); await commandBuffer.completed()
         guard commandBuffer.status == .completed else { throw MetalSolverError.commandExecutionFailed }
@@ -457,7 +511,7 @@ public final class MetalBubbleSolver {
             particles: Array(UnsafeBufferPointer(start: pointer, count: snapshot.particles.count)),
             ranges: snapshot.bubbleRanges,
             candidatePairCount: candidatePairCount,
-            commandPassCount: configuration.solverIterations * 3,
+            commandPassCount: configuration.solverIterations * (bounds == nil ? 3 : 4) + (gravity == nil ? 0 : 1),
             broadPhaseMilliseconds: 0,
             preparationMilliseconds: 0,
             solveMilliseconds: solveMilliseconds

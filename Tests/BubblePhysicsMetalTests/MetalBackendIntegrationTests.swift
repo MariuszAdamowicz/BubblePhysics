@@ -37,4 +37,21 @@ final class MetalBackendIntegrationTests: XCTestCase {
 
         XCTAssertEqual(report.interactionMilliseconds, 0)
     }
+
+    func testFusedFrameRunsPredictionBoundsAndContactsInOneSolverCall() async throws {
+        guard let solver = MetalBubbleSolver() else { throw XCTSkip("Metal unavailable") }
+        let scenario = BenchmarkScenario.iPhoneX
+        let snapshot = MetalWorldSnapshot(world: scenario.makeWorld())
+
+        let result = try await solver.solveFrame(
+            snapshot: snapshot,
+            gravity: .zero,
+            bounds: scenario.bounds,
+            configuration: scenario.configuration
+        )
+
+        XCTAssertEqual(result.particles.count, snapshot.particles.count)
+        XCTAssertGreaterThan(result.candidatePairCount, 0)
+        XCTAssertTrue(result.particles.allSatisfy { $0.position.x.isFinite && $0.position.y.isFinite })
+    }
 }
