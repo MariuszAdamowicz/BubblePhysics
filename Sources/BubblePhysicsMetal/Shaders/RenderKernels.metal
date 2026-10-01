@@ -30,3 +30,6 @@ fragment float4 labelFragment(LabelOut in [[stage_in]], texture2d<float> atlas [
     constexpr sampler s(filter::linear, address::clamp_to_edge);
     const float alpha = atlas.sample(s, in.uv).r; return float4(0.06, 0.08, 0.12, alpha);
 }
+vertex VertexOut polygonVertex(uint id [[vertex_id]], device const float2 *vertices [[buffer(0)]], constant Uniforms &u [[buffer(1)]]) {
+    const float2 p = vertices[id]; VertexOut out; out.position = float4(p.x/u.worldSize.x*2-1, 1-p.y/u.worldSize.y*2, 0, 1); out.local = p/u.worldSize; return out;
+}

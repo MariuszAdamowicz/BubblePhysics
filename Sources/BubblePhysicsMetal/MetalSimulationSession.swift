@@ -16,11 +16,13 @@ public struct MetalFrameInput: Equatable, Sendable {
     public var gravity: Vector2?
     public var bounds: AABB?
     public var configuration: WorldConfiguration?
+    public var triangleState: KinematicTriangleState?
 
-    public init(gravity: Vector2? = nil, bounds: AABB? = nil, configuration: WorldConfiguration? = nil) {
+    public init(gravity: Vector2? = nil, bounds: AABB? = nil, configuration: WorldConfiguration? = nil, triangleState: KinematicTriangleState? = nil) {
         self.gravity = gravity
         self.bounds = bounds
         self.configuration = configuration
+        self.triangleState = triangleState
     }
 }
 
@@ -41,6 +43,8 @@ public struct MetalFrameResources: @unchecked Sendable {
     public let bubbleCount: Int
     public let pairCountBuffer: MTLBuffer
     public let comparisonCountBuffer: MTLBuffer
+    public let polygonVertexBuffer: MTLBuffer
+    public let polygonVertexCount: Int
 }
 
 final class MetalSessionBuffers {
@@ -58,6 +62,10 @@ final class MetalSessionBuffers {
     let neighborCursors: MTLBuffer
     let neighbors: MTLBuffer
     let deltas: MTLBuffer
+    let polygonVertices: MTLBuffer
+    let polygons: MTLBuffer
+    let polygonVertexCount: Int
+    let polygonCount: Int
     let particleCapacity: Int
     let bubbleCapacity: Int
     let distanceCapacity: Int
@@ -89,12 +97,16 @@ final class MetalSessionBuffers {
               let neighborCursors = buffer(UInt32.self, bubbleCapacity),
               let neighbors = buffer(UInt32.self, pairCapacity * 2),
               let deltas = buffer(SIMD2<Float>.self, particleCapacity)
+              , let polygonVertices = buffer(SIMD2<Float>.self, max(1, snapshot.polygons.reduce(0) { $0 + $1.worldVertices.count }))
+              , let polygons = buffer(MetalInteractionPolygon.self, max(1, snapshot.polygons.count))
         else { return nil }
         self.particle = particle; self.ranges = ranges; self.distance = distance; self.area = area
         self.aabb = aabb; self.keys = keys; self.pairs = pairs; self.pairCount = pairCount
         self.comparisons = comparisons; self.neighborCounts = neighborCounts
         self.neighborOffsets = neighborOffsets; self.neighborCursors = neighborCursors
         self.neighbors = neighbors; self.deltas = deltas
+        self.polygonVertices = polygonVertices; self.polygons = polygons
+        polygonVertexCount = snapshot.polygons.reduce(0) { $0 + $1.worldVertices.count }; polygonCount = snapshot.polygons.count
     }
 
     func canHold(_ snapshot: MetalWorldSnapshot) -> Bool {
@@ -105,6 +117,24 @@ final class MetalSessionBuffers {
     func upload(_ snapshot: MetalWorldSnapshot) {
         copy(snapshot.particles, to: particle); copy(snapshot.bubbleRanges, to: ranges)
         copy(snapshot.distanceConstraints, to: distance); copy(snapshot.areaConstraints, to: area)
+        var vertices: [SIMD2<Float>] = [], records: [MetalInteractionPolygon] = []
+        for polygon in snapshot.polygons {
+            let start = vertices.count; vertices.append(contentsOf: polygon.worldVertices.map { SIMD2($0.x, $0.y) })
+            records.append(.init(vertexStart: UInt32(start), vertexCount: UInt32(polygon.worldVertices.count), position: SIMD2(polygon.position.x, polygon.position.y), linearVelocity: SIMD2(polygon.linearVelocity.x, polygon.linearVelocity.y), angularVelocity: polygon.angularVelocity))
+        }
+        copy(vertices, to: polygonVertices); copy(records, to: polygons)
+    }
+
+    func updateTriangle(_ state: KinematicTriangleState, snapshot: MetalWorldSnapshot) {
+        guard let original = snapshot.polygons.first else { return }
+        let c = cos(state.angleRadians), s = sin(state.angleRadians)
+        let vertices = original.worldVertices.map { point -> SIMD2<Float> in
+            let local = SIMD2(point.x - original.position.x, point.y - original.position.y)
+            return SIMD2(state.position.x + local.x * c - local.y * s, state.position.y + local.x * s + local.y * c)
+        }
+        copy(vertices, to: polygonVertices)
+        let record = MetalInteractionPolygon(vertexStart: 0, vertexCount: UInt32(vertices.count), position: SIMD2(state.position.x, state.position.y), linearVelocity: SIMD2(state.linearVelocity.x, state.linearVelocity.y), angularVelocity: state.angularVelocity)
+        copy([record], to: polygons)
     }
 
     private func copy<T>(_ values: [T], to buffer: MTLBuffer) {
@@ -144,6 +174,7 @@ public final class MetalSimulationSession: @unchecked Sendable {
     public func encodeFrame(input: MetalFrameInput, commandBuffer: MTLCommandBuffer) throws -> MetalFrameResources {
         guard status == .ready else { throw MetalSolverError.commandExecutionFailed }
         let resources = frameResources()
+        if let triangleState = input.triangleState { buffers.updateTriangle(triangleState, snapshot: snapshot) }
         try grabController.encode(into: commandBuffer, resources: resources)
         try solver.encodeSessionFrame(snapshot: snapshot, input: input, buffers: buffers, commandBuffer: commandBuffer)
         let encodedBuffers = buffers
@@ -196,7 +227,8 @@ public final class MetalSimulationSession: @unchecked Sendable {
         MetalFrameResources(
             particleBuffer: buffers.particle, rangeBuffer: buffers.ranges,
             particleCount: snapshot.particles.count, bubbleCount: snapshot.bubbleRanges.count,
-            pairCountBuffer: buffers.pairCount, comparisonCountBuffer: buffers.comparisons
+            pairCountBuffer: buffers.pairCount, comparisonCountBuffer: buffers.comparisons,
+            polygonVertexBuffer: buffers.polygonVertices, polygonVertexCount: buffers.polygonVertexCount
         )
     }
 

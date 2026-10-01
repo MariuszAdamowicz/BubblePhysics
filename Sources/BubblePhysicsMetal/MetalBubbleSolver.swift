@@ -625,6 +625,14 @@ public final class MetalBubbleSolver {
                 bounds.setBytes(&boundsMinimum, length: MemoryLayout<SIMD2<Float>>.stride, index: 2); bounds.setBytes(&boundsMaximum, length: MemoryLayout<SIMD2<Float>>.stride, index: 3)
                 dispatch(bounds, pipeline: boundsPipeline, count: particleCountValue); bounds.endEncoding()
             }
+            if buffers.polygonCount > 0 {
+                var polygonCount = UInt32(buffers.polygonCount)
+                guard let polygon = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
+                polygon.setComputePipelineState(polygonPipeline); polygon.setBuffer(buffers.particle, offset: 0, index: 0)
+                polygon.setBuffer(buffers.polygonVertices, offset: 0, index: 1); polygon.setBuffer(buffers.polygons, offset: 0, index: 2)
+                polygon.setBytes(&particleCount, length: 4, index: 3); polygon.setBytes(&polygonCount, length: 4, index: 4); polygon.setBytes(&timeStep, length: 4, index: 5)
+                dispatch(polygon, pipeline: polygonPipeline, count: particleCountValue); polygon.endEncoding()
+            }
         }
     }
 

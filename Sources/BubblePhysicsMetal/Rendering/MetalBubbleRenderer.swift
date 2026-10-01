@@ -16,6 +16,7 @@ public final class MetalBubbleRenderer: @unchecked Sendable {
     private let device: MTLDevice
     private let pipeline: MTLRenderPipelineState
     private let labelPipeline: MTLRenderPipelineState
+    private let polygonPipeline: MTLRenderPipelineState
     private var geometry: BubbleRenderGeometryBuffers?
     private var fillBuffer: MTLBuffer?
     private var outlineBuffer: MTLBuffer?
@@ -40,7 +41,8 @@ public final class MetalBubbleRenderer: @unchecked Sendable {
               let source = try? String(contentsOf: url),
               let library = try? device.makeLibrary(source: source, options: nil),
               let vertex = library.makeFunction(name: "bubbleVertex"), let fragment = library.makeFunction(name: "bubbleFragment"),
-              let labelVertex = library.makeFunction(name: "labelVertex"), let labelFragment = library.makeFunction(name: "labelFragment")
+              let labelVertex = library.makeFunction(name: "labelVertex"), let labelFragment = library.makeFunction(name: "labelFragment"),
+              let polygonVertex = library.makeFunction(name: "polygonVertex")
         else { throw MetalSolverError.metalUnavailable }
         let descriptor = MTLRenderPipelineDescriptor(); descriptor.vertexFunction = vertex; descriptor.fragmentFunction = fragment
         descriptor.colorAttachments[0].pixelFormat = pixelFormat
@@ -51,6 +53,10 @@ public final class MetalBubbleRenderer: @unchecked Sendable {
         labelDescriptor.colorAttachments[0].pixelFormat = pixelFormat; labelDescriptor.colorAttachments[0].isBlendingEnabled = true
         labelDescriptor.colorAttachments[0].sourceRGBBlendFactor = .sourceAlpha; labelDescriptor.colorAttachments[0].destinationRGBBlendFactor = .oneMinusSourceAlpha
         labelPipeline = try device.makeRenderPipelineState(descriptor: labelDescriptor)
+        let polygonDescriptor = MTLRenderPipelineDescriptor(); polygonDescriptor.vertexFunction = polygonVertex; polygonDescriptor.fragmentFunction = fragment
+        polygonDescriptor.colorAttachments[0].pixelFormat = pixelFormat; polygonDescriptor.colorAttachments[0].isBlendingEnabled = true
+        polygonDescriptor.colorAttachments[0].sourceRGBBlendFactor = .sourceAlpha; polygonDescriptor.colorAttachments[0].destinationRGBBlendFactor = .oneMinusSourceAlpha
+        polygonPipeline = try device.makeRenderPipelineState(descriptor: polygonDescriptor)
     }
 
     public func rebuildSceneResources(ranges: [MetalBubbleRange], labels: [String]) {
@@ -93,6 +99,12 @@ public final class MetalBubbleRenderer: @unchecked Sendable {
             encoder.setRenderPipelineState(labelPipeline); encoder.setVertexBuffer(frame.particleBuffer, offset: 0, index: 0)
             encoder.setVertexBytes(&uniforms, length: MemoryLayout<SIMD4<Float>>.stride, index: 1); encoder.setVertexBuffer(labelInstanceBuffer, offset: 0, index: 2)
             encoder.setFragmentTexture(atlas.texture, index: 0); encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6, instanceCount: labelInstanceCount)
+        }
+        if frame.polygonVertexCount >= 3 {
+            var color = SIMD4<Float>(0.95, 0.38, 0.18, 0.88)
+            encoder.setRenderPipelineState(polygonPipeline); encoder.setVertexBuffer(frame.polygonVertexBuffer, offset: 0, index: 0)
+            encoder.setVertexBytes(&uniforms, length: MemoryLayout<SIMD4<Float>>.stride, index: 1); encoder.setFragmentBytes(&color, length: 16, index: 0)
+            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: frame.polygonVertexCount)
         }
         encoder.endEncoding(); return true
     }
