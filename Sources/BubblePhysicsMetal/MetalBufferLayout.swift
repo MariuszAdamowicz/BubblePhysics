@@ -148,6 +148,68 @@ public struct MetalCorrection: Equatable, Sendable {
     }
 }
 
+public struct MetalContourContactSourceID: Equatable, Comparable, Sendable {
+    public let rawValue: UInt64
+
+    public init(pairIndex: UInt32, direction: UInt32, feature: UInt32) {
+        rawValue = (UInt64(pairIndex) << 32) |
+            (UInt64(direction & 0x0f) << 28) |
+            UInt64(feature & 0x0fff_ffff)
+    }
+
+    public static func < (lhs: MetalContourContactSourceID, rhs: MetalContourContactSourceID) -> Bool {
+        lhs.rawValue < rhs.rawValue
+    }
+}
+
+public struct MetalContourContact: Equatable, Sendable {
+    public var pointIndex: UInt32
+    public var edgeStartIndex: UInt32
+    public var edgeEndIndex: UInt32
+    public var barycentric: Float
+    public var normal: SIMD2<Float>
+    public var penetration: Float
+    public var padding: UInt32 = 0
+    public var sourceID: UInt64
+    public var trailingPadding: SIMD2<UInt32> = .zero
+
+    public init(
+        pointIndex: UInt32,
+        edgeStartIndex: UInt32,
+        edgeEndIndex: UInt32,
+        barycentric: Float,
+        normal: SIMD2<Float>,
+        penetration: Float,
+        sourceID: UInt64
+    ) {
+        self.pointIndex = pointIndex
+        self.edgeStartIndex = edgeStartIndex
+        self.edgeEndIndex = edgeEndIndex
+        self.barycentric = barycentric
+        self.normal = normal
+        self.penetration = penetration
+        self.sourceID = sourceID
+    }
+}
+
+public enum MetalContourContactReservation: Equatable, Sendable {
+    case fits(totalCount: Int)
+    case overflow(requiredCapacity: Int)
+}
+
+public struct MetalContourContactCapacityPlan: Equatable, Sendable {
+    public let capacity: Int
+
+    public init(capacity: Int) {
+        self.capacity = max(0, capacity)
+    }
+
+    public func reservation(for sourceCounts: [Int]) -> MetalContourContactReservation {
+        let required = sourceCounts.reduce(0, +)
+        return required <= capacity ? .fits(totalCount: required) : .overflow(requiredCapacity: required)
+    }
+}
+
 public struct MetalEncodedWorldBuffers: Equatable, Sendable {
     public let particles: [MetalParticle]
     public let bubbleRanges: [MetalBubbleRange]

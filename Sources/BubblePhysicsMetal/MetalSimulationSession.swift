@@ -64,6 +64,11 @@ final class MetalSessionBuffers {
     let deltas: MTLBuffer
     let polygonVertices: MTLBuffer
     let polygons: MTLBuffer
+    let contourContacts: MTLBuffer
+    let contourContactCounts: MTLBuffer
+    let contourContactOffsets: MTLBuffer
+    let contourContactTotal: MTLBuffer
+    let contourContactOverflow: MTLBuffer
     let polygonVertexCount: Int
     let polygonCount: Int
     let particleCapacity: Int
@@ -72,6 +77,7 @@ final class MetalSessionBuffers {
     let areaCapacity: Int
     let pairCapacity: Int
     let sortCapacity: Int
+    let contourContactCapacity: Int
 
     init?(device: MTLDevice, snapshot: MetalWorldSnapshot) {
         particleCapacity = max(1, snapshot.particles.count)
@@ -80,6 +86,7 @@ final class MetalSessionBuffers {
         areaCapacity = max(1, snapshot.areaConstraints.count)
         pairCapacity = max(1, bubbleCapacity * (bubbleCapacity - 1) / 2)
         sortCapacity = Self.nextPowerOfTwo(bubbleCapacity)
+        contourContactCapacity = max(1, snapshot.particles.count * 8)
         func buffer<T>(_ type: T.Type, _ count: Int) -> MTLBuffer? {
             device.makeBuffer(length: max(1, count) * MemoryLayout<T>.stride, options: .storageModeShared)
         }
@@ -99,6 +106,11 @@ final class MetalSessionBuffers {
               let deltas = buffer(SIMD2<Float>.self, particleCapacity)
               , let polygonVertices = buffer(SIMD2<Float>.self, max(1, snapshot.polygons.reduce(0) { $0 + $1.worldVertices.count }))
               , let polygons = buffer(MetalInteractionPolygon.self, max(1, snapshot.polygons.count))
+              , let contourContacts = buffer(MetalContourContact.self, contourContactCapacity)
+              , let contourContactCounts = buffer(UInt32.self, pairCapacity * 3)
+              , let contourContactOffsets = buffer(UInt32.self, pairCapacity * 3 + 1)
+              , let contourContactTotal = buffer(UInt32.self, 1)
+              , let contourContactOverflow = buffer(UInt32.self, 1)
         else { return nil }
         self.particle = particle; self.ranges = ranges; self.distance = distance; self.area = area
         self.aabb = aabb; self.keys = keys; self.pairs = pairs; self.pairCount = pairCount
@@ -106,7 +118,12 @@ final class MetalSessionBuffers {
         self.neighborOffsets = neighborOffsets; self.neighborCursors = neighborCursors
         self.neighbors = neighbors; self.deltas = deltas
         self.polygonVertices = polygonVertices; self.polygons = polygons
+        self.contourContacts = contourContacts; self.contourContactCounts = contourContactCounts
+        self.contourContactOffsets = contourContactOffsets; self.contourContactTotal = contourContactTotal
+        self.contourContactOverflow = contourContactOverflow
         polygonVertexCount = snapshot.polygons.reduce(0) { $0 + $1.worldVertices.count }; polygonCount = snapshot.polygons.count
+        contourContactTotal.contents().bindMemory(to: UInt32.self, capacity: 1).pointee = 0
+        contourContactOverflow.contents().bindMemory(to: UInt32.self, capacity: 1).pointee = 0
     }
 
     func canHold(_ snapshot: MetalWorldSnapshot) -> Bool {
