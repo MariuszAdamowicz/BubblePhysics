@@ -37,9 +37,11 @@ public final class MetalBubbleRenderer: @unchecked Sendable {
 
     public init(device: MTLDevice, pixelFormat: MTLPixelFormat) throws {
         self.device = device
-        guard let url = Bundle.module.url(forResource: "RenderKernels", withExtension: "metal"),
-              let source = try? String(contentsOf: url),
-              let library = try? device.makeLibrary(source: source, options: nil),
+        guard let library = MetalShaderLibrary.load(
+                device: device,
+                sourceName: "RenderKernels",
+                requiredFunctions: ["bubbleVertex", "bubbleFragment", "labelVertex", "labelFragment", "polygonVertex"]
+              ),
               let vertex = library.makeFunction(name: "bubbleVertex"), let fragment = library.makeFunction(name: "bubbleFragment"),
               let labelVertex = library.makeFunction(name: "labelVertex"), let labelFragment = library.makeFunction(name: "labelFragment"),
               let polygonVertex = library.makeFunction(name: "polygonVertex")

@@ -28,9 +28,11 @@ public final class MetalGrabController: @unchecked Sendable {
         targetSmoothing: Float = 0.35,
         maximumCorrection: Float = 1.5
     ) throws {
-        guard let url = Bundle.module.url(forResource: "InteractionKernels", withExtension: "metal"),
-              let source = try? String(contentsOf: url),
-              let library = try? device.makeLibrary(source: source, options: nil),
+        guard let library = MetalShaderLibrary.load(
+                device: device,
+                sourceName: "InteractionKernels",
+                requiredFunctions: ["pickBubble", "applyResistantGrab"]
+              ),
               let pick = library.makeFunction(name: "pickBubble"),
               let grab = library.makeFunction(name: "applyResistantGrab"),
               let pickPipeline = try? device.makeComputePipelineState(function: pick),
