@@ -68,6 +68,7 @@ public final class MetalBubbleRenderer: @unchecked Sendable {
     private let coverPipeline: MTLRenderPipelineState
     private let invertStencilState: MTLDepthStencilState
     private let coverStencilState: MTLDepthStencilState
+    private let neutralStencilState: MTLDepthStencilState
     private let labelPipeline: MTLRenderPipelineState
     private let polygonPipeline: MTLRenderPipelineState
     private var geometry: BubbleRenderGeometryBuffers?
@@ -124,6 +125,8 @@ public final class MetalBubbleRenderer: @unchecked Sendable {
         let coverStateDescriptor = MTLDepthStencilDescriptor(); coverStateDescriptor.frontFaceStencil = coverStencil; coverStateDescriptor.backFaceStencil = coverStencil
         guard let coverState = device.makeDepthStencilState(descriptor: coverStateDescriptor) else { throw MetalSolverError.metalUnavailable }
         coverStencilState = coverState
+        guard let neutralState = device.makeDepthStencilState(descriptor: MTLDepthStencilDescriptor()) else { throw MetalSolverError.metalUnavailable }
+        neutralStencilState = neutralState
         let labelDescriptor = MTLRenderPipelineDescriptor(); labelDescriptor.vertexFunction = labelVertex; labelDescriptor.fragmentFunction = labelFragment
         labelDescriptor.colorAttachments[0].pixelFormat = pixelFormat; labelDescriptor.stencilAttachmentPixelFormat = .stencil8; labelDescriptor.colorAttachments[0].isBlendingEnabled = true
         labelDescriptor.colorAttachments[0].sourceRGBBlendFactor = .sourceAlpha; labelDescriptor.colorAttachments[0].destinationRGBBlendFactor = .oneMinusSourceAlpha
@@ -173,7 +176,7 @@ public final class MetalBubbleRenderer: @unchecked Sendable {
             encoder.setRenderPipelineState(maskPipeline); encoder.setDepthStencilState(invertStencilState)
             encoder.drawIndexedPrimitives(type: .triangle, indexCount: span.fillIndexRange.count, indexType: .uint32, indexBuffer: fillBuffer, indexBufferOffset: span.fillIndexRange.lowerBound * 4)
         }
-        encoder.setDepthStencilState(nil); encoder.setRenderPipelineState(pipeline)
+        encoder.setDepthStencilState(neutralStencilState); encoder.setRenderPipelineState(pipeline)
         if let outlineBuffer {
             var color = SIMD4<Float>(0.08, 0.12, 0.2, 0.85); encoder.setFragmentBytes(&color, length: 16, index: 0)
             encoder.drawIndexedPrimitives(type: .line, indexCount: sceneStatistics.outlineIndexCount, indexType: .uint32, indexBuffer: outlineBuffer, indexBufferOffset: 0)
