@@ -124,3 +124,88 @@ kernel void applyGatheredCorrections(
     particles[particleIndex].position += sum;
     particles[particleIndex].previousPosition += sum;
 }
+
+kernel void countBubbleNeighbors(
+    device const uint2 *pairs [[buffer(0)]],
+    device const atomic_uint *pairCount [[buffer(1)]],
+    device atomic_uint *neighborCounts [[buffer(2)]],
+    constant uint &pairCapacity [[buffer(3)]],
+    uint pairIndex [[thread_position_in_grid]]
+) {
+    const uint count = min(atomic_load_explicit(pairCount, memory_order_relaxed), pairCapacity);
+    if (pairIndex >= count) { return; }
+    const uint2 pair = pairs[pairIndex];
+    atomic_fetch_add_explicit(&neighborCounts[pair.x], 1u, memory_order_relaxed);
+    atomic_fetch_add_explicit(&neighborCounts[pair.y], 1u, memory_order_relaxed);
+}
+
+kernel void prefixBubbleNeighbors(
+    device const atomic_uint *neighborCounts [[buffer(0)]],
+    device uint *neighborOffsets [[buffer(1)]],
+    device atomic_uint *writeCursors [[buffer(2)]],
+    constant uint &bubbleCount [[buffer(3)]],
+    uint index [[thread_position_in_grid]]
+) {
+    if (index != 0) { return; }
+    uint offset = 0;
+    for (uint bubble = 0; bubble < bubbleCount; ++bubble) {
+        neighborOffsets[bubble] = offset;
+        atomic_store_explicit(&writeCursors[bubble], offset, memory_order_relaxed);
+        offset += atomic_load_explicit(&neighborCounts[bubble], memory_order_relaxed);
+    }
+    neighborOffsets[bubbleCount] = offset;
+}
+
+kernel void writeBubbleNeighbors(
+    device const uint2 *pairs [[buffer(0)]],
+    device const atomic_uint *pairCount [[buffer(1)]],
+    device atomic_uint *writeCursors [[buffer(2)]],
+    device uint *neighbors [[buffer(3)]],
+    constant uint &pairCapacity [[buffer(4)]],
+    uint pairIndex [[thread_position_in_grid]]
+) {
+    const uint count = min(atomic_load_explicit(pairCount, memory_order_relaxed), pairCapacity);
+    if (pairIndex >= count) { return; }
+    const uint2 pair = pairs[pairIndex];
+    const uint firstSlot = atomic_fetch_add_explicit(&writeCursors[pair.x], 1u, memory_order_relaxed);
+    const uint secondSlot = atomic_fetch_add_explicit(&writeCursors[pair.y], 1u, memory_order_relaxed);
+    neighbors[firstSlot] = pair.y;
+    neighbors[secondSlot] = pair.x;
+}
+
+kernel void generateAdjacencyCorrections(
+    device const MetalParticle *particles [[buffer(0)]],
+    device const MetalBubbleRange *ranges [[buffer(1)]],
+    device const uint *neighborOffsets [[buffer(2)]],
+    device const uint *neighbors [[buffer(3)]],
+    device float2 *deltas [[buffer(4)]],
+    constant uint &particleCount [[buffer(5)]],
+    uint particleIndex [[thread_position_in_grid]]
+) {
+    if (particleIndex >= particleCount) { return; }
+    const uint bubbleIndex = particles[particleIndex].bubbleIndex;
+    const MetalBubbleRange own = ranges[bubbleIndex];
+    const float2 ownCenter = particles[own.centerIndex].position;
+    float2 total = float2(0.0f);
+    for (uint cursor = neighborOffsets[bubbleIndex]; cursor < neighborOffsets[bubbleIndex + 1]; ++cursor) {
+        const MetalBubbleRange other = ranges[neighbors[cursor]];
+        const float2 otherCenter = particles[other.centerIndex].position;
+        const float2 separation = otherCenter - ownCenter;
+        const float distance = length(separation);
+        const float ownRadius = sqrt(own.restArea / M_PI_F);
+        const float otherRadius = sqrt(other.restArea / M_PI_F);
+        const float penetration = ownRadius + otherRadius - distance;
+        if (penetration <= 0.0f) { continue; }
+        const float2 normal = distance > 0.00001f ? separation / distance : float2(1.0f, 0.0f);
+        if (particleIndex == own.centerIndex) {
+            total -= normal * penetration * 0.5f;
+        } else {
+            const float2 radial = particles[particleIndex].position - otherCenter;
+            const float radialLength = length(radial);
+            if (radialLength < otherRadius) {
+                total += (radialLength > 0.00001f ? radial / radialLength : -normal) * (otherRadius - radialLength + 0.01f);
+            }
+        }
+    }
+    deltas[particleIndex] = total;
+}

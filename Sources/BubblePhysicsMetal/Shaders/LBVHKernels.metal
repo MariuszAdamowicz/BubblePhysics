@@ -69,7 +69,7 @@ kernel void emitCandidatePairs(
         if (a.y > b.w || a.w < b.y) { continue; }
         const uint slot = atomic_fetch_add_explicit(pairCount, 1u, memory_order_relaxed);
         if (slot < capacity) {
-            pairs[slot] = uint2(ranges[firstIndex].id, ranges[secondIndex].id);
+            pairs[slot] = uint2(firstIndex, secondIndex);
         }
     }
 }
