@@ -16,7 +16,7 @@ let package = Package(
         .target(
             name: "BubblePhysicsMetal",
             dependencies: ["BubblePhysics"],
-            resources: [.copy("Shaders/BubblePhysicsKernels.metal"), .copy("Shaders/LBVHKernels.metal"), .copy("Shaders/ContactKernels.metal"), .copy("Shaders/ContourContactKernels.metal"), .copy("Shaders/RemeshKernels.metal"), .copy("Shaders/PolygonKernels.metal"), .copy("Shaders/InteractionKernels.metal"), .copy("Shaders/RenderKernels.metal")]
+            resources: [.copy("Shaders/BubblePhysicsKernels.metal"), .copy("Shaders/LBVHKernels.metal"), .copy("Shaders/ContactKernels.metal"), .copy("Shaders/ContourContactKernels.metal"), .copy("Shaders/RemeshKernels.metal"), .copy("Shaders/PolygonKernels.metal"), .copy("Shaders/InteractionKernels.metal"), .copy("Shaders/RenderKernels.metal"), .copy("Shaders/RadialBubbleKernels.metal")]
         ),
         .testTarget(name: "BubblePhysicsTests", dependencies: ["BubblePhysics"]),
         .testTarget(name: "BubblePhysicsMetalTests", dependencies: ["BubblePhysics", "BubblePhysicsMetal"])
