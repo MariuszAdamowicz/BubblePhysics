@@ -47,8 +47,29 @@ kernel void sortMortonKeysInThreadgroup(
     }
 }
 kernel void buildLBVH(device const float4 *bounds [[buffer(0)]], device const uint2 *keys [[buffer(1)]], device float4 *tree [[buffer(2)]], constant uint &count [[buffer(3)]], constant uint &leafBase [[buffer(4)]], constant uint &levelStart [[buffer(5)]], constant uint &levelCount [[buffer(6)]], uint index [[thread_position_in_grid]]) { if (index >= levelCount) { return; } const uint node = levelStart + index; if (node >= leafBase) { const uint sorted = node - leafBase; tree[node] = sorted < count ? bounds[keys[sorted].y] : float4(INFINITY, INFINITY, -INFINITY, -INFINITY); } else { const float4 left = tree[node * 2]; const float4 right = tree[node * 2 + 1]; tree[node] = float4(min(left.xy, right.xy), max(left.zw, right.zw)); } }
-kernel void emitCandidatePairs(device const float4 *bounds [[buffer(0)]], device const MetalBubbleRange *ranges [[buffer(1)]], device const uint2 *keys [[buffer(2)]], device uint2 *pairs [[buffer(3)]], device atomic_uint *pairCount [[buffer(4)]], device atomic_uint *comparisonCount [[buffer(5)]], device const float4 *tree [[buffer(6)]], constant uint &count [[buffer(7)]], constant uint &capacity [[buffer(8)]], constant uint &leafBase [[buffer(9)]], uint first [[thread_position_in_grid]]) {
+kernel void emitCandidatePairs(
+    device const float4 *bounds [[buffer(0)]],
+    device const MetalBubbleRange *ranges [[buffer(1)]],
+    device const uint2 *keys [[buffer(2)]],
+    device uint2 *pairs [[buffer(3)]],
+    device atomic_uint *pairCount [[buffer(4)]],
+    device atomic_uint *comparisonCount [[buffer(5)]],
+    constant uint &count [[buffer(6)]],
+    constant uint &capacity [[buffer(7)]],
+    uint first [[thread_position_in_grid]]
+) {
     if (first >= count) { return; }
-    const uint firstIndex = keys[first].y; const float4 a = bounds[firstIndex]; uint stack[64]; uint depth = 1; stack[0] = 1;
-    while (depth > 0) { const uint node = stack[--depth]; const float4 b = tree[node]; if (a.x > b.z || a.z < b.x || a.y > b.w || a.w < b.y) { continue; } if (node >= leafBase) { const uint second = node - leafBase; if (second <= first || second >= count) { continue; } const uint secondIndex = keys[second].y; atomic_fetch_add_explicit(comparisonCount, 1u, memory_order_relaxed); const uint slot = atomic_fetch_add_explicit(pairCount, 1u, memory_order_relaxed); if (slot < capacity) { pairs[slot] = uint2(ranges[firstIndex].id, ranges[secondIndex].id); } } else if (depth <= 62) { stack[depth++] = node * 2; stack[depth++] = node * 2 + 1; } }
+    const uint firstIndex = keys[first].y;
+    const float4 a = bounds[firstIndex];
+    for (uint second = first + 1; second < count; ++second) {
+        atomic_fetch_add_explicit(comparisonCount, 1u, memory_order_relaxed);
+        const uint secondIndex = keys[second].y;
+        const float4 b = bounds[secondIndex];
+        if (b.x > a.z) { break; }
+        if (a.y > b.w || a.w < b.y) { continue; }
+        const uint slot = atomic_fetch_add_explicit(pairCount, 1u, memory_order_relaxed);
+        if (slot < capacity) {
+            pairs[slot] = uint2(ranges[firstIndex].id, ranges[secondIndex].id);
+        }
+    }
 }

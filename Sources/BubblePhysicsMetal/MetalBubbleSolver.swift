@@ -145,7 +145,6 @@ public final class MetalBubbleSolver {
               let rangeBuffer = makeBuffer(snapshot.bubbleRanges),
               let aabbBuffer = device.makeBuffer(length: bubbleCount * MemoryLayout<SIMD4<Float>>.stride, options: .storageModeShared),
               let keyBuffer = device.makeBuffer(length: nextPowerOfTwo(bubbleCount) * MemoryLayout<SIMD2<UInt32>>.stride, options: .storageModeShared),
-              let treeBuffer = device.makeBuffer(length: nextPowerOfTwo(bubbleCount) * 2 * MemoryLayout<SIMD4<Float>>.stride, options: .storageModeShared),
               let pairBuffer = device.makeBuffer(length: max(1, capacities.pairs) * MemoryLayout<SIMD2<UInt32>>.stride, options: .storageModeShared),
               let countBuffer = device.makeBuffer(length: MemoryLayout<UInt32>.stride, options: .storageModeShared),
               let comparisonBuffer = device.makeBuffer(length: MemoryLayout<UInt32>.stride, options: .storageModeShared),
@@ -210,39 +209,6 @@ public final class MetalBubbleSolver {
                 stage *= 2
             }
         }
-        var leafBase = UInt32(sortCount)
-        var levelStart = UInt32(sortCount)
-        var levelCount = UInt32(sortCount)
-        guard let leafEncoder = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
-        leafEncoder.setComputePipelineState(buildPipeline)
-        leafEncoder.setBuffer(aabbBuffer, offset: 0, index: 0)
-        leafEncoder.setBuffer(keyBuffer, offset: 0, index: 1)
-        leafEncoder.setBuffer(treeBuffer, offset: 0, index: 2)
-        leafEncoder.setBytes(&encodedCount, length: MemoryLayout<UInt32>.stride, index: 3)
-        leafEncoder.setBytes(&leafBase, length: MemoryLayout<UInt32>.stride, index: 4)
-        leafEncoder.setBytes(&levelStart, length: MemoryLayout<UInt32>.stride, index: 5)
-        leafEncoder.setBytes(&levelCount, length: MemoryLayout<UInt32>.stride, index: 6)
-        dispatch(leafEncoder, pipeline: buildPipeline, count: sortCount)
-        leafEncoder.endEncoding()
-        var parentCount = sortCount / 2
-        var treePassCount = 1
-        while parentCount > 0 {
-            levelStart = UInt32(parentCount)
-            levelCount = UInt32(parentCount)
-            guard let treeEncoder = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
-            treeEncoder.setComputePipelineState(buildPipeline)
-            treeEncoder.setBuffer(aabbBuffer, offset: 0, index: 0)
-            treeEncoder.setBuffer(keyBuffer, offset: 0, index: 1)
-            treeEncoder.setBuffer(treeBuffer, offset: 0, index: 2)
-            treeEncoder.setBytes(&encodedCount, length: MemoryLayout<UInt32>.stride, index: 3)
-            treeEncoder.setBytes(&leafBase, length: MemoryLayout<UInt32>.stride, index: 4)
-            treeEncoder.setBytes(&levelStart, length: MemoryLayout<UInt32>.stride, index: 5)
-            treeEncoder.setBytes(&levelCount, length: MemoryLayout<UInt32>.stride, index: 6)
-            dispatch(treeEncoder, pipeline: buildPipeline, count: parentCount)
-            treeEncoder.endEncoding()
-            treePassCount += 1
-            parentCount /= 2
-        }
         guard let pairEncoder = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
         pairEncoder.setComputePipelineState(pairPipeline)
         pairEncoder.setBuffer(aabbBuffer, offset: 0, index: 0)
@@ -251,10 +217,8 @@ public final class MetalBubbleSolver {
         pairEncoder.setBuffer(pairBuffer, offset: 0, index: 3)
         pairEncoder.setBuffer(countBuffer, offset: 0, index: 4)
         pairEncoder.setBuffer(comparisonBuffer, offset: 0, index: 5)
-        pairEncoder.setBuffer(treeBuffer, offset: 0, index: 6)
-        pairEncoder.setBytes(&encodedCount, length: MemoryLayout<UInt32>.stride, index: 7)
-        pairEncoder.setBytes(&pairCapacity, length: MemoryLayout<UInt32>.stride, index: 8)
-        pairEncoder.setBytes(&leafBase, length: MemoryLayout<UInt32>.stride, index: 9)
+        pairEncoder.setBytes(&encodedCount, length: MemoryLayout<UInt32>.stride, index: 6)
+        pairEncoder.setBytes(&pairCapacity, length: MemoryLayout<UInt32>.stride, index: 7)
         dispatch(pairEncoder, pipeline: pairPipeline, count: bubbleCount)
         pairEncoder.endEncoding()
         commandBuffer.commit()
@@ -262,7 +226,7 @@ public final class MetalBubbleSolver {
         guard commandBuffer.status == .completed else { throw MetalSolverError.commandExecutionFailed }
         let count = Int(countBuffer.contents().bindMemory(to: UInt32.self, capacity: 1).pointee)
         lastBroadPhaseComparisonCount = Int(comparisonBuffer.contents().bindMemory(to: UInt32.self, capacity: 1).pointee)
-        lastBroadPhaseCommandPassCount = 3 + sortPassCount + treePassCount
+        lastBroadPhaseCommandPassCount = 3 + sortPassCount
         guard count <= capacities.pairs else { throw MetalSolverError.candidatePairOverflow }
         let records = pairBuffer.contents().bindMemory(to: SIMD2<UInt32>.self, capacity: count)
         return Array(UnsafeBufferPointer(start: records, count: count)).map { MetalBubblePair(firstID: $0.x, secondID: $0.y) }.sorted()

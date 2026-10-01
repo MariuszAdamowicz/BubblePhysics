@@ -47,6 +47,6 @@ final class MetalBroadPhaseTests: XCTestCase {
 
         _ = try await solver.candidatePairs(snapshot: snapshot)
 
-        XCTAssertLessThanOrEqual(solver.lastBroadPhaseCommandPassCount, 16)
+        XCTAssertEqual(solver.lastBroadPhaseCommandPassCount, 4)
     }
 }
