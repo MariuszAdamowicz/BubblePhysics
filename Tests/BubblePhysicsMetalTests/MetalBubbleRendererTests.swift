@@ -33,13 +33,13 @@ final class MetalBubbleRendererTests: XCTestCase {
 
     func testEncodeSafelySkipsMissingRenderPass() throws {
         let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
-        let renderer = try MetalBubbleRenderer(device: device, pixelFormat: .bgra8Unorm)
+        let renderer = try MetalBubbleRenderer(device: device, pixelFormat: .bgra8Unorm, worldBounds: PrototypeSceneFactory.bounds)
         let queue = try XCTUnwrap(device.makeCommandQueue())
         XCTAssertFalse(try renderer.encode(frame: nil, diagnostics: false, renderPass: nil, drawableSize: .init(width: 0, height: 0), commandBuffer: try XCTUnwrap(queue.makeCommandBuffer())))
     }
 
     private func makeRenderer() throws -> MetalBubbleRenderer {
-        try MetalBubbleRenderer(device: XCTUnwrap(MTLCreateSystemDefaultDevice()), pixelFormat: .bgra8Unorm)
+        try MetalBubbleRenderer(device: XCTUnwrap(MTLCreateSystemDefaultDevice()), pixelFormat: .bgra8Unorm, worldBounds: PrototypeSceneFactory.bounds)
     }
 
     private func range(_ id: UInt32) -> MetalBubbleRange {

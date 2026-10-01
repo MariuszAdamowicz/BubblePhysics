@@ -1,5 +1,50 @@
+import BubblePhysics
 import CoreGraphics
 import Metal
+
+public struct MetalWorldViewport: Equatable, Sendable {
+    public let worldBounds: AABB
+    public let drawableSize: CGSize
+    public let worldToClipScale: SIMD2<Float>
+    public let worldToClipOffset: SIMD2<Float>
+
+    public init(worldBounds: AABB, drawableSize: CGSize) {
+        self.worldBounds = worldBounds
+        self.drawableSize = drawableSize
+
+        let worldWidth = max(worldBounds.maximum.x - worldBounds.minimum.x, Float.leastNonzeroMagnitude)
+        let worldHeight = max(worldBounds.maximum.y - worldBounds.minimum.y, Float.leastNonzeroMagnitude)
+        let drawableWidth = max(Float(drawableSize.width), Float.leastNonzeroMagnitude)
+        let drawableHeight = max(Float(drawableSize.height), Float.leastNonzeroMagnitude)
+        let pixelsPerWorldUnit = min(drawableWidth / worldWidth, drawableHeight / worldHeight)
+        let renderedWidth = worldWidth * pixelsPerWorldUnit
+        let renderedHeight = worldHeight * pixelsPerWorldUnit
+        let viewportOrigin = SIMD2<Float>(
+            (drawableWidth - renderedWidth) * 0.5,
+            (drawableHeight - renderedHeight) * 0.5
+        )
+
+        worldToClipScale = SIMD2(
+            2 * pixelsPerWorldUnit / drawableWidth,
+            -2 * pixelsPerWorldUnit / drawableHeight
+        )
+        worldToClipOffset = SIMD2(
+            -1 + 2 * (viewportOrigin.x - worldBounds.minimum.x * pixelsPerWorldUnit) / drawableWidth,
+            1 - 2 * (viewportOrigin.y - worldBounds.minimum.y * pixelsPerWorldUnit) / drawableHeight
+        )
+    }
+
+    public func worldToClip(_ point: SIMD2<Float>) -> SIMD2<Float> {
+        point * worldToClipScale + worldToClipOffset
+    }
+
+    public func viewToWorld(_ point: SIMD2<Float>) -> SIMD2<Float> {
+        let width = max(Float(drawableSize.width), Float.leastNonzeroMagnitude)
+        let height = max(Float(drawableSize.height), Float.leastNonzeroMagnitude)
+        let clip = SIMD2<Float>(2 * point.x / width - 1, 1 - 2 * point.y / height)
+        return (clip - worldToClipOffset) / worldToClipScale
+    }
+}
 
 public struct MetalBubbleSceneStatistics: Equatable, Sendable {
     public let bubbleCount: Int
@@ -14,6 +59,7 @@ public final class MetalBubbleRenderer: @unchecked Sendable {
     public var labelCount: Int { atlas?.entries.count ?? 0 }
 
     private let device: MTLDevice
+    private let worldBounds: AABB
     private let pipeline: MTLRenderPipelineState
     private let labelPipeline: MTLRenderPipelineState
     private let polygonPipeline: MTLRenderPipelineState
@@ -35,8 +81,9 @@ public final class MetalBubbleRenderer: @unchecked Sendable {
         let halfSize: SIMD2<Float>
     }
 
-    public init(device: MTLDevice, pixelFormat: MTLPixelFormat) throws {
+    public init(device: MTLDevice, pixelFormat: MTLPixelFormat, worldBounds: AABB) throws {
         self.device = device
+        self.worldBounds = worldBounds
         guard let library = MetalShaderLibrary.load(
                 device: device,
                 sourceName: "RenderKernels",
@@ -82,7 +129,13 @@ public final class MetalBubbleRenderer: @unchecked Sendable {
     public func encode(frame: MetalFrameResources?, diagnostics: Bool, renderPass: MTLRenderPassDescriptor?, drawableSize: CGSize, commandBuffer: MTLCommandBuffer) throws -> Bool {
         guard let frame, let renderPass, drawableSize.width > 0, drawableSize.height > 0, let geometry, let fillBuffer,
               let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPass) else { return false }
-        var uniforms = SIMD4<Float>(Float(drawableSize.width), Float(drawableSize.height), 0, 0)
+        let viewport = MetalWorldViewport(worldBounds: worldBounds, drawableSize: drawableSize)
+        var uniforms = SIMD4<Float>(
+            viewport.worldToClipScale.x,
+            viewport.worldToClipScale.y,
+            viewport.worldToClipOffset.x,
+            viewport.worldToClipOffset.y
+        )
         encoder.setRenderPipelineState(pipeline); encoder.setVertexBuffer(frame.particleBuffer, offset: 0, index: 0); encoder.setVertexBytes(&uniforms, length: MemoryLayout<SIMD4<Float>>.stride, index: 1)
         for span in geometry.bubbles {
             var color = Self.color(for: span.bubbleID)
