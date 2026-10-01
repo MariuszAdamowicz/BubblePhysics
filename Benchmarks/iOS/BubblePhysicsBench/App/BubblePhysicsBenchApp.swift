@@ -42,8 +42,13 @@ private struct PrototypeScreen: View {
                 HStack { Picker("Scena", selection: $model.scene) { Text("Radial").tag(PrototypeMode.radial); Text("40").tag(PrototypeMode.inspection); Text("300").tag(PrototypeMode.stress) }.pickerStyle(.segmented); Button(model.isPaused ? "Wznów" : "Pauza") { model.isPaused.toggle() }; Button("Reset") { model.resetGeneration += 1; model.errorMessage = nil } }
                 HStack { Toggle("Punkty", isOn: $model.diagnostics); Toggle("Pauza △", isOn: $model.trianglePaused) }
                 Text(String(format: "%.0f FPS · p50 %.2f · p95 %.2f ms", model.telemetry.fps, model.telemetry.p50Milliseconds, model.telemetry.p95Milliseconds)).font(.caption.monospacedDigit())
-                Text("punkty \(model.telemetry.particleCount) · segmenty \(model.telemetry.segmentCount) · pary \(model.telemetry.candidatePairCount) · kontakty \(model.telemetry.contactCount) · remesh \(model.telemetry.remeshOperationCount)").font(.caption2.monospacedDigit())
-                Text(String(format: "kontur %.2f · remesh %.2f · render %.2f ms · overflow %@ · non-finite %@", model.telemetry.contourMilliseconds, model.telemetry.remeshingMilliseconds, model.telemetry.renderingMilliseconds, model.telemetry.didOverflow ? "tak" : "nie", model.telemetry.didEncounterNonFinite ? "tak" : "nie")).font(.caption2.monospacedDigit())
+                if model.scene == .radial {
+                    Text(String(format: "GPU %.2f ms · czujniki %d · promień %.1f / %.1f / %.1f", model.telemetry.radial.gpuFrameMilliseconds, model.telemetry.radial.sensorCount, model.telemetry.radial.minimumRadialLength, model.telemetry.radial.meanRadialLength, model.telemetry.radial.maximumRadialLength)).font(.caption2.monospacedDigit())
+                    Text(String(format: "ruch %.2f · obrót %.2f · nacisk %.1f · overflow %@ · non-finite %@", model.telemetry.radial.bodySpeed, model.telemetry.radial.angularSpeed, model.telemetry.radial.maximumPressure, model.telemetry.radial.didOverflow ? "tak" : "nie", model.telemetry.radial.didEncounterNonFinite ? "tak" : "nie")).font(.caption2.monospacedDigit())
+                } else {
+                    Text("punkty \(model.telemetry.particleCount) · segmenty \(model.telemetry.segmentCount) · pary \(model.telemetry.candidatePairCount) · kontakty \(model.telemetry.contactCount) · remesh \(model.telemetry.remeshOperationCount)").font(.caption2.monospacedDigit())
+                    Text(String(format: "kontur %.2f · remesh %.2f · render %.2f ms · overflow %@ · non-finite %@", model.telemetry.contourMilliseconds, model.telemetry.remeshingMilliseconds, model.telemetry.renderingMilliseconds, model.telemetry.didOverflow ? "tak" : "nie", model.telemetry.didEncounterNonFinite ? "tak" : "nie")).font(.caption2.monospacedDigit())
+                }
                 if let error = model.errorMessage { Text(error).foregroundStyle(.red).font(.caption) }
             }.padding(10).background(.ultraThinMaterial).clipShape(RoundedRectangle(cornerRadius: 14)).padding()
         }

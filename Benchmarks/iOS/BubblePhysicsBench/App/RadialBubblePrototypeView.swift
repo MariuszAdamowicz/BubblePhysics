@@ -89,6 +89,7 @@ struct RadialBubblePrototypeView: UIViewRepresentable {
             let drawable = view.currentDrawable
         else { return }
         frameInFlight = true
+        let began = CACurrentMediaTime()
         do {
             let triangleState = KinematicTriangleMotion.default.sample(
                 time: CACurrentMediaTime() - start,
@@ -111,7 +112,6 @@ struct RadialBubblePrototypeView: UIViewRepresentable {
                 commandBuffer: command
             )
             command.present(drawable)
-            let began = CACurrentMediaTime()
             command.addCompletedHandler { [weak self] completed in
                 Task { @MainActor in
                     self?.complete(
@@ -140,9 +140,11 @@ struct RadialBubblePrototypeView: UIViewRepresentable {
             try simulation.complete(frame: frame, commandBuffer: command)
             let milliseconds = (CACurrentMediaTime() - began) * 1_000
             let state = simulation.state
-            let nonFinite = state.sensors.contains {
-                !$0.length.isFinite || !$0.radialVelocity.isFinite
-            }
+            let radial = RadialFrameMetrics(
+                state: state,
+                frame: frame,
+                gpuFrameMilliseconds: milliseconds
+            )
             telemetry.record(
                 milliseconds: milliseconds,
                 timings: .init(
@@ -156,9 +158,10 @@ struct RadialBubblePrototypeView: UIViewRepresentable {
                     candidatePairCount: 0,
                     contactCount: frame.contactCount,
                     remeshOperationCount: 0,
-                    didOverflow: frame.contactOverflowBuffer.contents().bindMemory(to: UInt32.self, capacity: 1).pointee != 0,
-                    didEncounterNonFinite: nonFinite
-                )
+                    didOverflow: radial.didOverflow,
+                    didEncounterNonFinite: radial.didEncounterNonFinite
+                ),
+                radial: radial
             )
             let now = CACurrentMediaTime()
             if now - lastPublish > 0.25 {
