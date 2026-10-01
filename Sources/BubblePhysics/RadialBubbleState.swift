@@ -62,6 +62,7 @@ public struct RadialBubbleState: Equatable, Sendable {
     public var birthProgress: Float
     public var maxSegmentLength: Float
     public var material: SpringMaterial
+    public var dynamics: RadialBubbleMaterial
 
     public init(
         id: BubbleID,
@@ -70,7 +71,8 @@ public struct RadialBubbleState: Equatable, Sendable {
         targetRadius: Float,
         birthProgress: Float,
         maxSegmentLength: Float,
-        material: SpringMaterial
+        material: SpringMaterial,
+        dynamics: RadialBubbleMaterial = .default
     ) {
         precondition(!sensors.isEmpty)
         precondition(targetRadius >= 0)
@@ -82,6 +84,7 @@ public struct RadialBubbleState: Equatable, Sendable {
         self.birthProgress = min(1, max(0, birthProgress))
         self.maxSegmentLength = maxSegmentLength
         self.material = material
+        self.dynamics = dynamics
     }
 
     public static func collapsed(
