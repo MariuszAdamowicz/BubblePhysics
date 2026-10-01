@@ -11,6 +11,7 @@ private struct ShaderLibraries {
     let shape: MTLLibrary
     let lbvh: MTLLibrary
     let contact: MTLLibrary
+    let contour: MTLLibrary
     let polygon: MTLLibrary
     let origin: MetalShaderLibraryOrigin
 }
@@ -40,6 +41,11 @@ public final class MetalBubbleSolver {
     private let neighborPrefixPipeline: MTLComputePipelineState
     private let neighborWritePipeline: MTLComputePipelineState
     private let adjacencyContactPipeline: MTLComputePipelineState
+    private let contourCountPipeline: MTLComputePipelineState
+    private let contourReservePipeline: MTLComputePipelineState
+    private let contourWritePipeline: MTLComputePipelineState
+    private let contourSolvePipeline: MTLComputePipelineState
+    private let contourApplyPipeline: MTLComputePipelineState
     private let polygonPipeline: MTLComputePipelineState
     private let grabPipeline: MTLComputePipelineState
     private var cachedContactPreparation: ContactPreparation?
@@ -59,6 +65,7 @@ public final class MetalBubbleSolver {
         let library = libraries.shape
         let lbvhLibrary = libraries.lbvh
         let contactLibrary = libraries.contact
+        let contourLibrary = libraries.contour
         let polygonLibrary = libraries.polygon
         guard
               let predictionFunction = library.makeFunction(name: "predictParticles"),
@@ -80,6 +87,11 @@ public final class MetalBubbleSolver {
               let neighborPrefixFunction = contactLibrary.makeFunction(name: "prefixBubbleNeighbors"),
               let neighborWriteFunction = contactLibrary.makeFunction(name: "writeBubbleNeighbors"),
               let adjacencyContactFunction = contactLibrary.makeFunction(name: "generateAdjacencyCorrections"),
+              let contourCountFunction = contourLibrary.makeFunction(name: "countContourContactFeatures"),
+              let contourReserveFunction = contourLibrary.makeFunction(name: "reserveContourContactRanges"),
+              let contourWriteFunction = contourLibrary.makeFunction(name: "writeContourContactFeatures"),
+              let contourSolveFunction = contourLibrary.makeFunction(name: "solveContourContactCorrections"),
+              let contourApplyFunction = contourLibrary.makeFunction(name: "applyContourCorrections"),
               let polygonFunction = polygonLibrary.makeFunction(name: "generatePolygonContacts"),
               let grabFunction = polygonLibrary.makeFunction(name: "applyGrabConstraint"),
               let commandQueue = device.makeCommandQueue(),
@@ -102,6 +114,11 @@ public final class MetalBubbleSolver {
               , let neighborPrefixPipeline = try? device.makeComputePipelineState(function: neighborPrefixFunction)
               , let neighborWritePipeline = try? device.makeComputePipelineState(function: neighborWriteFunction)
               , let adjacencyContactPipeline = try? device.makeComputePipelineState(function: adjacencyContactFunction)
+              , let contourCountPipeline = try? device.makeComputePipelineState(function: contourCountFunction)
+              , let contourReservePipeline = try? device.makeComputePipelineState(function: contourReserveFunction)
+              , let contourWritePipeline = try? device.makeComputePipelineState(function: contourWriteFunction)
+              , let contourSolvePipeline = try? device.makeComputePipelineState(function: contourSolveFunction)
+              , let contourApplyPipeline = try? device.makeComputePipelineState(function: contourApplyFunction)
               , let polygonPipeline = try? device.makeComputePipelineState(function: polygonFunction),
               let grabPipeline = try? device.makeComputePipelineState(function: grabFunction)
         else { return nil }
@@ -130,13 +147,18 @@ public final class MetalBubbleSolver {
         self.neighborPrefixPipeline = neighborPrefixPipeline
         self.neighborWritePipeline = neighborWritePipeline
         self.adjacencyContactPipeline = adjacencyContactPipeline
+        self.contourCountPipeline = contourCountPipeline
+        self.contourReservePipeline = contourReservePipeline
+        self.contourWritePipeline = contourWritePipeline
+        self.contourSolvePipeline = contourSolvePipeline
+        self.contourApplyPipeline = contourApplyPipeline
         self.polygonPipeline = polygonPipeline
         self.grabPipeline = grabPipeline
     }
 
     private static func loadShaderLibraries(device: MTLDevice) -> ShaderLibraries? {
         if let compiled = try? device.makeDefaultLibrary(bundle: Bundle.module) {
-            return ShaderLibraries(shape: compiled, lbvh: compiled, contact: compiled, polygon: compiled, origin: .compiledBundle)
+            return ShaderLibraries(shape: compiled, lbvh: compiled, contact: compiled, contour: compiled, polygon: compiled, origin: .compiledBundle)
         }
         func sourceLibrary(_ name: String) -> MTLLibrary? {
             guard let url = Bundle.module.url(forResource: name, withExtension: "metal"),
@@ -147,9 +169,10 @@ public final class MetalBubbleSolver {
         guard let shape = sourceLibrary("BubblePhysicsKernels"),
               let lbvh = sourceLibrary("LBVHKernels"),
               let contact = sourceLibrary("ContactKernels"),
+              let contour = sourceLibrary("ContourContactKernels"),
               let polygon = sourceLibrary("PolygonKernels")
         else { return nil }
-        return ShaderLibraries(shape: shape, lbvh: lbvh, contact: contact, polygon: polygon, origin: .runtimeSource)
+        return ShaderLibraries(shape: shape, lbvh: lbvh, contact: contact, contour: contour, polygon: polygon, origin: .runtimeSource)
     }
 
     public func candidatePairs(snapshot: MetalWorldSnapshot) async throws -> [MetalBubblePair] {
@@ -614,13 +637,7 @@ public final class MetalBubbleSolver {
         var boundsMinimum = SIMD2<Float>(input.bounds?.minimum.x ?? -.infinity, input.bounds?.minimum.y ?? -.infinity)
         var boundsMaximum = SIMD2<Float>(input.bounds?.maximum.x ?? .infinity, input.bounds?.maximum.y ?? .infinity)
         for _ in 0..<configuration.solverIterations {
-            guard let contacts = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
-            contacts.setComputePipelineState(adjacencyContactPipeline); contacts.setBuffer(buffers.particle, offset: 0, index: 0); contacts.setBuffer(buffers.ranges, offset: 0, index: 1)
-            contacts.setBuffer(buffers.neighborOffsets, offset: 0, index: 2); contacts.setBuffer(buffers.neighbors, offset: 0, index: 3); contacts.setBuffer(buffers.deltas, offset: 0, index: 4)
-            contacts.setBytes(&particleCount, length: 4, index: 5); dispatch(contacts, pipeline: adjacencyContactPipeline, count: particleCountValue); contacts.endEncoding()
-            guard let apply = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
-            apply.setComputePipelineState(applyCorrectionPipeline); apply.setBuffer(buffers.particle, offset: 0, index: 0); apply.setBuffer(buffers.deltas, offset: 0, index: 1)
-            apply.setBytes(&particleCount, length: 4, index: 2); dispatch(apply, pipeline: applyCorrectionPipeline, count: particleCountValue); apply.endEncoding()
+            try encodeContourContacts(snapshot: snapshot, buffers: buffers, commandBuffer: commandBuffer)
             guard let shape = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
             shape.setComputePipelineState(shapePipeline); shape.setBuffer(buffers.particle, offset: 0, index: 0); shape.setBuffer(buffers.ranges, offset: 0, index: 1)
             shape.setBuffer(buffers.distance, offset: 0, index: 2); shape.setBuffer(buffers.area, offset: 0, index: 3); shape.setBytes(&bubbleCount, length: 4, index: 4); shape.setBytes(&timeStep, length: 4, index: 5)
@@ -641,6 +658,53 @@ public final class MetalBubbleSolver {
                 dispatch(polygon, pipeline: polygonPipeline, count: particleCountValue); polygon.endEncoding()
             }
         }
+    }
+
+    func encodeContourContacts(
+        snapshot: MetalWorldSnapshot,
+        buffers: MetalSessionBuffers,
+        commandBuffer: MTLCommandBuffer
+    ) throws {
+        var pairCapacity = UInt32(buffers.pairCapacity)
+        var sourceCount = UInt32(buffers.pairCapacity * 3)
+        var contactCapacity = UInt32(buffers.contourContactCapacity)
+        var correctionCapacity = UInt32(buffers.contourContactCapacity * 3)
+        var particleCount = UInt32(snapshot.particles.count)
+
+        guard let count = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
+        count.setComputePipelineState(contourCountPipeline)
+        count.setBuffer(buffers.particle, offset: 0, index: 0); count.setBuffer(buffers.ranges, offset: 0, index: 1)
+        count.setBuffer(buffers.pairs, offset: 0, index: 2); count.setBuffer(buffers.pairCount, offset: 0, index: 3)
+        count.setBuffer(buffers.contourContactCounts, offset: 0, index: 4); count.setBytes(&pairCapacity, length: 4, index: 5)
+        dispatch(count, pipeline: contourCountPipeline, count: buffers.pairCapacity); count.endEncoding()
+
+        guard let reserve = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
+        reserve.setComputePipelineState(contourReservePipeline)
+        reserve.setBuffer(buffers.contourContactCounts, offset: 0, index: 0); reserve.setBuffer(buffers.contourContactOffsets, offset: 0, index: 1)
+        reserve.setBuffer(buffers.contourContactTotal, offset: 0, index: 2); reserve.setBuffer(buffers.contourContactOverflow, offset: 0, index: 3)
+        reserve.setBytes(&sourceCount, length: 4, index: 4); reserve.setBytes(&contactCapacity, length: 4, index: 5)
+        dispatch(reserve, pipeline: contourReservePipeline, count: 1); reserve.endEncoding()
+
+        guard let write = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
+        write.setComputePipelineState(contourWritePipeline)
+        write.setBuffer(buffers.particle, offset: 0, index: 0); write.setBuffer(buffers.ranges, offset: 0, index: 1)
+        write.setBuffer(buffers.pairs, offset: 0, index: 2); write.setBuffer(buffers.pairCount, offset: 0, index: 3)
+        write.setBuffer(buffers.contourContactOffsets, offset: 0, index: 4); write.setBuffer(buffers.contourContactOverflow, offset: 0, index: 5)
+        write.setBuffer(buffers.contourContacts, offset: 0, index: 6); write.setBytes(&pairCapacity, length: 4, index: 7)
+        dispatch(write, pipeline: contourWritePipeline, count: buffers.pairCapacity); write.endEncoding()
+
+        guard let solve = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
+        solve.setComputePipelineState(contourSolvePipeline)
+        solve.setBuffer(buffers.particle, offset: 0, index: 0); solve.setBuffer(buffers.contourContacts, offset: 0, index: 1)
+        solve.setBuffer(buffers.contourContactTotal, offset: 0, index: 2); solve.setBuffer(buffers.contourCorrections, offset: 0, index: 3)
+        solve.setBytes(&correctionCapacity, length: 4, index: 4)
+        dispatch(solve, pipeline: contourSolvePipeline, count: buffers.contourContactCapacity); solve.endEncoding()
+
+        guard let apply = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
+        apply.setComputePipelineState(contourApplyPipeline)
+        apply.setBuffer(buffers.particle, offset: 0, index: 0); apply.setBuffer(buffers.contourCorrections, offset: 0, index: 1)
+        apply.setBuffer(buffers.contourContactTotal, offset: 0, index: 2); apply.setBytes(&particleCount, length: 4, index: 3)
+        dispatch(apply, pipeline: contourApplyPipeline, count: snapshot.particles.count); apply.endEncoding()
     }
 
     private func makeContactPreparation(pairs: [MetalBubblePair], ranges: [MetalBubbleRange]) -> ContactPreparation {

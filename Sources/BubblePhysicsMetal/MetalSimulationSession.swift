@@ -43,6 +43,7 @@ public struct MetalFrameResources: @unchecked Sendable {
     public let bubbleCount: Int
     public let pairCountBuffer: MTLBuffer
     public let comparisonCountBuffer: MTLBuffer
+    public let contourContactCountBuffer: MTLBuffer
     public let polygonVertexBuffer: MTLBuffer
     public let polygonVertexCount: Int
 }
@@ -69,6 +70,7 @@ final class MetalSessionBuffers {
     let contourContactOffsets: MTLBuffer
     let contourContactTotal: MTLBuffer
     let contourContactOverflow: MTLBuffer
+    let contourCorrections: MTLBuffer
     let polygonVertexCount: Int
     let polygonCount: Int
     let particleCapacity: Int
@@ -111,6 +113,7 @@ final class MetalSessionBuffers {
               , let contourContactOffsets = buffer(UInt32.self, pairCapacity * 3 + 1)
               , let contourContactTotal = buffer(UInt32.self, 1)
               , let contourContactOverflow = buffer(UInt32.self, 1)
+              , let contourCorrections = buffer(MetalCorrection.self, contourContactCapacity * 3)
         else { return nil }
         self.particle = particle; self.ranges = ranges; self.distance = distance; self.area = area
         self.aabb = aabb; self.keys = keys; self.pairs = pairs; self.pairCount = pairCount
@@ -121,6 +124,7 @@ final class MetalSessionBuffers {
         self.contourContacts = contourContacts; self.contourContactCounts = contourContactCounts
         self.contourContactOffsets = contourContactOffsets; self.contourContactTotal = contourContactTotal
         self.contourContactOverflow = contourContactOverflow
+        self.contourCorrections = contourCorrections
         polygonVertexCount = snapshot.polygons.reduce(0) { $0 + $1.worldVertices.count }; polygonCount = snapshot.polygons.count
         contourContactTotal.contents().bindMemory(to: UInt32.self, capacity: 1).pointee = 0
         contourContactOverflow.contents().bindMemory(to: UInt32.self, capacity: 1).pointee = 0
@@ -203,7 +207,8 @@ public final class MetalSimulationSession: @unchecked Sendable {
                 return
             }
             let pairCount = Int(encodedBuffers.pairCount.contents().bindMemory(to: UInt32.self, capacity: 1).pointee)
-            if pairCount > encodedBuffers.pairCapacity {
+            let contourOverflow = encodedBuffers.contourContactOverflow.contents().bindMemory(to: UInt32.self, capacity: 1).pointee
+            if pairCount > encodedBuffers.pairCapacity || contourOverflow != 0 {
                 self.status = .failed(.overflow)
                 return
             }
@@ -255,6 +260,7 @@ public final class MetalSimulationSession: @unchecked Sendable {
             particleBuffer: buffers.particle, rangeBuffer: buffers.ranges,
             particleCount: snapshot.particles.count, bubbleCount: snapshot.bubbleRanges.count,
             pairCountBuffer: buffers.pairCount, comparisonCountBuffer: buffers.comparisons,
+            contourContactCountBuffer: buffers.contourContactTotal,
             polygonVertexBuffer: buffers.polygonVertices, polygonVertexCount: buffers.polygonVertexCount
         )
     }
