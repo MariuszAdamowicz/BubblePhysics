@@ -3,18 +3,18 @@ using namespace metal;
 
 struct MetalParticle { float2 position; float2 previousPosition; float inverseMass; uint bubbleIndex; float2 padding; };
 struct MetalBubbleRange { uint id; uint centerIndex; uint boundaryStart; uint boundaryCount; float restArea; uint distanceConstraintStart; uint distanceConstraintCount; float padding; };
-struct MetalDistanceConstraint { uint firstIndex; uint secondIndex; float restLength; float compliance; };
+struct MetalSpringConstraint { uint firstIndex; uint secondIndex; float restLength; uint kind; float2 padding; };
 struct MetalAreaConstraint { uint boundaryStart; uint boundaryCount; float restArea; float compliance; };
 
 kernel void predictParticles(
     device MetalParticle *particles [[buffer(0)]], constant uint &particleCount [[buffer(1)]],
     constant float2 &gravity [[buffer(2)]], constant float &timeStep [[buffer(3)]],
-    constant float &linearDamping [[buffer(4)]], uint index [[thread_position_in_grid]]
+    constant float &drag [[buffer(4)]], uint index [[thread_position_in_grid]]
 ) {
     if (index >= particleCount) { return; }
     MetalParticle particle = particles[index];
     const float2 position = particle.position;
-    const float2 velocity = (position - particle.previousPosition) * (1.0f - linearDamping);
+    const float2 velocity = (position - particle.previousPosition) * exp(-max(0.0f, drag) * timeStep);
     particle.previousPosition = position;
     particle.position = position + velocity + gravity * timeStep * timeStep;
     particles[index] = particle;
@@ -22,57 +22,35 @@ kernel void predictParticles(
 
 kernel void solveBubbleShape(
     device MetalParticle *particles [[buffer(0)]], device const MetalBubbleRange *bubbleRanges [[buffer(1)]],
-    device const MetalDistanceConstraint *distanceConstraints [[buffer(2)]], device const MetalAreaConstraint *areaConstraints [[buffer(3)]],
-    constant uint &bubbleCount [[buffer(4)]], constant float &timeStep [[buffer(5)]], uint bubbleIndex [[thread_position_in_grid]]
+    device const MetalSpringConstraint *springConstraints [[buffer(2)]], device const MetalAreaConstraint *areaConstraints [[buffer(3)]],
+    constant uint &bubbleCount [[buffer(4)]], constant float &timeStep [[buffer(5)]],
+    constant float &quadraticStiffness [[buffer(6)]], constant float &quarticStiffness [[buffer(7)]],
+    uint bubbleIndex [[thread_position_in_grid]]
 ) {
     if (bubbleIndex >= bubbleCount) { return; }
     const MetalBubbleRange range = bubbleRanges[bubbleIndex];
     for (uint offset = 0; offset < range.distanceConstraintCount; ++offset) {
-        const MetalDistanceConstraint constraint = distanceConstraints[range.distanceConstraintStart + offset];
+        const MetalSpringConstraint constraint = springConstraints[range.distanceConstraintStart + offset];
         MetalParticle first = particles[constraint.firstIndex];
         MetalParticle second = particles[constraint.secondIndex];
         const float2 separation = second.position - first.position;
         const float distance = length(separation);
-        if (distance <= 0.00001f) { continue; }
-        const float alpha = constraint.compliance / (timeStep * timeStep);
+        if (distance <= 0.0000001f) { continue; }
         const float weight = first.inverseMass + second.inverseMass;
-        if (weight + alpha <= 0.0f) { continue; }
-        const float deltaLambda = -(distance - constraint.restLength) / (weight + alpha);
+        if (weight <= 0.0f) { continue; }
+        const float extension = distance - constraint.restLength;
+        const float force = quadraticStiffness * extension + quarticStiffness * extension * extension * extension;
+        const float tangent = quadraticStiffness + 3.0f * quarticStiffness * extension * extension;
+        const float timeSquared = timeStep * timeStep;
+        const float correction = force * timeSquared * weight / (1.0f + tangent * timeSquared * weight);
+        if (!isfinite(correction)) { continue; }
         const float2 gradient = separation / distance;
-        first.position -= gradient * (first.inverseMass * deltaLambda);
-        second.position += gradient * (second.inverseMass * deltaLambda);
+        first.position += gradient * (first.inverseMass * correction / weight);
+        second.position -= gradient * (second.inverseMass * correction / weight);
         particles[constraint.firstIndex] = first;
         particles[constraint.secondIndex] = second;
     }
-
-    const MetalAreaConstraint areaConstraint = areaConstraints[bubbleIndex];
-    if (areaConstraint.boundaryCount < 3) { return; }
-    float area = 0.0f;
-    float weight = 0.0f;
-    for (uint offset = 0; offset < areaConstraint.boundaryCount; ++offset) {
-        const uint previousOffset = (offset + areaConstraint.boundaryCount - 1) % areaConstraint.boundaryCount;
-        const uint nextOffset = (offset + 1) % areaConstraint.boundaryCount;
-        const MetalParticle previous = particles[areaConstraint.boundaryStart + previousOffset];
-        const MetalParticle current = particles[areaConstraint.boundaryStart + offset];
-        const MetalParticle next = particles[areaConstraint.boundaryStart + nextOffset];
-        area += current.position.x * next.position.y - current.position.y * next.position.x;
-        const float2 gradient = float2((next.position.y - previous.position.y) * 0.5f, (previous.position.x - next.position.x) * 0.5f);
-        weight += current.inverseMass * dot(gradient, gradient);
-    }
-    area *= 0.5f;
-    const float alpha = areaConstraint.compliance / (timeStep * timeStep);
-    if (weight + alpha <= 0.0f) { return; }
-    const float deltaLambda = -(area - areaConstraint.restArea) / (weight + alpha);
-    for (uint offset = 0; offset < areaConstraint.boundaryCount; ++offset) {
-        const uint previousOffset = (offset + areaConstraint.boundaryCount - 1) % areaConstraint.boundaryCount;
-        const uint nextOffset = (offset + 1) % areaConstraint.boundaryCount;
-        MetalParticle current = particles[areaConstraint.boundaryStart + offset];
-        const float2 previous = particles[areaConstraint.boundaryStart + previousOffset].position;
-        const float2 next = particles[areaConstraint.boundaryStart + nextOffset].position;
-        const float2 gradient = float2((next.y - previous.y) * 0.5f, (previous.x - next.x) * 0.5f);
-        current.position += gradient * (current.inverseMass * deltaLambda);
-        particles[areaConstraint.boundaryStart + offset] = current;
-    }
+    (void)areaConstraints;
 }
 
 kernel void solveWorldBounds(

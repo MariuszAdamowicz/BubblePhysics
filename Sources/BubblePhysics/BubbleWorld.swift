@@ -58,8 +58,7 @@ private struct BubbleState: Sendable {
     var restArea: Float
     let centerIndex: Int
     let boundaryIndices: [Int]
-    var distanceConstraints: [DistanceConstraint]
-    var areaConstraint: AreaConstraint
+    var springConstraints: [SpringConstraint]
 }
 
 private struct ConstraintPhaseTimings: Sendable {
@@ -108,21 +107,20 @@ public struct BubbleWorld: Sendable {
         )
         let centerIndex = particles.append(Particle(position: center))
         let boundaryIndices = topology.boundaryPoints.map { particles.append(Particle(position: $0)) }
-        var constraints: [DistanceConstraint] = []
+        var constraints: [SpringConstraint] = []
         for offset in boundaryIndices.indices {
             let current = boundaryIndices[offset]
             let next = boundaryIndices[(offset + 1) % boundaryIndices.count]
             let diagonal = boundaryIndices[(offset + 2) % boundaryIndices.count]
-            constraints.append(DistanceConstraint(first: centerIndex, second: current, restLength: length(particles[current].position - center)))
-            constraints.append(DistanceConstraint(first: current, second: next, restLength: length(particles[next].position - particles[current].position)))
-            constraints.append(DistanceConstraint(first: current, second: diagonal, restLength: length(particles[diagonal].position - particles[current].position)))
+            constraints.append(SpringConstraint(first: centerIndex, second: current, restLength: length(particles[current].position - center), kind: .radial))
+            constraints.append(SpringConstraint(first: current, second: next, restLength: length(particles[next].position - particles[current].position), kind: .perimeter))
+            constraints.append(SpringConstraint(first: current, second: diagonal, restLength: length(particles[diagonal].position - particles[current].position), kind: .bending))
         }
         states[id] = BubbleState(
             restArea: restArea,
             centerIndex: centerIndex,
             boundaryIndices: boundaryIndices,
-            distanceConstraints: constraints,
-            areaConstraint: AreaConstraint(indices: boundaryIndices, restArea: restArea)
+            springConstraints: constraints
         )
         bubbleOrder.append(id)
         synchronizeBroadPhase()
@@ -157,24 +155,17 @@ public struct BubbleWorld: Sendable {
                     restArea: state.restArea
                 )
             },
-            distanceConstraints: bubbleOrder.compactMap { states[$0] }.flatMap { state in
-                return state.distanceConstraints.map {
-                    SimulationDistanceConstraintSnapshot(
+            springConstraints: bubbleOrder.compactMap { states[$0] }.flatMap { state in
+                return state.springConstraints.map {
+                    SimulationSpringConstraintSnapshot(
                         firstIndex: $0.first,
                         secondIndex: $0.second,
                         restLength: $0.restLength,
-                        compliance: $0.compliance
+                        kindRawValue: $0.kind.rawValue
                     )
                 }
             },
-            areaConstraints: bubbleOrder.compactMap { id in
-                guard let state = states[id] else { return nil }
-                return SimulationAreaConstraintSnapshot(
-                    boundaryIndices: state.areaConstraint.indices,
-                    restArea: state.areaConstraint.restArea,
-                    compliance: state.areaConstraint.compliance
-                )
-            },
+            areaConstraints: [],
             configuration: configuration,
             bounds: bounds,
             polygons: polygonOrder.compactMap { id in
@@ -241,7 +232,9 @@ public struct BubbleWorld: Sendable {
             particles[index] = particle
         }
         state.restArea = restArea
-        state.areaConstraint = AreaConstraint(indices: state.boundaryIndices, restArea: restArea)
+        for index in state.springConstraints.indices {
+            state.springConstraints[index].scaleRestLength(by: scale)
+        }
         states[id] = state
         operationEvents.append(.resized(id, restArea: restArea))
         synchronizeBroadPhase()
@@ -330,13 +323,13 @@ public struct BubbleWorld: Sendable {
 
     private mutating func predictPositions(forces: [BubbleID: Vector2]) {
         let timeStep = configuration.fixedTimeStep
-        let damping = max(0, min(configuration.linearDamping, 1))
+        let velocityScale = configuration.springMaterial.velocityScale(deltaTime: timeStep)
         for id in bubbleOrder {
             guard let state = states[id] else { continue }
             let acceleration = gravity + (forces[id] ?? .zero) * (1 / Float(state.boundaryIndices.count + 1))
             for index in [state.centerIndex] + state.boundaryIndices {
                 var particle = particles[index]
-                let velocity = (particle.position - particle.previousPosition) * (1 - damping)
+                let velocity = (particle.position - particle.previousPosition) * velocityScale
                 particle.previousPosition = particle.position
                 particle.position = particle.position + velocity + acceleration * (timeStep * timeStep)
                 particles[index] = particle
@@ -346,31 +339,22 @@ public struct BubbleWorld: Sendable {
 
     private mutating func solveConstraints() -> ConstraintPhaseTimings {
         var timings = ConstraintPhaseTimings()
-        let resetStart = Date()
-        for id in bubbleOrder {
-            guard var state = states[id] else { continue }
-            for offset in state.distanceConstraints.indices {
-                state.distanceConstraints[offset].resetMultiplier()
-            }
-            state.areaConstraint.resetMultiplier()
-            states[id] = state
-        }
-        timings.shapeMilliseconds += Date().timeIntervalSince(resetStart) * 1_000
-
         var activeContacts: Set<BubblePair> = []
         let candidatePairs = contactGraph.pairs
         for _ in 0..<configuration.solverIterations {
             let shapeStart = Date()
             for id in bubbleOrder {
-                guard var state = states[id] else { continue }
-                for offset in state.distanceConstraints.indices {
-                    state.distanceConstraints[offset].project(particles: &particles, timeStep: configuration.fixedTimeStep)
+                guard let state = states[id] else { continue }
+                for offset in state.springConstraints.indices {
+                    state.springConstraints[offset].project(
+                        particles: &particles,
+                        timeStep: configuration.fixedTimeStep,
+                        material: configuration.springMaterial
+                    )
                 }
-                state.areaConstraint.project(particles: &particles, timeStep: configuration.fixedTimeStep)
                 if let bounds {
                     WorldBoundaryConstraint(bounds: bounds).project(particles: &particles, indices: [state.centerIndex] + state.boundaryIndices)
                 }
-                states[id] = state
             }
             timings.shapeMilliseconds += Date().timeIntervalSince(shapeStart) * 1_000
 

@@ -18,5 +18,6 @@ final class MetalBufferLayoutTests: XCTestCase {
     func testSharedSwiftMetalRecordsHaveExpectedStride() {
         XCTAssertEqual(MemoryLayout<MetalParticle>.stride % 16, 0)
         XCTAssertEqual(MemoryLayout<MetalBubbleRange>.stride % 16, 0)
+        XCTAssertEqual(MemoryLayout<MetalSpringConstraint>.stride, 24)
     }
 }

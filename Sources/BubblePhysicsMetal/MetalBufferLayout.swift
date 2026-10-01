@@ -58,6 +58,32 @@ public struct MetalDistanceConstraint: Equatable, Sendable {
     }
 }
 
+public enum MetalSpringKind: UInt32, CaseIterable, Sendable {
+    case radial
+    case perimeter
+    case bending
+}
+
+public struct MetalSpringConstraint: Equatable, Sendable {
+    public var firstIndex: UInt32
+    public var secondIndex: UInt32
+    public var restLength: Float
+    public var kindRawValue: UInt32
+    public var padding: SIMD2<Float> = .zero
+
+    public var kind: MetalSpringKind {
+        get { MetalSpringKind(rawValue: kindRawValue) ?? .radial }
+        set { kindRawValue = newValue.rawValue }
+    }
+
+    public init(firstIndex: UInt32, secondIndex: UInt32, restLength: Float, kind: MetalSpringKind) {
+        self.firstIndex = firstIndex
+        self.secondIndex = secondIndex
+        self.restLength = restLength
+        kindRawValue = kind.rawValue
+    }
+}
+
 public struct MetalAreaConstraint: Equatable, Sendable {
     public var boundaryStart: UInt32
     public var boundaryCount: UInt32
@@ -126,17 +152,20 @@ public struct MetalEncodedWorldBuffers: Equatable, Sendable {
     public let particles: [MetalParticle]
     public let bubbleRanges: [MetalBubbleRange]
     public let distanceConstraints: [MetalDistanceConstraint]
+    public let springConstraints: [MetalSpringConstraint]
     public let areaConstraints: [MetalAreaConstraint]
 
     public init(
         particles: [MetalParticle],
         bubbleRanges: [MetalBubbleRange],
         distanceConstraints: [MetalDistanceConstraint] = [],
+        springConstraints: [MetalSpringConstraint] = [],
         areaConstraints: [MetalAreaConstraint] = []
     ) {
         self.particles = particles
         self.bubbleRanges = bubbleRanges
         self.distanceConstraints = distanceConstraints
+        self.springConstraints = springConstraints
         self.areaConstraints = areaConstraints
     }
 }

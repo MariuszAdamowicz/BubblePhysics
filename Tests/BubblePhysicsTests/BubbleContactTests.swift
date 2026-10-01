@@ -60,7 +60,7 @@ final class BubbleContactTests: XCTestCase {
         XCTAssertEqual(world.currentArea(of: second)!, .pi * 100, accuracy: 3)
     }
 
-    func testDenseGroupRemainsFiniteAcrossManySolverSteps() {
+    func testDenseGroupRemainsFiniteAndMayCompressAcrossManySolverSteps() {
         var world = BubbleWorld(configuration: .default)
         var identifiers: [BubbleID] = []
         for row in 0..<4 {
@@ -74,10 +74,14 @@ final class BubbleContactTests: XCTestCase {
 
         for _ in 0..<120 { world.step() }
 
+        var compressedCount = 0
         for id in identifiers {
             XCTAssertFalse(world.bubble(id)!.boundaryPoints.contains { !$0.x.isFinite || !$0.y.isFinite })
-            XCTAssertEqual(world.currentArea(of: id)!, .pi * 25, accuracy: 3)
+            let area = world.currentArea(of: id)!
+            XCTAssertGreaterThan(area, 0)
+            if area < .pi * 25 - 3 { compressedCount += 1 }
         }
+        XCTAssertGreaterThan(compressedCount, 0)
     }
 
     private func square(id: Int, center: Vector2, halfExtent: Float) -> BubbleTopology {

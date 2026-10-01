@@ -68,6 +68,20 @@ public struct SimulationDistanceConstraintSnapshot: Equatable, Sendable {
     }
 }
 
+public struct SimulationSpringConstraintSnapshot: Equatable, Sendable {
+    public let firstIndex: Int
+    public let secondIndex: Int
+    public let restLength: Float
+    public let kindRawValue: UInt32
+
+    public init(firstIndex: Int, secondIndex: Int, restLength: Float, kindRawValue: UInt32) {
+        self.firstIndex = firstIndex
+        self.secondIndex = secondIndex
+        self.restLength = restLength
+        self.kindRawValue = kindRawValue
+    }
+}
+
 public struct SimulationAreaConstraintSnapshot: Equatable, Sendable {
     public let boundaryIndices: [Int]
     public let restArea: Float
@@ -100,6 +114,7 @@ public struct SimulationWorldSnapshot: Equatable, Sendable {
     public let particles: [SimulationParticleSnapshot]
     public let bubbles: [SimulationBubbleSnapshot]
     public let distanceConstraints: [SimulationDistanceConstraintSnapshot]
+    public let springConstraints: [SimulationSpringConstraintSnapshot]
     public let areaConstraints: [SimulationAreaConstraintSnapshot]
     public let configuration: WorldConfiguration
     public let bounds: AABB?
@@ -110,6 +125,7 @@ public struct SimulationWorldSnapshot: Equatable, Sendable {
         particles: [SimulationParticleSnapshot],
         bubbles: [SimulationBubbleSnapshot],
         distanceConstraints: [SimulationDistanceConstraintSnapshot] = [],
+        springConstraints: [SimulationSpringConstraintSnapshot] = [],
         areaConstraints: [SimulationAreaConstraintSnapshot] = [],
         configuration: WorldConfiguration = .default,
         bounds: AABB? = nil,
@@ -119,6 +135,7 @@ public struct SimulationWorldSnapshot: Equatable, Sendable {
         self.particles = particles
         self.bubbles = bubbles
         self.distanceConstraints = distanceConstraints
+        self.springConstraints = springConstraints
         self.areaConstraints = areaConstraints
         self.configuration = configuration
         self.bounds = bounds

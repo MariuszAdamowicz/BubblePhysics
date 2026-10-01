@@ -76,7 +76,7 @@ final class MetalSessionBuffers {
     init?(device: MTLDevice, snapshot: MetalWorldSnapshot) {
         particleCapacity = max(1, snapshot.particles.count)
         bubbleCapacity = max(1, snapshot.bubbleRanges.count)
-        distanceCapacity = max(1, snapshot.distanceConstraints.count)
+        distanceCapacity = max(1, snapshot.springConstraints.count)
         areaCapacity = max(1, snapshot.areaConstraints.count)
         pairCapacity = max(1, bubbleCapacity * (bubbleCapacity - 1) / 2)
         sortCapacity = Self.nextPowerOfTwo(bubbleCapacity)
@@ -85,7 +85,7 @@ final class MetalSessionBuffers {
         }
         guard let particle = buffer(MetalParticle.self, particleCapacity),
               let ranges = buffer(MetalBubbleRange.self, bubbleCapacity),
-              let distance = buffer(MetalDistanceConstraint.self, distanceCapacity),
+              let distance = buffer(MetalSpringConstraint.self, distanceCapacity),
               let area = buffer(MetalAreaConstraint.self, areaCapacity),
               let aabb = buffer(SIMD4<Float>.self, bubbleCapacity),
               let keys = buffer(SIMD2<UInt32>.self, sortCapacity),
@@ -111,12 +111,12 @@ final class MetalSessionBuffers {
 
     func canHold(_ snapshot: MetalWorldSnapshot) -> Bool {
         snapshot.particles.count <= particleCapacity && snapshot.bubbleRanges.count <= bubbleCapacity &&
-        snapshot.distanceConstraints.count <= distanceCapacity && snapshot.areaConstraints.count <= areaCapacity
+        snapshot.springConstraints.count <= distanceCapacity && snapshot.areaConstraints.count <= areaCapacity
     }
 
     func upload(_ snapshot: MetalWorldSnapshot) {
         copy(snapshot.particles, to: particle); copy(snapshot.bubbleRanges, to: ranges)
-        copy(snapshot.distanceConstraints, to: distance); copy(snapshot.areaConstraints, to: area)
+        copy(snapshot.springConstraints, to: distance); copy(snapshot.areaConstraints, to: area)
         var vertices: [SIMD2<Float>] = [], records: [MetalInteractionPolygon] = []
         for polygon in snapshot.polygons {
             let start = vertices.count; vertices.append(contentsOf: polygon.worldVertices.map { SIMD2($0.x, $0.y) })

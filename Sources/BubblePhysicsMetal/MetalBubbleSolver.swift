@@ -330,7 +330,7 @@ public final class MetalBubbleSolver {
               let neighborCursorBuffer = device.makeBuffer(length: bubbleCountValue * MemoryLayout<UInt32>.stride, options: .storageModeShared),
               let neighborBuffer = device.makeBuffer(length: pairCapacityValue * 2 * MemoryLayout<UInt32>.stride, options: .storageModeShared),
               let deltaBuffer = device.makeBuffer(length: snapshot.particles.count * MemoryLayout<SIMD2<Float>>.stride, options: .storageModeShared),
-              let distanceBuffer = makeBuffer(snapshot.distanceConstraints, minimumCount: 1),
+              let distanceBuffer = makeBuffer(snapshot.springConstraints, minimumCount: 1),
               let areaBuffer = makeBuffer(snapshot.areaConstraints, minimumCount: 1),
               let commandBuffer = commandQueue.makeCommandBuffer()
         else { throw MetalSolverError.bufferAllocationFailed }
@@ -344,10 +344,12 @@ public final class MetalBubbleSolver {
         var particleCount = UInt32(snapshot.particles.count)
         var bubbleCount = UInt32(snapshot.bubbleRanges.count)
         var timeStep = configuration.fixedTimeStep
+        var quadraticStiffness = configuration.springMaterial.quadraticStiffness
+        var quarticStiffness = configuration.springMaterial.quarticStiffness
 
         if let gravity {
             var gravityValue = SIMD2<Float>(gravity.x, gravity.y)
-            var damping = configuration.linearDamping
+            var damping = configuration.springMaterial.drag
             guard let predictionEncoder = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
             predictionEncoder.setComputePipelineState(predictionPipeline)
             predictionEncoder.setBuffer(particleBuffer, offset: 0, index: 0)
@@ -486,6 +488,8 @@ public final class MetalBubbleSolver {
             shapeEncoder.setBuffer(areaBuffer, offset: 0, index: 3)
             shapeEncoder.setBytes(&bubbleCount, length: 4, index: 4)
             shapeEncoder.setBytes(&timeStep, length: 4, index: 5)
+            shapeEncoder.setBytes(&quadraticStiffness, length: 4, index: 6)
+            shapeEncoder.setBytes(&quarticStiffness, length: 4, index: 7)
             dispatch(shapeEncoder, pipeline: shapePipeline, count: snapshot.bubbleRanges.count)
             shapeEncoder.endEncoding()
             if bounds != nil {
@@ -540,10 +544,12 @@ public final class MetalBubbleSolver {
         var pairCapacity = UInt32(buffers.pairCapacity)
         let configuration = input.configuration ?? snapshot.configuration
         var timeStep = configuration.fixedTimeStep
+        var quadraticStiffness = configuration.springMaterial.quadraticStiffness
+        var quarticStiffness = configuration.springMaterial.quarticStiffness
 
         if let gravity = input.gravity {
             var value = SIMD2<Float>(gravity.x, gravity.y)
-            var damping = configuration.linearDamping
+            var damping = configuration.springMaterial.drag
             guard let encoder = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
             encoder.setComputePipelineState(predictionPipeline); encoder.setBuffer(buffers.particle, offset: 0, index: 0)
             encoder.setBytes(&particleCount, length: 4, index: 1); encoder.setBytes(&value, length: MemoryLayout<SIMD2<Float>>.stride, index: 2)
@@ -618,6 +624,7 @@ public final class MetalBubbleSolver {
             guard let shape = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
             shape.setComputePipelineState(shapePipeline); shape.setBuffer(buffers.particle, offset: 0, index: 0); shape.setBuffer(buffers.ranges, offset: 0, index: 1)
             shape.setBuffer(buffers.distance, offset: 0, index: 2); shape.setBuffer(buffers.area, offset: 0, index: 3); shape.setBytes(&bubbleCount, length: 4, index: 4); shape.setBytes(&timeStep, length: 4, index: 5)
+            shape.setBytes(&quadraticStiffness, length: 4, index: 6); shape.setBytes(&quarticStiffness, length: 4, index: 7)
             dispatch(shape, pipeline: shapePipeline, count: bubbleCountValue); shape.endEncoding()
             if input.bounds != nil {
                 guard let bounds = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
@@ -780,24 +787,23 @@ public final class MetalBubbleSolver {
     }
 
     private func rebuildTopology(_ bubbles: [TopologyBubble], preserving snapshot: MetalWorldSnapshot) -> MetalWorldSnapshot {
-        var particles: [MetalParticle] = []; var ranges: [MetalBubbleRange] = []; var distances: [MetalDistanceConstraint] = []; var areas: [MetalAreaConstraint] = []
+        var particles: [MetalParticle] = []; var ranges: [MetalBubbleRange] = []; var springs: [MetalSpringConstraint] = []
         for (bubbleIndex, bubble) in bubbles.sorted(by: { $0.id < $1.id }).enumerated() {
             let topology = BubbleTopology.regular(id: bubble.id, center: Vector2(x: bubble.center.x, y: bubble.center.y), restArea: bubble.restArea, maxBoundarySegmentLength: snapshot.configuration.maxBoundarySegmentLength)
             let centerIndex = particles.count
             particles.append(MetalParticle(position: bubble.center, previousPosition: bubble.center, inverseMass: 1, bubbleIndex: UInt32(bubbleIndex)))
             let boundaryStart = particles.count
             particles.append(contentsOf: topology.boundaryPoints.map { point in MetalParticle(position: SIMD2(point.x, point.y), previousPosition: SIMD2(point.x, point.y), inverseMass: 1, bubbleIndex: UInt32(bubbleIndex)) })
-            let constraintStart = distances.count
+            let constraintStart = springs.count
             for offset in topology.boundaryPoints.indices {
                 let current = boundaryStart + offset, next = boundaryStart + (offset + 1) % topology.boundaryPoints.count, diagonal = boundaryStart + (offset + 2) % topology.boundaryPoints.count
-                distances.append(MetalDistanceConstraint(firstIndex: UInt32(centerIndex), secondIndex: UInt32(current), restLength: vectorDistance(particles[centerIndex].position, particles[current].position), compliance: 0))
-                distances.append(MetalDistanceConstraint(firstIndex: UInt32(current), secondIndex: UInt32(next), restLength: vectorDistance(particles[current].position, particles[next].position), compliance: 0))
-                distances.append(MetalDistanceConstraint(firstIndex: UInt32(current), secondIndex: UInt32(diagonal), restLength: vectorDistance(particles[current].position, particles[diagonal].position), compliance: 0))
+                springs.append(MetalSpringConstraint(firstIndex: UInt32(centerIndex), secondIndex: UInt32(current), restLength: vectorDistance(particles[centerIndex].position, particles[current].position), kind: .radial))
+                springs.append(MetalSpringConstraint(firstIndex: UInt32(current), secondIndex: UInt32(next), restLength: vectorDistance(particles[current].position, particles[next].position), kind: .perimeter))
+                springs.append(MetalSpringConstraint(firstIndex: UInt32(current), secondIndex: UInt32(diagonal), restLength: vectorDistance(particles[current].position, particles[diagonal].position), kind: .bending))
             }
-            ranges.append(MetalBubbleRange(id: UInt32(bubble.id.rawValue), centerIndex: UInt32(centerIndex), boundaryStart: UInt32(boundaryStart), boundaryCount: UInt32(topology.boundaryPoints.count), restArea: bubble.restArea, distanceConstraintStart: UInt32(constraintStart), distanceConstraintCount: UInt32(distances.count - constraintStart)))
-            areas.append(MetalAreaConstraint(boundaryStart: UInt32(boundaryStart), boundaryCount: UInt32(topology.boundaryPoints.count), restArea: bubble.restArea, compliance: 0))
+            ranges.append(MetalBubbleRange(id: UInt32(bubble.id.rawValue), centerIndex: UInt32(centerIndex), boundaryStart: UInt32(boundaryStart), boundaryCount: UInt32(topology.boundaryPoints.count), restArea: bubble.restArea, distanceConstraintStart: UInt32(constraintStart), distanceConstraintCount: UInt32(springs.count - constraintStart)))
         }
-        return MetalWorldSnapshot(particles: particles, bubbleRanges: ranges, distanceConstraints: distances, areaConstraints: areas, polygons: snapshot.polygons, grabs: snapshot.grabs, configuration: snapshot.configuration)
+        return MetalWorldSnapshot(particles: particles, bubbleRanges: ranges, springConstraints: springs, polygons: snapshot.polygons, grabs: snapshot.grabs, configuration: snapshot.configuration)
     }
 
     private func vectorDistance(_ first: SIMD2<Float>, _ second: SIMD2<Float>) -> Float {
@@ -832,7 +838,7 @@ public final class MetalBubbleSolver {
         guard !snapshot.particles.isEmpty else { return MetalShapeStepResult(particles: []) }
         guard let particleBuffer = makeBuffer(snapshot.particles),
               let rangeBuffer = makeBuffer(snapshot.bubbleRanges),
-              let distanceBuffer = makeBuffer(snapshot.distanceConstraints, minimumCount: 1),
+              let distanceBuffer = makeBuffer(snapshot.springConstraints, minimumCount: 1),
               let areaBuffer = makeBuffer(snapshot.areaConstraints, minimumCount: 1),
               let commandBuffer = commandQueue.makeCommandBuffer()
         else { throw MetalSolverError.bufferAllocationFailed }
@@ -841,7 +847,9 @@ public final class MetalBubbleSolver {
         var bubbleCount = UInt32(snapshot.bubbleRanges.count)
         var gravityValue = SIMD2<Float>(gravity.x, gravity.y)
         var timeStep = configuration.fixedTimeStep
-        var damping = configuration.linearDamping
+        var damping = configuration.springMaterial.drag
+        var quadraticStiffness = configuration.springMaterial.quadraticStiffness
+        var quarticStiffness = configuration.springMaterial.quarticStiffness
 
         guard let predictionEncoder = commandBuffer.makeComputeCommandEncoder() else {
             throw MetalSolverError.commandEncodingFailed
@@ -868,6 +876,8 @@ public final class MetalBubbleSolver {
             shapeEncoder.setBuffer(areaBuffer, offset: 0, index: 3)
             shapeEncoder.setBytes(&bubbleCount, length: MemoryLayout<UInt32>.stride, index: 4)
             shapeEncoder.setBytes(&timeStep, length: MemoryLayout<Float>.stride, index: 5)
+            shapeEncoder.setBytes(&quadraticStiffness, length: MemoryLayout<Float>.stride, index: 6)
+            shapeEncoder.setBytes(&quarticStiffness, length: MemoryLayout<Float>.stride, index: 7)
             dispatch(shapeEncoder, pipeline: shapePipeline, count: snapshot.bubbleRanges.count)
             shapeEncoder.endEncoding()
 

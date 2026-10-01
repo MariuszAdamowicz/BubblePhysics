@@ -3,7 +3,7 @@ import XCTest
 @testable import BubblePhysicsMetal
 
 final class MetalContactSolverTests: XCTestCase {
-    func testMetalContactsSeparateOverlappingBubblesWithoutLosingRestArea() async throws {
+    func testMetalContactsSeparateOverlappingBubblesWhileAllowingCompression() async throws {
         guard let solver = MetalBubbleSolver() else { throw XCTSkip("Metal unavailable") }
         var world = BubbleWorld(configuration: .default)
         world.addBubble(center: Vector2(x: 40, y: 50), restArea: .pi * 100)
@@ -13,8 +13,8 @@ final class MetalContactSolverTests: XCTestCase {
         let result = try await solver.solveContacts(snapshot: snapshot, configuration: .default)
 
         XCTAssertGreaterThan(result.centerDistance, 10)
-        XCTAssertEqual(result.areas[0], .pi * 100, accuracy: 2)
-        XCTAssertEqual(result.areas[1], .pi * 100, accuracy: 2)
+        XCTAssertTrue(result.areas.allSatisfy { $0.isFinite && $0 > 0 })
+        XCTAssertTrue(result.areas.contains { abs($0 - .pi * 100) > 2 })
         let range = snapshot.bubbleRanges[0]
         let centerDelta = result.particles[Int(range.centerIndex)].position - snapshot.particles[Int(range.centerIndex)].position
         let boundaryDeltas = (0..<Int(range.boundaryCount)).map { offset in
