@@ -146,6 +146,35 @@ kernel void applyContourCorrections(
     particles[particleIndex].position += total;
 }
 
+kernel void solveContourSelfIntersections(
+    device MetalParticle *particles [[buffer(0)]], device const MetalBubbleRange *ranges [[buffer(1)]],
+    constant uint &bubbleCount [[buffer(2)]], uint bubbleIndex [[thread_position_in_grid]]
+) {
+    if (bubbleIndex >= bubbleCount) { return; }
+    const MetalBubbleRange range = ranges[bubbleIndex];
+    for (uint first = 0; first < range.boundaryCount; ++first) {
+        const uint firstNext = (first + 1) % range.boundaryCount;
+        for (uint second = first + 2; second < range.boundaryCount; ++second) {
+            const uint secondNext = (second + 1) % range.boundaryCount;
+            if (secondNext == first) { continue; }
+            const uint a = range.boundaryStart + first, b = range.boundaryStart + firstNext;
+            const uint c = range.boundaryStart + second, d = range.boundaryStart + secondNext;
+            float t;
+            if (!edgeIntersection(particles[a].position, particles[b].position, particles[c].position, particles[d].position, t)) { continue; }
+            const float2 edge = particles[d].position - particles[c].position;
+            const float edgeLength = length(edge); if (edgeLength <= 1e-7f) { continue; }
+            float2 normal = float2(-edge.y, edge.x) / edgeLength;
+            const float side = dot(particles[a].position - particles[c].position, normal);
+            if (side < 0.0f) { normal = -normal; }
+            const float correction = max(0.01f, edgeLength * 0.25f);
+            particles[a].position += normal * correction;
+            particles[b].position += normal * correction;
+            particles[c].position -= normal * correction;
+            particles[d].position -= normal * correction;
+        }
+    }
+}
+
 // One thread reserves all deterministic (pair, direction, feature) ranges.
 // No writer is allowed to run when overflow is set, so a pair is never partial.
 kernel void reserveContourContactRanges(
