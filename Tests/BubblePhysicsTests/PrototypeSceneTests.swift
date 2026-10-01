@@ -16,6 +16,30 @@ final class PrototypeSceneTests: XCTestCase {
         XCTAssertEqual(snapshot.bubbles.count, 300)
     }
 
+    func testInspectionSceneUsesExactMultiscaleValueDistribution() {
+        XCTAssertEqual(counts(PrototypeSceneFactory.seeds(for: .inspection)), [2: 20, 4: 8, 8: 5, 16: 3, 32: 2, 64: 1, 512: 1])
+    }
+
+    func testStressSceneUsesExactMultiscaleValueDistribution() {
+        XCTAssertEqual(counts(PrototypeSceneFactory.seeds(for: .stress)), [2: 163, 4: 64, 8: 32, 16: 16, 32: 8, 64: 6, 128: 4, 256: 3, 512: 2, 1024: 1, 2048: 1])
+    }
+
+    func testRestAreaScalesLinearlyWithValueAndLargestRadiusExceedsScreenWidth() throws {
+        let seeds = PrototypeSceneFactory.seeds(for: .stress)
+        let area2 = try XCTUnwrap(seeds.first(where: { $0.value == 2 })).restArea
+        let largest = try XCTUnwrap(seeds.first(where: { $0.value == 2048 }))
+
+        XCTAssertEqual(largest.restArea, area2 * 1024, accuracy: area2 * 0.0001)
+        XCTAssertGreaterThan(sqrt(largest.restArea / .pi), PrototypeSceneFactory.bounds.maximum.x)
+    }
+
+    func testValueLabelsAreIndependentFromBubbleIdentifiers() {
+        let seeds = PrototypeSceneFactory.seeds(for: .inspection)
+
+        XCTAssertEqual(seeds.map(\.value), PrototypeSceneFactory.values(for: .inspection))
+        XCTAssertNotEqual(seeds.map { $0.id.rawValue }, seeds.map(\.value))
+    }
+
     func testSceneFactoryIsDeterministic() throws {
         let first = try PrototypeSceneFactory.make(.inspection).simulationSnapshot()
         let second = try PrototypeSceneFactory.make(.inspection).simulationSnapshot()
@@ -45,5 +69,9 @@ final class PrototypeSceneTests: XCTestCase {
         XCTAssertEqual(paused.angleRadians, moving.angleRadians)
         XCTAssertEqual(paused.linearVelocity, .zero)
         XCTAssertEqual(paused.angularVelocity, 0)
+    }
+
+    private func counts(_ seeds: [BenchmarkBubbleSeed]) -> [Int: Int] {
+        Dictionary(grouping: seeds, by: \.value).mapValues(\.count)
     }
 }

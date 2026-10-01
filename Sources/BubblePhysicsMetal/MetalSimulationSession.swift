@@ -81,14 +81,14 @@ final class MetalSessionBuffers {
     let sortCapacity: Int
     let contourContactCapacity: Int
 
-    init?(device: MTLDevice, snapshot: MetalWorldSnapshot) {
+    init?(device: MTLDevice, snapshot: MetalWorldSnapshot, minimumContourContactCapacity: Int = 0) {
         particleCapacity = max(1, snapshot.particles.count)
         bubbleCapacity = max(1, snapshot.bubbleRanges.count)
         distanceCapacity = max(1, snapshot.springConstraints.count)
         areaCapacity = max(1, snapshot.areaConstraints.count)
         pairCapacity = max(1, bubbleCapacity * (bubbleCapacity - 1) / 2)
         sortCapacity = Self.nextPowerOfTwo(bubbleCapacity)
-        contourContactCapacity = max(1, snapshot.particles.count * 8)
+        contourContactCapacity = max(1, snapshot.particles.count * 8, minimumContourContactCapacity)
         func buffer<T>(_ type: T.Type, _ count: Int) -> MTLBuffer? {
             device.makeBuffer(length: max(1, count) * MemoryLayout<T>.stride, options: .storageModeShared)
         }
@@ -209,7 +209,7 @@ public final class MetalSimulationSession: @unchecked Sendable {
             }
             let pairCount = Int(encodedBuffers.pairCount.contents().bindMemory(to: UInt32.self, capacity: 1).pointee)
             let contourOverflow = encodedBuffers.contourContactOverflow.contents().bindMemory(to: UInt32.self, capacity: 1).pointee
-            if pairCount > encodedBuffers.pairCapacity || contourOverflow != 0 {
+            if pairCount > encodedBuffers.pairCapacity {
                 self.status = .failed(.overflow)
                 return
             }
@@ -219,6 +219,23 @@ public final class MetalSimulationSession: @unchecked Sendable {
                 !particles[$0].previousPosition.x.isFinite || !particles[$0].previousPosition.y.isFinite
             }) {
                 self.status = .failed(.nonFinite)
+                return
+            }
+            if contourOverflow != 0 {
+                let required = Int(encodedBuffers.contourContactTotal.contents().bindMemory(to: UInt32.self, capacity: 1).pointee)
+                let preserved = self.snapshot.replacingParticles(Array(UnsafeBufferPointer(start: particles, count: encodedParticleCount)))
+                let capacity = max(required, encodedBuffers.contourContactCapacity * 2)
+                guard let replacement = MetalSessionBuffers(
+                    device: self.solver.device,
+                    snapshot: preserved,
+                    minimumContourContactCapacity: capacity
+                ) else {
+                    self.status = .failed(.overflow)
+                    return
+                }
+                self.snapshot = preserved
+                self.buffers = replacement
+                replacement.upload(preserved)
             }
         }
         return resources

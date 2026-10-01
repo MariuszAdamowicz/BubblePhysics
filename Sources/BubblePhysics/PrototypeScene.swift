@@ -91,17 +91,34 @@ public enum PrototypeSceneFactory {
         return world
     }
 
+    public static func seeds(for size: PrototypeSceneSize) -> [BenchmarkBubbleSeed] {
+        switch size {
+        case .inspection:
+            let values = BenchmarkScenario.expandedValues([2: 20, 4: 8, 8: 5, 16: 3, 32: 2, 64: 1, 512: 1])
+            return values.enumerated().map { index, value in
+                let column = index % 5
+                let row = index / 5
+                return BenchmarkBubbleSeed(
+                    id: BubbleID(rawValue: index + 1),
+                    value: value,
+                    center: Vector2(x: 48 + Float(column) * 70 + Float(row % 2) * 8, y: 72 + Float(row) * 92),
+                    restArea: BenchmarkScenario.restArea(for: value)
+                )
+            }
+        case .stress:
+            return BenchmarkScenario.iPhoneX.seeds
+        }
+    }
+
+    public static func values(for size: PrototypeSceneSize) -> [Int] {
+        seeds(for: size).map(\.value)
+    }
+
     private static func makeInspectionWorld() -> BubbleWorld {
         var world = BubbleWorld(configuration: .default, bounds: bounds)
-        for index in 0..<40 {
-            let column = index % 5
-            let row = index / 5
-            let center = Vector2(
-                x: 48 + Float(column) * 70 + Float(row % 2) * 8,
-                y: 72 + Float(row) * 92
-            )
-            let radius: Float = [27, 31, 35, 29][index % 4]
-            world.addBubble(center: center, restArea: .pi * radius * radius)
+        for seed in seeds(for: .inspection) {
+            let allocated = world.addBubble(center: seed.center, restArea: seed.restArea)
+            precondition(allocated == seed.id)
         }
         return world
     }

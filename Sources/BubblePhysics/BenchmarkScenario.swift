@@ -2,8 +2,16 @@ import Foundation
 
 public struct BenchmarkBubbleSeed: Equatable, Sendable {
     public let id: BubbleID
+    public let value: Int
     public let center: Vector2
     public let restArea: Float
+
+    public init(id: BubbleID, value: Int, center: Vector2, restArea: Float) {
+        self.id = id
+        self.value = value
+        self.center = center
+        self.restArea = restArea
+    }
 }
 
 public struct BenchmarkScenario: Sendable {
@@ -14,15 +22,25 @@ public struct BenchmarkScenario: Sendable {
     public static let iPhoneX: BenchmarkScenario = {
         let configuration = WorldConfiguration.default
         let bounds = AABB(minimum: .zero, maximum: Vector2(x: 375, y: 812))
-        let seeds = (0..<300).map { index in
+        let values = Self.expandedValues([2: 163, 4: 64, 8: 32, 16: 16, 32: 8, 64: 6, 128: 4, 256: 3, 512: 2, 1024: 1, 2048: 1])
+        let seeds = values.enumerated().map { index, value in
             let column = index % 15
             let row = index / 15
             let center = Vector2(x: 12.5 + Float(column) * 25, y: 20 + Float(row) * 40)
-            let radius: Float = index % 3 == 0 ? 14 : (index % 3 == 1 ? 16 : 18)
-            return BenchmarkBubbleSeed(id: BubbleID(rawValue: index + 1), center: center, restArea: .pi * radius * radius)
+            return BenchmarkBubbleSeed(id: BubbleID(rawValue: index + 1), value: value, center: center, restArea: Self.restArea(for: value))
         }
         return BenchmarkScenario(configuration: configuration, bounds: bounds, seeds: seeds)
     }()
+
+    public static func restArea(for value: Int) -> Float {
+        precondition(value >= 2)
+        let baseArea = Float.pi * 14 * 14
+        return baseArea * Float(value) / 2
+    }
+
+    public static func expandedValues(_ counts: [Int: Int]) -> [Int] {
+        counts.keys.sorted().flatMap { value in Array(repeating: value, count: counts[value] ?? 0) }
+    }
 
     public func makeWorld() -> BubbleWorld {
         var world = BubbleWorld(configuration: configuration, bounds: bounds)
