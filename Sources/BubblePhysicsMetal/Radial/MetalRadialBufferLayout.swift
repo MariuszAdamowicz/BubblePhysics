@@ -83,6 +83,20 @@ struct MetalRadialStepParameters: Equatable, Sendable {
     var padding: Float = 0
 }
 
+struct MetalRadialPolygon: Equatable, Sendable {
+    var rangeAndMode: SIMD4<UInt32>
+    var positionAndVelocityX: SIMD4<Float>
+    var velocityYAngularPadding: SIMD4<Float>
+}
+
+struct MetalRadialEnvironmentParameters: Equatable, Sendable {
+    var bounds: SIMD4<Float>
+    var sensorCount: UInt32
+    var polygonCount: UInt32
+    var contactCapacity: UInt32
+    var padding: UInt32 = 0
+}
+
 public struct MetalRadialFrameResources: @unchecked Sendable {
     public let bodyBuffer: MTLBuffer
     public let sensorBuffer: MTLBuffer
@@ -90,7 +104,13 @@ public struct MetalRadialFrameResources: @unchecked Sendable {
     public let loadHeaderBuffer: MTLBuffer
     public let compressionBuffer: MTLBuffer
     public let pressureBuffer: MTLBuffer
+    public let contactCountBuffer: MTLBuffer
+    public let contactOverflowBuffer: MTLBuffer
     public let sensorCount: Int
+
+    public var contactCount: Int {
+        Int(contactCountBuffer.contents().bindMemory(to: UInt32.self, capacity: 1).pointee)
+    }
 
     public func reducedLoad() -> RadialBodyLoad {
         let header = loadHeaderBuffer.contents().bindMemory(to: SIMD4<Float>.self, capacity: 1).pointee

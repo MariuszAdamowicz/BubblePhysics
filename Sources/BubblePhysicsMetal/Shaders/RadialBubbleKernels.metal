@@ -43,6 +43,7 @@ kernel void radialReduceContacts(
     device float *pressure [[buffer(4)]],
     constant MetalRadialContactMaterial &material [[buffer(5)]],
     constant MetalRadialStepParameters &parameters [[buffer(6)]],
+    device const uint *contactCount [[buffer(7)]],
     uint index [[thread_position_in_grid]]
 ) {
     if (index != 0) { return; }
@@ -52,7 +53,8 @@ kernel void radialReduceContacts(
     }
     float2 totalForce = float2(0.0f);
     float totalTorque = 0.0f;
-    for (uint contactIndex = 0; contactIndex < parameters.contactCount; ++contactIndex) {
+    const uint actualContactCount = contactCount[0];
+    for (uint contactIndex = 0; contactIndex < actualContactCount; ++contactIndex) {
         const MetalRadialContact contact = contacts[contactIndex];
         const uint start = contact.indicesAndSourceLow.x;
         const uint end = contact.indicesAndSourceLow.y;

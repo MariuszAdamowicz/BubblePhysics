@@ -7,6 +7,7 @@ public final class MetalRadialSimulation: @unchecked Sendable {
     private let buildSurfacePipeline: MTLComputePipelineState
     private let reduceContactsPipeline: MTLComputePipelineState
     private let integrateSurfacePipeline: MTLComputePipelineState
+    private let generateEnvironmentPipeline: MTLComputePipelineState
     private let bodyBuffer: MTLBuffer
     private let sensorBufferA: MTLBuffer
     private let sensorBufferB: MTLBuffer
@@ -14,6 +15,8 @@ public final class MetalRadialSimulation: @unchecked Sendable {
     private let loadHeaderBuffer: MTLBuffer
     private let compressionBuffer: MTLBuffer
     private let pressureBuffer: MTLBuffer
+    private let contactCountBuffer: MTLBuffer
+    private let contactOverflowBuffer: MTLBuffer
     private var contactBuffer: MTLBuffer
     private var contactCapacity: Int
     private var currentIsA = true
@@ -35,12 +38,21 @@ public final class MetalRadialSimulation: @unchecked Sendable {
             let reduceFunction = library.makeFunction(name: functionNames[2]),
             let integrateFunction = library.makeFunction(name: functionNames[3])
         else { throw MetalSolverError.metalUnavailable }
+        guard
+            let environmentLibrary = MetalShaderLibrary.load(
+                device: device,
+                sourceName: "RadialContactKernels",
+                requiredFunctions: ["radialGenerateEnvironmentContacts"]
+            ),
+            let environmentFunction = environmentLibrary.makeFunction(name: "radialGenerateEnvironmentContacts")
+        else { throw MetalSolverError.metalUnavailable }
 
         do {
             predictPipeline = try device.makeComputePipelineState(function: predictFunction)
             buildSurfacePipeline = try device.makeComputePipelineState(function: buildFunction)
             reduceContactsPipeline = try device.makeComputePipelineState(function: reduceFunction)
             integrateSurfacePipeline = try device.makeComputePipelineState(function: integrateFunction)
+            generateEnvironmentPipeline = try device.makeComputePipelineState(function: environmentFunction)
         } catch {
             throw MetalSolverError.metalUnavailable
         }
@@ -54,6 +66,8 @@ public final class MetalRadialSimulation: @unchecked Sendable {
             let loadHeaderBuffer = device.makeBuffer(length: MemoryLayout<SIMD4<Float>>.stride, options: .storageModeShared),
             let compressionBuffer = device.makeBuffer(length: sensorCount * MemoryLayout<Float>.stride, options: .storageModeShared),
             let pressureBuffer = device.makeBuffer(length: sensorCount * MemoryLayout<Float>.stride, options: .storageModeShared),
+            let contactCountBuffer = device.makeBuffer(length: MemoryLayout<UInt32>.stride, options: .storageModeShared),
+            let contactOverflowBuffer = device.makeBuffer(length: MemoryLayout<UInt32>.stride, options: .storageModeShared),
             let contactBuffer = device.makeBuffer(length: MemoryLayout<MetalRadialContact>.stride, options: .storageModeShared)
         else { throw MetalSolverError.bufferAllocationFailed }
 
@@ -65,6 +79,8 @@ public final class MetalRadialSimulation: @unchecked Sendable {
         self.loadHeaderBuffer = loadHeaderBuffer
         self.compressionBuffer = compressionBuffer
         self.pressureBuffer = pressureBuffer
+        self.contactCountBuffer = contactCountBuffer
+        self.contactOverflowBuffer = contactOverflowBuffer
         self.contactBuffer = contactBuffer
         contactCapacity = 1
         templateState = state
@@ -72,6 +88,8 @@ public final class MetalRadialSimulation: @unchecked Sendable {
         let sensors = state.sensors.map(MetalRadialSensor.init)
         copy(sensors, to: sensorBufferA)
         copy(sensors, to: sensorBufferB)
+        contactCountBuffer.contents().bindMemory(to: UInt32.self, capacity: 1).pointee = 0
+        contactOverflowBuffer.contents().bindMemory(to: UInt32.self, capacity: 1).pointee = 0
         upload(load: .zero(sensorCount: sensorCount))
     }
 
@@ -118,6 +136,7 @@ public final class MetalRadialSimulation: @unchecked Sendable {
         precondition(load.sensorCompression.count == templateState.sensors.count)
         precondition(load.sensorPressureDeltas.count == templateState.sensors.count)
         upload(load: load)
+        contactCountBuffer.contents().bindMemory(to: UInt32.self, capacity: 1).pointee = 0
         return try encode(deltaTime: deltaTime, contactCount: 0, reduceContacts: false, commandBuffer: commandBuffer)
     }
 
@@ -133,7 +152,65 @@ public final class MetalRadialSimulation: @unchecked Sendable {
         }
         try ensureContactCapacity(ordered.count)
         copy(ordered.map(MetalRadialContact.init), to: contactBuffer)
+        contactCountBuffer.contents().bindMemory(to: UInt32.self, capacity: 1).pointee = UInt32(ordered.count)
         return try encode(deltaTime: deltaTime, contactCount: ordered.count, reduceContacts: true, commandBuffer: commandBuffer)
+    }
+
+    public func encodeStep(
+        bounds: AABB,
+        polygons: [SimulationPolygonSnapshot],
+        deltaTime: Float,
+        commandBuffer: MTLCommandBuffer
+    ) throws -> MetalRadialFrameResources {
+        let maximumContacts = templateState.sensors.count * (4 + polygons.count)
+        try ensureContactCapacity(maximumContacts)
+        let (vertices, records) = encode(polygons: polygons)
+        guard
+            let vertexBuffer = device.makeBuffer(
+                length: max(1, vertices.count) * MemoryLayout<SIMD2<Float>>.stride,
+                options: .storageModeShared
+            ),
+            let polygonBuffer = device.makeBuffer(
+                length: max(1, records.count) * MemoryLayout<MetalRadialPolygon>.stride,
+                options: .storageModeShared
+            )
+        else { throw MetalSolverError.bufferAllocationFailed }
+        copy(vertices, to: vertexBuffer)
+        copy(records, to: polygonBuffer)
+        contactCountBuffer.contents().bindMemory(to: UInt32.self, capacity: 1).pointee = 0
+        contactOverflowBuffer.contents().bindMemory(to: UInt32.self, capacity: 1).pointee = 0
+
+        var stepParameters = MetalRadialStepParameters(
+            sensorCount: UInt32(templateState.sensors.count),
+            contactCount: 0,
+            deltaTime: deltaTime
+        )
+        try encodeSurfaceBuild(
+            sensors: currentSensorBuffer,
+            parameters: &stepParameters,
+            commandBuffer: commandBuffer
+        )
+        var environment = MetalRadialEnvironmentParameters(
+            bounds: SIMD4(bounds.minimum.x, bounds.minimum.y, bounds.maximum.x, bounds.maximum.y),
+            sensorCount: UInt32(templateState.sensors.count),
+            polygonCount: UInt32(polygons.count),
+            contactCapacity: UInt32(maximumContacts)
+        )
+        guard let environmentEncoder = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
+        environmentEncoder.setComputePipelineState(generateEnvironmentPipeline)
+        environmentEncoder.setBuffer(bodyBuffer, offset: 0, index: 0)
+        environmentEncoder.setBuffer(currentSensorBuffer, offset: 0, index: 1)
+        environmentEncoder.setBuffer(surfacePointBuffer, offset: 0, index: 2)
+        environmentEncoder.setBuffer(vertexBuffer, offset: 0, index: 3)
+        environmentEncoder.setBuffer(polygonBuffer, offset: 0, index: 4)
+        environmentEncoder.setBuffer(contactBuffer, offset: 0, index: 5)
+        environmentEncoder.setBuffer(contactCountBuffer, offset: 0, index: 6)
+        environmentEncoder.setBuffer(contactOverflowBuffer, offset: 0, index: 7)
+        environmentEncoder.setBytes(&environment, length: MemoryLayout<MetalRadialEnvironmentParameters>.stride, index: 8)
+        dispatch(environmentEncoder, pipeline: generateEnvironmentPipeline, count: 1)
+        environmentEncoder.endEncoding()
+
+        return try encode(deltaTime: deltaTime, contactCount: 0, reduceContacts: true, commandBuffer: commandBuffer)
     }
 
     public func complete(
@@ -141,6 +218,9 @@ public final class MetalRadialSimulation: @unchecked Sendable {
         commandBuffer: MTLCommandBuffer
     ) throws {
         guard commandBuffer.status == .completed else { throw MetalSolverError.commandExecutionFailed }
+        guard contactOverflowBuffer.contents().bindMemory(to: UInt32.self, capacity: 1).pointee == 0 else {
+            throw MetalSolverError.candidatePairOverflow
+        }
         currentIsA.toggle()
         templateState = state
     }
@@ -172,6 +252,7 @@ public final class MetalRadialSimulation: @unchecked Sendable {
             encoder.setBuffer(pressureBuffer, offset: 0, index: 4)
             encoder.setBytes(&contactMaterial, length: MemoryLayout<MetalRadialContactMaterial>.stride, index: 5)
             encoder.setBytes(&parameters, length: MemoryLayout<MetalRadialStepParameters>.stride, index: 6)
+            encoder.setBuffer(contactCountBuffer, offset: 0, index: 7)
             dispatch(encoder, pipeline: reduceContactsPipeline, count: 1)
             encoder.endEncoding()
         }
@@ -197,14 +278,7 @@ public final class MetalRadialSimulation: @unchecked Sendable {
         dispatch(surfaceEncoder, pipeline: integrateSurfacePipeline, count: templateState.sensors.count)
         surfaceEncoder.endEncoding()
 
-        guard let buildEncoder = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
-        buildEncoder.setComputePipelineState(buildSurfacePipeline)
-        buildEncoder.setBuffer(bodyBuffer, offset: 0, index: 0)
-        buildEncoder.setBuffer(destinationSensorBuffer, offset: 0, index: 1)
-        buildEncoder.setBuffer(surfacePointBuffer, offset: 0, index: 2)
-        buildEncoder.setBytes(&parameters, length: MemoryLayout<MetalRadialStepParameters>.stride, index: 3)
-        dispatch(buildEncoder, pipeline: buildSurfacePipeline, count: templateState.sensors.count)
-        buildEncoder.endEncoding()
+        try encodeSurfaceBuild(sensors: destinationSensorBuffer, parameters: &parameters, commandBuffer: commandBuffer)
 
         return MetalRadialFrameResources(
             bodyBuffer: bodyBuffer,
@@ -213,8 +287,47 @@ public final class MetalRadialSimulation: @unchecked Sendable {
             loadHeaderBuffer: loadHeaderBuffer,
             compressionBuffer: compressionBuffer,
             pressureBuffer: pressureBuffer,
+            contactCountBuffer: contactCountBuffer,
+            contactOverflowBuffer: contactOverflowBuffer,
             sensorCount: templateState.sensors.count
         )
+    }
+
+    private func encodeSurfaceBuild(
+        sensors: MTLBuffer,
+        parameters: inout MetalRadialStepParameters,
+        commandBuffer: MTLCommandBuffer
+    ) throws {
+        guard let encoder = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
+        encoder.setComputePipelineState(buildSurfacePipeline)
+        encoder.setBuffer(bodyBuffer, offset: 0, index: 0)
+        encoder.setBuffer(sensors, offset: 0, index: 1)
+        encoder.setBuffer(surfacePointBuffer, offset: 0, index: 2)
+        encoder.setBytes(&parameters, length: MemoryLayout<MetalRadialStepParameters>.stride, index: 3)
+        dispatch(encoder, pipeline: buildSurfacePipeline, count: templateState.sensors.count)
+        encoder.endEncoding()
+    }
+
+    private func encode(polygons: [SimulationPolygonSnapshot]) -> ([SIMD2<Float>], [MetalRadialPolygon]) {
+        var vertices: [SIMD2<Float>] = []
+        var records: [MetalRadialPolygon] = []
+        for polygon in polygons {
+            let start = vertices.count
+            vertices.append(contentsOf: polygon.worldVertices.map { SIMD2($0.x, $0.y) })
+            records.append(MetalRadialPolygon(
+                rangeAndMode: SIMD4(
+                    UInt32(start), UInt32(polygon.worldVertices.count),
+                    polygon.mode == .kinematic ? 1 : 0, UInt32(truncatingIfNeeded: polygon.id.rawValue)
+                ),
+                positionAndVelocityX: SIMD4(
+                    polygon.position.x, polygon.position.y, polygon.linearVelocity.x, 0
+                ),
+                velocityYAngularPadding: SIMD4(
+                    polygon.linearVelocity.y, polygon.angularVelocity, 0, 0
+                )
+            ))
+        }
+        return (vertices, records)
     }
 
     private func upload(load: RadialBodyLoad) {
