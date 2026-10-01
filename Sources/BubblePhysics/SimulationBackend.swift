@@ -101,6 +101,22 @@ public struct SimulationPolygonSnapshot: Equatable, Sendable {
     public let position: Vector2
     public let linearVelocity: Vector2
     public let angularVelocity: Float
+
+    public init(
+        id: PolygonID,
+        mode: RigidPolygonMode,
+        worldVertices: [Vector2],
+        position: Vector2,
+        linearVelocity: Vector2,
+        angularVelocity: Float
+    ) {
+        self.id = id
+        self.mode = mode
+        self.worldVertices = worldVertices
+        self.position = position
+        self.linearVelocity = linearVelocity
+        self.angularVelocity = angularVelocity
+    }
 }
 
 public struct SimulationGrabSnapshot: Equatable, Sendable {

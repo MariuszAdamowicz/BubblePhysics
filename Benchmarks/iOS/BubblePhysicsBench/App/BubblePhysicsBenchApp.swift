@@ -5,8 +5,22 @@ import SwiftUI
 
 @main struct BubblePhysicsBenchApp: App { var body: some Scene { WindowGroup { PrototypeScreen() } } }
 
+enum PrototypeMode: Equatable {
+    case inspection
+    case stress
+    case radial
+
+    var legacyScene: PrototypeSceneSize? {
+        switch self {
+        case .inspection: return .inspection
+        case .stress: return .stress
+        case .radial: return nil
+        }
+    }
+}
+
 @MainActor final class PrototypeViewModel: ObservableObject {
-    @Published var scene: PrototypeSceneSize = .inspection
+    @Published var scene: PrototypeMode = .radial
     @Published var isPaused = false
     @Published var diagnostics = false
     @Published var trianglePaused = false
@@ -19,9 +33,13 @@ private struct PrototypeScreen: View {
     @StateObject private var model = PrototypeViewModel()
     var body: some View {
         ZStack(alignment: .top) {
-            MetalPrototypeView(model: model).ignoresSafeArea()
+            if model.scene == .radial {
+                RadialBubblePrototypeView(model: model).ignoresSafeArea()
+            } else {
+                MetalPrototypeView(model: model).ignoresSafeArea()
+            }
             VStack(spacing: 8) {
-                HStack { Picker("Scena", selection: $model.scene) { Text("40").tag(PrototypeSceneSize.inspection); Text("300").tag(PrototypeSceneSize.stress) }.pickerStyle(.segmented); Button(model.isPaused ? "Wznów" : "Pauza") { model.isPaused.toggle() }; Button("Reset") { model.resetGeneration += 1; model.errorMessage = nil } }
+                HStack { Picker("Scena", selection: $model.scene) { Text("Radial").tag(PrototypeMode.radial); Text("40").tag(PrototypeMode.inspection); Text("300").tag(PrototypeMode.stress) }.pickerStyle(.segmented); Button(model.isPaused ? "Wznów" : "Pauza") { model.isPaused.toggle() }; Button("Reset") { model.resetGeneration += 1; model.errorMessage = nil } }
                 HStack { Toggle("Punkty", isOn: $model.diagnostics); Toggle("Pauza △", isOn: $model.trianglePaused) }
                 Text(String(format: "%.0f FPS · p50 %.2f · p95 %.2f ms", model.telemetry.fps, model.telemetry.p50Milliseconds, model.telemetry.p95Milliseconds)).font(.caption.monospacedDigit())
                 Text("punkty \(model.telemetry.particleCount) · segmenty \(model.telemetry.segmentCount) · pary \(model.telemetry.candidatePairCount) · kontakty \(model.telemetry.contactCount) · remesh \(model.telemetry.remeshOperationCount)").font(.caption2.monospacedDigit())
@@ -56,7 +74,7 @@ private final class TouchMetalView: MTKView {
     private var frameInFlight = false
     init(model: PrototypeViewModel) { self.model = model }
     func attach(_ view: TouchMetalView) { guard let device = view.device else { return }; queue = device.makeCommandQueue(); renderer = try? .init(device: device, pixelFormat: view.colorPixelFormat, worldBounds: PrototypeSceneFactory.bounds); view.touch = { [weak self, weak view] phase, point, time in self?.handle(phase, point, time, view?.bounds.size ?? .zero) }; rebuild(device) }
-    func synchronize(_ model: PrototypeViewModel) { if scene != model.scene || generation != model.resetGeneration, let device = queue?.device { scene = model.scene; generation = model.resetGeneration; rebuild(device) } }
+    func synchronize(_ model: PrototypeViewModel) { guard let selected = model.scene.legacyScene else { return }; if scene != selected || generation != model.resetGeneration, let device = queue?.device { scene = selected; generation = model.resetGeneration; rebuild(device) } }
     private func rebuild(_ device: MTLDevice) { do { let snapshot = MetalWorldSnapshot(world: try PrototypeSceneFactory.make(scene)); session = try .init(snapshot: snapshot, device: device); renderer?.rebuildSceneResources(ranges: snapshot.bubbleRanges, labels: PrototypeSceneFactory.values(for: scene).map(String.init)); telemetry.reset(); model?.telemetry = telemetry.snapshot; start = CACurrentMediaTime() } catch { Task { @MainActor in self.model?.errorMessage = "Błąd Metal: \(error)" } } }
     func draw(in view: MTKView) {
         guard !frameInFlight, let model, !model.isPaused, model.errorMessage == nil, let session, let renderer, let queue, let command = queue.makeCommandBuffer(), let drawable = view.currentDrawable else { return }
