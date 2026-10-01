@@ -75,7 +75,9 @@ public final class MetalBubbleRenderer: @unchecked Sendable {
     private struct SceneKey: Equatable { let ranges: [MetalBubbleRange]; let labels: [String] }
     private struct LabelInstance {
         let centerIndex: UInt32
-        let materialIndex: UInt32
+        let boundaryStart: UInt32
+        let boundaryCount: UInt32
+        let padding: UInt32 = 0
         let uvOrigin: SIMD2<Float>
         let uvSize: SIMD2<Float>
         let halfSize: SIMD2<Float>
@@ -118,7 +120,7 @@ public final class MetalBubbleRenderer: @unchecked Sendable {
             let instances = zip(ranges, labels).compactMap { range, label -> LabelInstance? in
                 guard let entry = atlas.entries[label], range.boundaryCount > 0 else { return nil }
                 let aspect = max(1, Float(label.count) * 0.62)
-                return LabelInstance(centerIndex: range.centerIndex, materialIndex: range.boundaryStart, uvOrigin: entry.uvOrigin, uvSize: entry.uvSize, halfSize: SIMD2(12 * aspect, 16))
+                return LabelInstance(centerIndex: range.centerIndex, boundaryStart: range.boundaryStart, boundaryCount: range.boundaryCount, uvOrigin: entry.uvOrigin, uvSize: entry.uvSize, halfSize: SIMD2(12 * aspect, 16))
             }
             labelInstanceBuffer = makeBuffer(instances); labelInstanceCount = instances.count
         }

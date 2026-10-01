@@ -16,13 +16,25 @@ fragment float4 bubbleFragment(VertexOut in [[stage_in]], constant float4 &color
     float glow = 0.82 + 0.18 * (1.0 - in.local.y); return float4(color.rgb * glow, color.a);
 }
 
-struct LabelInstance { uint centerIndex; uint materialIndex; float2 uvOrigin; float2 uvSize; float2 halfSize; };
+struct LabelInstance { uint centerIndex; uint boundaryStart; uint boundaryCount; uint padding; float2 uvOrigin; float2 uvSize; float2 halfSize; };
 struct LabelOut { float4 position [[position]]; float2 uv; };
 vertex LabelOut labelVertex(uint vertexID [[vertex_id]], uint instanceID [[instance_id]], device const MetalParticle *particles [[buffer(0)]], constant Uniforms &u [[buffer(1)]], device const LabelInstance *instances [[buffer(2)]]) {
     constexpr float2 corners[6] = { {-1,-1}, {1,-1}, {-1,1}, {-1,1}, {1,-1}, {1,1} };
     const LabelInstance item = instances[instanceID];
     const float2 center = particles[item.centerIndex].position;
-    float2 axis = normalize(particles[item.materialIndex].position - center);
+    const float2 previousCenter = particles[item.centerIndex].previousPosition;
+    float2 currentAxis = float2(0);
+    float2 previousAxis = float2(0);
+    const uint sampleCount = min(8u, item.boundaryCount);
+    for (uint sample = 0; sample < sampleCount; ++sample) {
+        const uint offset = sample * item.boundaryCount / sampleCount;
+        const MetalParticle point = particles[item.boundaryStart + offset];
+        const float2 currentDirection = point.position - center;
+        const float2 previousDirection = point.previousPosition - previousCenter;
+        if (length_squared(currentDirection) > 0.000001f) { currentAxis += normalize(currentDirection); }
+        if (length_squared(previousDirection) > 0.000001f) { previousAxis += normalize(previousDirection); }
+    }
+    float2 axis = normalize(currentAxis * 0.8f + previousAxis * 0.2f);
     if (!all(isfinite(axis))) { axis = float2(1, 0); }
     const float2 perpendicular = float2(-axis.y, axis.x);
     const float2 corner = corners[vertexID];

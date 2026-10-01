@@ -18,4 +18,42 @@ final class FrameTelemetryTests: XCTestCase {
         XCTAssertEqual(telemetry.snapshot.sampleCount, 1)
         XCTAssertEqual(telemetry.snapshot.failure, .nonFinite)
     }
+
+    func testSnapshotCarriesFiniteContourTimingsAndCounters() {
+        var telemetry = FrameTelemetry(windowSize: 4)
+        telemetry.record(
+            milliseconds: 12,
+            timings: .init(contourMilliseconds: 7, remeshingMilliseconds: 1, renderingMilliseconds: 4),
+            counters: .init(particleCount: 4200, segmentCount: 3900, candidatePairCount: 650, contactCount: 618, remeshOperationCount: 3, didOverflow: true, didEncounterNonFinite: false)
+        )
+
+        let snapshot = telemetry.snapshot
+        XCTAssertEqual(snapshot.particleCount, 4200)
+        XCTAssertEqual(snapshot.segmentCount, 3900)
+        XCTAssertEqual(snapshot.candidatePairCount, 650)
+        XCTAssertEqual(snapshot.contactCount, 618)
+        XCTAssertEqual(snapshot.remeshOperationCount, 3)
+        XCTAssertTrue(snapshot.didOverflow)
+        XCTAssertFalse(snapshot.didEncounterNonFinite)
+        XCTAssertEqual(snapshot.contourMilliseconds, 7)
+        XCTAssertEqual(snapshot.remeshingMilliseconds, 1)
+        XCTAssertEqual(snapshot.renderingMilliseconds, 4)
+        XCTAssertTrue([snapshot.contourMilliseconds, snapshot.remeshingMilliseconds, snapshot.renderingMilliseconds].allSatisfy(\.isFinite))
+    }
+
+    func testResetClearsDetailedCountersAndFailureFreezesThem() {
+        var telemetry = FrameTelemetry()
+        let counters = FrameTelemetryCounters(particleCount: 10, segmentCount: 8, candidatePairCount: 4, contactCount: 3, remeshOperationCount: 1, didOverflow: false, didEncounterNonFinite: false)
+        telemetry.record(milliseconds: 2, timings: .zero, counters: counters)
+        telemetry.fail(.nonFinite)
+        telemetry.record(milliseconds: 1, timings: .zero, counters: .init(particleCount: 99, segmentCount: 99, candidatePairCount: 99, contactCount: 99, remeshOperationCount: 99, didOverflow: true, didEncounterNonFinite: true))
+        XCTAssertEqual(telemetry.snapshot.particleCount, 10)
+
+        telemetry.reset()
+
+        XCTAssertEqual(telemetry.snapshot.particleCount, 0)
+        XCTAssertEqual(telemetry.snapshot.contactCount, 0)
+        XCTAssertFalse(telemetry.snapshot.didOverflow)
+        XCTAssertNil(telemetry.snapshot.failure)
+    }
 }

@@ -44,6 +44,7 @@ public struct MetalFrameResources: @unchecked Sendable {
     public let pairCountBuffer: MTLBuffer
     public let comparisonCountBuffer: MTLBuffer
     public let contourContactCountBuffer: MTLBuffer
+    public let contourContactOverflowBuffer: MTLBuffer
     public let polygonVertexBuffer: MTLBuffer
     public let polygonVertexCount: Int
 }
@@ -290,6 +291,7 @@ public final class MetalSimulationSession: @unchecked Sendable {
             particleCount: snapshot.particles.count, bubbleCount: snapshot.bubbleRanges.count,
             pairCountBuffer: buffers.pairCount, comparisonCountBuffer: buffers.comparisons,
             contourContactCountBuffer: buffers.contourContactTotal,
+            contourContactOverflowBuffer: buffers.contourContactOverflow,
             polygonVertexBuffer: buffers.polygonVertices, polygonVertexCount: buffers.polygonVertexCount
         )
     }

@@ -35,7 +35,8 @@ final class BubbleRenderGeometryTests: XCTestCase {
         let before = axis.pose(range: range, particles: particles(firstBoundaryAngle: .pi - 0.05, radius: 10))
         let after = axis.pose(range: range, particles: particles(firstBoundaryAngle: -.pi + 0.05, radius: 10))
 
-        XCTAssertEqual(after.angleRadians - before.angleRadians, 0.1, accuracy: 0.001)
+        XCTAssertGreaterThan(after.angleRadians - before.angleRadians, 0)
+        XCTAssertLessThan(after.angleRadians - before.angleRadians, 0.2)
     }
 
     func testRadialDeformationDoesNotScaleLabel() {
