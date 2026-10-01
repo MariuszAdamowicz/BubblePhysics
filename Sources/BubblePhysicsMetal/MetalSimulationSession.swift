@@ -223,6 +223,16 @@ public final class MetalSimulationSession: @unchecked Sendable {
         }
     }
 
+    @discardableResult
+    public func beginGrab(at point: SIMD2<Float>, resources: MetalFrameResources, timestamp: TimeInterval) async throws -> Bool {
+        let selected = try await grabController.begin(at: point, resources: resources, timestamp: timestamp)
+        hasActiveGrab = selected
+        return selected
+    }
+
+    public func moveGrab(to point: SIMD2<Float>, timestamp: TimeInterval) { grabController.move(to: point, timestamp: timestamp) }
+    public func endGrab() { grabController.end(); hasActiveGrab = false }
+
     private func frameResources() -> MetalFrameResources {
         MetalFrameResources(
             particleBuffer: buffers.particle, rangeBuffer: buffers.ranges,
