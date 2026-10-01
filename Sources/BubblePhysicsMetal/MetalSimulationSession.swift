@@ -123,6 +123,7 @@ public final class MetalSimulationSession: @unchecked Sendable {
     public private(set) var status: MetalSessionStatus = .ready
     public private(set) var hasActiveGrab = false
     private let solver: MetalBubbleSolver
+    private let grabController: MetalGrabController
     private var snapshot: MetalWorldSnapshot
     private var buffers: MetalSessionBuffers
     private var grab: MetalSessionGrab?
@@ -130,18 +131,20 @@ public final class MetalSimulationSession: @unchecked Sendable {
     public init(snapshot: MetalWorldSnapshot, device: MTLDevice) throws {
         guard let solver = MetalBubbleSolver(device: device) else { throw MetalSolverError.metalUnavailable }
         guard let buffers = MetalSessionBuffers(device: device, snapshot: snapshot) else { throw MetalSolverError.bufferAllocationFailed }
-        self.solver = solver; self.snapshot = snapshot; self.buffers = buffers
+        self.solver = solver; self.grabController = try MetalGrabController(device: device); self.snapshot = snapshot; self.buffers = buffers
         buffers.upload(snapshot)
     }
 
     internal init(snapshot: MetalWorldSnapshot, solver: MetalBubbleSolver) throws {
         guard let buffers = MetalSessionBuffers(device: solver.device, snapshot: snapshot) else { throw MetalSolverError.bufferAllocationFailed }
-        self.solver = solver; self.snapshot = snapshot; self.buffers = buffers
+        self.solver = solver; self.grabController = try MetalGrabController(device: solver.device); self.snapshot = snapshot; self.buffers = buffers
         buffers.upload(snapshot)
     }
 
     public func encodeFrame(input: MetalFrameInput, commandBuffer: MTLCommandBuffer) throws -> MetalFrameResources {
         guard status == .ready else { throw MetalSolverError.commandExecutionFailed }
+        let resources = frameResources()
+        try grabController.encode(into: commandBuffer, resources: resources)
         try solver.encodeSessionFrame(snapshot: snapshot, input: input, buffers: buffers, commandBuffer: commandBuffer)
         let encodedBuffers = buffers
         let encodedParticleCount = snapshot.particles.count
@@ -164,11 +167,7 @@ public final class MetalSimulationSession: @unchecked Sendable {
                 self.status = .failed(.nonFinite)
             }
         }
-        return MetalFrameResources(
-            particleBuffer: buffers.particle, rangeBuffer: buffers.ranges,
-            particleCount: snapshot.particles.count, bubbleCount: snapshot.bubbleRanges.count,
-            pairCountBuffer: buffers.pairCount, comparisonCountBuffer: buffers.comparisons
-        )
+        return resources
     }
 
     public func reset(snapshot: MetalWorldSnapshot) throws {
@@ -177,11 +176,28 @@ public final class MetalSimulationSession: @unchecked Sendable {
             buffers = replacement
         }
         self.snapshot = snapshot; buffers.upload(snapshot)
-        grab = nil; hasActiveGrab = false; status = .ready
+        grab = nil; grabController.end(); hasActiveGrab = false; status = .ready
     }
 
     public func updateGrab(_ grab: MetalSessionGrab?) {
         self.grab = grab; hasActiveGrab = grab != nil
+        if let grab {
+            grabController.installSelectionForTesting(
+                particleIndex: grab.particleIndex,
+                target: grab.target,
+                timestamp: ProcessInfo.processInfo.systemUptime
+            )
+        } else {
+            grabController.end()
+        }
+    }
+
+    private func frameResources() -> MetalFrameResources {
+        MetalFrameResources(
+            particleBuffer: buffers.particle, rangeBuffer: buffers.ranges,
+            particleCount: snapshot.particles.count, bubbleCount: snapshot.bubbleRanges.count,
+            pairCountBuffer: buffers.pairCount, comparisonCountBuffer: buffers.comparisons
+        )
     }
 
     internal func recordFailureForTesting(_ failure: MetalSessionFailure) { status = .failed(failure) }
