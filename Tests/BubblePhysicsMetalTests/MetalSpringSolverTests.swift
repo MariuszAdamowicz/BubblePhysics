@@ -60,6 +60,29 @@ final class MetalSpringSolverTests: XCTestCase {
         XCTAssertTrue(result.particles.allSatisfy { $0.position.x.isFinite && $0.position.y.isFinite })
     }
 
+    func testPerSpringStiffnessScaleChangesGPUCorrection() async throws {
+        guard let solver = MetalBubbleSolver() else { throw XCTSkip("Metal unavailable") }
+        let particles = [
+            MetalParticle(position: SIMD2(0, 0), previousPosition: SIMD2(0, 0), inverseMass: 1, bubbleIndex: 0),
+            MetalParticle(position: SIMD2(10, 0), previousPosition: SIMD2(10, 0), inverseMass: 1, bubbleIndex: 0),
+        ]
+        let range = MetalBubbleRange(id: 1, centerIndex: 0, boundaryStart: 1, boundaryCount: 1, restArea: 1, distanceConstraintStart: 0, distanceConstraintCount: 1)
+        let configuration = WorldConfiguration(fixedTimeStep: 1 / 60, solverIterations: 1, maxBoundarySegmentLength: 8, linearDamping: 0, springMaterial: .init(quadraticStiffness: 100, quarticStiffness: 0, drag: 0))
+        func snapshot(scale: Float) -> MetalWorldSnapshot {
+            MetalWorldSnapshot(
+                particles: particles,
+                bubbleRanges: [range],
+                springConstraints: [.init(firstIndex: 0, secondIndex: 1, restLength: 5, kind: .perimeter, stiffnessScale: scale)],
+                configuration: configuration
+            )
+        }
+
+        let normal = try await solver.solveShape(snapshot: snapshot(scale: 1), gravity: .zero, bounds: nil, configuration: configuration)
+        let doubled = try await solver.solveShape(snapshot: snapshot(scale: 2), gravity: .zero, bounds: nil, configuration: configuration)
+
+        XCTAssertLessThan(doubled.particles[1].position.x - doubled.particles[0].position.x, normal.particles[1].position.x - normal.particles[0].position.x)
+    }
+
     private func averageRadius(_ snapshot: MetalWorldSnapshot) -> Float {
         averageRadius(snapshot.particles, range: snapshot.bubbleRanges[0])
     }

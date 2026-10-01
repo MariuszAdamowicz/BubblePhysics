@@ -69,18 +69,24 @@ public struct MetalSpringConstraint: Equatable, Sendable {
     public var secondIndex: UInt32
     public var restLength: Float
     public var kindRawValue: UInt32
-    public var padding: SIMD2<Float> = .zero
+    public var padding: SIMD2<Float>
+
+    public var stiffnessScale: Float {
+        get { padding.x }
+        set { padding.x = newValue }
+    }
 
     public var kind: MetalSpringKind {
         get { MetalSpringKind(rawValue: kindRawValue) ?? .radial }
         set { kindRawValue = newValue.rawValue }
     }
 
-    public init(firstIndex: UInt32, secondIndex: UInt32, restLength: Float, kind: MetalSpringKind) {
+    public init(firstIndex: UInt32, secondIndex: UInt32, restLength: Float, kind: MetalSpringKind, stiffnessScale: Float = 1) {
         self.firstIndex = firstIndex
         self.secondIndex = secondIndex
         self.restLength = restLength
         kindRawValue = kind.rawValue
+        padding = SIMD2(stiffnessScale, 0)
     }
 }
 

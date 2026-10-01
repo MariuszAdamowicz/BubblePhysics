@@ -178,6 +178,7 @@ public final class MetalSimulationSession: @unchecked Sendable {
     private var snapshot: MetalWorldSnapshot
     private var buffers: MetalSessionBuffers
     private var grab: MetalSessionGrab?
+    private var remeshTransaction: MetalRemeshTransaction?
 
     public init(snapshot: MetalWorldSnapshot, device: MTLDevice) throws {
         guard let solver = MetalBubbleSolver(device: device) else { throw MetalSolverError.metalUnavailable }
@@ -230,6 +231,17 @@ public final class MetalSimulationSession: @unchecked Sendable {
         }
         self.snapshot = snapshot; buffers.upload(snapshot)
         grab = nil; grabController.end(); hasActiveGrab = false; status = .ready
+    }
+
+    public func scheduleRemesh(_ contour: AdaptiveContour, policy: RemeshPolicy, capacity: Int) throws -> MetalRemeshResult {
+        let transaction = try MetalRemeshTransaction(initialCapacity: capacity, device: solver.device)
+        remeshTransaction = transaction
+        return try transaction.apply(contour, policy: policy)
+    }
+
+    public func applyPendingRemeshAtFrameBoundary() throws -> MetalRemeshResult {
+        guard let remeshTransaction else { throw MetalSolverError.invalidTopologyCommand }
+        return try remeshTransaction.applyPendingAtFrameBoundary()
     }
 
     public func updateGrab(_ grab: MetalSessionGrab?) {

@@ -39,8 +39,9 @@ kernel void solveBubbleShape(
         const float weight = first.inverseMass + second.inverseMass;
         if (weight <= 0.0f) { continue; }
         const float extension = distance - constraint.restLength;
-        const float force = quadraticStiffness * extension + quarticStiffness * extension * extension * extension;
-        const float tangent = quadraticStiffness + 3.0f * quarticStiffness * extension * extension;
+        const float materialScale = constraint.padding.x;
+        const float force = materialScale * (quadraticStiffness * extension + quarticStiffness * extension * extension * extension);
+        const float tangent = materialScale * (quadraticStiffness + 3.0f * quarticStiffness * extension * extension);
         const float timeSquared = timeStep * timeStep;
         const float correction = force * timeSquared * weight / (1.0f + tangent * timeSquared * weight);
         if (!isfinite(correction)) { continue; }

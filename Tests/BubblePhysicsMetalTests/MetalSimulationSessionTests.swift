@@ -54,6 +54,27 @@ final class MetalSimulationSessionTests: XCTestCase {
         XCTAssertThrowsError(try session.encodeFrame(input: .init(), commandBuffer: try XCTUnwrap(queue.makeCommandBuffer())))
     }
 
+    func testRemeshGrowthIsRetriedAtomicallyAtNextFrameBoundary() throws {
+        let (session, _) = try makeSession(.inspection)
+        var contour = AdaptiveContour(
+            vertices: (0..<8).map { index in
+                let x = Float(index) * 4
+                return .init(position: Vector2(x: x, y: 0), previousPosition: Vector2(x: x, y: 0))
+            },
+            restLengths: Array(repeating: 4, count: 8)
+        )
+        contour.vertices[1] = .init(position: Vector2(x: 20, y: 0), previousPosition: Vector2(x: 18, y: 0))
+        let policy = RemeshPolicy(splitLength: 8, mergeLength: 1, persistenceFrames: 1, cooldownFrames: 0)
+
+        let first = try session.scheduleRemesh(contour, policy: policy, capacity: 8)
+        let retry = try session.applyPendingRemeshAtFrameBoundary()
+
+        XCTAssertEqual(first.contour, contour)
+        XCTAssertEqual(first.capacityGrowthRequired, 9)
+        XCTAssertEqual(retry.contour.vertices.count, 9)
+        XCTAssertNil(retry.capacityGrowthRequired)
+    }
+
     private func makeSession(_ size: PrototypeSceneSize) throws -> (MetalSimulationSession, MTLCommandQueue) {
         let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
         let snapshot = MetalWorldSnapshot(world: try PrototypeSceneFactory.make(size))
