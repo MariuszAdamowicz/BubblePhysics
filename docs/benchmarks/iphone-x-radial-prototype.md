@@ -25,11 +25,14 @@ kontakt ze ścianami i kinematycznym trójkątem.
 
 ## Wyniki urządzenia
 
-Status: **oczekuje na pomiar i ocenę CEO**.
+Status techniczny: **proces działał ponad 60 sekund bez zakończenia ani błędu
+Metal**. Xcode raportował 60 FPS, 41,7–41,8 MB pamięci i niski wpływ energetyczny.
+
+Status fizyki wizualnej: **oczekuje na pomiar aplikacji i ocenę CEO**.
 
 | Metryka | Wynik |
 | --- | --- |
-| FPS | — |
+| FPS | 60 (miernik Xcode); wartość z nakładki oczekuje |
 | p50 / p95 | — |
 | GPU frame | — |
 | Liczba czujników | — |
