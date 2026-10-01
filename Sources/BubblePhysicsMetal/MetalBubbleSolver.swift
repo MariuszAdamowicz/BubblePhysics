@@ -518,6 +518,116 @@ public final class MetalBubbleSolver {
         )
     }
 
+    func encodeSessionFrame(
+        snapshot: MetalWorldSnapshot,
+        input: MetalFrameInput,
+        buffers: MetalSessionBuffers,
+        commandBuffer: MTLCommandBuffer
+    ) throws {
+        let particleCountValue = snapshot.particles.count
+        let bubbleCountValue = snapshot.bubbleRanges.count
+        guard particleCountValue > 0, bubbleCountValue > 0 else { return }
+
+        buffers.pairCount.contents().bindMemory(to: UInt32.self, capacity: 1).pointee = 0
+        buffers.comparisons.contents().bindMemory(to: UInt32.self, capacity: 1).pointee = 0
+        memset(buffers.neighborCounts.contents(), 0, buffers.neighborCounts.length)
+        memset(buffers.neighborCursors.contents(), 0, buffers.neighborCursors.length)
+        let keyRecords = buffers.keys.contents().bindMemory(to: SIMD2<UInt32>.self, capacity: buffers.sortCapacity)
+        for index in bubbleCountValue..<buffers.sortCapacity { keyRecords[index] = SIMD2(UInt32.max, UInt32(index)) }
+
+        var particleCount = UInt32(particleCountValue)
+        var bubbleCount = UInt32(bubbleCountValue)
+        var pairCapacity = UInt32(buffers.pairCapacity)
+        let configuration = input.configuration ?? snapshot.configuration
+        var timeStep = configuration.fixedTimeStep
+
+        if let gravity = input.gravity {
+            var value = SIMD2<Float>(gravity.x, gravity.y)
+            var damping = configuration.linearDamping
+            guard let encoder = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
+            encoder.setComputePipelineState(predictionPipeline); encoder.setBuffer(buffers.particle, offset: 0, index: 0)
+            encoder.setBytes(&particleCount, length: 4, index: 1); encoder.setBytes(&value, length: MemoryLayout<SIMD2<Float>>.stride, index: 2)
+            encoder.setBytes(&timeStep, length: 4, index: 3); encoder.setBytes(&damping, length: 4, index: 4)
+            dispatch(encoder, pipeline: predictionPipeline, count: particleCountValue); encoder.endEncoding()
+        }
+
+        guard let aabb = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
+        aabb.setComputePipelineState(aabbPipeline); aabb.setBuffer(buffers.particle, offset: 0, index: 0)
+        aabb.setBuffer(buffers.ranges, offset: 0, index: 1); aabb.setBuffer(buffers.aabb, offset: 0, index: 2)
+        aabb.setBytes(&bubbleCount, length: 4, index: 3); dispatch(aabb, pipeline: aabbPipeline, count: bubbleCountValue); aabb.endEncoding()
+
+        guard let keys = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
+        keys.setComputePipelineState(keyPipeline); keys.setBuffer(buffers.aabb, offset: 0, index: 0)
+        keys.setBuffer(buffers.keys, offset: 0, index: 1); keys.setBytes(&bubbleCount, length: 4, index: 2)
+        dispatch(keys, pipeline: keyPipeline, count: bubbleCountValue); keys.endEncoding()
+
+        var sortCount = UInt32(buffers.sortCapacity)
+        let sortMemoryLength = buffers.sortCapacity * MemoryLayout<SIMD2<UInt32>>.stride
+        if sortMemoryLength <= device.maxThreadgroupMemoryLength {
+            guard let encoder = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
+            encoder.setComputePipelineState(threadgroupSortPipeline); encoder.setBuffer(buffers.keys, offset: 0, index: 0)
+            encoder.setBytes(&sortCount, length: 4, index: 1); encoder.setThreadgroupMemoryLength(sortMemoryLength, index: 0)
+            encoder.dispatchThreadgroups(MTLSize(width: 1, height: 1, depth: 1), threadsPerThreadgroup: MTLSize(width: min(buffers.sortCapacity, threadgroupSortPipeline.maxTotalThreadsPerThreadgroup), height: 1, depth: 1))
+            encoder.endEncoding()
+        } else {
+            var stage = 2
+            while stage <= buffers.sortCapacity {
+                var strideValue = stage / 2
+                while strideValue > 0 {
+                    var encodedStage = UInt32(stage), encodedStride = UInt32(strideValue)
+                    guard let encoder = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
+                    encoder.setComputePipelineState(sortPipeline); encoder.setBuffer(buffers.keys, offset: 0, index: 0)
+                    encoder.setBytes(&sortCount, length: 4, index: 1); encoder.setBytes(&encodedStage, length: 4, index: 2); encoder.setBytes(&encodedStride, length: 4, index: 3)
+                    dispatch(encoder, pipeline: sortPipeline, count: buffers.sortCapacity); encoder.endEncoding(); strideValue /= 2
+                }
+                stage *= 2
+            }
+        }
+
+        guard let pairs = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
+        pairs.setComputePipelineState(pairPipeline); pairs.setBuffer(buffers.aabb, offset: 0, index: 0); pairs.setBuffer(buffers.ranges, offset: 0, index: 1)
+        pairs.setBuffer(buffers.keys, offset: 0, index: 2); pairs.setBuffer(buffers.pairs, offset: 0, index: 3); pairs.setBuffer(buffers.pairCount, offset: 0, index: 4)
+        pairs.setBuffer(buffers.comparisons, offset: 0, index: 5); pairs.setBytes(&bubbleCount, length: 4, index: 6); pairs.setBytes(&pairCapacity, length: 4, index: 7)
+        dispatch(pairs, pipeline: pairPipeline, count: bubbleCountValue); pairs.endEncoding()
+
+        guard let counts = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
+        counts.setComputePipelineState(neighborCountPipeline); counts.setBuffer(buffers.pairs, offset: 0, index: 0); counts.setBuffer(buffers.pairCount, offset: 0, index: 1)
+        counts.setBuffer(buffers.neighborCounts, offset: 0, index: 2); counts.setBytes(&pairCapacity, length: 4, index: 3)
+        dispatch(counts, pipeline: neighborCountPipeline, count: buffers.pairCapacity); counts.endEncoding()
+
+        guard let prefix = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
+        prefix.setComputePipelineState(neighborPrefixPipeline); prefix.setBuffer(buffers.neighborCounts, offset: 0, index: 0)
+        prefix.setBuffer(buffers.neighborOffsets, offset: 0, index: 1); prefix.setBuffer(buffers.neighborCursors, offset: 0, index: 2); prefix.setBytes(&bubbleCount, length: 4, index: 3)
+        dispatch(prefix, pipeline: neighborPrefixPipeline, count: 1); prefix.endEncoding()
+
+        guard let neighbors = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
+        neighbors.setComputePipelineState(neighborWritePipeline); neighbors.setBuffer(buffers.pairs, offset: 0, index: 0); neighbors.setBuffer(buffers.pairCount, offset: 0, index: 1)
+        neighbors.setBuffer(buffers.neighborCursors, offset: 0, index: 2); neighbors.setBuffer(buffers.neighbors, offset: 0, index: 3); neighbors.setBytes(&pairCapacity, length: 4, index: 4)
+        dispatch(neighbors, pipeline: neighborWritePipeline, count: buffers.pairCapacity); neighbors.endEncoding()
+
+        var boundsMinimum = SIMD2<Float>(input.bounds?.minimum.x ?? -.infinity, input.bounds?.minimum.y ?? -.infinity)
+        var boundsMaximum = SIMD2<Float>(input.bounds?.maximum.x ?? .infinity, input.bounds?.maximum.y ?? .infinity)
+        for _ in 0..<configuration.solverIterations {
+            guard let contacts = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
+            contacts.setComputePipelineState(adjacencyContactPipeline); contacts.setBuffer(buffers.particle, offset: 0, index: 0); contacts.setBuffer(buffers.ranges, offset: 0, index: 1)
+            contacts.setBuffer(buffers.neighborOffsets, offset: 0, index: 2); contacts.setBuffer(buffers.neighbors, offset: 0, index: 3); contacts.setBuffer(buffers.deltas, offset: 0, index: 4)
+            contacts.setBytes(&particleCount, length: 4, index: 5); dispatch(contacts, pipeline: adjacencyContactPipeline, count: particleCountValue); contacts.endEncoding()
+            guard let apply = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
+            apply.setComputePipelineState(applyCorrectionPipeline); apply.setBuffer(buffers.particle, offset: 0, index: 0); apply.setBuffer(buffers.deltas, offset: 0, index: 1)
+            apply.setBytes(&particleCount, length: 4, index: 2); dispatch(apply, pipeline: applyCorrectionPipeline, count: particleCountValue); apply.endEncoding()
+            guard let shape = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
+            shape.setComputePipelineState(shapePipeline); shape.setBuffer(buffers.particle, offset: 0, index: 0); shape.setBuffer(buffers.ranges, offset: 0, index: 1)
+            shape.setBuffer(buffers.distance, offset: 0, index: 2); shape.setBuffer(buffers.area, offset: 0, index: 3); shape.setBytes(&bubbleCount, length: 4, index: 4); shape.setBytes(&timeStep, length: 4, index: 5)
+            dispatch(shape, pipeline: shapePipeline, count: bubbleCountValue); shape.endEncoding()
+            if input.bounds != nil {
+                guard let bounds = commandBuffer.makeComputeCommandEncoder() else { throw MetalSolverError.commandEncodingFailed }
+                bounds.setComputePipelineState(boundsPipeline); bounds.setBuffer(buffers.particle, offset: 0, index: 0); bounds.setBytes(&particleCount, length: 4, index: 1)
+                bounds.setBytes(&boundsMinimum, length: MemoryLayout<SIMD2<Float>>.stride, index: 2); bounds.setBytes(&boundsMaximum, length: MemoryLayout<SIMD2<Float>>.stride, index: 3)
+                dispatch(bounds, pipeline: boundsPipeline, count: particleCountValue); bounds.endEncoding()
+            }
+        }
+    }
+
     private func makeContactPreparation(pairs: [MetalBubblePair], ranges: [MetalBubbleRange]) -> ContactPreparation {
         let rangeByID = Dictionary(uniqueKeysWithValues: ranges.enumerated().map { ($0.element.id, UInt32($0.offset)) })
         let pairIndices = pairs.compactMap { pair -> SIMD2<UInt32>? in

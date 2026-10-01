@@ -19,15 +19,13 @@ public final class MetalSimulationEngine: @unchecked Sendable {
 
         do {
             var snapshot = MetalWorldSnapshot(world: world)
-            let shape = try await solver.solveShape(
+            let frame = try await solver.solveFrame(
                 snapshot: snapshot,
                 gravity: world.gravity,
                 bounds: world.bounds,
                 configuration: world.configuration
             )
-            snapshot = snapshot.replacingParticles(shape.particles)
-            let contacts = try await solver.solveContacts(snapshot: snapshot, configuration: world.configuration)
-            snapshot = snapshot.replacingParticles(contacts.particles)
+            snapshot = snapshot.replacingParticles(frame.particles)
             let interactions = try await solver.solveInteractions(snapshot: snapshot, configuration: world.configuration)
             snapshot = snapshot.replacingParticles(interactions.particles)
             return MetalEngineStepResult(
@@ -36,8 +34,8 @@ public final class MetalSimulationEngine: @unchecked Sendable {
                     backend: .metal,
                     didFallbackToCPU: false,
                     particleCount: snapshot.particles.count,
-                    candidatePairCount: contacts.candidatePairCount,
-                    contactCount: contacts.candidatePairCount,
+                    candidatePairCount: frame.candidatePairCount,
+                    contactCount: frame.candidatePairCount,
                     didOverflow: false
                 ),
                 appliedCommandCount: 0,
