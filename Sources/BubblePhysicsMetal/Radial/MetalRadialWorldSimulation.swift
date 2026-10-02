@@ -7,6 +7,8 @@ public final class MetalRadialWorldSimulation: @unchecked Sendable {
     private let pipeline: MTLComputePipelineState
     private let environmentPipeline: MTLComputePipelineState
     private let reducePipeline: MTLComputePipelineState
+    private let generatePairPipeline: MTLComputePipelineState
+    private let reducePairPipeline: MTLComputePipelineState
     private let environmentContactCapacity: Int?
     private var sensorBufferA: MTLBuffer
     private var sensorBufferB: MTLBuffer
@@ -42,6 +44,15 @@ public final class MetalRadialWorldSimulation: @unchecked Sendable {
         }
         environmentPipeline = try device.makeComputePipelineState(function: environmentFunction)
         reducePipeline = try device.makeComputePipelineState(function: reduceFunction)
+        guard let pairLibrary = MetalShaderLibrary.load(
+            device: device, sourceName: "RadialWorldPairKernels",
+            requiredFunctions: ["radialWorldGeneratePairContacts", "radialWorldReducePairContacts"]
+        ), let generatePairFunction = pairLibrary.makeFunction(name: "radialWorldGeneratePairContacts"),
+           let reducePairFunction = pairLibrary.makeFunction(name: "radialWorldReducePairContacts") else {
+            throw MetalSolverError.metalUnavailable
+        }
+        generatePairPipeline = try device.makeComputePipelineState(function: generatePairFunction)
+        reducePairPipeline = try device.makeComputePipelineState(function: reducePairFunction)
         self.environmentContactCapacity = environmentContactCapacity
         templateWorld = world
         let packed = try Self.allocate(device: device, allocator: allocator, world: world)
@@ -68,7 +79,8 @@ public final class MetalRadialWorldSimulation: @unchecked Sendable {
         commandBuffer: MTLCommandBuffer,
         contactBuffers: [MTLBuffer] = [],
         countBuffers: [MTLBuffer] = [],
-        overflowBuffers: [MTLBuffer] = []
+        overflowBuffers: [MTLBuffer] = [],
+        pairMetricsBuffer: MTLBuffer? = nil
     ) throws -> MetalRadialWorldFrameResources {
         var parameters = SIMD4<UInt32>(
             UInt32(resources.bubbleCount), UInt32(resources.sensorCount),
@@ -96,7 +108,7 @@ public final class MetalRadialWorldSimulation: @unchecked Sendable {
         return frameResources(
             sensorBuffer: destinationSensorBuffer,
             contactBuffers: contactBuffers, countBuffers: countBuffers,
-            overflowBuffers: overflowBuffers
+            overflowBuffers: overflowBuffers, pairMetricsBuffer: pairMetricsBuffer
         )
     }
 
@@ -175,11 +187,101 @@ public final class MetalRadialWorldSimulation: @unchecked Sendable {
             )
             reduceEncoder.endEncoding()
         }
+        let orderedIndices = templateWorld.bubbles.indices.sorted {
+            templateWorld.bubbles[$0].id < templateWorld.bubbles[$1].id
+        }
+        var pairRecords: [MetalRadialPairRecord] = []
+        var contactStart = 0
+        for firstPosition in orderedIndices.indices {
+            for secondPosition in orderedIndices.index(after: firstPosition)..<orderedIndices.endIndex {
+                let first = orderedIndices[firstPosition], second = orderedIndices[secondPosition]
+                let capacity = 3 * (resources.ranges[first].sensorCount + resources.ranges[second].sensorCount)
+                pairRecords.append(MetalRadialPairRecord(
+                    bubblesAndRange: SIMD4(UInt32(first), UInt32(second), UInt32(contactStart), UInt32(capacity))
+                ))
+                contactStart += capacity
+            }
+        }
+        let pairBuffer = try temporaryBuffer(pairRecords)
+        let pairContactBuffer: MTLBuffer = try emptyBuffer(
+            length: max(1, contactStart) * MemoryLayout<MetalRadialPairContact>.stride
+        )
+        let pairCountBuffer: MTLBuffer = try emptyBuffer(
+            length: max(1, pairRecords.count) * MemoryLayout<UInt32>.stride
+        )
+        memset(pairCountBuffer.contents(), 0, max(1, pairRecords.count) * MemoryLayout<UInt32>.stride)
+        let pairMetrics = try emptyBuffer(length: 3 * MemoryLayout<UInt32>.stride)
+        memset(pairMetrics.contents(), 0, 3 * MemoryLayout<UInt32>.stride)
+        var pairCount = UInt32(pairRecords.count)
+        guard let pairEncoder = commandBuffer.makeComputeCommandEncoder() else {
+            throw MetalSolverError.commandEncodingFailed
+        }
+        pairEncoder.setComputePipelineState(generatePairPipeline)
+        pairEncoder.setBuffer(resources.bodyBuffer, offset: 0, index: 0)
+        pairEncoder.setBuffer(resources.descriptorBuffer, offset: 0, index: 1)
+        pairEncoder.setBuffer(resources.surfacePointBuffer, offset: 0, index: 2)
+        pairEncoder.setBuffer(pairBuffer, offset: 0, index: 3)
+        pairEncoder.setBuffer(pairContactBuffer, offset: 0, index: 4)
+        pairEncoder.setBuffer(pairCountBuffer, offset: 0, index: 5)
+        pairEncoder.setBuffer(pairMetrics, offset: 0, index: 6)
+        pairEncoder.setBytes(&pairCount, length: MemoryLayout<UInt32>.stride, index: 7)
+        let pairWidth = max(1, min(generatePairPipeline.threadExecutionWidth, pairRecords.count))
+        pairEncoder.dispatchThreads(
+            MTLSize(width: pairRecords.count, height: 1, depth: 1),
+            threadsPerThreadgroup: MTLSize(width: pairWidth, height: 1, depth: 1)
+        )
+        pairEncoder.endEncoding()
+        guard let pairReduceEncoder = commandBuffer.makeComputeCommandEncoder() else {
+            throw MetalSolverError.commandEncodingFailed
+        }
+        pairReduceEncoder.setComputePipelineState(reducePairPipeline)
+        pairReduceEncoder.setBuffer(resources.bodyBuffer, offset: 0, index: 0)
+        pairReduceEncoder.setBuffer(resources.descriptorBuffer, offset: 0, index: 1)
+        pairReduceEncoder.setBuffer(currentSensorBuffer, offset: 0, index: 2)
+        pairReduceEncoder.setBuffer(resources.surfacePointBuffer, offset: 0, index: 3)
+        pairReduceEncoder.setBuffer(pairBuffer, offset: 0, index: 4)
+        pairReduceEncoder.setBuffer(pairContactBuffer, offset: 0, index: 5)
+        pairReduceEncoder.setBuffer(pairCountBuffer, offset: 0, index: 6)
+        pairReduceEncoder.setBuffer(resources.loadHeaderBuffer, offset: 0, index: 7)
+        pairReduceEncoder.setBuffer(resources.compressionBuffer, offset: 0, index: 8)
+        pairReduceEncoder.setBuffer(resources.pressureBuffer, offset: 0, index: 9)
+        pairReduceEncoder.setBytes(&pairCount, length: MemoryLayout<UInt32>.stride, index: 10)
+        pairReduceEncoder.dispatchThreads(
+            MTLSize(width: 1, height: 1, depth: 1),
+            threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1)
+        )
+        pairReduceEncoder.endEncoding()
         return try encodeIntegration(
             deltaTime: deltaTime, commandBuffer: commandBuffer,
             contactBuffers: contactBuffers, countBuffers: countBuffers,
-            overflowBuffers: overflowBuffers
+            overflowBuffers: overflowBuffers, pairMetricsBuffer: pairMetrics
         )
+    }
+
+    public static func substepCount(
+        for world: RadialWorldState,
+        polygons: [SimulationPolygonSnapshot],
+        deltaTime: Float
+    ) -> Int {
+        let segmentLengths: [Float] = world.bubbles.flatMap { bubble -> [Float] in
+            let points = bubble.surfacePoints
+            return points.indices.map { index in
+                let edge = points[(index + 1) % points.count] - points[index]
+                return edge.dot(edge).squareRoot()
+            }
+        }.filter { $0 > 1e-5 }
+        let shortestSegment: Float = segmentLengths.min() ?? 1
+        let polygonSpeeds: [Float] = polygons.map { polygon -> Float in
+            let radii: [Float] = polygon.worldVertices.map { point -> Float in
+                let arm = point - polygon.position
+                return arm.dot(arm).squareRoot()
+            }
+            let radius: Float = radii.max() ?? 0
+            let linear = polygon.linearVelocity.dot(polygon.linearVelocity).squareRoot()
+            return linear + abs(polygon.angularVelocity) * radius
+        }
+        let maximumPolygonSpeed: Float = polygonSpeeds.max() ?? 0
+        return min(8, max(1, Int(ceil(maximumPolygonSpeed * deltaTime / shortestSegment))))
     }
 
     public func complete(
@@ -216,7 +318,8 @@ public final class MetalRadialWorldSimulation: @unchecked Sendable {
         sensorBuffer: MTLBuffer,
         contactBuffers: [MTLBuffer]? = nil,
         countBuffers: [MTLBuffer]? = nil,
-        overflowBuffers: [MTLBuffer]? = nil
+        overflowBuffers: [MTLBuffer]? = nil,
+        pairMetricsBuffer: MTLBuffer? = nil
     ) -> MetalRadialWorldFrameResources {
         MetalRadialWorldFrameResources(
             bodyBuffer: resources.bodyBuffer,
@@ -232,7 +335,8 @@ public final class MetalRadialWorldSimulation: @unchecked Sendable {
             sensorCount: resources.sensorCount,
             contactBuffers: contactBuffers ?? resources.contactBuffers,
             contactCountBuffers: countBuffers ?? resources.contactCountBuffers,
-            overflowBuffers: overflowBuffers ?? resources.overflowBuffers
+            overflowBuffers: overflowBuffers ?? resources.overflowBuffers,
+            pairMetricsBuffer: pairMetricsBuffer ?? resources.pairMetricsBuffer
         )
     }
 
@@ -352,7 +456,8 @@ public final class MetalRadialWorldSimulation: @unchecked Sendable {
             compressionBuffer: compressionBuffer, pressureBuffer: pressureBuffer,
             ranges: world.ranges, bubbleCount: world.bubbles.count,
             sensorCount: world.totalSensorCount,
-            contactBuffers: [], contactCountBuffers: [], overflowBuffers: []
+            contactBuffers: [], contactCountBuffers: [], overflowBuffers: [],
+            pairMetricsBuffer: nil
         )
         return (resources, sensorA, sensorB)
     }

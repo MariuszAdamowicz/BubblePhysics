@@ -8,6 +8,7 @@ struct MetalRadialWorldDescriptor {
     float4 radial;
     float4 response;
     float4 timing;
+    float4 contact;
 };
 
 kernel void radialWorldFreeStep(

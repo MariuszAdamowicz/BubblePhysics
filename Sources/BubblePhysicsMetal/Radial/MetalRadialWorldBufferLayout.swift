@@ -18,6 +18,7 @@ struct MetalRadialWorldDescriptor: Equatable, Sendable {
     var radial: SIMD4<Float>
     var response: SIMD4<Float>
     var timing: SIMD4<Float>
+    var contact: SIMD4<Float>
 
     init(bubble: RadialBubbleState, range: RadialBubbleRange) {
         self.range = SIMD4(UInt32(range.sensorStart), UInt32(range.sensorCount), UInt32(range.bubbleIndex), 0)
@@ -30,7 +31,22 @@ struct MetalRadialWorldDescriptor: Equatable, Sendable {
             bubble.dynamics.bodyLinearDrag, bubble.dynamics.bodyAngularDrag
         )
         timing = SIMD4(bubble.dynamics.birthDuration, bubble.dynamics.maximumRadialSpeed, 0, 0)
+        contact = SIMD4(
+            bubble.material.quadraticStiffness, bubble.material.quarticStiffness,
+            bubble.material.drag, 0
+        )
     }
+}
+
+struct MetalRadialPairRecord: Equatable, Sendable {
+    var bubblesAndRange: SIMD4<UInt32>
+}
+
+struct MetalRadialPairContact: Equatable, Sendable {
+    var first: SIMD4<UInt32>
+    var second: SIMD4<UInt32>
+    var barycentricPenetration: SIMD4<Float>
+    var pointNormal: SIMD4<Float>
 }
 
 public struct MetalRadialWorldFrameResources: @unchecked Sendable {
@@ -48,6 +64,7 @@ public struct MetalRadialWorldFrameResources: @unchecked Sendable {
     let contactBuffers: [MTLBuffer]
     let contactCountBuffers: [MTLBuffer]
     let overflowBuffers: [MTLBuffer]
+    let pairMetricsBuffer: MTLBuffer?
 
     public var contactCount: Int {
         contactCountBuffers.reduce(0) {
@@ -57,6 +74,7 @@ public struct MetalRadialWorldFrameResources: @unchecked Sendable {
 
     public var overflow: Bool {
         overflowBuffers.contains { $0.contents().bindMemory(to: UInt32.self, capacity: 1).pointee != 0 }
+            || (pairMetricsBuffer?.contents().bindMemory(to: UInt32.self, capacity: 3)[2] ?? 0) != 0
     }
 
     public var maximumPenetration: Float {
@@ -65,6 +83,16 @@ public struct MetalRadialWorldFrameResources: @unchecked Sendable {
             let contacts = pair.0.contents().bindMemory(to: MetalRadialContact.self, capacity: max(1, count))
             return (0..<count).reduce(result) { max($0, contacts[$1].penetrationBarycentricVelocity.x) }
         }
+    }
+
+    public var candidatePairCount: Int {
+        guard let pairMetricsBuffer else { return 0 }
+        return Int(pairMetricsBuffer.contents().bindMemory(to: UInt32.self, capacity: 2)[0])
+    }
+
+    public var pairContactCount: Int {
+        guard let pairMetricsBuffer else { return 0 }
+        return Int(pairMetricsBuffer.contents().bindMemory(to: UInt32.self, capacity: 2)[1])
     }
 }
 
