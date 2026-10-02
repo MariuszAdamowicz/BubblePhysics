@@ -42,4 +42,28 @@ public struct ReferenceSegment: Sendable, Equatable {
             ownerID: ownerID
         )
     }
+
+    public static func kinematicSegment(
+        id: ReferenceSegmentID,
+        previousA: ReferenceVector2,
+        previousB: ReferenceVector2,
+        currentA: ReferenceVector2,
+        currentB: ReferenceVector2,
+        angularVelocity: Float = 0,
+        ownerID: Int? = nil
+    ) -> ReferenceSegment {
+        let previousCenter = (previousA + previousB) * 0.5
+        let currentCenter = (currentA + currentB) * 0.5
+        return ReferenceSegment(
+            id: id,
+            previousA: previousA,
+            previousB: previousB,
+            currentA: currentA,
+            currentB: currentB,
+            linearVelocity: currentCenter - previousCenter,
+            angularVelocity: angularVelocity,
+            motion: .kinematic,
+            ownerID: ownerID
+        )
+    }
 }
