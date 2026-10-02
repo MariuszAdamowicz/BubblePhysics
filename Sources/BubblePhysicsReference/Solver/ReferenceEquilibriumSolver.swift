@@ -32,6 +32,15 @@ public enum ReferenceEquilibriumSolver {
                 if correction > 0 {
                     correctedPositions += 1
                     largestCorrection = max(largestCorrection, correction)
+                    if segmentContactCount(for: contact.bubbleA, in: orderedContacts) > 1 {
+                        deformationCount += storeRigidCompression(
+                            bubbleIndex: index,
+                            contact: contact,
+                            blockedDistance: correction,
+                            bubbles: &bubbles,
+                            configuration: configuration
+                        )
+                    }
                 }
                 if transferredFriction.insert(contact.id).inserted {
                     transferTangentialMotion(
@@ -81,6 +90,15 @@ public enum ReferenceEquilibriumSolver {
                         contacts: orderedContacts,
                         configuration: configuration
                     )
+                    if segmentContactCount(for: contact.bubbleA, in: orderedContacts) > 1 {
+                        deformationCount += storeRigidCompression(
+                            bubbleIndex: index,
+                            contact: contact,
+                            blockedDistance: correction,
+                            bubbles: &bubbles,
+                            configuration: configuration
+                        )
+                    }
                 }
             }
 
@@ -179,6 +197,44 @@ public enum ReferenceEquilibriumSolver {
             pressure: blockedDistance * bubbles[bubbleIndex].stiffness
         )
         if let existing = bubbles[bubbleIndex].directionalDeformations.firstIndex(where: { $0.contactID == pair.id }) {
+            if deformation.depth > bubbles[bubbleIndex].directionalDeformations[existing].depth {
+                bubbles[bubbleIndex].directionalDeformations[existing] = deformation
+            }
+        } else {
+            bubbles[bubbleIndex].directionalDeformations.append(deformation)
+        }
+        return 1
+    }
+
+    private static func segmentContactCount(
+        for bubbleID: ReferenceBubbleID,
+        in contacts: [ReferenceContact]
+    ) -> Int {
+        contacts.reduce(into: 0) { count, contact in
+            if contact.kind == .bubbleSegment && contact.bubbleA == bubbleID { count += 1 }
+        }
+    }
+
+    private static func storeRigidCompression(
+        bubbleIndex: Int,
+        contact: ReferenceContact,
+        blockedDistance: Float,
+        bubbles: inout [ReferenceBubble],
+        configuration: ReferenceConfiguration
+    ) -> Int {
+        let ratio = blockedDistance / max(bubbles[bubbleIndex].targetRadius, Float.ulpOfOne)
+        let resistance = 1 + configuration.nonlinearStiffening * ratio * ratio
+        let deformation = DirectionalDeformation(
+            contactID: contact.id,
+            direction: -contact.normal,
+            depth: blockedDistance / resistance,
+            angularWidth: .pi / 3,
+            pressure: blockedDistance * bubbles[bubbleIndex].stiffness
+        )
+        guard deformation.depth > configuration.positionTolerance else { return 0 }
+        if let existing = bubbles[bubbleIndex].directionalDeformations.firstIndex(where: {
+            $0.contactID == contact.id
+        }) {
             if deformation.depth > bubbles[bubbleIndex].directionalDeformations[existing].depth {
                 bubbles[bubbleIndex].directionalDeformations[existing] = deformation
             }
