@@ -11,6 +11,7 @@ enum PrototypeMode: Equatable {
     case stress
     case radial
     case reference
+    case referenceVisual
 
     var legacyScene: PrototypeSceneSize? {
         switch self {
@@ -18,6 +19,7 @@ enum PrototypeMode: Equatable {
         case .stress: return .stress
         case .radial: return nil
         case .reference: return nil
+        case .referenceVisual: return nil
         }
     }
 }
@@ -36,15 +38,17 @@ private struct PrototypeScreen: View {
     @StateObject private var model = PrototypeViewModel()
     var body: some View {
         ZStack(alignment: .top) {
-            if model.scene == .reference {
+            if model.scene == .referenceVisual {
+                ReferenceVisualPrototypeView(selectedMode: $model.scene).ignoresSafeArea()
+            } else if model.scene == .reference {
                 ReferenceBenchmarkView().ignoresSafeArea()
             } else if model.scene == .radial {
                 RadialBubblePrototypeView(model: model).ignoresSafeArea()
             } else {
                 MetalPrototypeView(model: model).ignoresSafeArea()
             }
-            VStack(spacing: 8) {
-                HStack { Picker("Scena", selection: $model.scene) { Text("CPU").tag(PrototypeMode.reference); Text("Radial").tag(PrototypeMode.radial); Text("40").tag(PrototypeMode.inspection); Text("300").tag(PrototypeMode.stress) }.pickerStyle(.segmented); if model.scene != .reference { Button(model.isPaused ? "Wznów" : "Pauza") { model.isPaused.toggle() }; Button("Reset") { model.resetGeneration += 1; model.errorMessage = nil } } }
+            if model.scene != .referenceVisual { VStack(spacing: 8) {
+                HStack { Picker("Scena", selection: $model.scene) { Text("CPU Wiz").tag(PrototypeMode.referenceVisual); Text("CPU").tag(PrototypeMode.reference); Text("Radial").tag(PrototypeMode.radial); Text("40").tag(PrototypeMode.inspection); Text("300").tag(PrototypeMode.stress) }.pickerStyle(.segmented); if model.scene != .reference { Button(model.isPaused ? "Wznów" : "Pauza") { model.isPaused.toggle() }; Button("Reset") { model.resetGeneration += 1; model.errorMessage = nil } } }
                 if model.scene != .reference {
                 HStack { Toggle("Punkty", isOn: $model.diagnostics); Toggle("Pauza △", isOn: $model.trianglePaused) }
                 Text(String(format: "%.0f FPS · p50 %.2f · p95 %.2f ms", model.telemetry.fps, model.telemetry.p50Milliseconds, model.telemetry.p95Milliseconds)).font(.caption.monospacedDigit())
@@ -58,7 +62,7 @@ private struct PrototypeScreen: View {
                 }
                 if let error = model.errorMessage { Text(error).foregroundStyle(.red).font(.caption) }
                 }
-            }.padding(10).background(.ultraThinMaterial).clipShape(RoundedRectangle(cornerRadius: 14)).padding()
+            }.padding(10).background(.ultraThinMaterial).clipShape(RoundedRectangle(cornerRadius: 14)).padding() }
         }
     }
 }

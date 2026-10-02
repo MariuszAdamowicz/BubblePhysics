@@ -51,3 +51,16 @@ Pomiar wykonano na fizycznym iPhonie X z iOS 16.7.16, w konfiguracji Release, po
 | AABB tree | 3,07 | 16,84 | 0,04 | 0,50 | 1,13 | 15,22 | 699 | 466/566 | 1899 | 2,0385 | 90 | 0 | 0 | nie |
 
 Sweep-and-prune jest lepszym wyborem dla tej sceny: ma niższe p50, p95 i koszt broad phase. Typowy krok mieści się z dużym zapasem w 16,67 ms, natomiast p95 leży na granicy 60 FPS. Limit 12 iteracji został osiągnięty w 90 z 300 mierzonych kroków, co koreluje z ogonem czasu solvera i wyznacza następny obszar analizy. Nie wystąpiło wyczerpanie budżetu CCD, korekta niedozwolonej strony ani stan niefinitywny.
+
+## Walidacja wizualna `CPU Wiz`
+
+Tryb `CPU Wiz` uruchamia osobną, deterministyczną scenę referencyjnego solvera CPU:
+40 baniek o wyraźnie różnych rozmiarach, cztery jednostronne ściany oraz obracający
+się trójkąt z trzech dwustronnych odcinków. Symulacja pracuje ze stałym krokiem
+`1/60 s` i wykonuje najwyżej trzy kroki nadrabiające po opóźnieniu prezentacji.
+
+Na iPhonie należy ocenić przede wszystkim, czy trójkąt nie przechodzi przez środki
+baniek, kontur reaguje natychmiast na nacisk, szybko wraca do kształtu po zwolnieniu
+i czy bańki zajmują przestrzeń pozostawioną za przeszkodą. Przełącznik `Punkty
+kontaktowe` pokazuje adaptacyjne próbki konturów; `Pauza` i `Reset` nie zmieniają
+pozostałych trybów benchmarku.
