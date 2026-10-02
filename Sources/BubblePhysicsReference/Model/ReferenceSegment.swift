@@ -13,6 +13,23 @@ public enum ReferenceSegmentMotion: Sendable, Equatable {
     case kinematic
 }
 
+public enum ReferenceSegmentCollisionMode: Sendable, Equatable {
+    case oneSided(allowedSide: Float)
+    case twoSided
+
+    public var allowedSide: Float? {
+        switch self {
+        case let .oneSided(allowedSide): allowedSide < 0 ? -1 : 1
+        case .twoSided: nil
+        }
+    }
+
+    fileprivate var normalized: ReferenceSegmentCollisionMode {
+        guard let allowedSide else { return .twoSided }
+        return .oneSided(allowedSide: allowedSide)
+    }
+}
+
 public struct ReferenceSegment: Sendable, Equatable {
     public var id: ReferenceSegmentID
     public var previousA: ReferenceVector2
@@ -23,12 +40,14 @@ public struct ReferenceSegment: Sendable, Equatable {
     public var angularVelocity: Float
     public var motion: ReferenceSegmentMotion
     public var ownerID: Int?
+    public var collisionMode: ReferenceSegmentCollisionMode
 
     public static func staticSegment(
         id: ReferenceSegmentID,
         a: ReferenceVector2,
         b: ReferenceVector2,
-        ownerID: Int? = nil
+        ownerID: Int? = nil,
+        collisionMode: ReferenceSegmentCollisionMode = .twoSided
     ) -> ReferenceSegment {
         ReferenceSegment(
             id: id,
@@ -39,7 +58,8 @@ public struct ReferenceSegment: Sendable, Equatable {
             linearVelocity: .zero,
             angularVelocity: 0,
             motion: .staticBody,
-            ownerID: ownerID
+            ownerID: ownerID,
+            collisionMode: collisionMode.normalized
         )
     }
 
@@ -51,7 +71,8 @@ public struct ReferenceSegment: Sendable, Equatable {
         currentB: ReferenceVector2,
         timeStep: Float = ReferenceConfiguration.default.timeStep,
         angularVelocity: Float = 0,
-        ownerID: Int? = nil
+        ownerID: Int? = nil,
+        collisionMode: ReferenceSegmentCollisionMode = .twoSided
     ) -> ReferenceSegment {
         let previousCenter = (previousA + previousB) * 0.5
         let currentCenter = (currentA + currentB) * 0.5
@@ -64,7 +85,8 @@ public struct ReferenceSegment: Sendable, Equatable {
             linearVelocity: (currentCenter - previousCenter) / max(timeStep, Float.ulpOfOne),
             angularVelocity: angularVelocity,
             motion: .kinematic,
-            ownerID: ownerID
+            ownerID: ownerID,
+            collisionMode: collisionMode.normalized
         )
     }
 }

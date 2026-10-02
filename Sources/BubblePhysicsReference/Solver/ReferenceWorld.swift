@@ -8,7 +8,6 @@ public struct ReferenceWorld {
     public private(set) var contacts = ReferenceContactSet()
 
     private var broadPhase: any ReferenceBroadPhase
-    private var segmentAllowedSides: [ReferenceSegmentID: Float] = [:]
 
     public init(
         configuration: ReferenceConfiguration,
@@ -31,14 +30,13 @@ public struct ReferenceWorld {
         addBubble(bubble)
     }
 
-    public mutating func addSegment(_ segment: ReferenceSegment, allowedSide: Float = 1) {
+    public mutating func addSegment(_ segment: ReferenceSegment) {
         if let index = segments.firstIndex(where: { $0.id == segment.id }) {
             segments[index] = segment
         } else {
             segments.append(segment)
             segments.sort { $0.id < $1.id }
         }
-        segmentAllowedSides[segment.id] = allowedSide < 0 ? -1 : 1
     }
 
     public mutating func updateSegment(_ segment: ReferenceSegment) {
@@ -51,7 +49,6 @@ public struct ReferenceWorld {
 
     public mutating func removeSegment(id: ReferenceSegmentID) {
         segments.removeAll { $0.id == id }
-        segmentAllowedSides.removeValue(forKey: id)
     }
 
     public mutating func step() -> ReferenceWorldStepReport {
@@ -103,20 +100,19 @@ public struct ReferenceWorld {
         }
 
         for segment in segments {
-            let allowedSide = segmentAllowedSides[segment.id] ?? 1
             for index in bubbles.indices {
                 toiTests += 1
                 let result = ReferenceCCD.bubbleSegment(
                     bubbles[index], segment,
-                    allowedSide: allowedSide,
+                    allowedSide: segment.collisionMode.allowedSide ?? 1,
                     configuration: configuration
                 )
                 if result.didExhaustBudget { ccdBudgetExhaustions += 1 }
-                if applySegmentTOI(result, bubbleIndex: index, segment: segment, allowedSide: allowedSide) {
+                if applySegmentTOI(result, bubbleIndex: index, segment: segment) {
                     sideCorrections += 1
                 }
                 generatedContacts.append(ReferenceDiscreteContactGenerator.bubbleSegmentCandidate(
-                    bubbles[index], segment, allowedSide: allowedSide
+                    bubbles[index], segment
                 ))
             }
         }
@@ -138,8 +134,7 @@ public struct ReferenceWorld {
             segments: segments,
             contacts: &contacts,
             configuration: configuration,
-            candidatePairs: pairs,
-            segmentAllowedSides: segmentAllowedSides
+            candidatePairs: pairs
         )
         let linearFactor = expf(-configuration.linearDamping * configuration.timeStep)
         let angularFactor = expf(-configuration.angularDamping * configuration.timeStep)
@@ -207,8 +202,7 @@ public struct ReferenceWorld {
     private mutating func applySegmentTOI(
         _ result: ReferenceSegmentTOIResult,
         bubbleIndex: Int,
-        segment: ReferenceSegment,
-        allowedSide: Float
+        segment: ReferenceSegment
     ) -> Bool {
         var corrected = false
         switch result.timeOfImpact {
@@ -220,8 +214,8 @@ public struct ReferenceWorld {
             break
         }
 
+        guard let sign = segment.collisionMode.allowedSide else { return corrected }
         let edge = segment.currentB - segment.currentA
-        let sign: Float = allowedSide < 0 ? -1 : 1
         let normal = ReferenceVector2(x: -edge.y, y: edge.x)
             .normalized(or: ReferenceVector2(x: 0, y: 1)) * sign
         let signedSide = (bubbles[bubbleIndex].center - segment.currentA).dot(normal)

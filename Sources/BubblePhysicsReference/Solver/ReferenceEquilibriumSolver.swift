@@ -6,8 +6,7 @@ public enum ReferenceEquilibriumSolver {
         segments: [ReferenceSegment],
         contacts: inout ReferenceContactSet,
         configuration: ReferenceConfiguration,
-        candidatePairs: [ReferencePair]? = nil,
-        segmentAllowedSides: [ReferenceSegmentID: Float] = [:]
+        candidatePairs: [ReferencePair]? = nil
     ) -> ReferenceSolverReport {
         let configuration = configuration.sanitized
         let bubbleIndices = Dictionary(uniqueKeysWithValues: bubbles.indices.map { (bubbles[$0].id, $0) })
@@ -29,7 +28,7 @@ public enum ReferenceEquilibriumSolver {
                       let segment = segmentsByID[segmentID] else { continue }
                 let correction = projectOut(
                     bubble: &bubbles[index], segment: segment,
-                    allowedSide: contact.allowedSide ?? 1,
+                    normal: contact.normal,
                     tolerance: configuration.positionTolerance
                 )
                 if correction > 0 {
@@ -80,7 +79,7 @@ public enum ReferenceEquilibriumSolver {
                       let segment = segmentsByID[segmentID] else { continue }
                 let correction = projectOut(
                     bubble: &bubbles[index], segment: segment,
-                    allowedSide: contact.allowedSide ?? 1,
+                    normal: contact.normal,
                     tolerance: configuration.positionTolerance
                 )
                 if correction > 0 {
@@ -110,8 +109,7 @@ public enum ReferenceEquilibriumSolver {
                 segments: segments,
                 existingContacts: orderedContacts,
                 candidatePairs: candidatePairs,
-                bubbleIndices: bubbleIndices,
-                segmentAllowedSides: segmentAllowedSides
+                bubbleIndices: bubbleIndices
             )
             contacts.update(
                 candidates: candidates,
@@ -130,8 +128,7 @@ public enum ReferenceEquilibriumSolver {
             segments: segments,
             existingContacts: orderedContacts,
             candidatePairs: candidatePairs,
-            bubbleIndices: bubbleIndices,
-            segmentAllowedSides: segmentAllowedSides
+            bubbleIndices: bubbleIndices
         )
         contacts.update(
             candidates: finalCandidates,
@@ -174,19 +171,20 @@ public enum ReferenceEquilibriumSolver {
     private static func projectOut(
         bubble: inout ReferenceBubble,
         segment: ReferenceSegment,
-        allowedSide: Float,
+        normal contactNormal: ReferenceVector2,
         tolerance: Float
     ) -> Float {
         let edge = segment.currentB - segment.currentA
-        let sign: Float = allowedSide < 0 ? -1 : 1
-        let allowedNormal = ReferenceVector2(x: -edge.y, y: edge.x)
-            .normalized(or: ReferenceVector2(x: 0, y: 1)) * sign
+        let baseNormal = ReferenceVector2(x: -edge.y, y: edge.x)
+            .normalized(or: ReferenceVector2(x: 0, y: 1))
+        let allowedNormal = segment.collisionMode.allowedSide.map { baseNormal * $0 }
+        let fallback = allowedNormal ?? contactNormal.normalized(or: baseNormal)
         let closest = closestPoint(
             to: bubble.center,
             on: ReferenceSegmentEndpoints(a: segment.currentA, b: segment.currentB)
         )
-        var normal = (bubble.center - closest.point).normalized(or: allowedNormal)
-        if normal.dot(allowedNormal) < 0 { normal = allowedNormal }
+        var normal = (bubble.center - closest.point).normalized(or: fallback)
+        if let allowedNormal, normal.dot(allowedNormal) < 0 { normal = allowedNormal }
         let radius = bubble.supportRadius(along: -normal)
         let signedDistance = (bubble.center - closest.point).dot(normal)
         let penetration = radius - signedDistance
@@ -290,8 +288,7 @@ public enum ReferenceEquilibriumSolver {
         segments: [ReferenceSegment],
         existingContacts: [ReferenceContact],
         candidatePairs: [ReferencePair]?,
-        bubbleIndices: [ReferenceBubbleID: Int],
-        segmentAllowedSides: [ReferenceSegmentID: Float]
+        bubbleIndices: [ReferenceBubbleID: Int]
     ) -> [ReferenceContact] {
         var generated: [ReferenceContact] = []
         var pairIDs: Set<ReferencePair> = []
@@ -328,9 +325,7 @@ public enum ReferenceEquilibriumSolver {
         if candidatePairs != nil {
             for segment in segments {
                 for bubble in bubbles {
-                    let contact = ReferenceDiscreteContactGenerator.bubbleSegmentCandidate(
-                        bubble, segment, allowedSide: segmentAllowedSides[segment.id] ?? 1
-                    )
+                    let contact = ReferenceDiscreteContactGenerator.bubbleSegmentCandidate(bubble, segment)
                     generated.append(contact)
                     segmentKeys.insert(contact.id)
                 }
@@ -340,10 +335,7 @@ public enum ReferenceEquilibriumSolver {
             guard let segmentID = previous.segment,
                   let segment = segmentsByID[segmentID],
                   let index = bubbleIndices[previous.bubbleA] else { continue }
-            generated.append(ReferenceDiscreteContactGenerator.bubbleSegmentCandidate(
-                bubbles[index], segment,
-                allowedSide: segmentAllowedSides[segmentID] ?? previous.allowedSide ?? 1
-            ))
+            generated.append(ReferenceDiscreteContactGenerator.bubbleSegmentCandidate(bubbles[index], segment))
         }
         return generated
     }

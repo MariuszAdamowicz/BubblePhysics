@@ -141,6 +141,8 @@ final class ReferenceEquilibriumSolverTests: XCTestCase {
         _ segment: ReferenceSegment,
         allowedSide: Float = -1
     ) throws -> ReferenceContact {
-        try XCTUnwrap(ReferenceDiscreteContactGenerator.bubbleSegment(bubble, segment, allowedSide: allowedSide))
+        var oneSidedSegment = segment
+        oneSidedSegment.collisionMode = .oneSided(allowedSide: allowedSide)
+        return try XCTUnwrap(ReferenceDiscreteContactGenerator.bubbleSegment(bubble, oneSidedSegment))
     }
 }

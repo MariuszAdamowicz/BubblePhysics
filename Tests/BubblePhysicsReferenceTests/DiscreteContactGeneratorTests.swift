@@ -29,12 +29,11 @@ final class DiscreteContactGeneratorTests: XCTestCase {
         let segment = ReferenceSegment.staticSegment(
             id: .init(rawValue: 4),
             a: .init(x: 0, y: 0),
-            b: .init(x: 10, y: 0)
+            b: .init(x: 10, y: 0),
+            collisionMode: .oneSided(allowedSide: 1)
         )
 
-        let contact = try XCTUnwrap(
-            ReferenceDiscreteContactGenerator.bubbleSegment(bubble, segment, allowedSide: 1)
-        )
+        let contact = try XCTUnwrap(ReferenceDiscreteContactGenerator.bubbleSegment(bubble, segment))
 
         XCTAssertEqual(contact.pointQ, ReferenceVector2(x: 5, y: 0))
         XCTAssertEqual(contact.penetration, 1, accuracy: 0.0001)
@@ -46,16 +45,63 @@ final class DiscreteContactGeneratorTests: XCTestCase {
         let segment = ReferenceSegment.staticSegment(
             id: .init(rawValue: 4),
             a: .init(x: 0, y: 0),
-            b: .init(x: 10, y: 0)
+            b: .init(x: 10, y: 0),
+            collisionMode: .twoSided
         )
 
-        let contact = try XCTUnwrap(
-            ReferenceDiscreteContactGenerator.bubbleSegment(bubble, segment, allowedSide: 1)
-        )
+        let contact = try XCTUnwrap(ReferenceDiscreteContactGenerator.bubbleSegment(bubble, segment))
 
         XCTAssertEqual(contact.pointQ, segment.currentA)
         XCTAssertEqual(contact.penetration, 1, accuracy: 0.0001)
         XCTAssertEqual(contact.normal, ReferenceVector2(x: -1, y: 0))
+        XCTAssertNil(contact.allowedSide)
+    }
+
+    func testOneSidedSegmentAlwaysUsesAllowedNormal() throws {
+        let bubble = try self.bubble(id: 1, x: 5, y: -2, radius: 3)
+        let segment = ReferenceSegment.staticSegment(
+            id: .init(rawValue: 4),
+            a: .init(x: 0, y: 0),
+            b: .init(x: 10, y: 0),
+            collisionMode: .oneSided(allowedSide: 1)
+        )
+
+        let contact = try XCTUnwrap(ReferenceDiscreteContactGenerator.bubbleSegment(bubble, segment))
+
+        XCTAssertEqual(contact.normal, ReferenceVector2(x: 0, y: 1))
+        XCTAssertEqual(contact.allowedSide, 1)
+    }
+
+    func testTwoSidedSegmentNormalPointsFromQToCenter() throws {
+        let bubble = try self.bubble(id: 1, x: 5, y: -2, radius: 3)
+        let segment = ReferenceSegment.staticSegment(
+            id: .init(rawValue: 4),
+            a: .init(x: 0, y: 0),
+            b: .init(x: 10, y: 0),
+            collisionMode: .twoSided
+        )
+
+        let contact = try XCTUnwrap(ReferenceDiscreteContactGenerator.bubbleSegment(bubble, segment))
+
+        XCTAssertEqual(contact.normal, ReferenceVector2(x: 0, y: -1))
+        XCTAssertNil(contact.allowedSide)
+    }
+
+    func testTwoSidedCoincidenceUsesDeterministicFiniteNormal() throws {
+        let bubble = try self.bubble(id: 1, x: 5, y: 0, radius: 3)
+        let segment = ReferenceSegment.staticSegment(
+            id: .init(rawValue: 4),
+            a: .init(x: 0, y: 0),
+            b: .init(x: 10, y: 0),
+            collisionMode: .twoSided
+        )
+
+        let first = try XCTUnwrap(ReferenceDiscreteContactGenerator.bubbleSegment(bubble, segment))
+        let second = try XCTUnwrap(ReferenceDiscreteContactGenerator.bubbleSegment(bubble, segment))
+
+        XCTAssertEqual(first.normal, second.normal)
+        XCTAssertTrue(first.normal.isFinite)
+        XCTAssertEqual(first.normal.length, 1, accuracy: 0.0001)
     }
 
     func testCoincidentCentersUseDeterministicFiniteNormal() throws {

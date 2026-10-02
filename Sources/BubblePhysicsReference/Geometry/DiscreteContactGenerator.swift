@@ -33,25 +33,26 @@ public enum ReferenceDiscreteContactGenerator {
 
     public static func bubbleSegment(
         _ bubble: ReferenceBubble,
-        _ segment: ReferenceSegment,
-        allowedSide: Float
+        _ segment: ReferenceSegment
     ) -> ReferenceContact? {
-        let candidate = bubbleSegmentCandidate(bubble, segment, allowedSide: allowedSide)
+        let candidate = bubbleSegmentCandidate(bubble, segment)
         return candidate.penetration > 0 ? candidate : nil
     }
 
     public static func bubbleSegmentCandidate(
         _ bubble: ReferenceBubble,
-        _ segment: ReferenceSegment,
-        allowedSide: Float
+        _ segment: ReferenceSegment
     ) -> ReferenceContact {
         let endpoints = ReferenceSegmentEndpoints(a: segment.currentA, b: segment.currentB)
         let closest = closestPoint(to: bubble.center, on: endpoints)
         let edge = segment.currentB - segment.currentA
-        let sideSign: Float = allowedSide < 0 ? -1 : 1
-        let sideNormal = ReferenceVector2(x: -edge.y, y: edge.x)
-            .normalized(or: ReferenceVector2(x: 0, y: 1)) * sideSign
-        let normal = (bubble.center - closest.point).normalized(or: sideNormal)
+        let baseNormal = ReferenceVector2(x: -edge.y, y: edge.x)
+            .normalized(or: ReferenceVector2(x: 0, y: 1))
+        let allowedSide = segment.collisionMode.allowedSide
+        let fallbackSign: Float = ((bubble.id.rawValue ^ segment.id.rawValue) & 1) == 0 ? 1 : -1
+        let fallback = allowedSide.map { baseNormal * $0 } ?? baseNormal * fallbackSign
+        let normal = allowedSide.map { _ in fallback }
+            ?? (bubble.center - closest.point).normalized(or: fallback)
         let radius = bubble.supportRadius(along: -normal)
         let penetration = radius - closest.distanceSquared.squareRoot()
         return ReferenceContact(
@@ -62,7 +63,7 @@ public enum ReferenceDiscreteContactGenerator {
             normal: normal,
             pointQ: closest.point,
             penetration: penetration,
-            allowedSide: sideSign
+            allowedSide: allowedSide
         )
     }
 

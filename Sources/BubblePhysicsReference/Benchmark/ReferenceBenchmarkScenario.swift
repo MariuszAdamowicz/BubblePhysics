@@ -85,16 +85,18 @@ public struct ReferenceBenchmarkScenario: Sendable, Equatable {
             world.addSegment(.kinematicSegment(
                 id: .init(rawValue: 1),
                 previousA: .init(x: 40, y: 350), previousB: .init(x: 100, y: 350),
-                currentA: .init(x: 240, y: 350), currentB: .init(x: 300, y: 350)
-            ), allowedSide: 1)
+                currentA: .init(x: 240, y: 350), currentB: .init(x: 300, y: 350),
+                collisionMode: .oneSided(allowedSide: 1)
+            ))
         case .rotatingSegment:
             world.addBubble(try bubble(id: 1, x: 187.5, y: 390, radius: 25))
             world.addSegment(.kinematicSegment(
                 id: .init(rawValue: 1),
                 previousA: .init(x: 120, y: 350), previousB: .init(x: 255, y: 350),
                 currentA: .init(x: 187.5, y: 282.5), currentB: .init(x: 187.5, y: 417.5),
-                angularVelocity: .pi * 0.5
-            ), allowedSide: 1)
+                angularVelocity: .pi * 0.5,
+                collisionMode: .oneSided(allowedSide: 1)
+            ))
         case .triangle:
             world = ReferenceWorld(configuration: configuration, broadPhase: selectedBroadPhase())
             for index in 0..<24 {
@@ -102,9 +104,9 @@ public struct ReferenceBenchmarkScenario: Sendable, Equatable {
                 let row = index / 6
                 world.addBubble(try bubble(id: index + 1, x: 70 + Float(column) * 47, y: 250 + Float(row) * 48, radius: 26))
             }
-            world.addSegment(.staticSegment(id: .init(rawValue: 1), a: .init(x: 120, y: 430), b: .init(x: 255, y: 430)), allowedSide: -1)
-            world.addSegment(.staticSegment(id: .init(rawValue: 2), a: .init(x: 255, y: 430), b: .init(x: 187.5, y: 300)), allowedSide: -1)
-            world.addSegment(.staticSegment(id: .init(rawValue: 3), a: .init(x: 187.5, y: 300), b: .init(x: 120, y: 430)), allowedSide: -1)
+            world.addSegment(.staticSegment(id: .init(rawValue: 1), a: .init(x: 120, y: 430), b: .init(x: 255, y: 430)))
+            world.addSegment(.staticSegment(id: .init(rawValue: 2), a: .init(x: 255, y: 430), b: .init(x: 187.5, y: 300)))
+            world.addSegment(.staticSegment(id: .init(rawValue: 3), a: .init(x: 187.5, y: 300), b: .init(x: 120, y: 430)))
         case .giantBubble:
             world.addBubble(try bubble(id: 1, x: 187.5, y: 350, radius: 500))
             addWalls(to: &world)
@@ -155,10 +157,10 @@ public struct ReferenceBenchmarkScenario: Sendable, Equatable {
     }
 
     private func addWalls(to world: inout ReferenceWorld) {
-        world.addSegment(.staticSegment(id: .init(rawValue: 1), a: .init(x: 0, y: 0), b: .init(x: 0, y: 700)), allowedSide: -1)
-        world.addSegment(.staticSegment(id: .init(rawValue: 2), a: .init(x: 375, y: 0), b: .init(x: 375, y: 700)), allowedSide: 1)
-        world.addSegment(.staticSegment(id: .init(rawValue: 3), a: .init(x: 0, y: 0), b: .init(x: 375, y: 0)), allowedSide: 1)
-        world.addSegment(.staticSegment(id: .init(rawValue: 4), a: .init(x: 0, y: 700), b: .init(x: 375, y: 700)), allowedSide: -1)
+        world.addSegment(.staticSegment(id: .init(rawValue: 1), a: .init(x: 0, y: 0), b: .init(x: 0, y: 700), collisionMode: .oneSided(allowedSide: -1)))
+        world.addSegment(.staticSegment(id: .init(rawValue: 2), a: .init(x: 375, y: 0), b: .init(x: 375, y: 700), collisionMode: .oneSided(allowedSide: 1)))
+        world.addSegment(.staticSegment(id: .init(rawValue: 3), a: .init(x: 0, y: 0), b: .init(x: 375, y: 0), collisionMode: .oneSided(allowedSide: 1)))
+        world.addSegment(.staticSegment(id: .init(rawValue: 4), a: .init(x: 0, y: 700), b: .init(x: 375, y: 700), collisionMode: .oneSided(allowedSide: -1)))
     }
 }
 

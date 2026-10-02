@@ -37,8 +37,9 @@ final class ReferenceWorldTests: XCTestCase {
         world.addSegment(.kinematicSegment(
             id: .init(rawValue: 1),
             previousA: .init(x: -5, y: 0), previousB: .init(x: 5, y: 0),
-            currentA: .init(x: -1, y: 0), currentB: .init(x: 9, y: 0)
-        ), allowedSide: 1)
+            currentA: .init(x: -1, y: 0), currentB: .init(x: 9, y: 0),
+            collisionMode: .oneSided(allowedSide: 1)
+        ))
 
         _ = world.step()
 
@@ -61,10 +62,10 @@ final class ReferenceWorldTests: XCTestCase {
         world.addBubble(try ReferenceBubble(
             id: .init(rawValue: 1), center: .zero, mass: 1, targetRadius: 20
         ))
-        world.addSegment(.staticSegment(id: .init(rawValue: 1), a: .init(x: -5, y: -5), b: .init(x: -5, y: 5)), allowedSide: -1)
-        world.addSegment(.staticSegment(id: .init(rawValue: 2), a: .init(x: 5, y: -5), b: .init(x: 5, y: 5)), allowedSide: 1)
-        world.addSegment(.staticSegment(id: .init(rawValue: 3), a: .init(x: -5, y: -5), b: .init(x: 5, y: -5)), allowedSide: 1)
-        world.addSegment(.staticSegment(id: .init(rawValue: 4), a: .init(x: -5, y: 5), b: .init(x: 5, y: 5)), allowedSide: -1)
+        world.addSegment(.staticSegment(id: .init(rawValue: 1), a: .init(x: -5, y: -5), b: .init(x: -5, y: 5), collisionMode: .oneSided(allowedSide: -1)))
+        world.addSegment(.staticSegment(id: .init(rawValue: 2), a: .init(x: 5, y: -5), b: .init(x: 5, y: 5), collisionMode: .oneSided(allowedSide: 1)))
+        world.addSegment(.staticSegment(id: .init(rawValue: 3), a: .init(x: -5, y: -5), b: .init(x: 5, y: -5), collisionMode: .oneSided(allowedSide: 1)))
+        world.addSegment(.staticSegment(id: .init(rawValue: 4), a: .init(x: -5, y: 5), b: .init(x: 5, y: 5), collisionMode: .oneSided(allowedSide: -1)))
 
         let report = world.step()
 
@@ -83,8 +84,9 @@ final class ReferenceWorldTests: XCTestCase {
             id: .init(rawValue: 1),
             previousA: .init(x: -5, y: 0), previousB: .init(x: 5, y: 0),
             currentA: .init(x: 0, y: 5), currentB: .init(x: 0, y: -5),
-            angularVelocity: .pi * 0.5
-        ), allowedSide: 1)
+            angularVelocity: .pi * 0.5,
+            collisionMode: .oneSided(allowedSide: 1)
+        ))
 
         let report = world.step()
         let segment = world.segments[0]
@@ -105,7 +107,7 @@ final class ReferenceWorldTests: XCTestCase {
         var world = ReferenceWorld(configuration: .default, broadPhase: SweepAndPruneBroadPhase())
         world.addBubble(try bubbleForRecovery(id: 1, x: 9))
         world.addBubble(try bubbleForRecovery(id: 2, x: 18))
-        world.addSegment(.staticSegment(id: .init(rawValue: 1), a: .init(x: 0, y: -100), b: .init(x: 0, y: 100)), allowedSide: -1)
+        world.addSegment(.staticSegment(id: .init(rawValue: 1), a: .init(x: 0, y: -100), b: .init(x: 0, y: 100), collisionMode: .oneSided(allowedSide: -1)))
         _ = world.step()
         let compressed = world.bubbles[0].directionalDeformations.map(\.depth).max() ?? 0
         XCTAssertGreaterThan(compressed, 0)
@@ -157,8 +159,9 @@ final class ReferenceWorldTests: XCTestCase {
         world.addSegment(.kinematicSegment(
             id: .init(rawValue: 1),
             previousA: .zero, previousB: .init(x: 4, y: 0),
-            currentA: .zero, currentB: .init(x: 0, y: 4)
-        ), allowedSide: 1)
+            currentA: .zero, currentB: .init(x: 0, y: 4),
+            collisionMode: .oneSided(allowedSide: 1)
+        ))
 
         let report = world.step()
 
@@ -186,8 +189,9 @@ final class ReferenceWorldTests: XCTestCase {
             id: .init(rawValue: 1), center: .init(x: 100, y: 100), mass: 1, targetRadius: 2
         ))
         world.addSegment(.staticSegment(
-            id: .init(rawValue: 1), a: .init(x: 0, y: -10), b: .init(x: 0, y: 10)
-        ), allowedSide: -1)
+            id: .init(rawValue: 1), a: .init(x: 0, y: -10), b: .init(x: 0, y: 10),
+            collisionMode: .oneSided(allowedSide: -1)
+        ))
 
         let report = world.step()
 
