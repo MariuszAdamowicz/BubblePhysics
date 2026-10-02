@@ -52,7 +52,9 @@ void radialWriteContact(
     device uint *overflow,
     thread uint &count,
     constant MetalRadialEnvironmentParameters &parameters,
-    uint sensor,
+    uint sensorStart,
+    uint sensorEnd,
+    float barycentric,
     float2 point,
     float2 normal,
     float penetration,
@@ -65,11 +67,38 @@ void radialWriteContact(
         return;
     }
     MetalRadialContact contact;
-    contact.indicesAndSourceLow = uint4(sensor, (sensor + 1) % parameters.sensorCount, sourceLow, sourceHigh);
+    contact.indicesAndSourceLow = uint4(sensorStart, sensorEnd, sourceLow, sourceHigh);
     contact.pointAndNormal = float4(point, normal);
-    contact.penetrationBarycentricVelocity = float4(penetration, 0.0f, relativeVelocity);
+    contact.penetrationBarycentricVelocity = float4(penetration, barycentric, relativeVelocity);
     contact.padding = float4(0.0f);
     contacts[count++] = contact;
+}
+
+bool radialSegmentIntersection(
+    float2 a, float2 b, float2 c, float2 d,
+    thread float &firstParameter, thread float &secondParameter, thread float2 &point
+) {
+    const float2 r = b - a;
+    const float2 s = d - c;
+    const float denominator = r.x * s.y - r.y * s.x;
+    if (abs(denominator) <= 0.0000001f) { return false; }
+    const float2 offset = c - a;
+    firstParameter = (offset.x * s.y - offset.y * s.x) / denominator;
+    secondParameter = (offset.x * r.y - offset.y * r.x) / denominator;
+    if (firstParameter < 0.0f || firstParameter > 1.0f || secondParameter < 0.0f || secondParameter > 1.0f) {
+        return false;
+    }
+    point = a + r * firstParameter;
+    return true;
+}
+
+float2 radialPolygonVelocity(MetalRadialPolygon polygon, float2 point) {
+    if (polygon.rangeAndMode.z != 1) { return float2(0.0f); }
+    const float2 position = polygon.positionAndVelocityX.xy;
+    const float2 linearVelocity = float2(polygon.positionAndVelocityX.z, polygon.velocityYAngularPadding.x);
+    const float angularVelocity = polygon.velocityYAngularPadding.y;
+    const float2 arm = point - position;
+    return linearVelocity + float2(-angularVelocity * arm.y, angularVelocity * arm.x);
 }
 
 kernel void radialGenerateEnvironmentContacts(
@@ -88,58 +117,126 @@ kernel void radialGenerateEnvironmentContacts(
     uint count = 0;
     overflow[0] = 0;
     for (uint sensor = 0; sensor < parameters.sensorCount; ++sensor) {
-        const float2 point = surfacePoints[sensor];
-        const float2 velocity = radialSurfaceVelocity(body, sensors, sensor, point);
-        if (point.x < parameters.bounds.x) {
-            radialWriteContact(contacts, overflow, count, parameters, sensor, point, float2(1, 0), parameters.bounds.x - point.x, velocity, sensor, 0);
+        const uint next = (sensor + 1) % parameters.sensorCount;
+        const float2 a = surfacePoints[sensor];
+        const float2 b = surfacePoints[next];
+        for (uint wall = 0; wall < 4; ++wall) {
+            float depthA = 0.0f;
+            float depthB = 0.0f;
+            float2 normal = float2(0.0f);
+            if (wall == 0) { depthA = parameters.bounds.x - a.x; depthB = parameters.bounds.x - b.x; normal = float2(1, 0); }
+            if (wall == 1) { depthA = a.x - parameters.bounds.z; depthB = b.x - parameters.bounds.z; normal = float2(-1, 0); }
+            if (wall == 2) { depthA = parameters.bounds.y - a.y; depthB = parameters.bounds.y - b.y; normal = float2(0, 1); }
+            if (wall == 3) { depthA = a.y - parameters.bounds.w; depthB = b.y - parameters.bounds.w; normal = float2(0, -1); }
+            if (depthA <= 0.0f && depthB <= 0.0f) { continue; }
+            float t = 0.5f;
+            if (depthA <= 0.0f || depthB <= 0.0f) {
+                const float crossing = depthA / (depthA - depthB);
+                t = depthA > 0.0f ? crossing * 0.5f : (crossing + 1.0f) * 0.5f;
+            }
+            const float penetration = mix(depthA, depthB, t);
+            const float2 point = mix(a, b, t);
+            const float2 velocity = mix(
+                radialSurfaceVelocity(body, sensors, sensor, a),
+                radialSurfaceVelocity(body, sensors, next, b), t
+            );
+            radialWriteContact(
+                contacts, overflow, count, parameters, sensor, next, t, point,
+                normal, penetration, velocity, sensor, wall
+            );
         }
-        if (point.x > parameters.bounds.z) {
-            radialWriteContact(contacts, overflow, count, parameters, sensor, point, float2(-1, 0), point.x - parameters.bounds.z, velocity, sensor, 1);
+    }
+
+    for (uint polygonIndex = 0; polygonIndex < parameters.polygonCount; ++polygonIndex) {
+        const MetalRadialPolygon polygon = polygons[polygonIndex];
+        const uint vertexStart = polygon.rangeAndMode.x;
+        const uint vertexCount = polygon.rangeAndMode.y;
+        if (vertexCount < 3) { continue; }
+        float2 polygonCenter = float2(0.0f);
+        for (uint vertexIndex = 0; vertexIndex < vertexCount; ++vertexIndex) {
+            polygonCenter += polygonVertices[vertexStart + vertexIndex];
         }
-        if (point.y < parameters.bounds.y) {
-            radialWriteContact(contacts, overflow, count, parameters, sensor, point, float2(0, 1), parameters.bounds.y - point.y, velocity, sensor, 2);
-        }
-        if (point.y > parameters.bounds.w) {
-            radialWriteContact(contacts, overflow, count, parameters, sensor, point, float2(0, -1), point.y - parameters.bounds.w, velocity, sensor, 3);
+        polygonCenter /= float(vertexCount);
+
+        for (uint sensor = 0; sensor < parameters.sensorCount; ++sensor) {
+            const uint next = (sensor + 1) % parameters.sensorCount;
+            const float2 a = surfacePoints[sensor];
+            const float2 b = surfacePoints[next];
+            for (uint edge = 0; edge < vertexCount; ++edge) {
+                const float2 c = polygonVertices[vertexStart + edge];
+                const float2 d = polygonVertices[vertexStart + ((edge + 1) % vertexCount)];
+                float t = 0.0f;
+                float u = 0.0f;
+                float2 point = float2(0.0f);
+                if (!radialSegmentIntersection(a, b, c, d, t, u, point)) { continue; }
+                const float2 direction = d - c;
+                float2 normal = normalize(float2(direction.y, -direction.x));
+                if (dot(normal, point - polygonCenter) < 0.0f) { normal *= -1.0f; }
+                const float2 velocity = mix(
+                    radialSurfaceVelocity(body, sensors, sensor, a),
+                    radialSurfaceVelocity(body, sensors, next, b), t
+                );
+                radialWriteContact(
+                    contacts, overflow, count, parameters, sensor, next, t, point,
+                    normal, 0.0001f, velocity - radialPolygonVelocity(polygon, point),
+                    sensor, 0x10000000u | polygonIndex
+                );
+            }
+
+            if (radialContains(a, polygonVertices, vertexStart, vertexCount)) {
+                float bestDistanceSquared = INFINITY;
+                float2 bestPoint = a;
+                for (uint edge = 0; edge < vertexCount; ++edge) {
+                    const float2 c = polygonVertices[vertexStart + edge];
+                    const float2 d = polygonVertices[vertexStart + ((edge + 1) % vertexCount)];
+                    const float2 direction = d - c;
+                    const float denominator = dot(direction, direction);
+                    const float t = denominator > 0.0000001f ? clamp(dot(a - c, direction) / denominator, 0.0f, 1.0f) : 0.0f;
+                    const float2 nearest = c + direction * t;
+                    const float distanceSquared = dot(nearest - a, nearest - a);
+                    if (distanceSquared < bestDistanceSquared) { bestDistanceSquared = distanceSquared; bestPoint = nearest; }
+                }
+                if (bestDistanceSquared > 0.000000000001f) {
+                    radialWriteContact(
+                        contacts, overflow, count, parameters, sensor, next, 0.0f, a,
+                        normalize(bestPoint - a), sqrt(bestDistanceSquared),
+                        radialSurfaceVelocity(body, sensors, sensor, a) - radialPolygonVelocity(polygon, a),
+                        sensor, 0x10800000u | polygonIndex
+                    );
+                }
+            }
         }
 
-        for (uint polygonIndex = 0; polygonIndex < parameters.polygonCount; ++polygonIndex) {
-            const MetalRadialPolygon polygon = polygons[polygonIndex];
-            const uint start = polygon.rangeAndMode.x;
-            const uint vertexCount = polygon.rangeAndMode.y;
-            if (vertexCount < 3 || !radialContains(point, polygonVertices, start, vertexCount)) { continue; }
+        for (uint vertexIndex = 0; vertexIndex < vertexCount; ++vertexIndex) {
+            const float2 point = polygonVertices[vertexStart + vertexIndex];
+            if (!radialContains(point, surfacePoints, 0, parameters.sensorCount)) { continue; }
             float bestDistanceSquared = INFINITY;
             float2 bestPoint = point;
-            float2 fallback = float2(1, 0);
-            for (uint edge = 0; edge < vertexCount; ++edge) {
-                const float2 a = polygonVertices[start + edge];
-                const float2 b = polygonVertices[start + ((edge + 1) % vertexCount)];
+            uint bestSensor = 0;
+            float bestT = 0.0f;
+            for (uint sensor = 0; sensor < parameters.sensorCount; ++sensor) {
+                const float2 a = surfacePoints[sensor];
+                const float2 b = surfacePoints[(sensor + 1) % parameters.sensorCount];
                 const float2 direction = b - a;
-                const float lengthSquared = dot(direction, direction);
-                const float t = lengthSquared > 0.0000001f ? clamp(dot(point - a, direction) / lengthSquared, 0.0f, 1.0f) : 0.0f;
+                const float denominator = dot(direction, direction);
+                const float t = denominator > 0.0000001f ? clamp(dot(point - a, direction) / denominator, 0.0f, 1.0f) : 0.0f;
                 const float2 nearest = a + direction * t;
                 const float distanceSquared = dot(nearest - point, nearest - point);
                 if (distanceSquared < bestDistanceSquared) {
-                    bestDistanceSquared = distanceSquared;
-                    bestPoint = nearest;
-                    fallback = float2(direction.y, -direction.x);
+                    bestDistanceSquared = distanceSquared; bestPoint = nearest; bestSensor = sensor; bestT = t;
                 }
             }
-            float2 normalVector = bestPoint - point;
-            if (length(normalVector) <= 0.000001f) { normalVector = fallback; }
-            const float2 normal = normalize(normalVector);
-            float2 polygonVelocity = float2(0.0f);
-            if (polygon.rangeAndMode.z == 1) {
-                const float2 position = polygon.positionAndVelocityX.xy;
-                const float2 linearVelocity = float2(polygon.positionAndVelocityX.z, polygon.velocityYAngularPadding.x);
-                const float angularVelocity = polygon.velocityYAngularPadding.y;
-                const float2 arm = point - position;
-                polygonVelocity = linearVelocity + float2(-angularVelocity * arm.y, angularVelocity * arm.x);
-            }
+            if (bestDistanceSquared <= 0.000000000001f) { continue; }
+            const uint next = (bestSensor + 1) % parameters.sensorCount;
+            const float2 velocity = mix(
+                radialSurfaceVelocity(body, sensors, bestSensor, surfacePoints[bestSensor]),
+                radialSurfaceVelocity(body, sensors, next, surfacePoints[next]), bestT
+            );
             radialWriteContact(
-                contacts, overflow, count, parameters, sensor, point, normal,
-                sqrt(bestDistanceSquared), velocity - polygonVelocity,
-                sensor, 0x10000000u | polygonIndex
+                contacts, overflow, count, parameters, bestSensor, next, bestT, bestPoint,
+                normalize(bestPoint - point), sqrt(bestDistanceSquared),
+                velocity - radialPolygonVelocity(polygon, bestPoint),
+                bestSensor, 0x11000000u | polygonIndex
             );
         }
     }
