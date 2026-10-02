@@ -16,7 +16,10 @@ kernel void radialWorldFreeStep(
     device const MetalRadialSensor *source [[buffer(2)]],
     device MetalRadialSensor *destination [[buffer(3)]],
     device float2 *surfacePoints [[buffer(4)]],
-    constant uint4 &parameters [[buffer(5)]],
+    device const float4 *loads [[buffer(5)]],
+    device const float *compression [[buffer(6)]],
+    device const float *pressure [[buffer(7)]],
+    constant uint4 &parameters [[buffer(8)]],
     uint bubbleIndex [[thread_position_in_grid]]
 ) {
     if (bubbleIndex >= parameters.x) { return; }
@@ -24,6 +27,8 @@ kernel void radialWorldFreeStep(
     const MetalRadialWorldDescriptor descriptor = descriptors[bubbleIndex];
     MetalRadialBody body = bodies[bubbleIndex];
 
+    body.pose.zw += loads[bubbleIndex].xy * (dt / body.motion.z);
+    body.motion.y += loads[bubbleIndex].z * dt / body.motion.w;
     body.pose.zw *= exp(-descriptor.response.z * dt);
     body.motion.y *= exp(-descriptor.response.w * dt);
     body.pose.xy += body.pose.zw * dt;
@@ -40,22 +45,24 @@ kernel void radialWorldFreeStep(
         const uint previousIndex = start + ((local + count - 1) % count);
         const uint nextIndex = start + ((local + 1) % count);
         MetalRadialSensor sensor = source[index];
-        const float extensionValue = currentTarget - sensor.state.y;
+        const float compressedLength = max(0.0f, sensor.state.y - compression[index] * descriptor.response.y);
+        const float extensionValue = currentTarget - compressedLength;
         const float radialForce = descriptor.radial.x * extensionValue
             + descriptor.radial.y * extensionValue * extensionValue * extensionValue;
         const float neighborForce = descriptor.radial.w
             * (source[previousIndex].state.y + source[nextIndex].state.y - 2.0f * sensor.state.y);
-        const float acceleration = radialForce + neighborForce - descriptor.radial.z * sensor.state.z;
+        const float acceleration = radialForce + neighborForce - descriptor.radial.z * sensor.state.z
+            - pressure[index] * descriptor.response.x;
         float velocity = clamp(
             sensor.state.z + acceleration * dt,
             -descriptor.timing.y, descriptor.timing.y
         );
-        float length = max(0.0f, sensor.state.y + velocity * dt);
+        float length = max(0.0f, compressedLength + velocity * dt);
         if (length == 0.0f && velocity < 0.0f) { velocity = 0.0f; }
         sensor.state.y = length;
         sensor.state.z = velocity;
         sensor.state.w = currentTarget;
-        sensor.pressureAndPadding.x = 0.0f;
+        sensor.pressureAndPadding.x = max(0.0f, pressure[index]);
         destination[index] = sensor;
 
         const float angle = body.motion.x + sensor.state.x;

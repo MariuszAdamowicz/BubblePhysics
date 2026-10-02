@@ -5,6 +5,9 @@ public final class MetalRadialWorldSimulation: @unchecked Sendable {
     private let device: MTLDevice
     private let allocator: any MetalBufferAllocator
     private let pipeline: MTLComputePipelineState
+    private let environmentPipeline: MTLComputePipelineState
+    private let reducePipeline: MTLComputePipelineState
+    private let environmentContactCapacity: Int?
     private var sensorBufferA: MTLBuffer
     private var sensorBufferB: MTLBuffer
     private var currentIsA = true
@@ -15,7 +18,8 @@ public final class MetalRadialWorldSimulation: @unchecked Sendable {
     public init(
         device: MTLDevice,
         world: RadialWorldState,
-        allocator: any MetalBufferAllocator = DefaultMetalBufferAllocator()
+        allocator: any MetalBufferAllocator = DefaultMetalBufferAllocator(),
+        environmentContactCapacity: Int? = nil
     ) throws {
         guard let library = MetalShaderLibrary.load(
             device: device, sourceName: "RadialWorldKernels",
@@ -26,6 +30,19 @@ public final class MetalRadialWorldSimulation: @unchecked Sendable {
         self.device = device
         self.allocator = allocator
         pipeline = try device.makeComputePipelineState(function: function)
+        guard let contactLibrary = MetalShaderLibrary.load(
+            device: device, sourceName: "RadialContactKernels",
+            requiredFunctions: ["radialGenerateEnvironmentContacts"]
+        ), let environmentFunction = contactLibrary.makeFunction(name: "radialGenerateEnvironmentContacts"),
+        let bubbleLibrary = MetalShaderLibrary.load(
+            device: device, sourceName: "RadialBubbleKernels",
+            requiredFunctions: ["radialReduceContacts"]
+        ), let reduceFunction = bubbleLibrary.makeFunction(name: "radialReduceContacts") else {
+            throw MetalSolverError.metalUnavailable
+        }
+        environmentPipeline = try device.makeComputePipelineState(function: environmentFunction)
+        reducePipeline = try device.makeComputePipelineState(function: reduceFunction)
+        self.environmentContactCapacity = environmentContactCapacity
         templateWorld = world
         let packed = try Self.allocate(device: device, allocator: allocator, world: world)
         resources = packed.resources
@@ -40,6 +57,19 @@ public final class MetalRadialWorldSimulation: @unchecked Sendable {
         commandBuffer: MTLCommandBuffer
     ) throws -> MetalRadialWorldFrameResources {
         guard status == .ready else { throw MetalSolverError.commandExecutionFailed }
+        memset(resources.loadHeaderBuffer.contents(), 0, resources.bubbleCount * MemoryLayout<SIMD4<Float>>.stride)
+        memset(resources.compressionBuffer.contents(), 0, resources.sensorCount * MemoryLayout<Float>.stride)
+        memset(resources.pressureBuffer.contents(), 0, resources.sensorCount * MemoryLayout<Float>.stride)
+        return try encodeIntegration(deltaTime: deltaTime, commandBuffer: commandBuffer)
+    }
+
+    private func encodeIntegration(
+        deltaTime: Float,
+        commandBuffer: MTLCommandBuffer,
+        contactBuffers: [MTLBuffer] = [],
+        countBuffers: [MTLBuffer] = [],
+        overflowBuffers: [MTLBuffer] = []
+    ) throws -> MetalRadialWorldFrameResources {
         var parameters = SIMD4<UInt32>(
             UInt32(resources.bubbleCount), UInt32(resources.sensorCount),
             deltaTime.bitPattern, 0
@@ -53,14 +83,103 @@ public final class MetalRadialWorldSimulation: @unchecked Sendable {
         encoder.setBuffer(currentSensorBuffer, offset: 0, index: 2)
         encoder.setBuffer(destinationSensorBuffer, offset: 0, index: 3)
         encoder.setBuffer(resources.surfacePointBuffer, offset: 0, index: 4)
-        encoder.setBytes(&parameters, length: MemoryLayout<SIMD4<UInt32>>.stride, index: 5)
+        encoder.setBuffer(resources.loadHeaderBuffer, offset: 0, index: 5)
+        encoder.setBuffer(resources.compressionBuffer, offset: 0, index: 6)
+        encoder.setBuffer(resources.pressureBuffer, offset: 0, index: 7)
+        encoder.setBytes(&parameters, length: MemoryLayout<SIMD4<UInt32>>.stride, index: 8)
         let width = max(1, min(pipeline.threadExecutionWidth, resources.bubbleCount))
         encoder.dispatchThreads(
             MTLSize(width: resources.bubbleCount, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: width, height: 1, depth: 1)
         )
         encoder.endEncoding()
-        return frameResources(sensorBuffer: destinationSensorBuffer)
+        return frameResources(
+            sensorBuffer: destinationSensorBuffer,
+            contactBuffers: contactBuffers, countBuffers: countBuffers,
+            overflowBuffers: overflowBuffers
+        )
+    }
+
+    public func encodeStep(
+        bounds: AABB,
+        polygons: [SimulationPolygonSnapshot],
+        deltaTime: Float,
+        commandBuffer: MTLCommandBuffer
+    ) throws -> MetalRadialWorldFrameResources {
+        guard status == .ready else { throw MetalSolverError.commandExecutionFailed }
+        let (vertices, polygonRecords) = encode(polygons: polygons)
+        let vertexBuffer = try temporaryBuffer(vertices)
+        let polygonBuffer = try temporaryBuffer(polygonRecords)
+        var contactBuffers: [MTLBuffer] = []
+        var countBuffers: [MTLBuffer] = []
+        var overflowBuffers: [MTLBuffer] = []
+
+        for (bubbleIndex, bubble) in templateWorld.bubbles.enumerated() {
+            let range = resources.ranges[bubbleIndex]
+            let naturalCapacity = max(1, range.sensorCount * (4 + polygons.reduce(0) { $0 + $1.worldVertices.count + 1 }))
+            let capacity = environmentContactCapacity ?? naturalCapacity
+            let contacts: MTLBuffer = try emptyBuffer(
+                length: capacity * MemoryLayout<MetalRadialContact>.stride
+            )
+            let count: MTLBuffer = try emptyBuffer(length: MemoryLayout<UInt32>.stride)
+            let overflow: MTLBuffer = try emptyBuffer(length: MemoryLayout<UInt32>.stride)
+            memset(count.contents(), 0, MemoryLayout<UInt32>.stride)
+            memset(overflow.contents(), 0, MemoryLayout<UInt32>.stride)
+            contactBuffers.append(contacts)
+            countBuffers.append(count)
+            overflowBuffers.append(overflow)
+
+            var environment = MetalRadialEnvironmentParameters(
+                bounds: SIMD4(bounds.minimum.x, bounds.minimum.y, bounds.maximum.x, bounds.maximum.y),
+                sensorCount: UInt32(range.sensorCount), polygonCount: UInt32(polygons.count),
+                contactCapacity: UInt32(capacity)
+            )
+            guard let environmentEncoder = commandBuffer.makeComputeCommandEncoder() else {
+                throw MetalSolverError.commandEncodingFailed
+            }
+            environmentEncoder.setComputePipelineState(environmentPipeline)
+            environmentEncoder.setBuffer(resources.bodyBuffer, offset: bubbleIndex * MemoryLayout<MetalRadialBody>.stride, index: 0)
+            environmentEncoder.setBuffer(currentSensorBuffer, offset: range.sensorStart * MemoryLayout<MetalRadialSensor>.stride, index: 1)
+            environmentEncoder.setBuffer(resources.surfacePointBuffer, offset: range.sensorStart * MemoryLayout<SIMD2<Float>>.stride, index: 2)
+            environmentEncoder.setBuffer(vertexBuffer, offset: 0, index: 3)
+            environmentEncoder.setBuffer(polygonBuffer, offset: 0, index: 4)
+            environmentEncoder.setBuffer(contacts, offset: 0, index: 5)
+            environmentEncoder.setBuffer(count, offset: 0, index: 6)
+            environmentEncoder.setBuffer(overflow, offset: 0, index: 7)
+            environmentEncoder.setBytes(&environment, length: MemoryLayout<MetalRadialEnvironmentParameters>.stride, index: 8)
+            environmentEncoder.dispatchThreads(
+                MTLSize(width: 1, height: 1, depth: 1),
+                threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1)
+            )
+            environmentEncoder.endEncoding()
+
+            var material = MetalRadialContactMaterial(bubble.material)
+            var step = MetalRadialStepParameters(
+                sensorCount: UInt32(range.sensorCount), contactCount: 0, deltaTime: deltaTime
+            )
+            guard let reduceEncoder = commandBuffer.makeComputeCommandEncoder() else {
+                throw MetalSolverError.commandEncodingFailed
+            }
+            reduceEncoder.setComputePipelineState(reducePipeline)
+            reduceEncoder.setBuffer(contacts, offset: 0, index: 0)
+            reduceEncoder.setBuffer(resources.bodyBuffer, offset: bubbleIndex * MemoryLayout<MetalRadialBody>.stride, index: 1)
+            reduceEncoder.setBuffer(resources.loadHeaderBuffer, offset: bubbleIndex * MemoryLayout<SIMD4<Float>>.stride, index: 2)
+            reduceEncoder.setBuffer(resources.compressionBuffer, offset: range.sensorStart * MemoryLayout<Float>.stride, index: 3)
+            reduceEncoder.setBuffer(resources.pressureBuffer, offset: range.sensorStart * MemoryLayout<Float>.stride, index: 4)
+            reduceEncoder.setBytes(&material, length: MemoryLayout<MetalRadialContactMaterial>.stride, index: 5)
+            reduceEncoder.setBytes(&step, length: MemoryLayout<MetalRadialStepParameters>.stride, index: 6)
+            reduceEncoder.setBuffer(count, offset: 0, index: 7)
+            reduceEncoder.dispatchThreads(
+                MTLSize(width: 1, height: 1, depth: 1),
+                threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1)
+            )
+            reduceEncoder.endEncoding()
+        }
+        return try encodeIntegration(
+            deltaTime: deltaTime, commandBuffer: commandBuffer,
+            contactBuffers: contactBuffers, countBuffers: countBuffers,
+            overflowBuffers: overflowBuffers
+        )
     }
 
     public func complete(
@@ -70,6 +189,10 @@ public final class MetalRadialWorldSimulation: @unchecked Sendable {
         guard commandBuffer.status == .completed else {
             status = .failed
             throw MetalSolverError.commandExecutionFailed
+        }
+        guard !frame.overflow else {
+            status = .failed
+            throw MetalSolverError.candidatePairOverflow
         }
         currentIsA.toggle()
         templateWorld = world
@@ -89,16 +212,27 @@ public final class MetalRadialWorldSimulation: @unchecked Sendable {
     private var currentSensorBuffer: MTLBuffer { currentIsA ? sensorBufferA : sensorBufferB }
     private var destinationSensorBuffer: MTLBuffer { currentIsA ? sensorBufferB : sensorBufferA }
 
-    private func frameResources(sensorBuffer: MTLBuffer) -> MetalRadialWorldFrameResources {
+    private func frameResources(
+        sensorBuffer: MTLBuffer,
+        contactBuffers: [MTLBuffer]? = nil,
+        countBuffers: [MTLBuffer]? = nil,
+        overflowBuffers: [MTLBuffer]? = nil
+    ) -> MetalRadialWorldFrameResources {
         MetalRadialWorldFrameResources(
             bodyBuffer: resources.bodyBuffer,
             descriptorBuffer: resources.descriptorBuffer,
             sensorBuffer: sensorBuffer,
             surfacePointBuffer: resources.surfacePointBuffer,
             rangeBuffer: resources.rangeBuffer,
+            loadHeaderBuffer: resources.loadHeaderBuffer,
+            compressionBuffer: resources.compressionBuffer,
+            pressureBuffer: resources.pressureBuffer,
             ranges: resources.ranges,
             bubbleCount: resources.bubbleCount,
-            sensorCount: resources.sensorCount
+            sensorCount: resources.sensorCount,
+            contactBuffers: contactBuffers ?? resources.contactBuffers,
+            contactCountBuffers: countBuffers ?? resources.contactCountBuffers,
+            overflowBuffers: overflowBuffers ?? resources.overflowBuffers
         )
     }
 
@@ -136,6 +270,48 @@ public final class MetalRadialWorldSimulation: @unchecked Sendable {
         return try! RadialWorldState(bubbles: bubbles)
     }
 
+    private func encode(
+        polygons: [SimulationPolygonSnapshot]
+    ) -> ([SIMD2<Float>], [MetalRadialPolygon]) {
+        var vertices: [SIMD2<Float>] = []
+        var records: [MetalRadialPolygon] = []
+        for polygon in polygons {
+            let start = vertices.count
+            vertices.append(contentsOf: polygon.worldVertices.map { SIMD2($0.x, $0.y) })
+            records.append(MetalRadialPolygon(
+                rangeAndMode: SIMD4(
+                    UInt32(start), UInt32(polygon.worldVertices.count),
+                    polygon.mode == .kinematic ? 1 : 0,
+                    UInt32(truncatingIfNeeded: polygon.id.rawValue)
+                ),
+                positionAndVelocityX: SIMD4(
+                    polygon.position.x, polygon.position.y, polygon.linearVelocity.x, 0
+                ),
+                velocityYAngularPadding: SIMD4(
+                    polygon.linearVelocity.y, polygon.angularVelocity, 0, 0
+                )
+            ))
+        }
+        return (vertices, records)
+    }
+
+    private func temporaryBuffer<T>(_ values: [T]) throws -> MTLBuffer {
+        let buffer: MTLBuffer = try emptyBuffer(
+            length: max(1, values.count) * MemoryLayout<T>.stride
+        )
+        if !values.isEmpty {
+            _ = values.withUnsafeBytes { memcpy(buffer.contents(), $0.baseAddress!, $0.count) }
+        }
+        return buffer
+    }
+
+    private func emptyBuffer(length: Int) throws -> MTLBuffer {
+        guard let buffer = allocator.makeBuffer(
+            device: device, length: max(1, length), options: .storageModeShared
+        ) else { throw MetalSolverError.bufferAllocationFailed }
+        return buffer
+    }
+
     private static func allocate(
         device: MTLDevice,
         allocator: any MetalBufferAllocator,
@@ -166,11 +342,17 @@ public final class MetalRadialWorldSimulation: @unchecked Sendable {
         }
         let surfaceBuffer = try buffer(surfacePoints)
         let rangeBuffer = try buffer(ranges)
+        let loadHeaderBuffer = try buffer(Array(repeating: SIMD4<Float>.zero, count: world.bubbles.count))
+        let compressionBuffer = try buffer(Array(repeating: Float.zero, count: world.totalSensorCount))
+        let pressureBuffer = try buffer(Array(repeating: Float.zero, count: world.totalSensorCount))
         let resources = MetalRadialWorldFrameResources(
             bodyBuffer: bodyBuffer, descriptorBuffer: descriptorBuffer,
             sensorBuffer: sensorA, surfacePointBuffer: surfaceBuffer,
-            rangeBuffer: rangeBuffer, ranges: world.ranges,
-            bubbleCount: world.bubbles.count, sensorCount: world.totalSensorCount
+            rangeBuffer: rangeBuffer, loadHeaderBuffer: loadHeaderBuffer,
+            compressionBuffer: compressionBuffer, pressureBuffer: pressureBuffer,
+            ranges: world.ranges, bubbleCount: world.bubbles.count,
+            sensorCount: world.totalSensorCount,
+            contactBuffers: [], contactCountBuffers: [], overflowBuffers: []
         )
         return (resources, sensorA, sensorB)
     }

@@ -39,9 +39,33 @@ public struct MetalRadialWorldFrameResources: @unchecked Sendable {
     public let sensorBuffer: MTLBuffer
     public let surfacePointBuffer: MTLBuffer
     public let rangeBuffer: MTLBuffer
+    public let loadHeaderBuffer: MTLBuffer
+    public let compressionBuffer: MTLBuffer
+    public let pressureBuffer: MTLBuffer
     public let ranges: [RadialBubbleRange]
     public let bubbleCount: Int
     public let sensorCount: Int
+    let contactBuffers: [MTLBuffer]
+    let contactCountBuffers: [MTLBuffer]
+    let overflowBuffers: [MTLBuffer]
+
+    public var contactCount: Int {
+        contactCountBuffers.reduce(0) {
+            $0 + Int($1.contents().bindMemory(to: UInt32.self, capacity: 1).pointee)
+        }
+    }
+
+    public var overflow: Bool {
+        overflowBuffers.contains { $0.contents().bindMemory(to: UInt32.self, capacity: 1).pointee != 0 }
+    }
+
+    public var maximumPenetration: Float {
+        zip(contactBuffers, contactCountBuffers).reduce(0) { result, pair in
+            let count = Int(pair.1.contents().bindMemory(to: UInt32.self, capacity: 1).pointee)
+            let contacts = pair.0.contents().bindMemory(to: MetalRadialContact.self, capacity: max(1, count))
+            return (0..<count).reduce(result) { max($0, contacts[$1].penetrationBarycentricVelocity.x) }
+        }
+    }
 }
 
 public enum MetalRadialWorldStatus: Equatable, Sendable {
