@@ -41,4 +41,13 @@ Lokalny baseline wykonano w konfiguracji Release na Macu mini: 10 kroków rozgrz
 
 Oba indeksy zwróciły identyczne liczniki kandydatów i kontaktów. Sweep-and-prune był szybszy we wszystkich trzech lokalnych scenach. Po naprawieniu ponownego wyznaczania kontaktów wewnątrz iteracji każda z mierzonych klatek wykorzystała limit 12 iteracji. To świadomie widoczny koszt poprawności solvera referencyjnego, a nie wynik docelowego backendu. Przed implementacją Metal trzeba ocenić na urządzeniu zarówno zachowanie układu, jak i potrzebną strategię zbieżności.
 
-Wyniki pomiaru na fizycznym iPhonie X nie zostały jeszcze wpisane.
+### iPhone X
+
+Pomiar wykonano na fizycznym iPhonie X z iOS 16.7.16, w konfiguracji Release, po 30 krokach rozgrzewki i na 300 mierzonych krokach.
+
+| Broad phase | p50 [ms] | p95 [ms] | Predykcja p95 [ms] | Broad p95 [ms] | Kontakty p95 [ms] | Solver p95 [ms] | Kandydaci | Kontakty aktywne/trwałe | TOI | Maks. penetracja | Limity / 300 | CCD limity | Korekty strony | Non-finite |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|:---:|
+| Sweep | 2,80 | 16,51 | 0,03 | 0,13 | 1,14 | 15,20 | 699 | 466/566 | 1899 | 2,0385 | 90 | 0 | 0 | nie |
+| AABB tree | 3,07 | 16,84 | 0,04 | 0,50 | 1,13 | 15,22 | 699 | 466/566 | 1899 | 2,0385 | 90 | 0 | 0 | nie |
+
+Sweep-and-prune jest lepszym wyborem dla tej sceny: ma niższe p50, p95 i koszt broad phase. Typowy krok mieści się z dużym zapasem w 16,67 ms, natomiast p95 leży na granicy 60 FPS. Limit 12 iteracji został osiągnięty w 90 z 300 mierzonych kroków, co koreluje z ogonem czasu solvera i wyznacza następny obszar analizy. Nie wystąpiło wyczerpanie budżetu CCD, korekta niedozwolonej strony ani stan niefinitywny.
