@@ -2,6 +2,22 @@
 
 `BubblePhysics` is a Swift package for deformable 2D bubbles, polygon obstacles, compliant grabs and structural bubble operations.
 
+## Reference solver
+
+`BubblePhysicsReference` is the correctness-oriented CPU implementation of the new contact-envelope model. A bubble has one massive centre, an expected radius and directional indentations produced by persistent contacts. Broad phase, CCD and equilibrium use centres and directional support radii; the adaptive visual contour is generated only after a solved step.
+
+The deterministic benchmark runner supports named geometry cases plus filled boards of 40, 300 and 1000 bubbles. For example:
+
+```swift
+let report = try ReferenceBenchmarkRunner.measure(
+    scenario: .filled(count: 300, broadPhase: .sweepAndPrune),
+    warmupSteps: 30,
+    measuredSteps: 300
+)
+```
+
+`ReferenceBenchmarkReport` contains p50/p95 for the complete step and its prediction, broad-phase, contact and solver phases, together with candidate/contact/TOI counts, maximum penetration, iteration-limit events, side corrections and non-finite-state detection. Use `.aabbTree` with the same seed to compare spatial indices on identical input. CPU timings are a diagnostic correctness baseline, not the iPhone acceptance threshold.
+
 ## Benchmark scenario
 
 `BenchmarkScenario.iPhoneX` creates a deterministic board of 300 bubbles for the 375 × 812 point iPhone X canvas. The number of boundary points is derived only from `WorldConfiguration.maxBoundarySegmentLength`; the package does not impose a maximum node count.
