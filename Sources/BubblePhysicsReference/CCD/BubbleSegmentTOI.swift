@@ -22,7 +22,6 @@ public extension ReferenceCCD {
     static func bubbleSegment(
         _ bubble: ReferenceBubble,
         _ segment: ReferenceSegment,
-        allowedSide: Float,
         configuration: ReferenceConfiguration
     ) -> ReferenceSegmentTOIResult {
         let bubbleMovement = bubble.center - bubble.previousCenter
@@ -34,15 +33,13 @@ public extension ReferenceCCD {
             return translatedSegmentTOI(
                 bubble: bubble,
                 segment: segment,
-                segmentMovement: movementA,
-                allowedSide: allowedSide
+                segmentMovement: movementA
             )
         }
 
         return conservativeSegmentTOI(
             bubble: bubble,
             segment: segment,
-            allowedSide: allowedSide,
             configuration: configuration,
             bubbleMovement: bubbleMovement,
             movementA: movementA,
@@ -53,15 +50,14 @@ public extension ReferenceCCD {
     private static func translatedSegmentTOI(
         bubble: ReferenceBubble,
         segment: ReferenceSegment,
-        segmentMovement: ReferenceVector2,
-        allowedSide: Float
+        segmentMovement: ReferenceVector2
     ) -> ReferenceSegmentTOIResult {
         let endpoints = ReferenceSegmentEndpoints(a: segment.previousA, b: segment.previousB)
         let start = bubble.previousCenter
         let movement = (bubble.center - bubble.previousCenter) - segmentMovement
         let initialClosest = closestPoint(to: start, on: endpoints)
         let initialNormal = (start - initialClosest.point).normalized(
-            or: allowedNormal(for: endpoints, allowedSide: allowedSide)
+            or: fallbackNormal(for: endpoints, bubble: bubble, segment: segment)
         )
         let radius = bubble.supportRadius(along: -initialNormal)
 
@@ -110,14 +106,13 @@ public extension ReferenceCCD {
 
         return .init(
             timeOfImpact: .none,
-            requiresSideCorrection: changedSide(bubble: bubble, segment: segment, allowedSide: allowedSide)
+            requiresSideCorrection: changedForbiddenSide(bubble: bubble, segment: segment)
         )
     }
 
     private static func conservativeSegmentTOI(
         bubble: ReferenceBubble,
         segment: ReferenceSegment,
-        allowedSide: Float,
         configuration: ReferenceConfiguration,
         bubbleMovement: ReferenceVector2,
         movementA: ReferenceVector2,
@@ -133,7 +128,7 @@ public extension ReferenceCCD {
             let endpoints = ReferenceSegmentEndpoints(a: a, b: b)
             let closest = closestPoint(to: center, on: endpoints)
             let normal = (center - closest.point).normalized(
-                or: allowedNormal(for: endpoints, allowedSide: allowedSide)
+                or: fallbackNormal(for: endpoints, bubble: bubble, segment: segment)
             )
             let radius = bubble.supportRadius(along: -normal)
             let distance = closest.distanceSquared.squareRoot()
@@ -154,7 +149,7 @@ public extension ReferenceCCD {
                 return .init(
                     timeOfImpact: .none,
                     didExhaustBudget: true,
-                    requiresSideCorrection: changedSide(bubble: bubble, segment: segment, allowedSide: allowedSide)
+                    requiresSideCorrection: changedForbiddenSide(bubble: bubble, segment: segment)
                 )
             }
         }
@@ -179,22 +174,23 @@ public extension ReferenceCCD {
         return fraction >= 0 && fraction <= 1 ? fraction : nil
     }
 
-    private static func allowedNormal(
+    private static func fallbackNormal(
         for endpoints: ReferenceSegmentEndpoints,
-        allowedSide: Float
+        bubble: ReferenceBubble,
+        segment: ReferenceSegment
     ) -> ReferenceVector2 {
         let edge = endpoints.b - endpoints.a
-        let sign: Float = allowedSide < 0 ? -1 : 1
+        let sign = segment.collisionMode.allowedSide
+            ?? (((bubble.id.rawValue ^ segment.id.rawValue) & 1) == 0 ? 1 : -1)
         return ReferenceVector2(x: -edge.y, y: edge.x)
             .normalized(or: ReferenceVector2(x: 0, y: 1)) * sign
     }
 
-    private static func changedSide(
+    private static func changedForbiddenSide(
         bubble: ReferenceBubble,
-        segment: ReferenceSegment,
-        allowedSide: Float
+        segment: ReferenceSegment
     ) -> Bool {
-        let sign: Float = allowedSide < 0 ? -1 : 1
+        guard let sign = segment.collisionMode.allowedSide else { return false }
         let previousEdge = segment.previousB - segment.previousA
         let currentEdge = segment.currentB - segment.currentA
         let previousSide = previousEdge.cross(bubble.previousCenter - segment.previousA) * sign

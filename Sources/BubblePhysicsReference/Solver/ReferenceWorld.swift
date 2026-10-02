@@ -104,7 +104,6 @@ public struct ReferenceWorld {
                 toiTests += 1
                 let result = ReferenceCCD.bubbleSegment(
                     bubbles[index], segment,
-                    allowedSide: segment.collisionMode.allowedSide ?? 1,
                     configuration: configuration
                 )
                 if result.didExhaustBudget { ccdBudgetExhaustions += 1 }

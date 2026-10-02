@@ -10,7 +10,7 @@ final class BubbleSegmentTOITests: XCTestCase {
             currentA: .init(x: -5, y: 5), currentB: .init(x: 5, y: 5)
         )
 
-        let result = ReferenceCCD.bubbleSegment(bubble, segment, allowedSide: 1, configuration: .default)
+        let result = ReferenceCCD.bubbleSegment(bubble, segment, configuration: .default)
         guard case let .impact(fraction, normal, _) = result.timeOfImpact else {
             return XCTFail("Expected interior impact, got \(result)")
         }
@@ -28,7 +28,7 @@ final class BubbleSegmentTOITests: XCTestCase {
             b: .init(x: 0, y: 4)
         )
 
-        let result = ReferenceCCD.bubbleSegment(bubble, segment, allowedSide: -1, configuration: .default)
+        let result = ReferenceCCD.bubbleSegment(bubble, segment, configuration: .default)
         guard case let .impact(fraction, _, point) = result.timeOfImpact else {
             return XCTFail("Expected endpoint impact")
         }
@@ -46,7 +46,7 @@ final class BubbleSegmentTOITests: XCTestCase {
             currentA: .init(x: -5, y: 4), currentB: .init(x: 5, y: 4)
         )
 
-        let result = ReferenceCCD.bubbleSegment(bubble, segment, allowedSide: 1, configuration: .default)
+        let result = ReferenceCCD.bubbleSegment(bubble, segment, configuration: .default)
         guard case let .impact(fraction, _, _) = result.timeOfImpact else {
             return XCTFail("Expected relative-motion impact")
         }
@@ -62,7 +62,7 @@ final class BubbleSegmentTOITests: XCTestCase {
             currentA: .zero, currentB: .init(x: 0, y: 4)
         )
 
-        let result = ReferenceCCD.bubbleSegment(bubble, segment, allowedSide: 1, configuration: .default)
+        let result = ReferenceCCD.bubbleSegment(bubble, segment, configuration: .default)
 
         guard case let .impact(fraction, _, _) = result.timeOfImpact else {
             return XCTFail("Expected rotating contact, got \(result)")
@@ -72,21 +72,34 @@ final class BubbleSegmentTOITests: XCTestCase {
         XCTAssertFalse(result.didExhaustBudget)
     }
 
-    func testSideChangeNeverPassesSilentlyWhenBudgetIsExhausted() throws {
-        let bubble = try stationaryBubble(x: 0, y: 0, radius: 1)
-        let segment = ReferenceSegment.kinematicSegment(
+    func testTwoSidedSegmentAllowsSideChangeOutsideEndpoint() throws {
+        var bubble = try stationaryBubble(x: -2, y: 1, radius: 0.5)
+        bubble.center = .init(x: -2, y: -1)
+        let segment = ReferenceSegment.staticSegment(
             id: .init(rawValue: 1),
-            previousA: .init(x: -2, y: -10), previousB: .init(x: 2, y: -10),
-            currentA: .init(x: -2, y: 10), currentB: .init(x: 2, y: 10)
+            a: .init(x: 0, y: 0), b: .init(x: 4, y: 0),
+            collisionMode: .twoSided
         )
-        var configuration = ReferenceConfiguration.default
-        configuration.toiIterationBudget = 1
 
-        let result = ReferenceCCD.bubbleSegment(bubble, segment, allowedSide: 1, configuration: configuration)
+        let result = ReferenceCCD.bubbleSegment(bubble, segment, configuration: .default)
 
-        if case .none = result.timeOfImpact {
-            XCTAssertTrue(result.requiresSideCorrection)
-        }
+        XCTAssertEqual(result.timeOfImpact, .none)
+        XCTAssertFalse(result.requiresSideCorrection)
+    }
+
+    func testOneSidedSegmentReportsForbiddenSideChangeOutsideEndpoint() throws {
+        var bubble = try stationaryBubble(x: -2, y: 1, radius: 0.5)
+        bubble.center = .init(x: -2, y: -1)
+        let segment = ReferenceSegment.staticSegment(
+            id: .init(rawValue: 1),
+            a: .init(x: 0, y: 0), b: .init(x: 4, y: 0),
+            collisionMode: .oneSided(allowedSide: 1)
+        )
+
+        let result = ReferenceCCD.bubbleSegment(bubble, segment, configuration: .default)
+
+        XCTAssertEqual(result.timeOfImpact, .none)
+        XCTAssertTrue(result.requiresSideCorrection)
     }
 
     private func stationaryBubble(x: Float, y: Float, radius: Float) throws -> ReferenceBubble {
