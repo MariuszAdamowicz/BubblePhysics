@@ -126,6 +126,9 @@ public struct ReferenceWorld {
             segments: segments,
             configuration: configuration
         )
+        let generatedActiveContactCount = generatedContacts.reduce(into: 0) { count, candidate in
+            if candidate.penetration > configuration.contactTolerance { count += 1 }
+        }
         let contactEnd = DispatchTime.now().uptimeNanoseconds
 
         let solverStart = contactEnd
@@ -151,7 +154,7 @@ public struct ReferenceWorld {
         return ReferenceWorldStepReport(
             solver: solverReport,
             candidatePairCount: pairs.count,
-            generatedContactCount: generatedContacts.count,
+            generatedContactCount: generatedActiveContactCount,
             persistentContactCount: contacts.contacts.count,
             toiTestCount: toiTests,
             sideCorrectionCount: sideCorrections,

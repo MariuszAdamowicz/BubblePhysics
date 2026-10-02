@@ -297,6 +297,16 @@ public enum ReferenceEquilibriumSolver {
         var pairIDs: Set<ReferencePair> = []
 
         if let candidatePairs { pairIDs.formUnion(candidatePairs) }
+        if candidatePairs != nil {
+            var broadPhase = SweepAndPruneBroadPhase()
+            let proxies = bubbles.map { bubble in
+                ReferenceProxy(
+                    id: .init(rawValue: bubble.id.rawValue),
+                    bounds: bubble.targetBounds
+                )
+            }
+            pairIDs.formUnion(broadPhase.candidatePairs(for: proxies))
+        }
         for contact in existingContacts where contact.kind == .bubbleBubble {
             guard let bubbleB = contact.bubbleB else { continue }
             pairIDs.insert(ReferencePair(

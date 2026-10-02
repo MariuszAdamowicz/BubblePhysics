@@ -32,12 +32,12 @@ Lokalny baseline wykonano w konfiguracji Release na Macu mini: 10 kroków rozgrz
 
 | Bańki | Broad phase | p50 [ms] | p95 [ms] | Broad p95 [ms] | Kontakty p95 [ms] | Solver p95 [ms] | Kandydaci | Kontakty trwałe | Maks. penetracja | Limity / 30 | CCD limity | Korekty strony | Non-finite |
 |---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|:---:|
-| 40 | Sweep | 0,5980 | 0,6711 | 0,0042 | 0,0469 | 0,6299 | 32 | 48 | 5,09325 | 30 | 0 | 0 | nie |
-| 40 | AABB tree | 0,6107 | 0,6794 | 0,0190 | 0,0450 | 0,6285 | 32 | 48 | 5,09325 | 30 | 0 | 0 | nie |
-| 300 | Sweep | 7,0906 | 7,2735 | 0,0662 | 0,5486 | 6,6998 | 745 | 542 | 2,62395 | 30 | 0 | 0 | nie |
-| 300 | AABB tree | 7,3644 | 7,5336 | 0,2662 | 0,5545 | 6,7503 | 745 | 542 | 2,62395 | 30 | 0 | 0 | nie |
-| 1000 | Sweep | 19,5210 | 20,9407 | 0,2533 | 1,9085 | 18,7804 | 2269 | 1162 | 0,58424 | 30 | 0 | 0 | nie |
-| 1000 | AABB tree | 20,6855 | 26,0763 | 1,1146 | 2,0590 | 23,2170 | 2269 | 1162 | 0,58424 | 30 | 0 | 0 | nie |
+| 40 | Sweep | 0,6615 | 0,7167 | 0,0027 | 0,0519 | 0,6485 | 32 | 48 | 5,09325 | 30 | 0 | 0 | nie |
+| 40 | AABB tree | 0,6601 | 0,7873 | 0,0200 | 0,0456 | 0,7313 | 32 | 48 | 5,09325 | 30 | 0 | 0 | nie |
+| 300 | Sweep | 8,5955 | 8,7828 | 0,0717 | 0,5603 | 8,1640 | 721 | 566 | 3,11850 | 30 | 0 | 0 | nie |
+| 300 | AABB tree | 8,8079 | 9,0064 | 0,3063 | 0,5796 | 8,1816 | 721 | 566 | 3,11850 | 30 | 0 | 0 | nie |
+| 1000 | Sweep | 24,7797 | 26,0664 | 0,2474 | 2,1002 | 23,7781 | 2257 | 1164 | 0,83170 | 30 | 0 | 0 | nie |
+| 1000 | AABB tree | 26,2650 | 28,3957 | 1,1855 | 2,2112 | 24,9226 | 2257 | 1164 | 0,83170 | 30 | 0 | 0 | nie |
 
 Oba indeksy zwróciły identyczne liczniki kandydatów i kontaktów. Sweep-and-prune był szybszy we wszystkich trzech lokalnych scenach. Po naprawieniu ponownego wyznaczania kontaktów wewnątrz iteracji każda z mierzonych klatek wykorzystała limit 12 iteracji. To świadomie widoczny koszt poprawności solvera referencyjnego, a nie wynik docelowego backendu. Przed implementacją Metal trzeba ocenić na urządzeniu zarówno zachowanie układu, jak i potrzebną strategię zbieżności.
 

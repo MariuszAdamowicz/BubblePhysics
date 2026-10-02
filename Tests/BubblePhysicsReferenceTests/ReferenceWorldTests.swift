@@ -165,6 +165,36 @@ final class ReferenceWorldTests: XCTestCase {
         XCTAssertEqual(report.ccdBudgetExhaustionCount, 1)
     }
 
+    func testWorldFindsContactCreatedBySolverOutsideInitialBroadPhase() throws {
+        var world = ReferenceWorld(configuration: .default, broadPhase: SweepAndPruneBroadPhase())
+        world.addBubble(try bubbleForRecovery(id: 1, x: 0))
+        world.addBubble(try bubbleForRecovery(id: 2, x: 15))
+        world.addBubble(try bubbleForRecovery(id: 3, x: 36))
+
+        let report = world.step()
+
+        XCTAssertEqual(report.candidatePairCount, 1)
+        XCTAssertGreaterThanOrEqual(world.bubbles[2].center.x - world.bubbles[1].center.x, 19.9)
+        XCTAssertTrue(world.contacts.contacts.contains {
+            $0.bubbleA == .init(rawValue: 2) && $0.bubbleB == .init(rawValue: 3)
+        })
+    }
+
+    func testGeneratedContactCountExcludesDistantSignedSegmentCandidates() throws {
+        var world = ReferenceWorld(configuration: .default, broadPhase: SweepAndPruneBroadPhase())
+        world.addBubble(try ReferenceBubble(
+            id: .init(rawValue: 1), center: .init(x: 100, y: 100), mass: 1, targetRadius: 2
+        ))
+        world.addSegment(.staticSegment(
+            id: .init(rawValue: 1), a: .init(x: 0, y: -10), b: .init(x: 0, y: 10)
+        ), allowedSide: -1)
+
+        let report = world.step()
+
+        XCTAssertEqual(report.generatedContactCount, 0)
+        XCTAssertEqual(report.persistentContactCount, 0)
+    }
+
     private func bubbleForRecovery(id: Int, x: Float) throws -> ReferenceBubble {
         try ReferenceBubble(id: .init(rawValue: id), center: .init(x: x, y: 0), mass: 1, targetRadius: 10)
     }
