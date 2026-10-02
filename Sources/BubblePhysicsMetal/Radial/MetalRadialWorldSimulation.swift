@@ -1,6 +1,17 @@
 import Metal
 import BubblePhysics
 
+public struct MetalRadialWorldStep: Sendable {
+    public let polygons: [SimulationPolygonSnapshot]
+    public let deltaTime: Float
+
+    public init(polygons: [SimulationPolygonSnapshot], deltaTime: Float) {
+        precondition(deltaTime > 0 && deltaTime.isFinite)
+        self.polygons = polygons
+        self.deltaTime = deltaTime
+    }
+}
+
 public final class MetalRadialWorldSimulation: @unchecked Sendable {
     private let device: MTLDevice
     private let allocator: any MetalBufferAllocator
@@ -84,7 +95,11 @@ public final class MetalRadialWorldSimulation: @unchecked Sendable {
         memset(resources.loadHeaderBuffer.contents(), 0, resources.bubbleCount * MemoryLayout<SIMD4<Float>>.stride)
         memset(resources.compressionBuffer.contents(), 0, resources.sensorCount * MemoryLayout<Float>.stride)
         memset(resources.pressureBuffer.contents(), 0, resources.sensorCount * MemoryLayout<Float>.stride)
-        return try encodeIntegration(deltaTime: deltaTime, commandBuffer: commandBuffer)
+        return try encodeIntegration(
+            deltaTime: deltaTime, commandBuffer: commandBuffer,
+            sourceSensorBuffer: currentSensorBuffer,
+            destinationSensorBuffer: destinationSensorBuffer
+        )
     }
 
     private func encodeIntegration(
@@ -93,7 +108,9 @@ public final class MetalRadialWorldSimulation: @unchecked Sendable {
         contactBuffers: [MTLBuffer] = [],
         countBuffers: [MTLBuffer] = [],
         overflowBuffers: [MTLBuffer] = [],
-        pairMetricsBuffer: MTLBuffer? = nil
+        pairMetricsBuffer: MTLBuffer? = nil,
+        sourceSensorBuffer: MTLBuffer,
+        destinationSensorBuffer: MTLBuffer
     ) throws -> MetalRadialWorldFrameResources {
         var parameters = SIMD4<UInt32>(
             UInt32(resources.bubbleCount), UInt32(resources.sensorCount),
@@ -105,7 +122,7 @@ public final class MetalRadialWorldSimulation: @unchecked Sendable {
         encoder.setComputePipelineState(pipeline)
         encoder.setBuffer(resources.bodyBuffer, offset: 0, index: 0)
         encoder.setBuffer(resources.descriptorBuffer, offset: 0, index: 1)
-        encoder.setBuffer(currentSensorBuffer, offset: 0, index: 2)
+        encoder.setBuffer(sourceSensorBuffer, offset: 0, index: 2)
         encoder.setBuffer(destinationSensorBuffer, offset: 0, index: 3)
         encoder.setBuffer(resources.surfacePointBuffer, offset: 0, index: 4)
         encoder.setBuffer(resources.loadHeaderBuffer, offset: 0, index: 5)
@@ -132,6 +149,42 @@ public final class MetalRadialWorldSimulation: @unchecked Sendable {
         commandBuffer: MTLCommandBuffer
     ) throws -> MetalRadialWorldFrameResources {
         guard status == .ready else { throw MetalSolverError.commandExecutionFailed }
+        return try encodeSingleStep(
+            bounds: bounds, polygons: polygons, deltaTime: deltaTime,
+            sourceSensorBuffer: currentSensorBuffer,
+            destinationSensorBuffer: destinationSensorBuffer,
+            commandBuffer: commandBuffer
+        )
+    }
+
+    public func encodeSteps(
+        bounds: AABB,
+        steps: [MetalRadialWorldStep],
+        commandBuffer: MTLCommandBuffer
+    ) throws -> MetalRadialWorldFrameResources {
+        guard status == .ready, !steps.isEmpty else { throw MetalSolverError.commandExecutionFailed }
+        var source = currentSensorBuffer
+        var destination = destinationSensorBuffer
+        var finalFrame: MetalRadialWorldFrameResources?
+        for step in steps {
+            finalFrame = try encodeSingleStep(
+                bounds: bounds, polygons: step.polygons, deltaTime: step.deltaTime,
+                sourceSensorBuffer: source, destinationSensorBuffer: destination,
+                commandBuffer: commandBuffer
+            )
+            swap(&source, &destination)
+        }
+        return finalFrame!
+    }
+
+    private func encodeSingleStep(
+        bounds: AABB,
+        polygons: [SimulationPolygonSnapshot],
+        deltaTime: Float,
+        sourceSensorBuffer: MTLBuffer,
+        destinationSensorBuffer: MTLBuffer,
+        commandBuffer: MTLCommandBuffer
+    ) throws -> MetalRadialWorldFrameResources {
         let (vertices, polygonRecords) = encode(polygons: polygons)
         let vertexBuffer = try temporaryBuffer(vertices)
         let polygonBuffer = try temporaryBuffer(polygonRecords)
@@ -164,7 +217,7 @@ public final class MetalRadialWorldSimulation: @unchecked Sendable {
             }
             environmentEncoder.setComputePipelineState(environmentPipeline)
             environmentEncoder.setBuffer(resources.bodyBuffer, offset: bubbleIndex * MemoryLayout<MetalRadialBody>.stride, index: 0)
-            environmentEncoder.setBuffer(currentSensorBuffer, offset: range.sensorStart * MemoryLayout<MetalRadialSensor>.stride, index: 1)
+            environmentEncoder.setBuffer(sourceSensorBuffer, offset: range.sensorStart * MemoryLayout<MetalRadialSensor>.stride, index: 1)
             environmentEncoder.setBuffer(resources.surfacePointBuffer, offset: range.sensorStart * MemoryLayout<SIMD2<Float>>.stride, index: 2)
             environmentEncoder.setBuffer(vertexBuffer, offset: 0, index: 3)
             environmentEncoder.setBuffer(polygonBuffer, offset: 0, index: 4)
@@ -250,7 +303,7 @@ public final class MetalRadialWorldSimulation: @unchecked Sendable {
         pairReduceEncoder.setComputePipelineState(reducePairPipeline)
         pairReduceEncoder.setBuffer(resources.bodyBuffer, offset: 0, index: 0)
         pairReduceEncoder.setBuffer(resources.descriptorBuffer, offset: 0, index: 1)
-        pairReduceEncoder.setBuffer(currentSensorBuffer, offset: 0, index: 2)
+        pairReduceEncoder.setBuffer(sourceSensorBuffer, offset: 0, index: 2)
         pairReduceEncoder.setBuffer(resources.surfacePointBuffer, offset: 0, index: 3)
         pairReduceEncoder.setBuffer(pairBuffer, offset: 0, index: 4)
         pairReduceEncoder.setBuffer(pairContactBuffer, offset: 0, index: 5)
@@ -267,7 +320,9 @@ public final class MetalRadialWorldSimulation: @unchecked Sendable {
         return try encodeIntegration(
             deltaTime: deltaTime, commandBuffer: commandBuffer,
             contactBuffers: contactBuffers, countBuffers: countBuffers,
-            overflowBuffers: overflowBuffers, pairMetricsBuffer: pairMetrics
+            overflowBuffers: overflowBuffers, pairMetricsBuffer: pairMetrics,
+            sourceSensorBuffer: sourceSensorBuffer,
+            destinationSensorBuffer: destinationSensorBuffer
         )
     }
 
@@ -309,7 +364,7 @@ public final class MetalRadialWorldSimulation: @unchecked Sendable {
             status = .failed
             throw MetalSolverError.candidatePairOverflow
         }
-        currentIsA.toggle()
+        currentIsA = frame.sensorBuffer === sensorBufferA
         templateWorld = world
         resources = frameResources(sensorBuffer: currentSensorBuffer)
     }

@@ -53,6 +53,7 @@ kernel void radialReduceContacts(
     }
     float2 totalForce = float2(0.0f);
     float totalTorque = 0.0f;
+    const float bodyLoadWeight = min(1.0f, 8.0f / max(1.0f, float(parameters.sensorCount)));
     const uint actualContactCount = contactCount[0];
     for (uint contactIndex = 0; contactIndex < actualContactCount; ++contactIndex) {
         const MetalRadialContact contact = contacts[contactIndex];
@@ -80,8 +81,8 @@ kernel void radialReduceContacts(
         pressure[end] += magnitude * barycentric;
         const float2 force = normal * magnitude;
         const float2 arm = contact.pointAndNormal.xy - body->pose.xy;
-        totalForce += force;
-        totalTorque += arm.x * force.y - arm.y * force.x;
+        totalForce += force * bodyLoadWeight;
+        totalTorque += (arm.x * force.y - arm.y * force.x) * bodyLoadWeight;
     }
     loadHeader[0] = float4(totalForce, totalTorque, 0.0f);
 }

@@ -92,6 +92,28 @@ final class RadialContactResponseTests: XCTestCase {
         }
     }
 
+    func testBodyLoadDoesNotGrowWhenSameSurfaceUsesMoreSensors() {
+        let coarse = makeBubble()
+        let dense = RadialSensorRemesher.resample(coarse, to: 16)
+        let coarseContact = RadialSurfaceContact(
+            sensorStartIndex: 0, sensorEndIndex: 1, barycentric: 0,
+            point: Vector2(x: 10, y: 0), normal: Vector2(x: -1, y: 0),
+            penetration: 2, relativeVelocity: .zero, sourceID: 1
+        )
+        let denseContacts = [0, 1].map { index in
+            RadialSurfaceContact(
+                sensorStartIndex: index, sensorEndIndex: index + 1, barycentric: 0,
+                point: Vector2(x: 10, y: 0), normal: Vector2(x: -1, y: 0),
+                penetration: 2, relativeVelocity: .zero, sourceID: UInt64(index + 1)
+            )
+        }
+
+        let coarseLoad = RadialContactResponse.reduce(contacts: [coarseContact], for: coarse)
+        let denseLoad = RadialContactResponse.reduce(contacts: denseContacts, for: dense)
+
+        XCTAssertEqual(denseLoad.force.x, coarseLoad.force.x, accuracy: 1e-5)
+    }
+
     private func makeBubble() -> RadialBubbleState {
         var bubble = RadialBubbleState.collapsed(
             id: BubbleID(rawValue: 1),

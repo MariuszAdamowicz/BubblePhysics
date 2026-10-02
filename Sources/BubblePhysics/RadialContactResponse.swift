@@ -67,6 +67,7 @@ public enum RadialContactResponse {
     ) -> RadialBodyLoad {
         var result = RadialBodyLoad.zero(sensorCount: bubble.sensors.count)
         let ordered = contacts.sorted(by: stableOrder)
+        let bodyLoadWeight = min(1, 8 / Float(bubble.sensors.count))
 
         for contact in ordered {
             guard
@@ -91,7 +92,7 @@ public enum RadialContactResponse {
             result.sensorPressureDeltas[contact.sensorStartIndex] += magnitude * startWeight
             result.sensorPressureDeltas[contact.sensorEndIndex] += magnitude * endWeight
 
-            let contactForce = normal * magnitude
+            let contactForce = normal * (magnitude * bodyLoadWeight)
             result.force = result.force + contactForce
             result.torque += cross(contact.point - bubble.body.center, contactForce)
         }

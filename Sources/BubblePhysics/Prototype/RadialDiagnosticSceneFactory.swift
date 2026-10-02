@@ -30,17 +30,17 @@ public enum RadialDiagnosticSceneFactory {
             quadraticStiffness: 20, quarticStiffness: 0.0001, drag: 4
         )
         let dynamics = RadialBubbleMaterial(
-            radialStiffness: 32, radialNonlinearity: 0.0002,
-            radialDamping: 18, neighborStiffness: 18,
+            radialStiffness: 240, radialNonlinearity: 0.0005,
+            radialDamping: 30, neighborStiffness: 80,
             pressureResponse: 1, contactCorrection: 0.35,
             bodyLinearDrag: 5, bodyAngularDrag: 6,
-            birthDuration: 1.2, maximumRadialSpeed: 35
+            birthDuration: 0.8, maximumRadialSpeed: 200
         )
         let bubbles = zip(radii, centers).enumerated().map { index, item in
             let (radius, center) = item
             var bubble = RadialBubbleState.collapsed(
                 id: BubbleID(rawValue: index + 1), center: center,
-                targetRadius: radius, maxSegmentLength: 8,
+                targetRadius: radius, maxSegmentLength: 12,
                 mass: max(8, radius * radius * 0.002)
             )
             bubble.material = contactMaterial

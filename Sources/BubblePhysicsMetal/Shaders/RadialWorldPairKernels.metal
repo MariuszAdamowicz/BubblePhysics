@@ -79,6 +79,7 @@ kernel void radialWorldGeneratePairContacts(
     if (pairIndex >= pairCount) return;
     const PairRecord pair = pairs[pairIndex];
     const uint firstBubble = pair.bubblesAndRange.x, secondBubble = pair.bubblesAndRange.y;
+    if (bodies[firstBubble].target.x <= 0.0f || bodies[secondBubble].target.x <= 0.0f) return;
     const Descriptor first = descriptors[firstBubble], second = descriptors[secondBubble];
     float2 firstMin = float2(INFINITY), firstMax = float2(-INFINITY);
     float2 secondMin = float2(INFINITY), secondMax = float2(-INFINITY);
@@ -185,9 +186,12 @@ kernel void radialWorldReducePairContacts(
                 + 0.5f * (a.y + b.y) * penetration * penetration * penetration
                 + closing * 0.5f * (a.z + b.z));
             const float2 force = normal * magnitude;
-            loads[firstBubble].xy += force; loads[secondBubble].xy -= force;
-            loads[firstBubble].z += radialWorldCross2(point - bodies[firstBubble].pose.xy, force);
-            loads[secondBubble].z += radialWorldCross2(point - bodies[secondBubble].pose.xy, -force);
+            const float bodyLoadWeight = min(
+                1.0f, 16.0f / max(2.0f, float(descriptors[firstBubble].range.y + descriptors[secondBubble].range.y))
+            );
+            loads[firstBubble].xy += force * bodyLoadWeight; loads[secondBubble].xy -= force * bodyLoadWeight;
+            loads[firstBubble].z += radialWorldCross2(point - bodies[firstBubble].pose.xy, force) * bodyLoadWeight;
+            loads[secondBubble].z += radialWorldCross2(point - bodies[secondBubble].pose.xy, -force) * bodyLoadWeight;
             compression[fs] += penetration * (1 - ft); compression[fe] += penetration * ft;
             compression[ss] += penetration * (1 - st); compression[se] += penetration * st;
             pressure[fs] += magnitude * (1 - ft); pressure[fe] += magnitude * ft;

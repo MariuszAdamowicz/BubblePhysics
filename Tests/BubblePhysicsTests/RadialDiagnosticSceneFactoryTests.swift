@@ -30,4 +30,22 @@ final class RadialDiagnosticSceneFactoryTests: XCTestCase {
         XCTAssertTrue(bubbles.allSatisfy { $0.birthProgress == 0 })
         XCTAssertTrue(bubbles.flatMap(\.sensors).allSatisfy { $0.length == 0 })
     }
+
+    func testDiagnosticMaterialRecoversFromDeformationWithinHalfSecond() throws {
+        var bubble = try XCTUnwrap(RadialDiagnosticSceneFactory.make().world.bubbles.first { $0.targetRadius == 160 })
+        bubble.birthProgress = 1
+        for index in bubble.sensors.indices {
+            bubble.sensors[index].length = index.isMultiple(of: 2) ? 80 : 160
+            bubble.sensors[index].targetLength = 160
+        }
+
+        for _ in 0..<60 {
+            RadialBubbleIntegrator.step(
+                state: &bubble, load: .zero(sensorCount: bubble.sensors.count),
+                deltaTime: 1 / 120
+            )
+        }
+
+        XCTAssertLessThan(bubble.sensors.map { abs($0.length - 160) }.max() ?? .infinity, 8)
+    }
 }

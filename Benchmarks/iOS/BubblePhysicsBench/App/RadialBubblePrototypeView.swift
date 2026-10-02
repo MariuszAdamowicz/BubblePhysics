@@ -31,6 +31,7 @@ struct RadialBubblePrototypeView: UIViewRepresentable {
     private var queue: MTLCommandQueue?
     private var generation = -1
     private var start = CACurrentMediaTime()
+    private var previousFrameTime = CACurrentMediaTime()
     private var telemetry = FrameTelemetry()
     private var lastPublish = 0.0
     private var frameInFlight = false
@@ -77,6 +78,7 @@ struct RadialBubblePrototypeView: UIViewRepresentable {
             model?.telemetry = telemetry.snapshot
             model?.errorMessage = nil
             start = CACurrentMediaTime()
+            previousFrameTime = start
             frameIndex = 0
         } catch {
             model?.errorMessage = "Błąd prototypu radialnego: \(error)"
@@ -98,22 +100,28 @@ struct RadialBubblePrototypeView: UIViewRepresentable {
         frameInFlight = true
         let began = CACurrentMediaTime()
         do {
-            let triangleState = KinematicTriangleMotion.default.sample(
-                time: CACurrentMediaTime() - start,
-                isPaused: model.trianglePaused
+            let now = CACurrentMediaTime()
+            let schedule = RadialFrameStepSchedule.make(
+                previousTime: previousFrameTime, currentTime: now,
+                fixedStep: 1 / 30, maximumStepCount: 2
             )
-            let triangle = makeTriangle(state: triangleState)
-            activateNextBubbleIfNeeded(elapsed: CACurrentMediaTime() - start, simulation: simulation)
-            let worldBeforeStep = simulation.world
-            let substeps = MetalRadialWorldSimulation.substepCount(
-                for: worldBeforeStep, polygons: [triangle], deltaTime: 1 / 60
-            )
-            let frame = try simulation.encodeStep(
+            let steps = schedule.sampleTimes.map { sampleTime -> MetalRadialWorldStep in
+                let state = KinematicTriangleMotion.default.sample(
+                    time: sampleTime - start, isPaused: model.trianglePaused
+                )
+                return MetalRadialWorldStep(
+                    polygons: [makeTriangle(state: state)],
+                    deltaTime: Float(schedule.deltaTime)
+                )
+            }
+            let triangle = steps.last!.polygons[0]
+            activateNextBubbleIfNeeded(elapsed: now - start, simulation: simulation)
+            let frame = try simulation.encodeSteps(
                 bounds: scene?.bounds ?? RadialDiagnosticSceneFactory.bounds,
-                polygons: [triangle],
-                deltaTime: 1 / 120,
+                steps: steps,
                 commandBuffer: command
             )
+            previousFrameTime = now
             let vertices = triangle.worldVertices.map { SIMD2($0.x, $0.y) }
             let renderBegan = CACurrentMediaTime()
             _ = try renderer.encode(
@@ -134,7 +142,7 @@ struct RadialBubblePrototypeView: UIViewRepresentable {
                         command: completed,
                         began: began,
                         renderMilliseconds: renderMilliseconds,
-                        substeps: substeps
+                        substeps: schedule.count
                     )
                 }
             }
