@@ -229,9 +229,13 @@ limitu nie zatrzymuje aplikacji, lecz jest widoczne w telemetrii.
 ## Kontur renderowany
 
 Po zakończeniu solvera dla każdej bańki dobierane jest `N` wynikające z
-docelowej jakości renderowania, a nie stabilności fizyki. Dla równomiernie
-rozłożonych kątów wywoływane jest `supportRadius(angle)`. Wynik może przejść
-małą, stałą liczbę kroków wygładzających, które nie zmieniają stanu fizycznego.
+aktualnego, zdeformowanego obwodu i maksymalnej dopuszczalnej długości odcinka
+renderowanego konturu, a nie ze stabilności fizyki ani sztywnej tabeli
+rozmiarów. Próbkowanie rozpoczyna się od małej liczby kierunków i dzieli tylko
+te łuki, których odcinek przekracza limit. Nie obowiązuje górny limit `N`.
+W każdym wybranym kierunku wywoływane jest `supportRadius(angle)`. Wynik może
+przejść małą, stałą liczbę kroków wygładzających, które nie zmieniają stanu
+fizycznego.
 
 Pełny kontur nie uczestniczy w broad phase, CCD ani iteracjach równowagi.
 Zmiana `N` wpływa na jakość i koszt renderowania, ale nie zmienia rozwiązania
