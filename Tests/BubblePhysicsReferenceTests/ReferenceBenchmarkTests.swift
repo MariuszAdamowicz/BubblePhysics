@@ -1,4 +1,5 @@
 import XCTest
+import Foundation
 @testable import BubblePhysicsReference
 
 final class ReferenceBenchmarkTests: XCTestCase {
@@ -57,6 +58,32 @@ final class ReferenceBenchmarkTests: XCTestCase {
             )
             XCTAssertEqual(sweep.maximumCandidatePairs, tree.maximumCandidatePairs)
             XCTAssertEqual(sweep.maximumGeneratedContacts, tree.maximumGeneratedContacts)
+        }
+    }
+
+    func testPrintLocalBaselineWhenRequested() throws {
+        guard ProcessInfo.processInfo.environment["REFERENCE_BENCHMARK_PRINT"] == "1" else {
+            throw XCTSkip("Set REFERENCE_BENCHMARK_PRINT=1 to print the local baseline")
+        }
+        for count in [40, 300, 1_000] {
+            for broadPhase in [ReferenceBroadPhaseSelection.sweepAndPrune, .aabbTree] {
+                let report = try ReferenceBenchmarkRunner.measure(
+                    scenario: .filled(count: count, broadPhase: broadPhase),
+                    warmupSteps: 10,
+                    measuredSteps: 30
+                )
+                print(String(format:
+                    "BASELINE count=%d broad=%@ p50=%.4f p95=%.4f prediction=%.4f broadPhase=%.4f contacts=%.4f solver=%.4f candidates=%d generated=%d persistent=%d penetration=%.5f iterations=%d limits=%d side=%d nonFinite=%@",
+                    count, broadPhase.rawValue,
+                    report.frame.p50Milliseconds, report.frame.p95Milliseconds,
+                    report.prediction.p95Milliseconds, report.broadPhaseTiming.p95Milliseconds,
+                    report.contacts.p95Milliseconds, report.solver.p95Milliseconds,
+                    report.maximumCandidatePairs, report.maximumGeneratedContacts,
+                    report.maximumPersistentContacts, report.maximumPenetration,
+                    report.maximumSolverIterations, report.solverIterationLimitCount,
+                    report.sideCorrectionCount, report.hasNonFiniteState ? "yes" : "no"
+                ))
+            }
         }
     }
 }

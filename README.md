@@ -1,6 +1,6 @@
 # BubblePhysics
 
-`BubblePhysics` is a Swift package for deformable 2D bubbles, polygon obstacles, compliant grabs and structural bubble operations.
+`BubblePhysics` is a Swift package for experiments with deformable 2D bubbles. The original point/spring CPU and Metal implementations remain in the repository as experimental history; they are not the current correctness model.
 
 ## Reference solver
 
@@ -18,9 +18,11 @@ let report = try ReferenceBenchmarkRunner.measure(
 
 `ReferenceBenchmarkReport` contains p50/p95 for the complete step and its prediction, broad-phase, contact and solver phases, together with candidate/contact/TOI counts, maximum penetration, iteration-limit events, side corrections and non-finite-state detection. Use `.aabbTree` with the same seed to compare spatial indices on identical input. CPU timings are a diagnostic correctness baseline, not the iPhone acceptance threshold.
 
+The next implementation stage is a new Metal backend reproducing the reference solver's behaviour. It has not been implemented or approved as part of this milestone.
+
 ## Benchmark scenario
 
-`BenchmarkScenario.iPhoneX` creates a deterministic board of 300 bubbles for the 375 × 812 point iPhone X canvas. The number of boundary points is derived only from `WorldConfiguration.maxBoundarySegmentLength`; the package does not impose a maximum node count.
+The legacy `BenchmarkScenario.iPhoneX` creates a deterministic board of 300 bubbles for the 375 × 812 point iPhone X canvas. The number of boundary points is derived only from `WorldConfiguration.maxBoundarySegmentLength`; the package does not impose a maximum node count.
 
 Use `MetalBenchmarkReport.measure(scenario: .iPhoneX, steps: 300)` in an iOS host to collect GPU step-time p50/p95 and separate shape, contact and interaction timings. The report also includes particle, candidate-pair and contact counts plus overflow and non-finite-state flags. `BenchmarkReport` remains available as the CPU reference measurement.
 
@@ -28,4 +30,4 @@ Acceptance on a physical iPhone X remains p95 ≤ 16.67 ms for the complete inte
 
 The committed XCTest scenario verifies construction and determinism. It is not a device-performance verdict: that requires a signed iOS host installed on the phone.
 
-The host is in `Benchmarks/iOS/BubblePhysicsBench`. Open `BubblePhysicsBench.xcodeproj` specifically in Xcode 26.6, choose the connected iPhone X and run. The app provides live 40/300-bubble scenes, pause/reset, diagnostic points, triangle pause, touch grabbing and throttled p50/p95 telemetry. See `docs/benchmarks/iphone-x-visual-prototype.md` for the device checklist.
+The host is in `Benchmarks/iOS/BubblePhysicsBench`. Open `BubblePhysicsBench.xcodeproj` specifically in Xcode 26.6, choose the connected iPhone X and run. The `CPU` tab runs the new reference benchmark for 40/300/1000 bubbles; the remaining tabs expose legacy experiments. See `docs/benchmarks/iphone-x-reference-solver.md` for the current checklist.
