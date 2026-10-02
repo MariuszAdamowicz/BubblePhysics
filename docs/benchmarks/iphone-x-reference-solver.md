@@ -30,15 +30,15 @@ Publikacja postępu jest ograniczona do czterech aktualizacji na sekundę. Pomia
 
 Lokalny baseline wykonano w konfiguracji Release na Macu mini: 10 kroków rozgrzewki i 30 kroków pomiarowych na wariant. Nie jest to wynik iPhone'a ani próg akceptacji.
 
-| Bańki | Broad phase | p50 [ms] | p95 [ms] | Broad p95 [ms] | Kontakty p95 [ms] | Solver p95 [ms] | Kandydaci | Kontakty trwałe | Maks. penetracja | Limity / 30 | Korekty strony | Non-finite |
-|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|:---:|
-| 40 | Sweep | 0,0446 | 0,0721 | 0,0065 | 0,0264 | 0,0435 | 64 | 15 | 0,00352 | 2 | 0 | nie |
-| 40 | AABB tree | 0,0582 | 0,0748 | 0,0206 | 0,0242 | 0,0385 | 64 | 15 | 0,00352 | 2 | 0 | nie |
-| 300 | Sweep | 0,6973 | 0,7408 | 0,0689 | 0,3360 | 0,3472 | 673 | 106 | 0,07568 | 28 | 52 | nie |
-| 300 | AABB tree | 0,8696 | 0,9122 | 0,2633 | 0,3389 | 0,3504 | 673 | 106 | 0,07568 | 28 | 52 | nie |
-| 1000 | Sweep | 2,4792 | 2,5353 | 0,2580 | 1,4237 | 0,9090 | 2211 | 286 | 0,67939 | 28 | 108 | nie |
-| 1000 | AABB tree | 3,2345 | 3,4888 | 1,1291 | 1,4398 | 0,9153 | 2211 | 286 | 0,67939 | 28 | 108 | nie |
+| Bańki | Broad phase | p50 [ms] | p95 [ms] | Broad p95 [ms] | Kontakty p95 [ms] | Solver p95 [ms] | Kandydaci | Kontakty trwałe | Maks. penetracja | Limity / 30 | CCD limity | Korekty strony | Non-finite |
+|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|:---:|
+| 40 | Sweep | 0,5980 | 0,6711 | 0,0042 | 0,0469 | 0,6299 | 32 | 48 | 5,09325 | 30 | 0 | 0 | nie |
+| 40 | AABB tree | 0,6107 | 0,6794 | 0,0190 | 0,0450 | 0,6285 | 32 | 48 | 5,09325 | 30 | 0 | 0 | nie |
+| 300 | Sweep | 7,0906 | 7,2735 | 0,0662 | 0,5486 | 6,6998 | 745 | 542 | 2,62395 | 30 | 0 | 0 | nie |
+| 300 | AABB tree | 7,3644 | 7,5336 | 0,2662 | 0,5545 | 6,7503 | 745 | 542 | 2,62395 | 30 | 0 | 0 | nie |
+| 1000 | Sweep | 19,5210 | 20,9407 | 0,2533 | 1,9085 | 18,7804 | 2269 | 1162 | 0,58424 | 30 | 0 | 0 | nie |
+| 1000 | AABB tree | 20,6855 | 26,0763 | 1,1146 | 2,0590 | 23,2170 | 2269 | 1162 | 0,58424 | 30 | 0 | 0 | nie |
 
-Oba indeksy zwróciły identyczne liczniki kandydatów i kontaktów. Sweep-and-prune był szybszy we wszystkich trzech lokalnych scenach. Częste osiąganie limitu 12 iteracji przy 300 i 1000 bańkach jest jawnie raportowaną cechą obecnego solvera referencyjnego; przed implementacją Metal trzeba ocenić wizualnie stan na urządzeniu i zdecydować, czy tolerancja/zbieżność wymaga korekty.
+Oba indeksy zwróciły identyczne liczniki kandydatów i kontaktów. Sweep-and-prune był szybszy we wszystkich trzech lokalnych scenach. Po naprawieniu ponownego wyznaczania kontaktów wewnątrz iteracji każda z mierzonych klatek wykorzystała limit 12 iteracji. To świadomie widoczny koszt poprawności solvera referencyjnego, a nie wynik docelowego backendu. Przed implementacją Metal trzeba ocenić na urządzeniu zarówno zachowanie układu, jak i potrzebną strategię zbieżności.
 
 Wyniki pomiaru na fizycznym iPhonie X nie zostały jeszcze wpisane.

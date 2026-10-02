@@ -93,7 +93,7 @@ struct ReferenceBenchmarkView: View {
             Text(String(format: "klatka p50 %.2f · p95 %.2f ms", report.frame.p50Milliseconds, report.frame.p95Milliseconds))
             Text(String(format: "predykcja %.2f · broad %.2f · kontakty %.2f · solver %.2f ms (p95)", report.prediction.p95Milliseconds, report.broadPhaseTiming.p95Milliseconds, report.contacts.p95Milliseconds, report.solver.p95Milliseconds))
             Text("kandydaci \(report.maximumCandidatePairs) · kontakty \(report.maximumGeneratedContacts)/\(report.maximumPersistentContacts) · TOI \(report.maximumTOITests)")
-            Text(String(format: "penetracja %.4f · iteracje %d · limity %d · korekty strony %d", report.maximumPenetration, report.maximumSolverIterations, report.solverIterationLimitCount, report.sideCorrectionCount))
+            Text(String(format: "penetracja %.4f · iteracje %d · limity %d · CCD limity %d · korekty strony %d", report.maximumPenetration, report.maximumSolverIterations, report.solverIterationLimitCount, report.ccdBudgetExhaustionCount, report.sideCorrectionCount))
             Text("non-finite \(report.hasNonFiniteState ? "tak" : "nie")")
         }
         .font(.caption.monospacedDigit())

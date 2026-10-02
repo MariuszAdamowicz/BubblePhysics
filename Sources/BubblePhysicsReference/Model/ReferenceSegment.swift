@@ -49,6 +49,7 @@ public struct ReferenceSegment: Sendable, Equatable {
         previousB: ReferenceVector2,
         currentA: ReferenceVector2,
         currentB: ReferenceVector2,
+        timeStep: Float = ReferenceConfiguration.default.timeStep,
         angularVelocity: Float = 0,
         ownerID: Int? = nil
     ) -> ReferenceSegment {
@@ -60,7 +61,7 @@ public struct ReferenceSegment: Sendable, Equatable {
             previousB: previousB,
             currentA: currentA,
             currentB: currentB,
-            linearVelocity: currentCenter - previousCenter,
+            linearVelocity: (currentCenter - previousCenter) / max(timeStep, Float.ulpOfOne),
             angularVelocity: angularVelocity,
             motion: .kinematic,
             ownerID: ownerID

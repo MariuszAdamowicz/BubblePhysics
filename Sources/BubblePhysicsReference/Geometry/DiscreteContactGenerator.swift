@@ -3,6 +3,14 @@ public enum ReferenceDiscreteContactGenerator {
         _ bubbleA: ReferenceBubble,
         _ bubbleB: ReferenceBubble
     ) -> ReferenceContact? {
+        let candidate = bubbleBubbleCandidate(bubbleA, bubbleB)
+        return candidate.penetration > 0 ? candidate : nil
+    }
+
+    public static func bubbleBubbleCandidate(
+        _ bubbleA: ReferenceBubble,
+        _ bubbleB: ReferenceBubble
+    ) -> ReferenceContact {
         let delta = bubbleB.center - bubbleA.center
         let fallback = bubbleA.id <= bubbleB.id
             ? ReferenceVector2(x: 1, y: 0)
@@ -12,8 +20,6 @@ public enum ReferenceDiscreteContactGenerator {
         let radiusA = bubbleA.supportRadius(along: normal)
         let radiusB = bubbleB.supportRadius(along: -normal)
         let penetration = radiusA + radiusB - distance
-        guard penetration > 0 else { return nil }
-
         return ReferenceContact(
             id: bubblePairID(bubbleA.id, bubbleB.id),
             kind: .bubbleBubble,
@@ -30,6 +36,15 @@ public enum ReferenceDiscreteContactGenerator {
         _ segment: ReferenceSegment,
         allowedSide: Float
     ) -> ReferenceContact? {
+        let candidate = bubbleSegmentCandidate(bubble, segment, allowedSide: allowedSide)
+        return candidate.penetration > 0 ? candidate : nil
+    }
+
+    public static func bubbleSegmentCandidate(
+        _ bubble: ReferenceBubble,
+        _ segment: ReferenceSegment,
+        allowedSide: Float
+    ) -> ReferenceContact {
         let endpoints = ReferenceSegmentEndpoints(a: segment.currentA, b: segment.currentB)
         let closest = closestPoint(to: bubble.center, on: endpoints)
         let edge = segment.currentB - segment.currentA
@@ -39,8 +54,6 @@ public enum ReferenceDiscreteContactGenerator {
         let normal = (bubble.center - closest.point).normalized(or: sideNormal)
         let radius = bubble.supportRadius(along: -normal)
         let penetration = radius - closest.distanceSquared.squareRoot()
-        guard penetration > 0 else { return nil }
-
         return ReferenceContact(
             id: bubbleSegmentID(bubble.id, segment.id),
             kind: .bubbleSegment,

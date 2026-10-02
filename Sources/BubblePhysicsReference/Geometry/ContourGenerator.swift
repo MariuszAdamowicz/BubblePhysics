@@ -5,7 +5,7 @@ public enum ReferenceContourGenerator {
         for bubble: ReferenceBubble,
         configuration: ReferenceConfiguration
     ) -> [ReferenceVector2] {
-        precondition(configuration.maxContourSegmentLength > 0)
+        let maximumLength = configuration.sanitized.maxContourSegmentLength
 
         let initialSegmentCount = 8
         let fullTurn = Float.pi * 2
@@ -22,7 +22,7 @@ public enum ReferenceContourGenerator {
                 startPoint: startPoint,
                 endAngle: endAngle,
                 endPoint: point(on: bubble, angle: endAngle),
-                maximumLength: configuration.maxContourSegmentLength,
+                maximumLength: maximumLength,
                 output: &points
             )
         }
@@ -46,6 +46,10 @@ public enum ReferenceContourGenerator {
         }
 
         let middleAngle = (startAngle + endAngle) * 0.5
+        guard middleAngle > startAngle, middleAngle < endAngle else {
+            output.append(endPoint)
+            return
+        }
         let middlePoint = point(on: bubble, angle: middleAngle)
         appendAdaptiveArc(
             bubble: bubble,

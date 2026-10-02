@@ -20,6 +20,7 @@ public struct ReferenceBenchmarkReport: Sendable, Equatable {
     public var maximumTOITests: Int
     public var maximumPenetration: Float
     public var sideCorrectionCount: Int
+    public var ccdBudgetExhaustionCount: Int
     public var solverIterationLimitCount: Int
     public var hasNonFiniteState: Bool
 }

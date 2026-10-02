@@ -46,6 +46,7 @@ public enum ReferenceBenchmarkRunner {
             maximumTOITests: reports.map(\.toiTestCount).max() ?? 0,
             maximumPenetration: reports.map(\.solver.maximumPenetration).max() ?? 0,
             sideCorrectionCount: reports.reduce(0) { $0 + $1.sideCorrectionCount },
+            ccdBudgetExhaustionCount: reports.reduce(0) { $0 + $1.ccdBudgetExhaustionCount },
             solverIterationLimitCount: reports.reduce(0) { $0 + ($1.solver.didReachIterationLimit ? 1 : 0) },
             hasNonFiniteState: reports.contains(where: \.hasNonFiniteState)
         )
@@ -128,6 +129,7 @@ public enum ReferenceBenchmarkRunner {
             maximumTOITests: reports.map(\.toiTestCount).max() ?? 0,
             maximumPenetration: reports.map(\.solver.maximumPenetration).max() ?? 0,
             sideCorrectionCount: reports.reduce(0) { $0 + $1.sideCorrectionCount },
+            ccdBudgetExhaustionCount: reports.reduce(0) { $0 + $1.ccdBudgetExhaustionCount },
             solverIterationLimitCount: reports.reduce(0) { $0 + ($1.solver.didReachIterationLimit ? 1 : 0) },
             hasNonFiniteState: reports.contains(where: \.hasNonFiniteState)
         )

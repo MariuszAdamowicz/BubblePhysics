@@ -94,6 +94,36 @@ final class ReferenceEquilibriumSolverTests: XCTestCase {
         XCTAssertTrue(bubbles[0].center.isFinite)
     }
 
+    func testCorrectionCreatesAndSolvesNewCandidateContactInSameCall() throws {
+        var bubbles = [
+            try bubble(1, x: 0, mass: 1),
+            try bubble(2, x: 15, mass: 1),
+            try bubble(3, x: 36, mass: 1)
+        ]
+        var contacts = ReferenceContactSet(contacts: [try pairContact(bubbles[0], bubbles[1])])
+        let candidates = [
+            ReferencePair(.init(rawValue: 1), .init(rawValue: 2)),
+            ReferencePair(.init(rawValue: 2), .init(rawValue: 3))
+        ]
+
+        _ = ReferenceEquilibriumSolver.solve(
+            bubbles: &bubbles, segments: [], contacts: &contacts,
+            configuration: .default, candidatePairs: candidates
+        )
+
+        XCTAssertGreaterThanOrEqual(bubbles[2].center.x - bubbles[1].center.x, 19.9)
+    }
+
+    func testKinematicVelocityUsesUnitsPerSecond() {
+        let segment = ReferenceSegment.kinematicSegment(
+            id: .init(rawValue: 9),
+            previousA: .init(x: 0, y: 0), previousB: .init(x: 10, y: 0),
+            currentA: .init(x: 1, y: 0), currentB: .init(x: 11, y: 0),
+            timeStep: 0.5
+        )
+        XCTAssertEqual(segment.linearVelocity.x, 2, accuracy: 0.0001)
+    }
+
     private func bubble(_ id: Int, x: Float, mass: Float) throws -> ReferenceBubble {
         try ReferenceBubble(id: .init(rawValue: id), center: .init(x: x, y: 0), mass: mass, targetRadius: 10)
     }

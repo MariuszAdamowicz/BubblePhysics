@@ -42,6 +42,21 @@ final class ReferenceContactSetTests: XCTestCase {
         XCTAssertEqual(set.contacts.map(\.age), [1, 1, 1])
     }
 
+    func testSignedGeometryCandidateKeepsExistingContactAcrossTinyGap() throws {
+        let first = try ReferenceBubble(id: .init(rawValue: 1), center: .zero, mass: 1, targetRadius: 10)
+        let touching = try ReferenceBubble(id: .init(rawValue: 2), center: .init(x: 19.999, y: 0), mass: 1, targetRadius: 10)
+        var set = ReferenceContactSet(contacts: [try XCTUnwrap(
+            ReferenceDiscreteContactGenerator.bubbleBubble(first, touching)
+        )])
+        let separated = try ReferenceBubble(id: .init(rawValue: 2), center: .init(x: 20.001, y: 0), mass: 1, targetRadius: 10)
+
+        let signed = ReferenceDiscreteContactGenerator.bubbleBubbleCandidate(first, separated)
+        set.update(candidates: [signed], bubbles: [first, separated], segments: [], configuration: .default)
+
+        XCTAssertEqual(set.contacts.count, 1)
+        XCTAssertLessThan(set.contacts[0].penetration, 0)
+    }
+
     private func contact(id: UInt64, penetration: Float) -> ReferenceContact {
         ReferenceContact(
             id: .init(rawValue: id),

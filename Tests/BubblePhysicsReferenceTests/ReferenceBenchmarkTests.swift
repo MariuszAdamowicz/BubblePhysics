@@ -44,6 +44,7 @@ final class ReferenceBenchmarkTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(report.frame.p95Milliseconds, report.frame.p50Milliseconds)
         XCTAssertFalse(report.hasNonFiniteState)
         XCTAssertGreaterThan(report.maximumTOITests, 0)
+        XCTAssertGreaterThanOrEqual(report.ccdBudgetExhaustionCount, 0)
     }
 
     func testBroadPhasesReturnSameCandidateCountsForFilledScenes() throws {
@@ -73,7 +74,7 @@ final class ReferenceBenchmarkTests: XCTestCase {
                     measuredSteps: 30
                 )
                 print(String(format:
-                    "BASELINE count=%d broad=%@ p50=%.4f p95=%.4f prediction=%.4f broadPhase=%.4f contacts=%.4f solver=%.4f candidates=%d generated=%d persistent=%d penetration=%.5f iterations=%d limits=%d side=%d nonFinite=%@",
+                    "BASELINE count=%d broad=%@ p50=%.4f p95=%.4f prediction=%.4f broadPhase=%.4f contacts=%.4f solver=%.4f candidates=%d generated=%d persistent=%d penetration=%.5f iterations=%d limits=%d ccdLimits=%d side=%d nonFinite=%@",
                     count, broadPhase.rawValue,
                     report.frame.p50Milliseconds, report.frame.p95Milliseconds,
                     report.prediction.p95Milliseconds, report.broadPhaseTiming.p95Milliseconds,
@@ -81,6 +82,7 @@ final class ReferenceBenchmarkTests: XCTestCase {
                     report.maximumCandidatePairs, report.maximumGeneratedContacts,
                     report.maximumPersistentContacts, report.maximumPenetration,
                     report.maximumSolverIterations, report.solverIterationLimitCount,
+                    report.ccdBudgetExhaustionCount,
                     report.sideCorrectionCount, report.hasNonFiniteState ? "yes" : "no"
                 ))
             }

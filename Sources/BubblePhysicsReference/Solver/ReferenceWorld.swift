@@ -14,7 +14,7 @@ public struct ReferenceWorld {
         configuration: ReferenceConfiguration,
         broadPhase: any ReferenceBroadPhase
     ) {
-        self.configuration = configuration
+        self.configuration = configuration.sanitized
         self.broadPhase = broadPhase
     }
 
@@ -25,6 +25,10 @@ public struct ReferenceWorld {
             bubbles.append(bubble)
             bubbles.sort { $0.id < $1.id }
         }
+    }
+
+    public mutating func updateBubble(_ bubble: ReferenceBubble) {
+        addBubble(bubble)
     }
 
     public mutating func addSegment(_ segment: ReferenceSegment, allowedSide: Float = 1) {
@@ -45,10 +49,16 @@ public struct ReferenceWorld {
         segments[index] = segment
     }
 
+    public mutating func removeSegment(id: ReferenceSegmentID) {
+        segments.removeAll { $0.id == id }
+        segmentAllowedSides.removeValue(forKey: id)
+    }
+
     public mutating func step() -> ReferenceWorldStepReport {
         let totalStart = DispatchTime.now().uptimeNanoseconds
 
         let predictionStart = DispatchTime.now().uptimeNanoseconds
+        recoverDeformations()
         for index in bubbles.indices {
             bubbles[index].previousCenter = bubbles[index].center
             bubbles[index].center = bubbles[index].center
@@ -69,15 +79,27 @@ public struct ReferenceWorld {
         var generatedContacts: [ReferenceContact] = []
         var toiTests = 0
         var sideCorrections = 0
+        var ccdBudgetExhaustions = 0
+        var generatedContactIDs: Set<ReferenceContactID> = []
 
         for pair in pairs {
             guard let idA = bubbleID(for: pair.first), let idB = bubbleID(for: pair.second),
                   let indexA = bubbleIndices[idA], let indexB = bubbleIndices[idB] else { continue }
             toiTests += 1
             applyBubbleTOI(indexA: indexA, indexB: indexB)
-            if let contact = ReferenceDiscreteContactGenerator.bubbleBubble(bubbles[indexA], bubbles[indexB]) {
-                generatedContacts.append(contact)
-            }
+            let candidate = ReferenceDiscreteContactGenerator.bubbleBubbleCandidate(bubbles[indexA], bubbles[indexB])
+            generatedContacts.append(candidate)
+            generatedContactIDs.insert(candidate.id)
+        }
+
+        // Broad phase may drop a barely separated pair; signed candidates preserve hysteresis.
+        for previous in contacts.contacts where previous.kind == .bubbleBubble && !generatedContactIDs.contains(previous.id) {
+            guard let bubbleB = previous.bubbleB,
+                  let indexA = bubbleIndices[previous.bubbleA],
+                  let indexB = bubbleIndices[bubbleB] else { continue }
+            generatedContacts.append(ReferenceDiscreteContactGenerator.bubbleBubbleCandidate(
+                bubbles[indexA], bubbles[indexB]
+            ))
         }
 
         for segment in segments {
@@ -89,14 +111,13 @@ public struct ReferenceWorld {
                     allowedSide: allowedSide,
                     configuration: configuration
                 )
+                if result.didExhaustBudget { ccdBudgetExhaustions += 1 }
                 if applySegmentTOI(result, bubbleIndex: index, segment: segment, allowedSide: allowedSide) {
                     sideCorrections += 1
                 }
-                if let contact = ReferenceDiscreteContactGenerator.bubbleSegment(
+                generatedContacts.append(ReferenceDiscreteContactGenerator.bubbleSegmentCandidate(
                     bubbles[index], segment, allowedSide: allowedSide
-                ) {
-                    generatedContacts.append(contact)
-                }
+                ))
             }
         }
         contacts.update(
@@ -113,7 +134,9 @@ public struct ReferenceWorld {
             bubbles: &bubbles,
             segments: segments,
             contacts: &contacts,
-            configuration: configuration
+            configuration: configuration,
+            candidatePairs: pairs,
+            segmentAllowedSides: segmentAllowedSides
         )
         let linearFactor = expf(-configuration.linearDamping * configuration.timeStep)
         let angularFactor = expf(-configuration.angularDamping * configuration.timeStep)
@@ -132,6 +155,7 @@ public struct ReferenceWorld {
             persistentContactCount: contacts.contacts.count,
             toiTestCount: toiTests,
             sideCorrectionCount: sideCorrections,
+            ccdBudgetExhaustionCount: ccdBudgetExhaustions,
             predictionMilliseconds: milliseconds(predictionEnd - predictionStart),
             broadPhaseMilliseconds: milliseconds(broadEnd - broadStart),
             contactMilliseconds: milliseconds(contactEnd - contactStart),
@@ -143,6 +167,19 @@ public struct ReferenceWorld {
                     || bubble.directionalDeformations.contains { !$0.depth.isFinite || !$0.pressure.isFinite }
             }
         )
+    }
+
+    private mutating func recoverDeformations() {
+        let factor = expf(-configuration.deformationRecoveryRate * configuration.timeStep)
+        for bubbleIndex in bubbles.indices {
+            bubbles[bubbleIndex].directionalDeformations = bubbles[bubbleIndex].directionalDeformations
+                .compactMap { deformation in
+                    var recovered = deformation
+                    recovered.depth *= factor
+                    recovered.pressure *= factor
+                    return recovered.depth > configuration.positionTolerance ? recovered : nil
+                }
+        }
     }
 
     public func contour(for id: ReferenceBubbleID) -> [ReferenceVector2] {

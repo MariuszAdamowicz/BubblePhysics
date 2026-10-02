@@ -5,11 +5,14 @@ public enum ReferenceEquilibriumSolver {
         bubbles: inout [ReferenceBubble],
         segments: [ReferenceSegment],
         contacts: inout ReferenceContactSet,
-        configuration: ReferenceConfiguration
+        configuration: ReferenceConfiguration,
+        candidatePairs: [ReferencePair]? = nil,
+        segmentAllowedSides: [ReferenceSegmentID: Float] = [:]
     ) -> ReferenceSolverReport {
+        let configuration = configuration.sanitized
         let bubbleIndices = Dictionary(uniqueKeysWithValues: bubbles.indices.map { (bubbles[$0].id, $0) })
         let segmentsByID = Dictionary(uniqueKeysWithValues: segments.map { ($0.id, $0) })
-        let orderedContacts = contacts.contacts.sorted { $0.id < $1.id }
+        var orderedContacts = contacts.contacts.sorted { $0.id < $1.id }
         var correctedPositions = 0
         var deformationCount = 0
         var iterations = 0
@@ -102,22 +105,41 @@ public enum ReferenceEquilibriumSolver {
                 }
             }
 
-            if largestCorrection <= configuration.positionTolerance { break }
+            let candidates = regeneratedCandidates(
+                bubbles: bubbles,
+                segments: segments,
+                existingContacts: orderedContacts,
+                candidatePairs: candidatePairs,
+                bubbleIndices: bubbleIndices,
+                segmentAllowedSides: segmentAllowedSides
+            )
+            contacts.update(
+                candidates: candidates,
+                bubbles: bubbles,
+                segments: segments,
+                configuration: configuration
+            )
+            let previousIDs = orderedContacts.map(\.id)
+            orderedContacts = contacts.contacts
+            let contactSetChanged = orderedContacts.map(\.id) != previousIDs
+            if largestCorrection <= configuration.positionTolerance && !contactSetChanged { break }
         }
 
-        var refreshed: [ReferenceContact] = []
-        var maximumPenetration: Float = 0
-        for previous in orderedContacts {
-            guard let current = refreshedContact(
-                previous, bubbles: bubbles, bubbleIndices: bubbleIndices, segmentsByID: segmentsByID
-            ) else { continue }
-            var retained = current
-            retained.age = previous.age + 1
-            retained.accumulatedCompression = max(previous.accumulatedCompression, current.penetration)
-            maximumPenetration = max(maximumPenetration, current.penetration)
-            refreshed.append(retained)
-        }
-        contacts.replaceContacts(refreshed)
+        let finalCandidates = regeneratedCandidates(
+            bubbles: bubbles,
+            segments: segments,
+            existingContacts: orderedContacts,
+            candidatePairs: candidatePairs,
+            bubbleIndices: bubbleIndices,
+            segmentAllowedSides: segmentAllowedSides
+        )
+        contacts.update(
+            candidates: finalCandidates,
+            bubbles: bubbles,
+            segments: segments,
+            configuration: configuration
+        )
+        let maximumPenetration = max(0, contacts.contacts.map(\.penetration).max() ?? 0)
 
         let converged = maximumPenetration <= configuration.positionTolerance
         return ReferenceSolverReport(
@@ -263,22 +285,57 @@ public enum ReferenceEquilibriumSolver {
         bubble.angularVelocity += lever.cross(velocityChange) / inertiaScale
     }
 
-    private static func refreshedContact(
-        _ previous: ReferenceContact,
+    private static func regeneratedCandidates(
         bubbles: [ReferenceBubble],
+        segments: [ReferenceSegment],
+        existingContacts: [ReferenceContact],
+        candidatePairs: [ReferencePair]?,
         bubbleIndices: [ReferenceBubbleID: Int],
-        segmentsByID: [ReferenceSegmentID: ReferenceSegment]
-    ) -> ReferenceContact? {
-        guard let indexA = bubbleIndices[previous.bubbleA] else { return nil }
-        switch previous.kind {
-        case .bubbleBubble:
-            guard let bubbleB = previous.bubbleB, let indexB = bubbleIndices[bubbleB] else { return nil }
-            return ReferenceDiscreteContactGenerator.bubbleBubble(bubbles[indexA], bubbles[indexB])
-        case .bubbleSegment:
-            guard let segmentID = previous.segment, let segment = segmentsByID[segmentID] else { return nil }
-            return ReferenceDiscreteContactGenerator.bubbleSegment(
-                bubbles[indexA], segment, allowedSide: previous.allowedSide ?? 1
-            )
+        segmentAllowedSides: [ReferenceSegmentID: Float]
+    ) -> [ReferenceContact] {
+        var generated: [ReferenceContact] = []
+        var pairIDs: Set<ReferencePair> = []
+
+        if let candidatePairs { pairIDs.formUnion(candidatePairs) }
+        for contact in existingContacts where contact.kind == .bubbleBubble {
+            guard let bubbleB = contact.bubbleB else { continue }
+            pairIDs.insert(ReferencePair(
+                .init(rawValue: contact.bubbleA.rawValue),
+                .init(rawValue: bubbleB.rawValue)
+            ))
         }
+        for pair in pairIDs.sorted() {
+            let idA = ReferenceBubbleID(rawValue: pair.first.rawValue)
+            let idB = ReferenceBubbleID(rawValue: pair.second.rawValue)
+            guard let indexA = bubbleIndices[idA], let indexB = bubbleIndices[idB] else { continue }
+            generated.append(ReferenceDiscreteContactGenerator.bubbleBubbleCandidate(
+                bubbles[indexA], bubbles[indexB]
+            ))
+        }
+
+        let segmentsByID = Dictionary(uniqueKeysWithValues: segments.map { ($0.id, $0) })
+        var segmentKeys: Set<ReferenceContactID> = []
+        if candidatePairs != nil {
+            for segment in segments {
+                for bubble in bubbles {
+                    let contact = ReferenceDiscreteContactGenerator.bubbleSegmentCandidate(
+                        bubble, segment, allowedSide: segmentAllowedSides[segment.id] ?? 1
+                    )
+                    generated.append(contact)
+                    segmentKeys.insert(contact.id)
+                }
+            }
+        }
+        for previous in existingContacts where previous.kind == .bubbleSegment && !segmentKeys.contains(previous.id) {
+            guard let segmentID = previous.segment,
+                  let segment = segmentsByID[segmentID],
+                  let index = bubbleIndices[previous.bubbleA] else { continue }
+            generated.append(ReferenceDiscreteContactGenerator.bubbleSegmentCandidate(
+                bubbles[index], segment,
+                allowedSide: segmentAllowedSides[segmentID] ?? previous.allowedSide ?? 1
+            ))
+        }
+        return generated
     }
+
 }

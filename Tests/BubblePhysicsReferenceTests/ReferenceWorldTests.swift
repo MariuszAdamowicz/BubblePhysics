@@ -101,6 +101,74 @@ final class ReferenceWorldTests: XCTestCase {
         XCTAssertFalse(contour.isEmpty)
     }
 
+    func testInactiveDeformationRecoversTowardTargetRadius() throws {
+        var world = ReferenceWorld(configuration: .default, broadPhase: SweepAndPruneBroadPhase())
+        world.addBubble(try bubbleForRecovery(id: 1, x: 9))
+        world.addBubble(try bubbleForRecovery(id: 2, x: 18))
+        world.addSegment(.staticSegment(id: .init(rawValue: 1), a: .init(x: 0, y: -100), b: .init(x: 0, y: 100)), allowedSide: -1)
+        _ = world.step()
+        let compressed = world.bubbles[0].directionalDeformations.map(\.depth).max() ?? 0
+        XCTAssertGreaterThan(compressed, 0)
+
+        world.removeSegment(id: .init(rawValue: 1))
+        world.updateBubble(try ReferenceBubble(
+            id: .init(rawValue: 2), center: .init(x: 80, y: 0), mass: 1, targetRadius: 10
+        ))
+        for _ in 0..<30 { _ = world.step() }
+        let recovered = world.bubbles[0].directionalDeformations.map(\.depth).max() ?? 0
+        XCTAssertLessThan(recovered, compressed * 0.1)
+    }
+
+    func testInvalidConfigurationIsSanitizedAtWorldBoundary() throws {
+        var invalid = ReferenceConfiguration.default
+        invalid.timeStep = 0
+        invalid.solverIterations = -4
+        invalid.toiIterationBudget = -2
+        invalid.maxContourSegmentLength = 0
+        var world = ReferenceWorld(configuration: invalid, broadPhase: SweepAndPruneBroadPhase())
+        world.addBubble(try bubbleForRecovery(id: 1, x: 0))
+        let report = world.step()
+        XCTAssertFalse(report.hasNonFiniteState)
+        XCTAssertFalse(world.contour(for: .init(rawValue: 1)).isEmpty)
+    }
+
+    func testWorldPreservesContactHysteresisOutsideBroadPhaseOverlap() throws {
+        var world = ReferenceWorld(configuration: .default, broadPhase: SweepAndPruneBroadPhase())
+        world.addBubble(try bubbleForRecovery(id: 1, x: 0))
+        world.addBubble(try bubbleForRecovery(id: 2, x: 19.998))
+        _ = world.step()
+        XCTAssertEqual(world.contacts.contacts.count, 1)
+        world.updateBubble(try bubbleForRecovery(id: 1, x: 0))
+        world.updateBubble(try bubbleForRecovery(id: 2, x: 20.001))
+
+        _ = world.step()
+
+        let retained = try XCTUnwrap(world.contacts.contacts.first)
+        XCTAssertLessThan(retained.penetration, 0)
+    }
+
+    func testWorldReportsExhaustedCCDBudget() throws {
+        var configuration = ReferenceConfiguration.default
+        configuration.toiIterationBudget = 1
+        var world = ReferenceWorld(configuration: configuration, broadPhase: SweepAndPruneBroadPhase())
+        world.addBubble(try ReferenceBubble(
+            id: .init(rawValue: 1), center: .init(x: 2, y: 2), mass: 1, targetRadius: 0.5
+        ))
+        world.addSegment(.kinematicSegment(
+            id: .init(rawValue: 1),
+            previousA: .zero, previousB: .init(x: 4, y: 0),
+            currentA: .zero, currentB: .init(x: 0, y: 4)
+        ), allowedSide: 1)
+
+        let report = world.step()
+
+        XCTAssertEqual(report.ccdBudgetExhaustionCount, 1)
+    }
+
+    private func bubbleForRecovery(id: Int, x: Float) throws -> ReferenceBubble {
+        try ReferenceBubble(id: .init(rawValue: id), center: .init(x: x, y: 0), mass: 1, targetRadius: 10)
+    }
+
     private func makeChainWorld() throws -> ReferenceWorld {
         var world = ReferenceWorld(configuration: .default, broadPhase: SweepAndPruneBroadPhase())
         world.addBubble(try ReferenceBubble(id: .init(rawValue: 1), center: .init(x: 0, y: 0), velocity: .init(x: 2, y: 0), mass: 1, targetRadius: 10))
