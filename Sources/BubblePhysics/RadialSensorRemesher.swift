@@ -1,6 +1,15 @@
 import Foundation
 
 public enum RadialSensorRemesher {
+    public static func maximumSegmentLength(in state: RadialBubbleState) -> Float {
+        let points = state.surfacePoints
+        guard points.count > 1 else { return 0 }
+        return points.indices.reduce(Float.zero) { maximum, index in
+            let edge = points[(index + 1) % points.count] - points[index]
+            return max(maximum, edge.dot(edge).squareRoot())
+        }
+    }
+
     public static func requiredCount(
         for state: RadialBubbleState,
         maxSegmentLength: Float
