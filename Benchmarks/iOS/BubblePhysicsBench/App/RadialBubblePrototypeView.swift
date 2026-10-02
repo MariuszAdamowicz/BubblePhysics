@@ -26,14 +26,18 @@ struct RadialBubblePrototypeView: UIViewRepresentable {
 
 @MainActor final class RadialBubblePrototypeCoordinator: NSObject, MTKViewDelegate {
     private weak var model: PrototypeViewModel?
-    private var simulation: MetalRadialSimulation?
-    private var renderer: MetalRadialRenderer?
+    private var simulation: MetalRadialWorldSimulation?
+    private var renderer: MetalRadialWorldRenderer?
     private var queue: MTLCommandQueue?
     private var generation = -1
     private var start = CACurrentMediaTime()
     private var telemetry = FrameTelemetry()
     private var lastPublish = 0.0
     private var frameInFlight = false
+    private var scene: RadialDiagnosticScene?
+    private var targetRadii: [BubbleID: Float] = [:]
+    private var activatedBubbleCount = 0
+    private var frameIndex = 0
 
     init(model: PrototypeViewModel) {
         self.model = model
@@ -42,11 +46,10 @@ struct RadialBubblePrototypeView: UIViewRepresentable {
     func attach(_ view: MTKView) {
         guard let device = view.device else { return }
         queue = device.makeCommandQueue()
-        renderer = try? MetalRadialRenderer(
+        renderer = try? MetalRadialWorldRenderer(
             device: device,
             pixelFormat: view.colorPixelFormat,
-            worldBounds: PrototypeSceneFactory.bounds,
-            label: "2"
+            worldBounds: RadialDiagnosticSceneFactory.bounds
         )
         rebuild(device)
     }
@@ -59,18 +62,22 @@ struct RadialBubblePrototypeView: UIViewRepresentable {
 
     private func rebuild(_ device: MTLDevice) {
         do {
-            let state = RadialBubbleState.collapsed(
-                id: BubbleID(rawValue: 1),
-                center: Vector2(x: 187.5, y: 406),
-                targetRadius: 150,
-                maxSegmentLength: 8,
-                mass: 20
-            )
-            simulation = try MetalRadialSimulation(device: device, state: state)
+            let scene = try RadialDiagnosticSceneFactory.make()
+            let simulation = try MetalRadialWorldSimulation(device: device, world: scene.world)
+            targetRadii = Dictionary(uniqueKeysWithValues: scene.world.bubbles.map { ($0.id, $0.targetRadius) })
+            for bubble in scene.world.bubbles { simulation.setTargetRadius(0, for: bubble.id) }
+            if let first = scene.world.bubbles.first {
+                simulation.setTargetRadius(targetRadii[first.id] ?? 0, for: first.id)
+                activatedBubbleCount = 1
+            }
+            try renderer?.rebuildScene(labels: scene.labels)
+            self.scene = scene
+            self.simulation = simulation
             telemetry.reset()
             model?.telemetry = telemetry.snapshot
             model?.errorMessage = nil
             start = CACurrentMediaTime()
+            frameIndex = 0
         } catch {
             model?.errorMessage = "Błąd prototypu radialnego: \(error)"
         }
@@ -96,13 +103,19 @@ struct RadialBubblePrototypeView: UIViewRepresentable {
                 isPaused: model.trianglePaused
             )
             let triangle = makeTriangle(state: triangleState)
+            activateNextBubbleIfNeeded(elapsed: CACurrentMediaTime() - start, simulation: simulation)
+            let worldBeforeStep = simulation.world
+            let substeps = MetalRadialWorldSimulation.substepCount(
+                for: worldBeforeStep, polygons: [triangle], deltaTime: 1 / 60
+            )
             let frame = try simulation.encodeStep(
-                bounds: PrototypeSceneFactory.bounds,
+                bounds: scene?.bounds ?? RadialDiagnosticSceneFactory.bounds,
                 polygons: [triangle],
-                deltaTime: 1 / 60,
+                deltaTime: 1 / 120,
                 commandBuffer: command
             )
             let vertices = triangle.worldVertices.map { SIMD2($0.x, $0.y) }
+            let renderBegan = CACurrentMediaTime()
             _ = try renderer.encode(
                 frame: frame,
                 polygonVertices: vertices,
@@ -111,6 +124,7 @@ struct RadialBubblePrototypeView: UIViewRepresentable {
                 drawableSize: view.drawableSize,
                 commandBuffer: command
             )
+            let renderMilliseconds = (CACurrentMediaTime() - renderBegan) * 1_000
             command.present(drawable)
             command.addCompletedHandler { [weak self] completed in
                 Task { @MainActor in
@@ -118,7 +132,9 @@ struct RadialBubblePrototypeView: UIViewRepresentable {
                         simulation: simulation,
                         frame: frame,
                         command: completed,
-                        began: began
+                        began: began,
+                        renderMilliseconds: renderMilliseconds,
+                        substeps: substeps
                     )
                 }
             }
@@ -130,38 +146,47 @@ struct RadialBubblePrototypeView: UIViewRepresentable {
     }
 
     private func complete(
-        simulation: MetalRadialSimulation,
-        frame: MetalRadialFrameResources,
+        simulation: MetalRadialWorldSimulation,
+        frame: MetalRadialWorldFrameResources,
         command: MTLCommandBuffer,
-        began: Double
+        began: Double,
+        renderMilliseconds: Double,
+        substeps: Int
     ) {
         defer { frameInFlight = false }
         do {
             try simulation.complete(frame: frame, commandBuffer: command)
             let milliseconds = (CACurrentMediaTime() - began) * 1_000
-            let state = simulation.state
-            let radial = RadialFrameMetrics(
-                state: state,
+            frameIndex += 1
+            let decisions = RadialWorldRemesher.plan(
+                world: simulation.world, policy: .default, frameIndex: frameIndex
+            )
+            if !decisions.isEmpty { try simulation.applyRemesh(decisions) }
+            let state = simulation.world
+            let radial = RadialWorldFrameMetrics(
+                world: state,
                 frame: frame,
-                gpuFrameMilliseconds: milliseconds
+                gpuFrameMilliseconds: milliseconds,
+                remeshOperationCount: decisions.count,
+                substepCount: substeps
             )
             telemetry.record(
                 milliseconds: milliseconds,
                 timings: .init(
-                    contourMilliseconds: milliseconds,
+                    contourMilliseconds: max(0, milliseconds - renderMilliseconds),
                     remeshingMilliseconds: 0,
-                    renderingMilliseconds: 0
+                    renderingMilliseconds: renderMilliseconds
                 ),
                 counters: .init(
-                    particleCount: state.sensors.count,
-                    segmentCount: state.sensors.count,
-                    candidatePairCount: 0,
-                    contactCount: frame.contactCount,
-                    remeshOperationCount: 0,
+                    particleCount: state.totalSensorCount,
+                    segmentCount: state.totalSensorCount,
+                    candidatePairCount: frame.candidatePairCount,
+                    contactCount: frame.contactCount + frame.pairContactCount,
+                    remeshOperationCount: decisions.count,
                     didOverflow: radial.didOverflow,
                     didEncounterNonFinite: radial.didEncounterNonFinite
                 ),
-                radial: radial
+                worldRadial: radial
             )
             let now = CACurrentMediaTime()
             if now - lastPublish > 0.25 {
@@ -170,6 +195,16 @@ struct RadialBubblePrototypeView: UIViewRepresentable {
             }
         } catch {
             model?.errorMessage = "Sesja radialna zatrzymana: \(error)"
+        }
+    }
+
+    private func activateNextBubbleIfNeeded(elapsed: Double, simulation: MetalRadialWorldSimulation) {
+        guard let scene else { return }
+        let requiredCount = min(scene.world.bubbles.count, 1 + Int(elapsed / 1.5))
+        while activatedBubbleCount < requiredCount {
+            let bubble = scene.world.bubbles[activatedBubbleCount]
+            simulation.setTargetRadius(targetRadii[bubble.id] ?? bubble.targetRadius, for: bubble.id)
+            activatedBubbleCount += 1
         }
     }
 

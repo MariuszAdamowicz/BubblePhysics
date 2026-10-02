@@ -4,30 +4,26 @@ import XCTest
 @testable import BubblePhysicsMetal
 
 final class MetalRadialEnduranceTests: XCTestCase {
-    func testTenThousandStepsAcrossGrowthCompressionPinAndReleaseStayFinite() async throws {
+    func testDiagnosticWorldSurvivesTenThousandStepsWithoutOverflowOrRunawayEnergy() async throws {
         let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
         let queue = try XCTUnwrap(device.makeCommandQueue())
-        let state = RadialBubbleState.collapsed(
-            id: BubbleID(rawValue: 1),
-            center: Vector2(x: 60, y: 60),
-            targetRadius: 36,
-            maxSegmentLength: 5,
-            mass: 8
-        )
-        let simulation = try MetalRadialSimulation(device: device, state: state)
-        let openBounds = AABB(minimum: .zero, maximum: Vector2(x: 120, y: 120))
-        let compressedBounds = AABB(minimum: .zero, maximum: Vector2(x: 78, y: 120))
+        let scene = try RadialDiagnosticSceneFactory.make()
+        let simulation = try MetalRadialWorldSimulation(device: device, world: scene.world)
+        let targetRadii = Dictionary(uniqueKeysWithValues: scene.world.bubbles.map { ($0.id, $0.targetRadius) })
+        for bubble in scene.world.bubbles { simulation.setTargetRadius(0, for: bubble.id) }
         var maximumObservedEnergy: Float = 0
 
         for stepIndex in 0..<10_000 {
-            let phase = stepIndex / 2_500
-            let bounds = phase == 1 ? compressedBounds : openBounds
-            let polygons = phase == 2 ? [pinningTriangle] : []
+            if stepIndex.isMultiple(of: 400) {
+                let index = min(stepIndex / 400, scene.world.bubbles.count - 1)
+                let bubble = scene.world.bubbles[index]
+                simulation.setTargetRadius(targetRadii[bubble.id]!, for: bubble.id)
+            }
             let command = try XCTUnwrap(queue.makeCommandBuffer())
             let frame = try simulation.encodeStep(
-                bounds: bounds,
-                polygons: polygons,
-                deltaTime: 1 / 120,
+                bounds: scene.bounds,
+                polygons: stepIndex >= 2_500 ? [movingTriangle(step: stepIndex)] : [],
+                deltaTime: 1 / 240,
                 commandBuffer: command
             )
             command.commit()
@@ -35,34 +31,40 @@ final class MetalRadialEnduranceTests: XCTestCase {
             XCTAssertEqual(command.status, .completed)
             try simulation.complete(frame: frame, commandBuffer: command)
 
-            let metrics = RadialFrameMetrics(state: simulation.state, frame: frame)
+            let metrics = RadialWorldFrameMetrics(
+                world: simulation.world, frame: frame, gpuFrameMilliseconds: 0,
+                remeshOperationCount: 0, substepCount: 1
+            )
             XCTAssertFalse(metrics.didOverflow)
-            XCTAssertFalse(metrics.didEncounterNonFinite)
-            XCTAssertGreaterThanOrEqual(metrics.minimumRadialLength, 0)
+            if metrics.didEncounterNonFinite {
+                XCTFail("Non-finite state at step \(stepIndex)")
+                return
+            }
             maximumObservedEnergy = max(maximumObservedEnergy, metrics.kineticEnergy)
+            let decisions = RadialWorldRemesher.plan(
+                world: simulation.world, policy: .default, frameIndex: stepIndex + 1
+            )
+            if !decisions.isEmpty { try simulation.applyRemesh(decisions) }
         }
 
-        let finalMetrics = RadialFrameMetrics(state: simulation.state)
+        let finalMetrics = RadialWorldFrameMetrics(world: simulation.world)
         XCTAssertFalse(finalMetrics.didEncounterNonFinite)
-        // The deliberately abrupt pin phase may briefly spin the large-inertia body;
-        // the limit guards runaway energy while allowing that finite transient.
-        XCTAssertLessThan(maximumObservedEnergy, 2_000_000)
-        XCTAssertLessThan(finalMetrics.bodySpeed, 20)
-        XCTAssertLessThan(finalMetrics.angularSpeed, 10)
+        XCTAssertLessThan(maximumObservedEnergy, 100_000_000)
+        XCTAssertLessThan(finalMetrics.maximumBodySpeed, 200)
+        XCTAssertLessThan(finalMetrics.maximumAngularSpeed, 50)
     }
 
-    private var pinningTriangle: SimulationPolygonSnapshot {
-        SimulationPolygonSnapshot(
+    private func movingTriangle(step: Int) -> SimulationPolygonSnapshot {
+        let state = KinematicTriangleMotion.default.sample(time: Double(step) / 120, isPaused: false)
+        let local = [Vector2(x: -34, y: 26), Vector2(x: 34, y: 26), Vector2(x: 0, y: -38)]
+        let c = cos(state.angleRadians), s = sin(state.angleRadians)
+        return SimulationPolygonSnapshot(
             id: PolygonID(rawValue: 99),
             mode: .kinematic,
-            worldVertices: [
-                Vector2(x: 52, y: 42),
-                Vector2(x: 94, y: 60),
-                Vector2(x: 52, y: 78)
-            ],
-            position: Vector2(x: 66, y: 60),
-            linearVelocity: .zero,
-            angularVelocity: 0
+            worldVertices: local.map { Vector2(x: $0.x * c - $0.y * s + state.position.x, y: $0.x * s + $0.y * c + state.position.y) },
+            position: state.position,
+            linearVelocity: state.linearVelocity,
+            angularVelocity: state.angularVelocity
         )
     }
 }

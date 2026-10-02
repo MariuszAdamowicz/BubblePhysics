@@ -1,4 +1,5 @@
 import XCTest
+@testable import BubblePhysics
 @testable import BubblePhysicsMetal
 
 final class FrameTelemetryTests: XCTestCase {
@@ -55,5 +56,28 @@ final class FrameTelemetryTests: XCTestCase {
         XCTAssertEqual(telemetry.snapshot.contactCount, 0)
         XCTAssertFalse(telemetry.snapshot.didOverflow)
         XCTAssertNil(telemetry.snapshot.failure)
+    }
+
+    func testSnapshotCarriesRadialWorldMetricsAndResetClearsThem() throws {
+        var telemetry = FrameTelemetry()
+        let world = try RadialWorldState(bubbles: [
+            .collapsed(id: BubbleID(rawValue: 1), center: .zero, targetRadius: 20, maxSegmentLength: 8, mass: 2),
+            .collapsed(id: BubbleID(rawValue: 2), center: Vector2(x: 10, y: 0), targetRadius: 50, maxSegmentLength: 8, mass: 4)
+        ])
+        let metrics = RadialWorldFrameMetrics(
+            world: world, gpuFrameMilliseconds: 3.5, candidatePairCount: 1,
+            environmentContactCount: 2, pairContactCount: 3, maximumPenetration: 4,
+            remeshOperationCount: 5, substepCount: 2, didOverflow: false
+        )
+
+        telemetry.record(milliseconds: 4, timings: .zero, counters: .zero, worldRadial: metrics)
+
+        XCTAssertEqual(telemetry.snapshot.worldRadial.bubbleCount, 2)
+        XCTAssertEqual(telemetry.snapshot.worldRadial.sensorCount, 16)
+        XCTAssertEqual(telemetry.snapshot.worldRadial.candidatePairCount, 1)
+        XCTAssertEqual(telemetry.snapshot.worldRadial.pairContactCount, 3)
+        XCTAssertEqual(telemetry.snapshot.worldRadial.substepCount, 2)
+        telemetry.reset()
+        XCTAssertEqual(telemetry.snapshot.worldRadial, .zero)
     }
 }

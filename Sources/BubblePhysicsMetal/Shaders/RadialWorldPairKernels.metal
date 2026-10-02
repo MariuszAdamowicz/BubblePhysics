@@ -12,17 +12,17 @@ struct PairContact {
     float4 pointNormal;
 };
 
-float cross2(float2 a, float2 b) { return a.x * b.y - a.y * b.x; }
+float radialWorldCross2(float2 a, float2 b) { return a.x * b.y - a.y * b.x; }
 
 bool segmentIntersection(
     float2 a, float2 b, float2 c, float2 d,
     thread float &t, thread float &u, thread float2 &point
 ) {
     const float2 r = b - a, s = d - c;
-    const float denominator = cross2(r, s);
+    const float denominator = radialWorldCross2(r, s);
     if (abs(denominator) <= 0.0000001f) return false;
-    t = cross2(c - a, s) / denominator;
-    u = cross2(c - a, r) / denominator;
+    t = radialWorldCross2(c - a, s) / denominator;
+    u = radialWorldCross2(c - a, r) / denominator;
     if (t < 0 || t > 1 || u < 0 || u > 1) return false;
     point = a + r * t;
     return true;
@@ -186,8 +186,8 @@ kernel void radialWorldReducePairContacts(
                 + closing * 0.5f * (a.z + b.z));
             const float2 force = normal * magnitude;
             loads[firstBubble].xy += force; loads[secondBubble].xy -= force;
-            loads[firstBubble].z += cross2(point - bodies[firstBubble].pose.xy, force);
-            loads[secondBubble].z += cross2(point - bodies[secondBubble].pose.xy, -force);
+            loads[firstBubble].z += radialWorldCross2(point - bodies[firstBubble].pose.xy, force);
+            loads[secondBubble].z += radialWorldCross2(point - bodies[secondBubble].pose.xy, -force);
             compression[fs] += penetration * (1 - ft); compression[fe] += penetration * ft;
             compression[ss] += penetration * (1 - st); compression[se] += penetration * st;
             pressure[fs] += magnitude * (1 - ft); pressure[fe] += magnitude * ft;

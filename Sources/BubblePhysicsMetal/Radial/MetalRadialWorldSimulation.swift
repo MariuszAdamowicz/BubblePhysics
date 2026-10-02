@@ -63,6 +63,19 @@ public final class MetalRadialWorldSimulation: @unchecked Sendable {
 
     public var world: RadialWorldState { unpackWorld() }
 
+    public func setTargetRadius(_ radius: Float, for id: BubbleID, restartBirth: Bool = true) {
+        guard radius >= 0, let index = templateWorld.bubbles.firstIndex(where: { $0.id == id }) else { return }
+        let bodies = resources.bodyBuffer.contents().bindMemory(
+            to: MetalRadialBody.self, capacity: resources.bubbleCount
+        )
+        bodies[index].target.x = radius
+        if restartBirth { bodies[index].target.y = 0 }
+        var bubbles = templateWorld.bubbles
+        bubbles[index].targetRadius = radius
+        if restartBirth { bubbles[index].birthProgress = 0 }
+        templateWorld = try! RadialWorldState(bubbles: bubbles)
+    }
+
     public func encodeFreeStep(
         deltaTime: Float,
         commandBuffer: MTLCommandBuffer
