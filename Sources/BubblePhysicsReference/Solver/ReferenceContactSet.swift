@@ -19,6 +19,10 @@ public struct ReferenceContactSet: Sendable, Equatable {
                 guard candidate.penetration >= -configuration.separationTolerance else { continue }
                 candidate.age = previous.age + 1
                 candidate.accumulatedCompression = previous.accumulatedCompression
+                candidate.compressionA = previous.compressionA
+                candidate.compressionB = previous.compressionB
+                candidate.pressure = previous.pressure
+                candidate.effectiveStiffness = previous.effectiveStiffness
                 updatedByID[candidate.id] = candidate
             } else if candidate.penetration > configuration.contactTolerance {
                 candidate.age = 0

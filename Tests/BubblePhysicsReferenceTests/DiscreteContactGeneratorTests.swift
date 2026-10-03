@@ -117,6 +117,22 @@ final class DiscreteContactGeneratorTests: XCTestCase {
         XCTAssertEqual(first.normal.length, 1, accuracy: 0.0001)
     }
 
+    func testNearlyCoincidentCentersProduceFiniteDeterministicGeometryAndStressState() throws {
+        let a = try bubble(id: 1, x: 0, y: 0, radius: 10)
+        let b = try bubble(id: 2, x: 0.00000001, y: 0, radius: 10)
+
+        let first = ReferenceDiscreteContactGenerator.bubbleBubbleCandidate(a, b)
+        let second = ReferenceDiscreteContactGenerator.bubbleBubbleCandidate(a, b)
+
+        XCTAssertEqual(first.normal, second.normal)
+        XCTAssertTrue(first.normal.isFinite)
+        XCTAssertTrue(first.penetration.isFinite)
+        XCTAssertTrue(first.compressionA.isFinite)
+        XCTAssertTrue(first.compressionB.isFinite)
+        XCTAssertTrue(first.pressure.isFinite)
+        XCTAssertTrue(first.effectiveStiffness.isFinite)
+    }
+
     private func bubble(id: Int, x: Float, y: Float, radius: Float) throws -> ReferenceBubble {
         try ReferenceBubble(
             id: .init(rawValue: id),

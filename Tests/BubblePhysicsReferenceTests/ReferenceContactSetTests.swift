@@ -57,6 +57,22 @@ final class ReferenceContactSetTests: XCTestCase {
         XCTAssertLessThan(set.contacts[0].penetration, 0)
     }
 
+    func testExistingContactPreservesStressState() {
+        var previous = contact(id: 12, penetration: 2)
+        previous.compressionA = 1.25
+        previous.compressionB = 0.75
+        previous.pressure = 42
+        previous.effectiveStiffness = 9
+        var set = ReferenceContactSet(contacts: [previous])
+
+        set.update(candidates: [contact(id: 12, penetration: 1)], bubbles: [], segments: [], configuration: .default)
+
+        XCTAssertEqual(set.contacts[0].compressionA, 1.25)
+        XCTAssertEqual(set.contacts[0].compressionB, 0.75)
+        XCTAssertEqual(set.contacts[0].pressure, 42)
+        XCTAssertEqual(set.contacts[0].effectiveStiffness, 9)
+    }
+
     private func contact(id: UInt64, penetration: Float) -> ReferenceContact {
         ReferenceContact(
             id: .init(rawValue: id),

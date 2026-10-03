@@ -25,6 +25,10 @@ public struct ReferenceContact: Sendable, Equatable {
     public var timeOfImpact: Float?
     public var allowedSide: Float?
     public var accumulatedCompression: Float
+    public var compressionA: Float
+    public var compressionB: Float
+    public var pressure: Float
+    public var effectiveStiffness: Float
     public var age: Int
 
     public init(
@@ -39,6 +43,10 @@ public struct ReferenceContact: Sendable, Equatable {
         timeOfImpact: Float? = nil,
         allowedSide: Float? = nil,
         accumulatedCompression: Float = 0,
+        compressionA: Float = 0,
+        compressionB: Float = 0,
+        pressure: Float = 0,
+        effectiveStiffness: Float = 0,
         age: Int = 0
     ) {
         self.id = id
@@ -52,6 +60,10 @@ public struct ReferenceContact: Sendable, Equatable {
         self.timeOfImpact = timeOfImpact
         self.allowedSide = allowedSide
         self.accumulatedCompression = accumulatedCompression
+        self.compressionA = compressionA
+        self.compressionB = compressionB
+        self.pressure = pressure
+        self.effectiveStiffness = effectiveStiffness
         self.age = age
     }
 }

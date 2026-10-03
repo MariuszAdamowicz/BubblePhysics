@@ -12,6 +12,7 @@ public struct ReferenceConfiguration: Sendable, Equatable {
     public var toiIterationBudget: Int
     public var maxContourSegmentLength: Float
     public var deformationRecoveryRate: Float
+    public var maximumContactPressure: Float
 
     public init(
         timeStep: Float = 1 / 60,
@@ -26,7 +27,8 @@ public struct ReferenceConfiguration: Sendable, Equatable {
         surfaceFriction: Float = 0.2,
         toiIterationBudget: Int = 8,
         maxContourSegmentLength: Float = 8,
-        deformationRecoveryRate: Float = 12
+        deformationRecoveryRate: Float = 12,
+        maximumContactPressure: Float = 1_000_000
     ) {
         self.timeStep = timeStep
         self.solverIterations = solverIterations
@@ -41,6 +43,7 @@ public struct ReferenceConfiguration: Sendable, Equatable {
         self.toiIterationBudget = toiIterationBudget
         self.maxContourSegmentLength = maxContourSegmentLength
         self.deformationRecoveryRate = deformationRecoveryRate
+        self.maximumContactPressure = maximumContactPressure
     }
 
     public var sanitized: ReferenceConfiguration {
@@ -59,6 +62,8 @@ public struct ReferenceConfiguration: Sendable, Equatable {
         value.maxContourSegmentLength = value.maxContourSegmentLength.isFinite && value.maxContourSegmentLength > 0
             ? value.maxContourSegmentLength : 8
         value.deformationRecoveryRate = finiteNonnegative(value.deformationRecoveryRate, fallback: 12)
+        value.maximumContactPressure = value.maximumContactPressure.isFinite && value.maximumContactPressure > 0
+            ? value.maximumContactPressure : 1_000_000
         return value
     }
 
