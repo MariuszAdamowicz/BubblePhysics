@@ -271,6 +271,35 @@ public enum ReferenceEquilibriumSolver {
                 contact.normal = normal
                 contact.pointQ = endCenters[indexA]
                     + normal * (bubbles[indexA].targetRadius - contact.compressionA)
+                let distance = delta.length
+                if distance > Float.ulpOfOne {
+                    let radiusA = bubbles[indexA].targetRadius
+                    let radiusB = bubbles[indexB].targetRadius
+                    let planeDistance: Float
+                    if distance >= abs(radiusA - radiusB) {
+                        // For two intersecting natural circles this is their exact common chord.
+                        planeDistance = (distance * distance + radiusA * radiusA - radiusB * radiusB)
+                            / (2 * distance)
+                    } else {
+                        // One natural circle contains the other. There is no radical chord, so place
+                        // a finite contact patch halfway between the two opposing radial surfaces.
+                        planeDistance = (radiusA + distance - radiusB) * 0.5
+                    }
+                    let clampedPlaneDistance = min(radiusA, max(-radiusA, planeDistance))
+                    contact.pointQ = endCenters[indexA] + normal * clampedPlaneDistance
+                    let halfSpanA = max(
+                        0, radiusA * radiusA - clampedPlaneDistance * clampedPlaneDistance
+                    ).squareRoot()
+                    let planeFromB = clampedPlaneDistance - distance
+                    let halfSpanB = max(
+                        0, radiusB * radiusB - planeFromB * planeFromB
+                    ).squareRoot()
+                    contact.contourHalfLength = min(halfSpanA, halfSpanB)
+                } else {
+                    contact.contourHalfLength = min(
+                        bubbles[indexA].targetRadius, bubbles[indexB].targetRadius
+                    )
+                }
             } else if let segmentID = original.segment, let segment = segments[segmentID] {
                 let closest = closestPoint(
                     to: endCenters[indexA], on: .init(a: segment.currentA, b: segment.currentB)
@@ -279,6 +308,7 @@ public enum ReferenceEquilibriumSolver {
                 compression = max(0, bubbles[indexA].targetRadius - closest.distanceSquared.squareRoot())
                 contact.compressionA = compression
                 contact.compressionB = 0
+                contact.contourHalfLength = nil
             } else {
                 return nil
             }

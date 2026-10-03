@@ -30,6 +30,7 @@ public struct ReferenceContact: Sendable, Equatable {
     public var pressure: Float
     public var effectiveStiffness: Float
     public var age: Int
+    public var contourHalfLength: Float?
 
     public init(
         id: ReferenceContactID,
@@ -47,7 +48,8 @@ public struct ReferenceContact: Sendable, Equatable {
         compressionB: Float = 0,
         pressure: Float = 0,
         effectiveStiffness: Float = 0,
-        age: Int = 0
+        age: Int = 0,
+        contourHalfLength: Float? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -65,5 +67,6 @@ public struct ReferenceContact: Sendable, Equatable {
         self.pressure = pressure
         self.effectiveStiffness = effectiveStiffness
         self.age = age
+        self.contourHalfLength = contourHalfLength
     }
 }

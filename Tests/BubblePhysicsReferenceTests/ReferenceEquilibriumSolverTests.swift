@@ -55,6 +55,30 @@ final class ReferenceEquilibriumSolverTests: XCTestCase {
         XCTAssertEqual(contact.pointQ.y, expectedMidpoint.y, accuracy: 1e-4)
     }
 
+    func testContainedSmallBubbleStillProducesFiniteSharedContourChord() throws {
+        var bubbles = [
+            try ReferenceBubble(
+                id: .init(rawValue: 1), center: .zero, velocity: .zero,
+                mass: 1_000, targetRadius: 10
+            ),
+            try ReferenceBubble(
+                id: .init(rawValue: 2), center: .init(x: 5, y: 0), velocity: .zero,
+                mass: 1_000, targetRadius: 3
+            ),
+        ]
+        var contacts = ReferenceContactSet(contacts: [try pair(bubbles[0], bubbles[1])])
+
+        _ = ReferenceEquilibriumSolver.solve(
+            bubbles: &bubbles, segments: [], contacts: &contacts,
+            configuration: configuration(), timeStep: 1 / 60
+        )
+
+        let contact = try XCTUnwrap(contacts.contacts.first)
+        XCTAssertGreaterThan(try XCTUnwrap(contact.contourHalfLength), 0.1)
+        XCTAssertGreaterThan(contact.pointQ.x, bubbles[1].center.x)
+        XCTAssertLessThan(contact.pointQ.x, bubbles[0].center.x + bubbles[0].targetRadius)
+    }
+
     func testOneFullStepIsCloseToTwoHalfSteps() throws {
         let wall = verticalWall(x: 0)
         var full = [try bubble(1, x: 8)]

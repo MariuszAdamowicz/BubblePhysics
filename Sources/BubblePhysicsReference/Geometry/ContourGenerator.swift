@@ -75,6 +75,22 @@ public enum ReferenceContourGenerator {
     ) -> [ReferenceContourConstraint] {
         let segmentByID = Dictionary(uniqueKeysWithValues: segments.map { ($0.id, $0) })
         return contacts.compactMap { contact -> ReferenceContourConstraint? in
+            if contact.kind == .bubbleBubble,
+               let halfLength = contact.contourHalfLength,
+               halfLength > 0 {
+                let tangent = ReferenceVector2(x: -contact.normal.y, y: contact.normal.x)
+                    .normalized(or: .init(x: 0, y: 1))
+                return .init(
+                    contactID: contact.id,
+                    pointQ: contact.pointQ,
+                    inwardNormal: contact.bubbleA == bubble.id ? -contact.normal : contact.normal,
+                    pressure: contact.pressure,
+                    finiteSegment: .init(
+                        a: contact.pointQ - tangent * halfLength,
+                        b: contact.pointQ + tangent * halfLength
+                    )
+                )
+            }
             if contact.kind == .bubbleSegment,
                let segmentID = contact.segment,
                let segment = segmentByID[segmentID] {

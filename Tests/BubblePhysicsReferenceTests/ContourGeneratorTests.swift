@@ -2,6 +2,27 @@ import XCTest
 @testable import BubblePhysicsReference
 
 final class ContourGeneratorTests: XCTestCase {
+    func testSmallBubbleCreatesOnlyFiniteSharedChordOnLargeBubble() throws {
+        let large = try ReferenceBubble(
+            id: .init(rawValue: 1), center: .zero, mass: 1, targetRadius: 10
+        )
+        let small = try ReferenceBubble(
+            id: .init(rawValue: 2), center: .init(x: 10, y: 0), mass: 1, targetRadius: 3
+        )
+        var contact = ReferenceDiscreteContactGenerator.bubbleBubbleCandidate(large, small)
+        contact.pointQ = .init(x: 9.55, y: 0)
+        contact.contourHalfLength = 2.97
+        contact.pressure = 100
+
+        let points = ReferenceContourGenerator.points(
+            for: large, contacts: [contact], configuration: configuration()
+        )
+        let flat = points.filter { abs($0.x - 9.55) < 0.02 }
+
+        XCTAssertFalse(flat.isEmpty)
+        XCTAssertLessThanOrEqual(flat.map { abs($0.y) }.max() ?? 100, 3.05)
+        XCTAssertGreaterThan(points.filter { abs($0.y) > 3.2 }.map(\.x).max() ?? 0, 9.15)
+    }
     func testVertexIndentationDoesNotExtendFiniteEdgesIntoAFullWedge() throws {
         let bubble = try ReferenceBubble(
             id: .init(rawValue: 1), center: .init(x: 0, y: -75), mass: 1, targetRadius: 78

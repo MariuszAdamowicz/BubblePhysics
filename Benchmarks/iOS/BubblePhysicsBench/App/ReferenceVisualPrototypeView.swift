@@ -80,7 +80,9 @@ struct ReferenceVisualPrototypeView: View {
 
         for bubble in snapshot.bubbles {
             guard let contour = snapshot.contours[bubble.id], contour.count >= 3 else { continue }
-            let path = smoothClosedPath(contour.map(point))
+            // The physics contour is already densely sampled and smoothed in radius space.
+            // A second quadratic interpolation can overshoot a rigid edge between samples.
+            let path = closedPath(contour.map(point))
             let hue = Double((bubble.id.rawValue * 37) % 360) / 360
             context.fill(path, with: .color(Color(hue: hue, saturation: 0.68, brightness: 0.88)))
             context.stroke(path, with: .color(.white.opacity(0.38)), lineWidth: 1.5)
@@ -115,15 +117,12 @@ struct ReferenceVisualPrototypeView: View {
         }
     }
 
-    private func smoothClosedPath(_ points: [CGPoint]) -> Path {
+    private func closedPath(_ points: [CGPoint]) -> Path {
         var path = Path()
         guard points.count >= 3 else { return path }
-        func midpoint(_ a: CGPoint, _ b: CGPoint) -> CGPoint {
-            CGPoint(x: (a.x + b.x) * 0.5, y: (a.y + b.y) * 0.5)
-        }
-        path.move(to: midpoint(points[points.count - 1], points[0]))
-        for index in points.indices {
-            path.addQuadCurve(to: midpoint(points[index], points[(index + 1) % points.count]), control: points[index])
+        path.move(to: points[0])
+        for point in points.dropFirst() {
+            path.addLine(to: point)
         }
         path.closeSubpath()
         return path
