@@ -2,6 +2,33 @@ import XCTest
 @testable import BubblePhysicsReference
 
 final class ContourGeneratorTests: XCTestCase {
+    func testVertexIndentationDoesNotExtendFiniteEdgesIntoAFullWedge() throws {
+        let bubble = try ReferenceBubble(
+            id: .init(rawValue: 1), center: .init(x: 0, y: -75), mass: 1, targetRadius: 78
+        )
+        let vertices = [
+            ReferenceVector2(x: -46, y: 34), .init(x: 46, y: 34), .init(x: 0, y: -52),
+        ]
+        let edges = vertices.indices.map { index in
+            ReferenceSegment.staticSegment(
+                id: .init(rawValue: index + 1), a: vertices[index],
+                b: vertices[(index + 1) % vertices.count], ownerID: 100
+            )
+        }
+        let contacts = edges.compactMap {
+            ReferenceDiscreteContactGenerator.bubbleSegment(bubble, $0)
+        }
+
+        let points = ReferenceContourGenerator.points(
+            for: bubble, contacts: contacts, segments: edges, configuration: configuration()
+        )
+
+        XCTAssertLessThan(points.map(\.x).min() ?? 0, -75)
+        XCTAssertGreaterThan(points.map(\.x).max() ?? 0, 75)
+        XCTAssertLessThan(points.map(\.y).min() ?? 0, -150)
+        let inside = points.filter { isInsideTriangle($0, vertices) }
+        XCTAssertTrue(inside.isEmpty, "inside points: \(inside)")
+    }
     func testPolygonVertexContactUsesBothRealEdgePlanesInsteadOfTangentAtVertex() throws {
         let bubble = try ReferenceBubble(
             id: .init(rawValue: 1), center: .init(x: 6, y: 6), mass: 1, targetRadius: 10

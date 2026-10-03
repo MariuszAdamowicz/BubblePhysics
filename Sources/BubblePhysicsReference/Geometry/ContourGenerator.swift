@@ -24,7 +24,8 @@ public enum ReferenceContourGenerator {
                 from: bubble.center,
                 direction: direction,
                 naturalRadius: bubble.targetRadius,
-                constraints: constraints
+                constraints: constraints,
+                finiteSegmentClearance: max(config.positionTolerance, config.contactTolerance * 2)
             )
             limits.append(sample.radius)
             dominant.append(sample.constraintIndex)
@@ -89,7 +90,8 @@ public enum ReferenceContourGenerator {
                     contactID: contact.id,
                     pointQ: segment.currentA,
                     inwardNormal: normal,
-                    pressure: contact.pressure
+                    pressure: contact.pressure,
+                    finiteSegment: .init(a: segment.currentA, b: segment.currentB)
                 )
             }
             let inward: ReferenceVector2
@@ -113,12 +115,22 @@ public enum ReferenceContourGenerator {
         from center: ReferenceVector2,
         direction: ReferenceVector2,
         naturalRadius: Float,
-        constraints: [ReferenceContourConstraint]
+        constraints: [ReferenceContourConstraint],
+        finiteSegmentClearance: Float = 0
     ) -> (radius: Float, constraintIndex: Int?) {
         var radius = naturalRadius
         var limitingIndex: Int?
         for index in constraints.indices {
             let constraint = constraints[index]
+            if let segment = constraint.finiteSegment,
+               let candidate = rayIntersectionDistance(
+                   origin: center, direction: direction, segment: segment
+               ), candidate < radius {
+                radius = max(0, candidate - finiteSegmentClearance)
+                limitingIndex = index
+                continue
+            }
+            guard constraint.finiteSegment == nil else { continue }
             let directionalSlope = direction.dot(constraint.inwardNormal)
             guard directionalSlope < -Float.ulpOfOne else { continue }
             let centerDistance = (center - constraint.pointQ).dot(constraint.inwardNormal)
@@ -129,6 +141,21 @@ public enum ReferenceContourGenerator {
             }
         }
         return (radius, limitingIndex)
+    }
+
+    private static func rayIntersectionDistance(
+        origin: ReferenceVector2,
+        direction: ReferenceVector2,
+        segment: ReferenceSegmentEndpoints
+    ) -> Float? {
+        let edge = segment.b - segment.a
+        let denominator = direction.cross(edge)
+        guard abs(denominator) > 1e-6 else { return nil }
+        let offset = segment.a - origin
+        let distance = offset.cross(edge) / denominator
+        let fraction = offset.cross(direction) / denominator
+        guard distance >= 0, fraction >= 0, fraction <= 1 else { return nil }
+        return distance
     }
 
     private static func localPressure(
