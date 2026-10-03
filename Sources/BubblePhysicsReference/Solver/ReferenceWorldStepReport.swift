@@ -8,6 +8,9 @@ public struct ReferenceWorldStepReport: Sendable, Equatable {
     public var ccdBudgetExhaustionCount: Int
     public var centerGuardCount: Int
     public var generatedContourPointCount: Int
+    public var eventGroupCount: Int
+    public var solverSubstepCount: Int
+    public var didReachEventGroupLimit: Bool
     public var predictionMilliseconds: Double
     public var broadPhaseMilliseconds: Double
     public var contactMilliseconds: Double
@@ -25,6 +28,9 @@ public struct ReferenceWorldStepReport: Sendable, Equatable {
         ccdBudgetExhaustionCount: Int,
         centerGuardCount: Int = 0,
         generatedContourPointCount: Int = 0,
+        eventGroupCount: Int = 0,
+        solverSubstepCount: Int = 0,
+        didReachEventGroupLimit: Bool = false,
         predictionMilliseconds: Double,
         broadPhaseMilliseconds: Double,
         contactMilliseconds: Double,
@@ -41,6 +47,9 @@ public struct ReferenceWorldStepReport: Sendable, Equatable {
         self.ccdBudgetExhaustionCount = ccdBudgetExhaustionCount
         self.centerGuardCount = centerGuardCount
         self.generatedContourPointCount = generatedContourPointCount
+        self.eventGroupCount = eventGroupCount
+        self.solverSubstepCount = solverSubstepCount
+        self.didReachEventGroupLimit = didReachEventGroupLimit
         self.predictionMilliseconds = predictionMilliseconds
         self.broadPhaseMilliseconds = broadPhaseMilliseconds
         self.contactMilliseconds = contactMilliseconds

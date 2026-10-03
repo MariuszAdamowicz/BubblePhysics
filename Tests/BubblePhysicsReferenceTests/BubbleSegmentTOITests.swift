@@ -102,6 +102,20 @@ final class BubbleSegmentTOITests: XCTestCase {
         XCTAssertTrue(result.requiresSideCorrection)
     }
 
+    func testContactAtExactIntervalEndReturnsFractionOne() throws {
+        var bubble = try stationaryBubble(x: 0, y: 3, radius: 1)
+        bubble.center = .init(x: 0, y: 1)
+        let segment = ReferenceSegment.staticSegment(
+            id: .init(rawValue: 1), a: .init(x: -2, y: 0), b: .init(x: 2, y: 0)
+        )
+
+        let result = ReferenceCCD.bubbleSegment(bubble, segment, configuration: .default)
+        guard case let .impact(fraction, _, _) = result.timeOfImpact else {
+            return XCTFail("Expected end-of-interval impact")
+        }
+        XCTAssertEqual(fraction, 1, accuracy: 1e-6)
+    }
+
     private func stationaryBubble(x: Float, y: Float, radius: Float) throws -> ReferenceBubble {
         try ReferenceBubble(id: .init(rawValue: 1), center: .init(x: x, y: y), mass: 1, targetRadius: radius)
     }

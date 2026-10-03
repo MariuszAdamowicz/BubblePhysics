@@ -45,6 +45,16 @@ final class BubbleBubbleTOITests: XCTestCase {
         XCTAssertEqual(fraction, 0.8, accuracy: 0.00001)
     }
 
+    func testContactAtExactIntervalEndReturnsFractionOne() throws {
+        let a = try bubble(id: 1, from: .zero, to: .init(x: 2, y: 0), radius: 1)
+        let b = try bubble(id: 2, from: .init(x: 4, y: 0), to: .init(x: 4, y: 0), radius: 1)
+
+        guard case let .impact(fraction, _, _) = ReferenceCCD.bubbleBubble(a, b) else {
+            return XCTFail("Expected end-of-interval impact")
+        }
+        XCTAssertEqual(fraction, 1, accuracy: 1e-6)
+    }
+
     private func bubble(
         id: Int,
         from: ReferenceVector2,
