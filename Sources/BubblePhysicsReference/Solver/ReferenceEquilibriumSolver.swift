@@ -44,14 +44,18 @@ public enum ReferenceEquilibriumSolver {
             totalPCG += pcg.iterationCount
             nonFinite = nonFinite || pcg.hasNonFiniteState
             let oldCenters = bubbles.map(\.center)
-            let oldEnergy = energy(centers: oldCenters, predicted: predicted, bubbles: bubbles, contacts: ordered,
+            let oldCandidates = energyContacts(centers: oldCenters, bubbles: bubbles, segments: segments,
+                                               existingContacts: ordered, candidatePairs: candidatePairs, indices: indices)
+            let oldEnergy = energy(centers: oldCenters, predicted: predicted, bubbles: bubbles, contacts: oldCandidates,
                                    indices: indices, segments: segmentMap, configuration: config)
             var accepted = false
             var acceptedStep: Float = 0
             for lambda: Float in [1, 0.5, 0.25, 0.125, 0.0625, 0.03125] {
                 let trial = zip(oldCenters, pcg.solution).map { $0 + $1 * lambda }
                 guard trial.allSatisfy(\.isFinite) else { continue }
-                let trialEnergy = energy(centers: trial, predicted: predicted, bubbles: bubbles, contacts: ordered,
+                let trialCandidates = energyContacts(centers: trial, bubbles: bubbles, segments: segments,
+                    existingContacts: ordered, candidatePairs: candidatePairs, indices: indices)
+                let trialEnergy = energy(centers: trial, predicted: predicted, bubbles: bubbles, contacts: trialCandidates,
                                          indices: indices, segments: segmentMap, configuration: config)
                 if trialEnergy <= oldEnergy {
                     for index in bubbles.indices { bubbles[index].center = trial[index] }
@@ -205,6 +209,19 @@ public enum ReferenceEquilibriumSolver {
 
     private static func vectorNorm(_ values: [ReferenceVector2]) -> Float {
         values.reduce(0) { $0 + $1.lengthSquared }.squareRoot()
+    }
+
+    private static func energyContacts(
+        centers: [ReferenceVector2], bubbles: [ReferenceBubble], segments: [ReferenceSegment],
+        existingContacts: [ReferenceContact], candidatePairs: [ReferencePair]?, indices: [ReferenceBubbleID: Int]
+    ) -> [ReferenceContact] {
+        var trialBubbles = bubbles
+        for index in trialBubbles.indices {
+            trialBubbles[index].center = centers[index]
+            trialBubbles[index].directionalDeformations.removeAll()
+        }
+        return regeneratedCandidates(bubbles: trialBubbles, segments: segments, existingContacts: existingContacts,
+                                     candidatePairs: candidatePairs, bubbleIndices: indices)
     }
 
     private static func regeneratedCandidates(

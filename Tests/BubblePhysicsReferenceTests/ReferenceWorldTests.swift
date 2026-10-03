@@ -111,6 +111,27 @@ final class ReferenceWorldTests: XCTestCase {
         XCTAssertGreaterThan(report.toiTestCount, 0)
     }
 
+    func testMovingTwoSidedSegmentPushesStationaryCenterBackToOriginalSide() throws {
+        var world = ReferenceWorld(configuration: .default, broadPhase: SweepAndPruneBroadPhase())
+        world.addBubble(try ReferenceBubble(id: .init(rawValue: 1), center: .zero, mass: 1, targetRadius: 0.25))
+        world.addSegment(.kinematicSegment(
+            id: .init(rawValue: 1), previousA: .init(x: -2, y: -2), previousB: .init(x: -2, y: 2),
+            currentA: .init(x: 2, y: -2), currentB: .init(x: 2, y: 2), collisionMode: .twoSided
+        ))
+
+        let report = world.step()
+        let segment = world.segments[0]
+        let previousNormal = ReferenceVector2(x: -(segment.previousB - segment.previousA).y,
+                                              y: (segment.previousB - segment.previousA).x).normalized()
+        let currentNormal = ReferenceVector2(x: -(segment.currentB - segment.currentA).y,
+                                             y: (segment.currentB - segment.currentA).x).normalized()
+        let previousSide = (.zero - segment.previousA).dot(previousNormal)
+        let currentSide = (world.bubbles[0].center - segment.currentA).dot(currentNormal)
+        XCTAssertGreaterThan(report.centerGuardCount, 0)
+        XCTAssertGreaterThanOrEqual(previousSide * currentSide, 0)
+        XCTAssertGreaterThan(abs(currentSide), 0)
+    }
+
     func testContourIsGeneratedOnlyOnRequestFromSolvedState() throws {
         var world = try makeChainWorld()
         let report = world.step()

@@ -149,6 +149,47 @@ final class ReferenceEquilibriumSolverTests: XCTestCase {
         XCTAssertEqual(reportA, reportB)
     }
 
+    func testActiveSetLineSearchDoesNotIncreaseTotalPairEnergy() throws {
+        var configuration = ReferenceConfiguration.default
+        configuration.timeStep = 1
+        var bubbles = [
+            try ReferenceBubble(id: .init(rawValue: 1), center: .init(x: 0, y: 0), mass: 1, targetRadius: 10, stiffness: 1),
+            try ReferenceBubble(id: .init(rawValue: 2), center: .init(x: 15, y: 0), mass: 1, targetRadius: 10, stiffness: 100_000_000),
+            try ReferenceBubble(id: .init(rawValue: 3), center: .init(x: 35.0001, y: 0), mass: 100, targetRadius: 10, stiffness: 100_000_000),
+        ]
+        let initial = totalPairEnergy(bubbles, alpha: configuration.nonlinearStiffening)
+        var contacts = ReferenceContactSet(contacts: [try pairContact(bubbles[0], bubbles[1])])
+        let candidates = [
+            ReferencePair(.init(rawValue: 1), .init(rawValue: 2)),
+            ReferencePair(.init(rawValue: 2), .init(rawValue: 3)),
+        ]
+
+        _ = ReferenceEquilibriumSolver.solve(bubbles: &bubbles, segments: [], contacts: &contacts,
+                                             configuration: configuration, candidatePairs: candidates)
+
+        XCTAssertLessThanOrEqual(totalPairEnergy(bubbles, alpha: configuration.nonlinearStiffening), initial + 0.001)
+    }
+
+    private func totalPairEnergy(_ bubbles: [ReferenceBubble], alpha: Float) -> Float {
+        var total: Float = 0
+        for a in bubbles.indices {
+            for b in bubbles.indices where b > a {
+                let depth = max(0, bubbles[a].targetRadius + bubbles[b].targetRadius
+                                - (bubbles[b].center - bubbles[a].center).length)
+                let stress = ReferenceDeformationLaw.solve(requiredCompression: depth,
+                    radiusA: bubbles[a].targetRadius, stiffnessA: bubbles[a].stiffness,
+                    radiusB: bubbles[b].targetRadius, stiffnessB: bubbles[b].stiffness,
+                    nonlinearStiffening: alpha)
+                for (d, bubble) in [(stress.compressionA, bubbles[a]), (stress.compressionB, bubbles[b])] {
+                    let d2 = d * d
+                    total += 0.5 * bubble.stiffness * d2
+                        + 0.25 * bubble.stiffness * alpha * d2 * d2 / (bubble.targetRadius * bubble.targetRadius)
+                }
+            }
+        }
+        return total
+    }
+
     func testKinematicVelocityUsesUnitsPerSecond() {
         let segment = ReferenceSegment.kinematicSegment(
             id: .init(rawValue: 9),
