@@ -1,260 +1,306 @@
-import Foundation
-
 public enum ReferenceEquilibriumSolver {
     public static func solve(
-        bubbles: inout [ReferenceBubble], segments: [ReferenceSegment], contacts: inout ReferenceContactSet,
-        configuration: ReferenceConfiguration, candidatePairs: [ReferencePair]? = nil
+        bubbles: inout [ReferenceBubble],
+        segments: [ReferenceSegment],
+        contacts: inout ReferenceContactSet,
+        configuration: ReferenceConfiguration,
+        candidatePairs: [ReferencePair]? = nil,
+        timeStep: Float? = nil
     ) -> ReferenceSolverReport {
         let config = configuration.sanitized
+        let dt = validTimeStep(timeStep ?? config.timeStep, fallback: config.timeStep)
+        let startCenters = bubbles.map(\.center)
+        let startVelocities = bubbles.map(\.velocity)
+        let masses = bubbles.map(\.mass)
+        let radii = bubbles.map(\.targetRadius)
         let indices = Dictionary(uniqueKeysWithValues: bubbles.indices.map { (bubbles[$0].id, $0) })
         let segmentMap = Dictionary(uniqueKeysWithValues: segments.map { ($0.id, $0) })
-        let predicted = bubbles.map(\.center)
-        var ordered = contacts.contacts
-        var totalPCG = 0
+        let newtonLimit = min(4, max(1, config.solverIterations))
+        let pcgLimit = min(16, max(1, config.pcgIterationLimit))
+
+        var endCenters = bubbles.indices.map { startCenters[$0] + startVelocities[$0] * dt }
+        var activeContacts = refreshedContacts(
+            previous: contacts.contacts, endCenters: endCenters, endVelocities: startVelocities,
+            bubbles: bubbles, segments: segments, candidatePairs: candidatePairs,
+            indices: indices, configuration: config
+        )
         var initialResidual: Float = 0
         var finalResidual: Float = 0
-        var maxRelative: Float = 0
-        var lineSearchFailures = 0
+        var totalPCG = 0
         var iterations = 0
+        var lineSearchFailures = 0
         var nonFinite = false
+        var converged = false
 
-        for outer in 0..<config.solverIterations {
-            iterations = outer + 1
-            let previousIDs = ordered.map(\.id)
-            let build = buildStressState(bubbles: &bubbles, contacts: ordered, indices: indices,
-                                         segments: segmentMap, configuration: config)
-            ordered = build.contacts
-            maxRelative = max(maxRelative, build.maximumRelativeDeformation)
-            let system = ReferenceStressSystem(
-                masses: bubbles.map(\.mass), predictedCenters: predicted, linearizationCenters: bubbles.map(\.center),
-                timeStep: config.timeStep, contributions: build.contributions
+        for iteration in 0..<newtonLimit {
+            iterations = iteration + 1
+            let system = dynamicSystem(
+                startCenters: startCenters, startVelocities: startVelocities,
+                masses: masses, radii: radii, contacts: activeContacts,
+                indices: indices, timeStep: dt, configuration: config
             )
-            let residual = system.residual(centers: bubbles.map(\.center))
+            let residual = system.residual(endCenters: endCenters)
             let residualNorm = vectorNorm(residual)
-            if outer == 0 { initialResidual = residualNorm }
+            if iteration == 0 { initialResidual = residualNorm }
             finalResidual = residualNorm
-            guard residualNorm.isFinite else { nonFinite = true; break }
-            if residualNorm <= config.stressTolerance && previousIDs == ordered.map(\.id) { break }
+            guard residualNorm.isFinite, endCenters.allSatisfy(\.isFinite) else {
+                nonFinite = true
+                break
+            }
+            if residualNorm <= config.stressTolerance {
+                converged = true
+                break
+            }
 
             let pcg = ReferencePCGSolver.solve(
-                rightHandSide: residual.map { -$0 }, apply: system.applyJacobian,
-                inverseDiagonal: system.inverseDiagonalPreconditioner(), tolerance: config.pcgTolerance,
-                iterationLimit: config.pcgIterationLimit
+                rightHandSide: residual.map { -$0 },
+                apply: { system.applyJacobian(at: endCenters, to: $0) },
+                inverseDiagonal: system.inverseDiagonalPreconditioner(at: endCenters),
+                tolerance: config.pcgTolerance,
+                iterationLimit: pcgLimit
             )
             totalPCG += pcg.iterationCount
             nonFinite = nonFinite || pcg.hasNonFiniteState
-            let oldCenters = bubbles.map(\.center)
-            let oldCandidates = energyContacts(centers: oldCenters, bubbles: bubbles, segments: segments,
-                                               existingContacts: ordered, candidatePairs: candidatePairs, indices: indices)
-            let oldEnergy = energy(centers: oldCenters, predicted: predicted, bubbles: bubbles, contacts: oldCandidates,
-                                   indices: indices, segments: segmentMap, configuration: config)
-            var accepted = false
-            var acceptedStep: Float = 0
+
+            var acceptedCenters: [ReferenceVector2]?
+            var acceptedContacts = activeContacts
+            var acceptedNorm = residualNorm
             for lambda: Float in [1, 0.5, 0.25, 0.125, 0.0625, 0.03125] {
-                let trial = zip(oldCenters, pcg.solution).map { $0 + $1 * lambda }
+                let trial = zip(endCenters, pcg.solution).map { $0 + $1 * lambda }
                 guard trial.allSatisfy(\.isFinite) else { continue }
-                let trialCandidates = energyContacts(centers: trial, bubbles: bubbles, segments: segments,
-                    existingContacts: ordered, candidatePairs: candidatePairs, indices: indices)
-                let trialEnergy = energy(centers: trial, predicted: predicted, bubbles: bubbles, contacts: trialCandidates,
-                                         indices: indices, segments: segmentMap, configuration: config)
-                if trialEnergy <= oldEnergy {
-                    for index in bubbles.indices { bubbles[index].center = trial[index] }
-                    accepted = true
-                    acceptedStep = zip(oldCenters, trial).map { ($1 - $0).length }.max() ?? 0
+                let trialVelocities = velocities(
+                    startCenters: startCenters, startVelocities: startVelocities,
+                    endCenters: trial, timeStep: dt
+                )
+                let trialContacts = refreshedContacts(
+                    previous: activeContacts, endCenters: trial, endVelocities: trialVelocities,
+                    bubbles: bubbles, segments: segments, candidatePairs: candidatePairs,
+                    indices: indices, configuration: config
+                )
+                let trialSystem = dynamicSystem(
+                    startCenters: startCenters, startVelocities: startVelocities,
+                    masses: masses, radii: radii, contacts: trialContacts,
+                    indices: indices, timeStep: dt, configuration: config
+                )
+                let trialNorm = vectorNorm(trialSystem.residual(endCenters: trial))
+                if trialNorm.isFinite, trialNorm < acceptedNorm {
+                    acceptedCenters = trial
+                    acceptedContacts = trialContacts
+                    acceptedNorm = trialNorm
                     break
                 }
             }
-            if !accepted { lineSearchFailures += 1 }
 
-            let candidates = regeneratedCandidates(bubbles: bubbles, segments: segments, existingContacts: ordered,
-                                                   candidatePairs: candidatePairs, bubbleIndices: indices)
-            contacts.update(candidates: candidates, bubbles: bubbles, segments: segments, configuration: config)
-            ordered = contacts.contacts
-            if previousIDs == ordered.map(\.id) && acceptedStep <= config.positionTolerance
-                && residualNorm <= config.stressTolerance { break }
+            guard let acceptedCenters else {
+                lineSearchFailures += 1
+                break
+            }
+            endCenters = acceptedCenters
+            activeContacts = acceptedContacts
+            finalResidual = acceptedNorm
         }
 
-        let finalBuild = buildStressState(bubbles: &bubbles, contacts: ordered, indices: indices,
-                                          segments: segmentMap, configuration: config)
-        ordered = finalBuild.contacts
-        contacts.replaceContacts(ordered)
-        maxRelative = max(maxRelative, finalBuild.maximumRelativeDeformation)
-        let finalSystem = ReferenceStressSystem(
-            masses: bubbles.map(\.mass), predictedCenters: predicted, linearizationCenters: bubbles.map(\.center),
-            timeStep: config.timeStep, contributions: finalBuild.contributions
+        let endVelocities = velocities(
+            startCenters: startCenters, startVelocities: startVelocities,
+            endCenters: endCenters, timeStep: dt
         )
-        finalResidual = vectorNorm(finalSystem.residual(centers: bubbles.map(\.center)))
-        nonFinite = nonFinite || !finalResidual.isFinite || bubbles.contains { !$0.center.isFinite }
-        let maximumPenetration = max(0, ordered.map(\.penetration).max() ?? 0)
-        let converged = finalResidual <= config.stressTolerance && !nonFinite
+        let finalContacts = annotatedContacts(
+            activeContacts, endCenters: endCenters, bubbles: bubbles,
+            segments: segmentMap, indices: indices, configuration: config
+        )
+        contacts.replaceContacts(finalContacts)
+        for index in bubbles.indices {
+            bubbles[index].center = endCenters[index]
+            bubbles[index].velocity = endVelocities[index]
+            bubbles[index].directionalDeformations.removeAll(keepingCapacity: true)
+        }
+
+        let finalSystem = dynamicSystem(
+            startCenters: startCenters, startVelocities: startVelocities,
+            masses: masses, radii: radii, contacts: finalContacts,
+            indices: indices, timeStep: dt, configuration: config
+        )
+        finalResidual = vectorNorm(finalSystem.residual(endCenters: endCenters))
+        converged = converged || finalResidual <= config.stressTolerance
+        nonFinite = nonFinite || !finalResidual.isFinite
+            || bubbles.contains { !$0.center.isFinite || !$0.velocity.isFinite }
+        let maximumCompression = finalContacts.map(\.accumulatedCompression).max() ?? 0
+        let maximumRelative = finalContacts.compactMap { contact -> Float? in
+            guard let index = indices[contact.bubbleA] else { return nil }
+            return contact.compressionA / max(bubbles[index].targetRadius, Float.ulpOfOne)
+        }.max() ?? 0
+
         return ReferenceSolverReport(
-            iterations: iterations, maximumPenetration: maximumPenetration, converged: converged,
-            didReachIterationLimit: !converged && iterations >= config.solverIterations,
-            positionCorrectionCount: 0, deformationCount: bubbles.reduce(0) { $0 + $1.directionalDeformations.count },
-            pcgIterationCount: totalPCG, initialResidualNorm: initialResidual, finalResidualNorm: finalResidual,
-            maximumRelativeDeformation: maxRelative, lineSearchFailureCount: lineSearchFailures,
+            iterations: iterations,
+            maximumPenetration: maximumCompression,
+            converged: converged && !nonFinite,
+            didReachIterationLimit: !converged && iterations >= newtonLimit,
+            positionCorrectionCount: 0,
+            deformationCount: 0,
+            pcgIterationCount: totalPCG,
+            initialResidualNorm: initialResidual,
+            finalResidualNorm: finalResidual,
+            maximumRelativeDeformation: maximumRelative,
+            lineSearchFailureCount: lineSearchFailures,
             hasNonFiniteState: nonFinite
         )
     }
 
-    private struct StressBuild {
-        var contacts: [ReferenceContact]
-        var contributions: [ReferenceStressContribution]
-        var maximumRelativeDeformation: Float
-    }
-
-    private static func buildStressState(
-        bubbles: inout [ReferenceBubble], contacts: [ReferenceContact], indices: [ReferenceBubbleID: Int],
-        segments: [ReferenceSegmentID: ReferenceSegment], configuration: ReferenceConfiguration
-    ) -> StressBuild {
-        for index in bubbles.indices { bubbles[index].directionalDeformations.removeAll(keepingCapacity: true) }
-        var updated: [ReferenceContact] = []
-        var contributions: [ReferenceStressContribution] = []
-        var maximumRelative: Float = 0
-        for var contact in contacts.sorted(by: { $0.id < $1.id }) {
-            guard let indexA = indices[contact.bubbleA] else { continue }
-            switch contact.kind {
-            case .bubbleBubble:
-                guard let idB = contact.bubbleB, let indexB = indices[idB] else { continue }
-                let delta = bubbles[indexB].center - bubbles[indexA].center
-                let fallback = bubbles[indexA].id <= bubbles[indexB].id
-                    ? ReferenceVector2(x: 1, y: 0) : ReferenceVector2(x: -1, y: 0)
-                let normal = delta.normalized(or: fallback)
-                let compression = max(0, bubbles[indexA].targetRadius + bubbles[indexB].targetRadius - delta.length)
-                guard compression > configuration.contactTolerance || contact.age > 0 else { continue }
-                var stress = ReferenceDeformationLaw.solve(
-                    requiredCompression: compression, radiusA: bubbles[indexA].targetRadius,
-                    stiffnessA: bubbles[indexA].stiffness, radiusB: bubbles[indexB].targetRadius,
-                    stiffnessB: bubbles[indexB].stiffness, nonlinearStiffening: configuration.nonlinearStiffening)
-                stress.pressure = min(stress.pressure, configuration.maximumContactPressure)
-                contact.normal = normal
-                if compression > configuration.contactTolerance { contact.penetration = compression }
-                apply(stress, to: &contact)
-                addDeformation(&bubbles[indexA], contact: contact, direction: normal, depth: stress.compressionA)
-                addDeformation(&bubbles[indexB], contact: contact, direction: -normal, depth: stress.compressionB)
-                contributions.append(.init(indexA: indexA, indexB: indexB, normal: normal,
-                                           pressure: stress.pressure, effectiveStiffness: stress.effectiveStiffness))
-                maximumRelative = max(maximumRelative, stress.compressionA / bubbles[indexA].targetRadius,
-                                      stress.compressionB / bubbles[indexB].targetRadius)
-            case .bubbleSegment:
-                guard let segmentID = contact.segment, let segment = segments[segmentID] else { continue }
-                let candidate = ReferenceDiscreteContactGenerator.bubbleSegmentCandidate(bubbles[indexA], segment)
-                let compression = max(0, bubbles[indexA].targetRadius - (bubbles[indexA].center - candidate.pointQ).length)
-                guard compression > configuration.contactTolerance || contact.age > 0 else { continue }
-                var stress = ReferenceDeformationLaw.solve(requiredCompression: compression,
-                    radiusA: bubbles[indexA].targetRadius, stiffnessA: bubbles[indexA].stiffness,
-                    nonlinearStiffening: configuration.nonlinearStiffening)
-                stress.pressure = min(stress.pressure, configuration.maximumContactPressure)
-                contact.normal = candidate.normal; contact.pointQ = candidate.pointQ
-                if compression > configuration.contactTolerance { contact.penetration = compression }
-                apply(stress, to: &contact)
-                addDeformation(&bubbles[indexA], contact: contact, direction: -candidate.normal, depth: stress.compressionA)
-                contributions.append(.init(indexA: indexA, indexB: nil, normal: -candidate.normal,
-                                           pressure: stress.pressure, effectiveStiffness: stress.effectiveStiffness))
-                maximumRelative = max(maximumRelative, stress.compressionA / bubbles[indexA].targetRadius)
-            }
-            updated.append(contact)
-        }
-        return .init(contacts: updated, contributions: contributions, maximumRelativeDeformation: maximumRelative)
-    }
-
-    private static func apply(_ stress: ReferenceContactStress, to contact: inout ReferenceContact) {
-        contact.compressionA = stress.compressionA; contact.compressionB = stress.compressionB
-        contact.pressure = stress.pressure; contact.effectiveStiffness = stress.effectiveStiffness
-        contact.accumulatedCompression = stress.compressionA + stress.compressionB
-    }
-
-    private static func addDeformation(
-        _ bubble: inout ReferenceBubble, contact: ReferenceContact, direction: ReferenceVector2, depth: Float
-    ) {
-        guard depth > 0 else { return }
-        bubble.directionalDeformations.append(.init(contactID: contact.id, direction: direction,
-            depth: min(depth, bubble.targetRadius), angularWidth: .pi / 2, pressure: contact.pressure))
-    }
-
-    private static func energy(
-        centers: [ReferenceVector2], predicted: [ReferenceVector2], bubbles: [ReferenceBubble],
-        contacts: [ReferenceContact], indices: [ReferenceBubbleID: Int], segments: [ReferenceSegmentID: ReferenceSegment],
+    private static func dynamicSystem(
+        startCenters: [ReferenceVector2],
+        startVelocities: [ReferenceVector2],
+        masses: [Float],
+        radii: [Float],
+        contacts: [ReferenceContact],
+        indices: [ReferenceBubbleID: Int],
+        timeStep: Float,
         configuration: ReferenceConfiguration
-    ) -> Float {
-        let invDt2 = 1 / max(configuration.timeStep * configuration.timeStep, Float.ulpOfOne)
-        var total: Float = 0
-        for index in centers.indices {
-            total += 0.5 * bubbles[index].mass * invDt2 * (centers[index] - predicted[index]).lengthSquared
-        }
-        for contact in contacts {
-            guard let a = indices[contact.bubbleA] else { continue }
-            if let idB = contact.bubbleB, let b = indices[idB] {
-                let depth = max(0, bubbles[a].targetRadius + bubbles[b].targetRadius - (centers[b] - centers[a]).length)
-                let stress = ReferenceDeformationLaw.solve(requiredCompression: depth,
-                    radiusA: bubbles[a].targetRadius, stiffnessA: bubbles[a].stiffness,
-                    radiusB: bubbles[b].targetRadius, stiffnessB: bubbles[b].stiffness,
-                    nonlinearStiffening: configuration.nonlinearStiffening)
-                total += deformationEnergy(stress.compressionA, bubbles[a], configuration.nonlinearStiffening)
-                    + deformationEnergy(stress.compressionB, bubbles[b], configuration.nonlinearStiffening)
-            } else if let segmentID = contact.segment, let segment = segments[segmentID] {
-                let q = closestPoint(to: centers[a], on: .init(a: segment.currentA, b: segment.currentB)).point
-                total += deformationEnergy(max(0, bubbles[a].targetRadius - (centers[a] - q).length),
-                                           bubbles[a], configuration.nonlinearStiffening)
-            }
-        }
-        return total.isFinite ? total : Float.greatestFiniteMagnitude
+    ) -> ReferenceDynamicSystem {
+        ReferenceDynamicSystem(
+            startCenters: startCenters,
+            startVelocities: startVelocities,
+            masses: masses,
+            radii: radii,
+            contacts: contacts.compactMap { contact in
+                guard let indexA = indices[contact.bubbleA] else { return nil }
+                let indexB = contact.bubbleB.flatMap { indices[$0] }
+                return ReferenceDynamicContact(
+                    indexA: indexA,
+                    indexB: indexB,
+                    pointQ: indexB == nil ? contact.pointQ : nil,
+                    contactDistance: indexB.map { radii[indexA] + radii[$0] } ?? radii[indexA],
+                    normalFallback: indexB == nil ? contact.normal : -contact.normal
+                )
+            },
+            timeStep: timeStep,
+            stiffness: configuration.contactStiffness,
+            contactDamping: configuration.contactDamping,
+            globalDrag: configuration.linearDamping
+        )
     }
 
-    private static func deformationEnergy(_ depth: Float, _ bubble: ReferenceBubble, _ alpha: Float) -> Float {
-        let square = depth * depth
-        return 0.5 * bubble.stiffness * square + 0.25 * bubble.stiffness * alpha * square * square
-            / max(bubble.targetRadius * bubble.targetRadius, Float.ulpOfOne)
+    private static func refreshedContacts(
+        previous: [ReferenceContact],
+        endCenters: [ReferenceVector2],
+        endVelocities: [ReferenceVector2],
+        bubbles: [ReferenceBubble],
+        segments: [ReferenceSegment],
+        candidatePairs: [ReferencePair]?,
+        indices: [ReferenceBubbleID: Int],
+        configuration: ReferenceConfiguration
+    ) -> [ReferenceContact] {
+        var geometryBubbles = bubbles
+        for index in geometryBubbles.indices {
+            geometryBubbles[index].center = endCenters[index]
+            geometryBubbles[index].velocity = endVelocities[index]
+            geometryBubbles[index].directionalDeformations.removeAll(keepingCapacity: true)
+        }
+        let segmentMap = Dictionary(uniqueKeysWithValues: segments.map { ($0.id, $0) })
+        var candidatesByID: [ReferenceContactID: ReferenceContact] = [:]
+
+        for old in previous {
+            guard let indexA = indices[old.bubbleA] else { continue }
+            let candidate: ReferenceContact
+            let separatingSpeed: Float
+            switch old.kind {
+            case .bubbleBubble:
+                guard let idB = old.bubbleB, let indexB = indices[idB] else { continue }
+                candidate = ReferenceDiscreteContactGenerator.bubbleBubbleCandidate(
+                    geometryBubbles[indexA], geometryBubbles[indexB]
+                )
+                separatingSpeed = (endVelocities[indexB] - endVelocities[indexA]).dot(candidate.normal)
+            case .bubbleSegment:
+                guard let id = old.segment, let segment = segmentMap[id] else { continue }
+                candidate = ReferenceDiscreteContactGenerator.bubbleSegmentCandidate(geometryBubbles[indexA], segment)
+                separatingSpeed = (endVelocities[indexA] - segment.linearVelocity).dot(candidate.normal)
+            }
+            if candidate.penetration > configuration.contactTolerance || separatingSpeed <= 0 {
+                candidatesByID[candidate.id] = preservingHistory(candidate, from: old)
+            }
+        }
+
+        if let candidatePairs {
+            for pair in candidatePairs.sorted() {
+                guard let indexA = indices[.init(rawValue: pair.first.rawValue)],
+                      let indexB = indices[.init(rawValue: pair.second.rawValue)] else { continue }
+                let candidate = ReferenceDiscreteContactGenerator.bubbleBubbleCandidate(
+                    geometryBubbles[indexA], geometryBubbles[indexB]
+                )
+                if candidate.penetration > configuration.contactTolerance {
+                    candidatesByID[candidate.id] = candidate
+                }
+            }
+            for segment in segments {
+                for bubble in geometryBubbles {
+                    let candidate = ReferenceDiscreteContactGenerator.bubbleSegmentCandidate(bubble, segment)
+                    if candidate.penetration > configuration.contactTolerance {
+                        candidatesByID[candidate.id] = candidate
+                    }
+                }
+            }
+        }
+        return candidatesByID.values.sorted { $0.id < $1.id }
+    }
+
+    private static func preservingHistory(_ candidate: ReferenceContact, from old: ReferenceContact) -> ReferenceContact {
+        var result = candidate
+        result.age = old.age + 1
+        result.allowedSide = old.allowedSide
+        return result
+    }
+
+    private static func annotatedContacts(
+        _ contacts: [ReferenceContact],
+        endCenters: [ReferenceVector2],
+        bubbles: [ReferenceBubble],
+        segments: [ReferenceSegmentID: ReferenceSegment],
+        indices: [ReferenceBubbleID: Int],
+        configuration: ReferenceConfiguration
+    ) -> [ReferenceContact] {
+        contacts.compactMap { original in
+            guard let indexA = indices[original.bubbleA] else { return nil }
+            var contact = original
+            let compression: Float
+            if let idB = original.bubbleB, let indexB = indices[idB] {
+                compression = max(0, bubbles[indexA].targetRadius + bubbles[indexB].targetRadius
+                    - (endCenters[indexA] - endCenters[indexB]).length)
+                contact.compressionA = compression * 0.5
+                contact.compressionB = compression * 0.5
+            } else if let segmentID = original.segment, let segment = segments[segmentID] {
+                let closest = closestPoint(
+                    to: endCenters[indexA], on: .init(a: segment.currentA, b: segment.currentB)
+                )
+                contact.pointQ = closest.point
+                compression = max(0, bubbles[indexA].targetRadius - closest.distanceSquared.squareRoot())
+                contact.compressionA = compression
+                contact.compressionB = 0
+            } else {
+                return nil
+            }
+            contact.penetration = compression
+            contact.accumulatedCompression = compression
+            contact.pressure = configuration.contactStiffness * compression
+            contact.effectiveStiffness = configuration.contactStiffness
+            return contact
+        }
+    }
+
+    private static func velocities(
+        startCenters: [ReferenceVector2],
+        startVelocities: [ReferenceVector2],
+        endCenters: [ReferenceVector2],
+        timeStep: Float
+    ) -> [ReferenceVector2] {
+        endCenters.indices.map {
+            (endCenters[$0] - startCenters[$0]) * (2 / timeStep) - startVelocities[$0]
+        }
+    }
+
+    private static func validTimeStep(_ candidate: Float, fallback: Float) -> Float {
+        candidate.isFinite && candidate > 0 ? candidate : fallback
     }
 
     private static func vectorNorm(_ values: [ReferenceVector2]) -> Float {
         values.reduce(0) { $0 + $1.lengthSquared }.squareRoot()
-    }
-
-    private static func energyContacts(
-        centers: [ReferenceVector2], bubbles: [ReferenceBubble], segments: [ReferenceSegment],
-        existingContacts: [ReferenceContact], candidatePairs: [ReferencePair]?, indices: [ReferenceBubbleID: Int]
-    ) -> [ReferenceContact] {
-        var trialBubbles = bubbles
-        for index in trialBubbles.indices {
-            trialBubbles[index].center = centers[index]
-            trialBubbles[index].directionalDeformations.removeAll()
-        }
-        return regeneratedCandidates(bubbles: trialBubbles, segments: segments, existingContacts: existingContacts,
-                                     candidatePairs: candidatePairs, bubbleIndices: indices)
-    }
-
-    private static func regeneratedCandidates(
-        bubbles: [ReferenceBubble], segments: [ReferenceSegment], existingContacts: [ReferenceContact],
-        candidatePairs: [ReferencePair]?, bubbleIndices: [ReferenceBubbleID: Int]
-    ) -> [ReferenceContact] {
-        // Deformation yields the target envelope; it must not erase its own stress contact.
-        var geometryBubbles = bubbles
-        for index in geometryBubbles.indices { geometryBubbles[index].directionalDeformations.removeAll() }
-        var result: [ReferenceContact] = []
-        var pairs = Set(candidatePairs ?? [])
-        for contact in existingContacts where contact.kind == .bubbleBubble {
-            if let b = contact.bubbleB { pairs.insert(.init(.init(rawValue: contact.bubbleA.rawValue), .init(rawValue: b.rawValue))) }
-        }
-        if candidatePairs != nil {
-            var broad = SweepAndPruneBroadPhase()
-            pairs.formUnion(broad.candidatePairs(for: geometryBubbles.map { .init(id: .init(rawValue: $0.id.rawValue), bounds: $0.targetBounds) }))
-        }
-        for pair in pairs.sorted() {
-            guard let a = bubbleIndices[.init(rawValue: pair.first.rawValue)],
-                  let b = bubbleIndices[.init(rawValue: pair.second.rawValue)] else { continue }
-            result.append(ReferenceDiscreteContactGenerator.bubbleBubbleCandidate(geometryBubbles[a], geometryBubbles[b]))
-        }
-        let segmentMap = Dictionary(uniqueKeysWithValues: segments.map { ($0.id, $0) })
-        if candidatePairs != nil {
-            for segment in segments { for bubble in geometryBubbles { result.append(ReferenceDiscreteContactGenerator.bubbleSegmentCandidate(bubble, segment)) } }
-        } else {
-            for contact in existingContacts where contact.kind == .bubbleSegment {
-                if let id = contact.segment, let segment = segmentMap[id], let index = bubbleIndices[contact.bubbleA] {
-                    result.append(ReferenceDiscreteContactGenerator.bubbleSegmentCandidate(geometryBubbles[index], segment))
-                }
-            }
-        }
-        return result
     }
 }

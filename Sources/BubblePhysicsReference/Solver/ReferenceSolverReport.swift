@@ -12,6 +12,10 @@ public struct ReferenceSolverReport: Sendable, Equatable {
     public var lineSearchFailureCount: Int
     public var hasNonFiniteState: Bool
 
+    public var newtonIterationCount: Int { iterations }
+    public var maximumCompression: Float { maximumPenetration }
+    public var didReachNewtonLimit: Bool { didReachIterationLimit }
+
     public init(
         iterations: Int,
         maximumPenetration: Float,
