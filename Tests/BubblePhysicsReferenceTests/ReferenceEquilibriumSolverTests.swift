@@ -40,6 +40,21 @@ final class ReferenceEquilibriumSolverTests: XCTestCase {
         XCTAssertEqual(bubbles[1].velocity.x, 0, accuracy: 5e-4)
     }
 
+    func testSolvedPairContactUpdatesSharedContourPlane() throws {
+        var bubbles = [try bubble(1, x: 0), try bubble(2, x: 18)]
+        var contacts = ReferenceContactSet(contacts: [try pair(bubbles[0], bubbles[1])])
+
+        _ = ReferenceEquilibriumSolver.solve(
+            bubbles: &bubbles, segments: [], contacts: &contacts,
+            configuration: configuration(), timeStep: 0.1
+        )
+
+        let contact = try XCTUnwrap(contacts.contacts.first)
+        let expectedMidpoint = (bubbles[0].center + bubbles[1].center) * 0.5
+        XCTAssertEqual(contact.pointQ.x, expectedMidpoint.x, accuracy: 1e-4)
+        XCTAssertEqual(contact.pointQ.y, expectedMidpoint.y, accuracy: 1e-4)
+    }
+
     func testOneFullStepIsCloseToTwoHalfSteps() throws {
         let wall = verticalWall(x: 0)
         var full = [try bubble(1, x: 8)]

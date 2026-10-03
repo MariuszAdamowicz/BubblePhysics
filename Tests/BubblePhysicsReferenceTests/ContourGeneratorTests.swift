@@ -2,63 +2,114 @@ import XCTest
 @testable import BubblePhysicsReference
 
 final class ContourGeneratorTests: XCTestCase {
-    func testAdaptiveContourKeepsEverySegmentWithinConfiguredLength() throws {
-        let bubble = try ReferenceBubble(
-            id: .init(rawValue: 1),
-            center: ReferenceVector2(x: 5, y: -3),
-            mass: 1,
-            targetRadius: 100
-        )
-        var configuration = ReferenceConfiguration.default
-        configuration.maxContourSegmentLength = 1
+    func testNoContactsProduceExactNaturalCircle() throws {
+        let bubble = try makeBubble(center: .init(x: 3, y: -2), radius: 10)
 
-        let points = ReferenceContourGenerator.points(for: bubble, configuration: configuration)
+        let points = ReferenceContourGenerator.points(for: bubble, contacts: [], configuration: configuration())
 
-        XCTAssertGreaterThan(points.count, 64, "The contour must not use the old hard cap")
-        for index in points.indices {
-            let next = points[(index + 1) % points.count]
-            XCTAssertLessThanOrEqual((next - points[index]).length, 1.001)
+        XCTAssertGreaterThanOrEqual(points.count, 32)
+        for point in points {
+            XCTAssertEqual((point - bubble.center).length, 10, accuracy: 1e-4)
         }
     }
 
-    func testCompressedBubbleUsesFewerPointsThanUncompressedBubble() throws {
-        let uncompressed = try makeBubble(radius: 40)
-        var compressed = uncompressed
-        compressed.directionalDeformations = (0..<8).map { index in
-            let angle = Float(index) * .pi / 4
-            return DirectionalDeformation(
-                contactID: .init(rawValue: UInt64(index)),
-                direction: .init(x: cosf(angle), y: sinf(angle)),
-                depth: 18,
-                angularWidth: .pi / 2,
-                pressure: 1
-            )
-        }
-        var configuration = ReferenceConfiguration.default
-        configuration.maxContourSegmentLength = 4
+    func testFlatContactCreatesBroadStraightSection() throws {
+        let bubble = try makeBubble(radius: 10)
+        let contact = segmentContact(id: 1, pointQ: .init(x: 8, y: 0), inward: .init(x: -1, y: 0), compression: 2)
 
-        let fullPoints = ReferenceContourGenerator.points(for: uncompressed, configuration: configuration)
-        let compressedPoints = ReferenceContourGenerator.points(for: compressed, configuration: configuration)
+        let points = ReferenceContourGenerator.points(for: bubble, contacts: [contact], configuration: configuration())
+        let flat = points.filter { abs($0.y) < 3.5 && $0.x > 7.9 }
 
-        XCTAssertLessThan(compressedPoints.count, fullPoints.count)
+        XCTAssertGreaterThanOrEqual(flat.count, 3)
+        XCTAssertTrue(flat.allSatisfy { abs($0.x - 8) < 1e-3 })
     }
 
-    func testContourSamplesCurrentSupportRadius() throws {
-        var bubble = try makeBubble(radius: 20)
-        bubble.center = ReferenceVector2(x: 3, y: 7)
-        bubble.directionalDeformations = [
-            .init(contactID: .init(rawValue: 1), direction: .init(x: 1, y: 0), depth: 8, angularWidth: .pi / 2, pressure: 2)
+    func testCornerRoundsSeveralSamplesWithoutCollapsingRadius() throws {
+        let bubble = try makeBubble(radius: 10)
+        let contacts = [
+            segmentContact(id: 1, pointQ: .init(x: 7, y: 0), inward: .init(x: -1, y: 0), compression: 3),
+            segmentContact(id: 2, pointQ: .init(x: 0, y: 7), inward: .init(x: 0, y: -1), compression: 3)
         ]
 
-        let points = ReferenceContourGenerator.points(for: bubble, configuration: .default)
+        let points = ReferenceContourGenerator.points(for: bubble, contacts: contacts, configuration: configuration())
+        let corner = points.filter { $0.x > 4 && $0.y > 4 }
 
-        for point in points {
-            let offset = point - bubble.center
-            XCTAssertEqual(offset.length, bubble.supportRadius(along: offset), accuracy: 0.001)
-        }
+        XCTAssertGreaterThanOrEqual(corner.count, 3)
+        XCTAssertTrue(corner.allSatisfy { $0.length > 5 && $0.x <= 7.001 && $0.y <= 7.001 })
+        XCTAssertTrue(corner.contains { $0.x < 6.9 && $0.y < 6.9 })
     }
 
-    private func makeBubble(radius: Float) throws -> ReferenceBubble {
-        try ReferenceBubble(id: .init(rawValue: 1), center: .zero, mass: 1, targetRadius: radius)
+    func testOppositeContactsChooseEnvelopeInsteadOfSummingHole() throws {
+        let bubble = try makeBubble(radius: 10)
+        let contacts = [
+            segmentContact(id: 1, pointQ: .init(x: -8, y: 0), inward: .init(x: 1, y: 0), compression: 2),
+            segmentContact(id: 2, pointQ: .init(x: 8, y: 0), inward: .init(x: -1, y: 0), compression: 2)
+        ]
+
+        let points = ReferenceContourGenerator.points(for: bubble, contacts: contacts, configuration: configuration())
+
+        XCTAssertGreaterThan(points.map(\.length).min() ?? 0, 7.5)
+        XCTAssertLessThanOrEqual(points.map(\.x).max() ?? 100, 8.001)
+        XCTAssertGreaterThanOrEqual(points.map(\.x).min() ?? -100, -8.001)
+    }
+
+    func testRemovingContactImmediatelyRestoresCircle() throws {
+        let bubble = try makeBubble(radius: 10)
+        let contact = segmentContact(id: 1, pointQ: .init(x: 7, y: 0), inward: .init(x: -1, y: 0), compression: 3)
+        let compressed = ReferenceContourGenerator.points(for: bubble, contacts: [contact], configuration: configuration())
+
+        let restored = ReferenceContourGenerator.points(for: bubble, contacts: [], configuration: configuration())
+
+        XCTAssertLessThan(compressed.map(\.x).max() ?? 10, 10)
+        XCTAssertTrue(restored.allSatisfy { abs($0.length - 10) < 1e-4 })
+    }
+
+    func testContourPointsStayOutsideRigidTriangle() throws {
+        let bubble = try makeBubble(center: .init(x: 5, y: 5), radius: 6)
+        let contacts = [
+            segmentContact(id: 1, pointQ: .init(x: 3, y: 3), inward: .init(x: 1, y: 1), compression: 2),
+            segmentContact(id: 2, pointQ: .init(x: 7, y: 3), inward: .init(x: -1, y: 1), compression: 2),
+            segmentContact(id: 3, pointQ: .init(x: 5, y: 7), inward: .init(x: 0, y: -1), compression: 2)
+        ]
+        let triangle = [ReferenceVector2(x: 3, y: 3), .init(x: 7, y: 3), .init(x: 5, y: 7)]
+
+        let points = ReferenceContourGenerator.points(for: bubble, contacts: contacts, configuration: configuration())
+
+        XCTAssertFalse(points.contains { isInsideTriangle($0, triangle) })
+    }
+
+    private func configuration() -> ReferenceConfiguration {
+        var value = ReferenceConfiguration.default
+        value.maxContourSegmentLength = 1
+        value.contourSurfaceTension = 20
+        return value
+    }
+
+    private func makeBubble(center: ReferenceVector2 = .zero, radius: Float) throws -> ReferenceBubble {
+        try ReferenceBubble(id: .init(rawValue: 1), center: center, mass: 1, targetRadius: radius)
+    }
+
+    private func segmentContact(
+        id: UInt64,
+        pointQ: ReferenceVector2,
+        inward: ReferenceVector2,
+        compression: Float
+    ) -> ReferenceContact {
+        .init(
+            id: .init(rawValue: id), kind: .bubbleSegment,
+            bubbleA: .init(rawValue: 1), segment: .init(rawValue: Int(id)),
+            normal: inward.normalized(), pointQ: pointQ, penetration: compression,
+            accumulatedCompression: compression, compressionA: compression,
+            pressure: 30 * compression, effectiveStiffness: 30
+        )
+    }
+
+    private func isInsideTriangle(_ point: ReferenceVector2, _ triangle: [ReferenceVector2]) -> Bool {
+        let signs = triangle.indices.map { index in
+            let a = triangle[index]
+            let b = triangle[(index + 1) % triangle.count]
+            return (b - a).cross(point - a)
+        }
+        return signs.allSatisfy { $0 > 1e-5 } || signs.allSatisfy { $0 < -1e-5 }
     }
 }

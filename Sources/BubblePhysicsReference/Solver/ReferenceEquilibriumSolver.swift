@@ -112,7 +112,6 @@ public enum ReferenceEquilibriumSolver {
         for index in bubbles.indices {
             bubbles[index].center = endCenters[index]
             bubbles[index].velocity = endVelocities[index]
-            bubbles[index].directionalDeformations.removeAll(keepingCapacity: true)
         }
 
         let finalSystem = dynamicSystem(
@@ -193,7 +192,6 @@ public enum ReferenceEquilibriumSolver {
         for index in geometryBubbles.indices {
             geometryBubbles[index].center = endCenters[index]
             geometryBubbles[index].velocity = endVelocities[index]
-            geometryBubbles[index].directionalDeformations.removeAll(keepingCapacity: true)
         }
         let segmentMap = Dictionary(uniqueKeysWithValues: segments.map { ($0.id, $0) })
         var candidatesByID: [ReferenceContactID: ReferenceContact] = [:]
@@ -262,10 +260,17 @@ public enum ReferenceEquilibriumSolver {
             var contact = original
             let compression: Float
             if let idB = original.bubbleB, let indexB = indices[idB] {
+                let delta = endCenters[indexB] - endCenters[indexA]
+                let fallback = bubbles[indexA].id <= bubbles[indexB].id
+                    ? ReferenceVector2(x: 1, y: 0) : ReferenceVector2(x: -1, y: 0)
+                let normal = delta.normalized(or: fallback)
                 compression = max(0, bubbles[indexA].targetRadius + bubbles[indexB].targetRadius
-                    - (endCenters[indexA] - endCenters[indexB]).length)
+                    - delta.length)
                 contact.compressionA = compression * 0.5
                 contact.compressionB = compression * 0.5
+                contact.normal = normal
+                contact.pointQ = endCenters[indexA]
+                    + normal * (bubbles[indexA].targetRadius - contact.compressionA)
             } else if let segmentID = original.segment, let segment = segments[segmentID] {
                 let closest = closestPoint(
                     to: endCenters[indexA], on: .init(a: segment.currentA, b: segment.currentB)

@@ -25,7 +25,6 @@ public struct ReferenceBubble: Sendable, Equatable {
     public var stiffness: Float
     public var rotation: Float
     public var angularVelocity: Float
-    public var directionalDeformations: [DirectionalDeformation]
 
     public init(
         id: ReferenceBubbleID,
@@ -35,8 +34,7 @@ public struct ReferenceBubble: Sendable, Equatable {
         targetRadius: Float,
         stiffness: Float = 1,
         rotation: Float = 0,
-        angularVelocity: Float = 0,
-        directionalDeformations: [DirectionalDeformation] = []
+        angularVelocity: Float = 0
     ) throws {
         guard center.isFinite, velocity.isFinite, mass.isFinite, targetRadius.isFinite,
               stiffness.isFinite, rotation.isFinite, angularVelocity.isFinite else {
@@ -55,7 +53,6 @@ public struct ReferenceBubble: Sendable, Equatable {
         self.stiffness = stiffness
         self.rotation = rotation
         self.angularVelocity = angularVelocity
-        self.directionalDeformations = directionalDeformations
     }
 
     public var targetBounds: ReferenceAABB {

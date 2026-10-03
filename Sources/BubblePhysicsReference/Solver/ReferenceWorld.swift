@@ -190,7 +190,10 @@ public struct ReferenceWorld {
 
     public func contour(for id: ReferenceBubbleID) -> [ReferenceVector2] {
         guard let bubble = bubbles.first(where: { $0.id == id }) else { return [] }
-        return ReferenceContourGenerator.points(for: bubble, configuration: configuration)
+        let bubbleContacts = contacts.contacts.filter { $0.bubbleA == id || $0.bubbleB == id }
+        return ReferenceContourGenerator.points(
+            for: bubble, contacts: bubbleContacts, configuration: configuration
+        )
     }
 
     private struct EventScan {
@@ -230,10 +233,8 @@ public struct ReferenceWorld {
             var pathB = startBubbles[indexB]
             pathA.previousCenter = startBubbles[indexA].center
             pathA.center = endBubbles[indexA].center
-            pathA.directionalDeformations.removeAll(keepingCapacity: true)
             pathB.previousCenter = startBubbles[indexB].center
             pathB.center = endBubbles[indexB].center
-            pathB.directionalDeformations.removeAll(keepingCapacity: true)
             switch ReferenceCCD.bubbleBubble(pathA, pathB) {
             case let .impact(fraction, _, _):
                 let event = ReferenceContactEvent(time: duration * fraction, contactID: candidate.id)
@@ -261,7 +262,6 @@ public struct ReferenceWorld {
                 var path = startBubbles[index]
                 path.previousCenter = startBubbles[index].center
                 path.center = endBubbles[index].center
-                path.directionalDeformations.removeAll(keepingCapacity: true)
                 let result = ReferenceCCD.bubbleSegment(path, segment, configuration: configuration)
                 if result.didExhaustBudget { exhausted += 1 }
                 switch result.timeOfImpact {

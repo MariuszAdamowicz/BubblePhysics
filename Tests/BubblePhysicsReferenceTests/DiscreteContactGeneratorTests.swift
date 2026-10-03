@@ -14,16 +14,6 @@ final class DiscreteContactGeneratorTests: XCTestCase {
         XCTAssertEqual(contact.bubbleB, b.id)
     }
 
-    func testDirectionalIndentationRemovesApparentBubbleContact() throws {
-        var a = try bubble(id: 1, x: 0, y: 0, radius: 10)
-        a.directionalDeformations = [
-            .init(contactID: .init(rawValue: 11), direction: .init(x: 1, y: 0), depth: 5, angularWidth: .pi / 2, pressure: 1)
-        ]
-        let b = try bubble(id: 2, x: 17, y: 0, radius: 10)
-
-        XCTAssertNil(ReferenceDiscreteContactGenerator.bubbleBubble(a, b))
-    }
-
     func testSegmentContactUsesInteriorQ() throws {
         let bubble = try self.bubble(id: 1, x: 5, y: 2, radius: 3)
         let segment = ReferenceSegment.staticSegment(

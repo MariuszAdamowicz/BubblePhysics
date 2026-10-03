@@ -20,6 +20,7 @@ public struct ReferenceConfiguration: Sendable, Equatable {
     public var contactDamping: Float
     public var simultaneousEventTolerance: Float
     public var maximumEventGroups: Int
+    public var contourSurfaceTension: Float
 
     public init(
         timeStep: Float = 1 / 60,
@@ -42,7 +43,8 @@ public struct ReferenceConfiguration: Sendable, Equatable {
         contactStiffness: Float = 120,
         contactDamping: Float = 8,
         simultaneousEventTolerance: Float = 1e-5,
-        maximumEventGroups: Int = 8
+        maximumEventGroups: Int = 8,
+        contourSurfaceTension: Float = 20
     ) {
         self.timeStep = timeStep
         self.solverIterations = solverIterations
@@ -65,6 +67,7 @@ public struct ReferenceConfiguration: Sendable, Equatable {
         self.contactDamping = contactDamping
         self.simultaneousEventTolerance = simultaneousEventTolerance
         self.maximumEventGroups = maximumEventGroups
+        self.contourSurfaceTension = contourSurfaceTension
     }
 
     public var sanitized: ReferenceConfiguration {
@@ -93,6 +96,7 @@ public struct ReferenceConfiguration: Sendable, Equatable {
         value.contactDamping = finiteNonnegative(value.contactDamping, fallback: 8)
         value.simultaneousEventTolerance = finiteNonnegative(value.simultaneousEventTolerance, fallback: 1e-5)
         value.maximumEventGroups = max(1, value.maximumEventGroups)
+        value.contourSurfaceTension = finiteNonnegative(value.contourSurfaceTension, fallback: 20)
         return value
     }
 
