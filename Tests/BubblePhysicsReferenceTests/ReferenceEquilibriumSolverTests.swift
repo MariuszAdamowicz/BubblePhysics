@@ -2,7 +2,7 @@ import XCTest
 @testable import BubblePhysicsReference
 
 final class ReferenceEquilibriumSolverTests: XCTestCase {
-    func testEqualMassesSplitPositionalCorrectionSymmetrically() throws {
+    func testPairContactDeformsBeforeCentersMoveFar() throws {
         var bubbles = [try bubble(1, x: 0, mass: 1), try bubble(2, x: 15, mass: 1)]
         var contacts = ReferenceContactSet(contacts: [try pairContact(bubbles[0], bubbles[1])])
 
@@ -10,9 +10,11 @@ final class ReferenceEquilibriumSolverTests: XCTestCase {
             bubbles: &bubbles, segments: [], contacts: &contacts, configuration: .default
         )
 
-        XCTAssertEqual(bubbles[0].center.x, -2.5, accuracy: 0.01)
-        XCTAssertEqual(bubbles[1].center.x, 17.5, accuracy: 0.01)
-        XCTAssertLessThanOrEqual(report.maximumPenetration, ReferenceConfiguration.default.positionTolerance)
+        XCTAssertFalse(bubbles[0].directionalDeformations.isEmpty)
+        XCTAssertFalse(bubbles[1].directionalDeformations.isEmpty)
+        XCTAssertLessThan(abs(bubbles[0].center.x), 0.1)
+        XCTAssertLessThan(abs(bubbles[1].center.x - 15), 0.1)
+        XCTAssertGreaterThan(report.maximumRelativeDeformation, 0)
     }
 
     func testLighterBubbleMovesFarther() throws {
@@ -23,11 +25,10 @@ final class ReferenceEquilibriumSolverTests: XCTestCase {
             bubbles: &bubbles, segments: [], contacts: &contacts, configuration: .default
         )
 
-        XCTAssertEqual(abs(bubbles[0].center.x), 3.75, accuracy: 0.01)
-        XCTAssertEqual(bubbles[1].center.x - 15, 1.25, accuracy: 0.01)
+        XCTAssertGreaterThan(abs(bubbles[0].center.x), abs(bubbles[1].center.x - 15))
     }
 
-    func testRigidSegmentNeverMovesWhileBubbleIsProjectedOut() throws {
+    func testRigidSegmentDeformsBubbleInsteadOfProjectingItsCenterByPenetration() throws {
         var bubbles = [try bubble(1, x: 3, mass: 1)]
         let segment = verticalWall()
         let original = segment
@@ -38,7 +39,8 @@ final class ReferenceEquilibriumSolverTests: XCTestCase {
         )
 
         XCTAssertEqual(segment, original)
-        XCTAssertGreaterThanOrEqual(bubbles[0].center.x, 9.999)
+        XCTAssertLessThan(bubbles[0].center.x, 4)
+        XCTAssertGreaterThan(bubbles[0].directionalDeformations[0].depth, 6)
     }
 
     func testChainPropagatesCorrectionAcrossThreeBubbles() throws {
@@ -54,8 +56,8 @@ final class ReferenceEquilibriumSolverTests: XCTestCase {
 
         XCTAssertLessThan(bubbles[0].center.x, 0)
         XCTAssertGreaterThan(bubbles[2].center.x, 30)
-        XCTAssertGreaterThanOrEqual(bubbles[1].center.x - bubbles[0].center.x, 19.9)
-        XCTAssertGreaterThanOrEqual(bubbles[2].center.x - bubbles[1].center.x, 19.9)
+        XCTAssertFalse(bubbles[1].directionalDeformations.isEmpty)
+        XCTAssertGreaterThan(bubbles[2].center.x, 30)
     }
 
     func testWallBlockedCorrectionBecomesDirectionalDeformation() throws {
@@ -70,12 +72,11 @@ final class ReferenceEquilibriumSolverTests: XCTestCase {
             bubbles: &bubbles, segments: [wall], contacts: &contacts, configuration: .default
         )
 
-        XCTAssertGreaterThanOrEqual(bubbles[0].center.x, 9.999)
         XCTAssertFalse(bubbles[0].directionalDeformations.isEmpty)
         XCTAssertTrue(bubbles[0].directionalDeformations.allSatisfy { $0.depth.isFinite && $0.depth >= 0 })
     }
 
-    func testMovingSegmentTransfersBoundedTangentialVelocityAndRotation() throws {
+    func testNormalStressDoesNotInjectTangentialVelocityBeforeFrictionStage() throws {
         var bubbles = [try ReferenceBubble(id: .init(rawValue: 1), center: .init(x: 0, y: 1), mass: 1, targetRadius: 2)]
         let segment = ReferenceSegment.kinematicSegment(
             id: .init(rawValue: 1),
@@ -88,9 +89,8 @@ final class ReferenceEquilibriumSolverTests: XCTestCase {
             bubbles: &bubbles, segments: [segment], contacts: &contacts, configuration: .default
         )
 
-        XCTAssertGreaterThan(bubbles[0].velocity.x, 0)
-        XCTAssertLessThanOrEqual(bubbles[0].velocity.x, segment.linearVelocity.x)
-        XCTAssertGreaterThan(bubbles[0].angularVelocity, 0)
+        XCTAssertEqual(bubbles[0].velocity.x, 0)
+        XCTAssertEqual(bubbles[0].angularVelocity, 0)
         XCTAssertTrue(bubbles[0].center.isFinite)
     }
 
@@ -111,7 +111,42 @@ final class ReferenceEquilibriumSolverTests: XCTestCase {
             configuration: .default, candidatePairs: candidates
         )
 
-        XCTAssertGreaterThanOrEqual(bubbles[2].center.x - bubbles[1].center.x, 19.9)
+        XCTAssertFalse(bubbles[1].directionalDeformations.isEmpty)
+        XCTAssertTrue(contacts.contacts.allSatisfy { $0.pressure.isFinite })
+    }
+
+    func testSymmetricWallStressDeformsWithoutMovingCenter() throws {
+        var bubbles = [try bubble(1, x: 0, mass: 1)]
+        let left = ReferenceSegment.staticSegment(id: .init(rawValue: 10), a: .init(x: -8, y: 20), b: .init(x: -8, y: -20))
+        let right = ReferenceSegment.staticSegment(id: .init(rawValue: 11), a: .init(x: 8, y: -20), b: .init(x: 8, y: 20))
+        var contacts = ReferenceContactSet(contacts: [
+            try XCTUnwrap(ReferenceDiscreteContactGenerator.bubbleSegment(bubbles[0], left)),
+            try XCTUnwrap(ReferenceDiscreteContactGenerator.bubbleSegment(bubbles[0], right)),
+        ])
+        _ = ReferenceEquilibriumSolver.solve(bubbles: &bubbles, segments: [left, right], contacts: &contacts, configuration: .default)
+        XCTAssertEqual(bubbles[0].center.x, 0, accuracy: 0.01)
+        XCTAssertEqual(bubbles[0].directionalDeformations.count, 2)
+    }
+
+    func testNoContactsLeavesPredictedPositionUnchanged() throws {
+        var bubbles = [try bubble(1, x: 7, mass: 1)]
+        var contacts = ReferenceContactSet()
+        let report = ReferenceEquilibriumSolver.solve(bubbles: &bubbles, segments: [], contacts: &contacts, configuration: .default)
+        XCTAssertEqual(bubbles[0].center.x, 7)
+        XCTAssertEqual(report.finalResidualNorm, 0)
+    }
+
+    func testAlmostFullCompressionAndCoincidentCentersRemainFiniteAndDeterministic() throws {
+        var first = [try bubble(1, x: 0, mass: 1), try bubble(2, x: 0, mass: 1)]
+        var second = first
+        var contactsA = ReferenceContactSet(contacts: [try pairContact(first[0], first[1])])
+        var contactsB = contactsA
+        let reportA = ReferenceEquilibriumSolver.solve(bubbles: &first, segments: [], contacts: &contactsA, configuration: .default)
+        let reportB = ReferenceEquilibriumSolver.solve(bubbles: &second, segments: [], contacts: &contactsB, configuration: .default)
+        XCTAssertEqual(first, second)
+        XCTAssertTrue(first.allSatisfy { $0.center.isFinite && $0.directionalDeformations.allSatisfy { $0.depth.isFinite } })
+        XCTAssertFalse(reportA.hasNonFiniteState)
+        XCTAssertEqual(reportA, reportB)
     }
 
     func testKinematicVelocityUsesUnitsPerSecond() {

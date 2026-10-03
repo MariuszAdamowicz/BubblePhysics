@@ -127,7 +127,6 @@ public struct ReferenceWorld {
         let contactEnd = DispatchTime.now().uptimeNanoseconds
 
         let solverStart = contactEnd
-        let velocitiesBeforeSolver = bubbles.map(\.velocity)
         let solverReport = ReferenceEquilibriumSolver.solve(
             bubbles: &bubbles,
             segments: segments,
@@ -138,9 +137,8 @@ public struct ReferenceWorld {
         let linearFactor = expf(-configuration.linearDamping * configuration.timeStep)
         let angularFactor = expf(-configuration.angularDamping * configuration.timeStep)
         for index in bubbles.indices {
-            let solverVelocityChange = bubbles[index].velocity - velocitiesBeforeSolver[index]
             let positionalVelocity = (bubbles[index].center - bubbles[index].previousCenter) / configuration.timeStep
-            bubbles[index].velocity = (positionalVelocity + solverVelocityChange) * linearFactor
+            bubbles[index].velocity = positionalVelocity * linearFactor
             bubbles[index].angularVelocity *= angularFactor
         }
         let solverEnd = DispatchTime.now().uptimeNanoseconds

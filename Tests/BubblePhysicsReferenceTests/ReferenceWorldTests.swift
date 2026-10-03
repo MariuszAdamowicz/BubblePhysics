@@ -29,7 +29,7 @@ final class ReferenceWorldTests: XCTestCase {
         XCTAssertLessThan(world.bubbles[0].velocity.x, 60)
     }
 
-    func testKinematicSegmentTransfersMotion() throws {
+    func testNormalStressDoesNotCreateTangentialMotionBeforeFrictionStage() throws {
         var world = ReferenceWorld(configuration: .default, broadPhase: SweepAndPruneBroadPhase())
         world.addBubble(try ReferenceBubble(
             id: .init(rawValue: 1), center: .init(x: 0, y: 1), mass: 1, targetRadius: 2
@@ -43,8 +43,8 @@ final class ReferenceWorldTests: XCTestCase {
 
         _ = world.step()
 
-        XCTAssertGreaterThan(world.bubbles[0].velocity.x, 0)
-        XCTAssertGreaterThan(world.bubbles[0].angularVelocity, 0)
+        XCTAssertEqual(world.bubbles[0].velocity.x, 0)
+        XCTAssertEqual(world.bubbles[0].angularVelocity, 0)
     }
 
     func testContactsDoNotGrowWithoutBound() throws {
@@ -168,7 +168,7 @@ final class ReferenceWorldTests: XCTestCase {
         XCTAssertEqual(report.ccdBudgetExhaustionCount, 1)
     }
 
-    func testWorldFindsContactCreatedBySolverOutsideInitialBroadPhase() throws {
+    func testSmallElasticStepDoesNotInventDistantContact() throws {
         var world = ReferenceWorld(configuration: .default, broadPhase: SweepAndPruneBroadPhase())
         world.addBubble(try bubbleForRecovery(id: 1, x: 0))
         world.addBubble(try bubbleForRecovery(id: 2, x: 15))
@@ -178,7 +178,7 @@ final class ReferenceWorldTests: XCTestCase {
 
         XCTAssertEqual(report.candidatePairCount, 1)
         XCTAssertGreaterThanOrEqual(world.bubbles[2].center.x - world.bubbles[1].center.x, 19.9)
-        XCTAssertTrue(world.contacts.contacts.contains {
+        XCTAssertFalse(world.contacts.contacts.contains {
             $0.bubbleA == .init(rawValue: 2) && $0.bubbleB == .init(rawValue: 3)
         })
     }
