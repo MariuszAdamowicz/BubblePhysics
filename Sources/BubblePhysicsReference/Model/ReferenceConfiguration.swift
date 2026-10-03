@@ -13,6 +13,9 @@ public struct ReferenceConfiguration: Sendable, Equatable {
     public var maxContourSegmentLength: Float
     public var deformationRecoveryRate: Float
     public var maximumContactPressure: Float
+    public var pcgTolerance: Float
+    public var pcgIterationLimit: Int
+    public var stressTolerance: Float
 
     public init(
         timeStep: Float = 1 / 60,
@@ -28,7 +31,10 @@ public struct ReferenceConfiguration: Sendable, Equatable {
         toiIterationBudget: Int = 8,
         maxContourSegmentLength: Float = 8,
         deformationRecoveryRate: Float = 12,
-        maximumContactPressure: Float = 1_000_000
+        maximumContactPressure: Float = 1_000_000,
+        pcgTolerance: Float = 0.001,
+        pcgIterationLimit: Int = 24,
+        stressTolerance: Float = 0.01
     ) {
         self.timeStep = timeStep
         self.solverIterations = solverIterations
@@ -44,6 +50,9 @@ public struct ReferenceConfiguration: Sendable, Equatable {
         self.maxContourSegmentLength = maxContourSegmentLength
         self.deformationRecoveryRate = deformationRecoveryRate
         self.maximumContactPressure = maximumContactPressure
+        self.pcgTolerance = pcgTolerance
+        self.pcgIterationLimit = pcgIterationLimit
+        self.stressTolerance = stressTolerance
     }
 
     public var sanitized: ReferenceConfiguration {
@@ -64,6 +73,9 @@ public struct ReferenceConfiguration: Sendable, Equatable {
         value.deformationRecoveryRate = finiteNonnegative(value.deformationRecoveryRate, fallback: 12)
         value.maximumContactPressure = value.maximumContactPressure.isFinite && value.maximumContactPressure > 0
             ? value.maximumContactPressure : 1_000_000
+        value.pcgTolerance = value.pcgTolerance.isFinite && value.pcgTolerance > 0 ? value.pcgTolerance : 0.001
+        value.pcgIterationLimit = max(1, value.pcgIterationLimit)
+        value.stressTolerance = value.stressTolerance.isFinite && value.stressTolerance > 0 ? value.stressTolerance : 0.01
         return value
     }
 
