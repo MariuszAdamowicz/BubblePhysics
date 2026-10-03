@@ -2,6 +2,30 @@ import XCTest
 @testable import BubblePhysicsReference
 
 final class ReferenceWorldTests: XCTestCase {
+    func testBubbleDeeplyCompressedByTwoSidedPolygonEdgeIsEjected() throws {
+        var configuration = ReferenceConfiguration.default
+        configuration.timeStep = 1 / 60
+        configuration.contactStiffness = 300
+        configuration.contactDamping = 26
+        configuration.linearDamping = 0.8
+        var world = ReferenceWorld(
+            configuration: configuration, broadPhase: SweepAndPruneBroadPhase()
+        )
+        world.addBubble(try ReferenceBubble(
+            id: .init(rawValue: 1), center: .init(x: 0, y: 5), mass: 200,
+            targetRadius: 10
+        ))
+        world.addSegment(.staticSegment(
+            id: .init(rawValue: 1), a: .init(x: -20, y: 0), b: .init(x: 20, y: 0),
+            ownerID: 100, collisionMode: .twoSided
+        ))
+
+        for _ in 0..<120 { _ = world.step() }
+
+        XCTAssertGreaterThan(world.bubbles[0].center.y, 9.9)
+        XCTAssertTrue(world.contacts.contacts.isEmpty)
+    }
+
     func testBubbleCompressedAgainstWallAcceleratesBackIntoChamber() throws {
         var configuration = ReferenceConfiguration.default
         configuration.timeStep = 1 / 60

@@ -2,6 +2,24 @@ import XCTest
 @testable import BubblePhysicsReference
 
 final class ContourGeneratorTests: XCTestCase {
+    func testInteriorRigidEdgeContactProducesRoundedOvalInsteadOfFlatHalfCircle() throws {
+        let bubble = try makeBubble(center: .init(x: 0, y: 5), radius: 10)
+        let segment = ReferenceSegment.staticSegment(
+            id: .init(rawValue: 1), a: .init(x: -20, y: 0), b: .init(x: 20, y: 0)
+        )
+        let contact = try XCTUnwrap(ReferenceDiscreteContactGenerator.bubbleSegment(bubble, segment))
+
+        let points = ReferenceContourGenerator.points(
+            for: bubble, contacts: [contact], segments: [segment], configuration: configuration()
+        )
+
+        XCTAssertTrue(points.allSatisfy { $0.y >= -0.01 })
+        let nearContact = points.filter { abs($0.y) < 0.05 }
+        XCTAssertLessThan(nearContact.map { abs($0.x) }.max() ?? 100, 2)
+        XCTAssertGreaterThan(points.map(\.x).max() ?? 0, 8)
+        XCTAssertLessThan(points.map(\.y).max() ?? 100, 15.1)
+    }
+
     func testSmallBubbleCreatesOnlyFiniteSharedChordOnLargeBubble() throws {
         let large = try ReferenceBubble(
             id: .init(rawValue: 1), center: .zero, mass: 1, targetRadius: 10

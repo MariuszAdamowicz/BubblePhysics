@@ -94,6 +94,8 @@ public enum ReferenceContourGenerator {
             if contact.kind == .bubbleSegment,
                let segmentID = contact.segment,
                let segment = segmentByID[segmentID] {
+                let endpoints = ReferenceSegmentEndpoints(a: segment.currentA, b: segment.currentB)
+                let closest = closestPoint(to: bubble.center, on: endpoints)
                 let edge = segment.currentB - segment.currentA
                 var normal = ReferenceVector2(x: -edge.y, y: edge.x)
                     .normalized(or: contact.normal)
@@ -107,7 +109,8 @@ public enum ReferenceContourGenerator {
                     pointQ: segment.currentA,
                     inwardNormal: normal,
                     pressure: contact.pressure,
-                    finiteSegment: .init(a: segment.currentA, b: segment.currentB)
+                    finiteSegment: endpoints,
+                    usesRoundedContactProfile: closest.t > 0.001 && closest.t < 0.999
                 )
             }
             let inward: ReferenceVector2
@@ -138,7 +141,19 @@ public enum ReferenceContourGenerator {
         var limitingIndex: Int?
         for index in constraints.indices {
             let constraint = constraints[index]
-            if let segment = constraint.finiteSegment,
+            if constraint.usesRoundedContactProfile,
+               let candidate = roundedContactRadius(
+                   center: center,
+                   direction: direction,
+                   naturalRadius: naturalRadius,
+                   pointOnPlane: constraint.pointQ,
+                   inwardNormal: constraint.inwardNormal
+               ), candidate < radius {
+                radius = max(0, candidate)
+                limitingIndex = index
+            }
+            if !constraint.usesRoundedContactProfile,
+               let segment = constraint.finiteSegment,
                let candidate = rayIntersectionDistance(
                    origin: center, direction: direction, segment: segment
                ), candidate < radius {
@@ -157,6 +172,37 @@ public enum ReferenceContourGenerator {
             }
         }
         return (radius, limitingIndex)
+    }
+
+    private static func roundedContactRadius(
+        center: ReferenceVector2,
+        direction: ReferenceVector2,
+        naturalRadius: Float,
+        pointOnPlane: ReferenceVector2,
+        inwardNormal: ReferenceVector2
+    ) -> Float? {
+        let normal = inwardNormal.normalized(or: .init(x: 1, y: 0))
+        let signedDistance = (center - pointOnPlane).dot(normal)
+        guard signedDistance >= 0, signedDistance < naturalRadius else { return nil }
+
+        // An offset ellipse is tangent to the rigid line at the compressed side,
+        // while its far side remains at the natural radius. This avoids turning a
+        // deeply compressed bubble into a circle cut by a long flat chord.
+        let normalRadius = max((naturalRadius + signedDistance) * 0.5, 1e-5)
+        let centerOffset = (naturalRadius - signedDistance) * 0.5
+        let tangentRadius = naturalRadius
+        let alongNormal = direction.dot(normal)
+        let alongTangent = direction.cross(normal)
+        let inverseNormalSquared = 1 / (normalRadius * normalRadius)
+        let inverseTangentSquared = 1 / (tangentRadius * tangentRadius)
+        let quadraticA = alongNormal * alongNormal * inverseNormalSquared
+            + alongTangent * alongTangent * inverseTangentSquared
+        let quadraticB = -2 * alongNormal * centerOffset * inverseNormalSquared
+        let quadraticC = centerOffset * centerOffset * inverseNormalSquared - 1
+        let discriminant = quadraticB * quadraticB - 4 * quadraticA * quadraticC
+        guard quadraticA > Float.ulpOfOne, discriminant >= 0 else { return nil }
+        let radius = (-quadraticB + discriminant.squareRoot()) / (2 * quadraticA)
+        return radius.isFinite && radius >= 0 ? radius : nil
     }
 
     private static func rayIntersectionDistance(

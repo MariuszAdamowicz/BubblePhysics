@@ -156,6 +156,24 @@ final class ReferenceEquilibriumSolverTests: XCTestCase {
         XCTAssertTrue(report.converged)
     }
 
+    func testMassNormalizedDragSlowsFreeHeavyBubble() throws {
+        var config = configuration()
+        config.linearDamping = 0.8
+        var bubbles = [try ReferenceBubble(
+            id: .init(rawValue: 1), center: .zero,
+            velocity: .init(x: 20, y: 0), mass: 200, targetRadius: 10
+        )]
+        var contacts = ReferenceContactSet()
+
+        _ = ReferenceEquilibriumSolver.solve(
+            bubbles: &bubbles, segments: [], contacts: &contacts,
+            configuration: config, timeStep: 1 / 60
+        )
+
+        XCTAssertLessThan(bubbles[0].velocity.x, 20)
+        XCTAssertGreaterThan(bubbles[0].velocity.x, 19)
+    }
+
     private func configuration() -> ReferenceConfiguration {
         var value = ReferenceConfiguration.default
         value.contactStiffness = 10
