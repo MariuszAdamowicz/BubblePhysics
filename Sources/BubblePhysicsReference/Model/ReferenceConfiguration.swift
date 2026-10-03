@@ -18,6 +18,8 @@ public struct ReferenceConfiguration: Sendable, Equatable {
     public var stressTolerance: Float
     public var contactStiffness: Float
     public var contactDamping: Float
+    public var simultaneousEventTolerance: Float
+    public var maximumEventGroups: Int
 
     public init(
         timeStep: Float = 1 / 60,
@@ -38,7 +40,9 @@ public struct ReferenceConfiguration: Sendable, Equatable {
         pcgIterationLimit: Int = 24,
         stressTolerance: Float = 0.01,
         contactStiffness: Float = 120,
-        contactDamping: Float = 8
+        contactDamping: Float = 8,
+        simultaneousEventTolerance: Float = 1e-5,
+        maximumEventGroups: Int = 8
     ) {
         self.timeStep = timeStep
         self.solverIterations = solverIterations
@@ -59,6 +63,8 @@ public struct ReferenceConfiguration: Sendable, Equatable {
         self.stressTolerance = stressTolerance
         self.contactStiffness = contactStiffness
         self.contactDamping = contactDamping
+        self.simultaneousEventTolerance = simultaneousEventTolerance
+        self.maximumEventGroups = maximumEventGroups
     }
 
     public var sanitized: ReferenceConfiguration {
@@ -85,6 +91,8 @@ public struct ReferenceConfiguration: Sendable, Equatable {
         value.contactStiffness = value.contactStiffness.isFinite && value.contactStiffness > 0
             ? value.contactStiffness : 120
         value.contactDamping = finiteNonnegative(value.contactDamping, fallback: 8)
+        value.simultaneousEventTolerance = finiteNonnegative(value.simultaneousEventTolerance, fallback: 1e-5)
+        value.maximumEventGroups = max(1, value.maximumEventGroups)
         return value
     }
 
