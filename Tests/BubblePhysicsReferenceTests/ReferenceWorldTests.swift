@@ -29,7 +29,7 @@ final class ReferenceWorldTests: XCTestCase {
         XCTAssertLessThan(world.bubbles[0].velocity.x, 60)
     }
 
-    func testNormalStressDoesNotCreateTangentialMotionBeforeFrictionStage() throws {
+    func testKinematicSegmentTransfersBoundedMotionWithFriction() throws {
         var world = ReferenceWorld(configuration: .default, broadPhase: SweepAndPruneBroadPhase())
         world.addBubble(try ReferenceBubble(
             id: .init(rawValue: 1), center: .init(x: 0, y: 1), mass: 1, targetRadius: 2
@@ -43,7 +43,23 @@ final class ReferenceWorldTests: XCTestCase {
 
         _ = world.step()
 
-        XCTAssertEqual(world.bubbles[0].velocity.x, 0)
+        XCTAssertGreaterThan(world.bubbles[0].velocity.x, 0)
+        XCTAssertLessThanOrEqual(world.bubbles[0].velocity.x, world.segments[0].linearVelocity.x)
+        XCTAssertTrue(world.bubbles[0].angularVelocity.isFinite)
+    }
+
+    func testZeroFrictionDoesNotChangeAngularVelocity() throws {
+        var configuration = ReferenceConfiguration.default
+        configuration.surfaceFriction = 0
+        var world = ReferenceWorld(configuration: configuration, broadPhase: SweepAndPruneBroadPhase())
+        world.addBubble(try ReferenceBubble(
+            id: .init(rawValue: 1), center: .init(x: 0, y: 1), mass: 1, targetRadius: 2
+        ))
+        world.addSegment(.kinematicSegment(
+            id: .init(rawValue: 1), previousA: .init(x: -5, y: 0), previousB: .init(x: 5, y: 0),
+            currentA: .init(x: -1, y: 0), currentB: .init(x: 9, y: 0), collisionMode: .oneSided(allowedSide: 1)
+        ))
+        _ = world.step()
         XCTAssertEqual(world.bubbles[0].angularVelocity, 0)
     }
 

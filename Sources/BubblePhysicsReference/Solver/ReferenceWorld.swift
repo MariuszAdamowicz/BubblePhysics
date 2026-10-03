@@ -107,9 +107,6 @@ public struct ReferenceWorld {
                     configuration: configuration
                 )
                 if result.didExhaustBudget { ccdBudgetExhaustions += 1 }
-                if applySegmentTOI(result, bubbleIndex: index, segment: segment) {
-                    sideCorrections += 1
-                }
                 generatedContacts.append(ReferenceDiscreteContactGenerator.bubbleSegmentCandidate(
                     bubbles[index], segment
                 ))
@@ -134,6 +131,8 @@ public struct ReferenceWorld {
             configuration: configuration,
             candidatePairs: pairs
         )
+        let centerGuardCount = applyCenterGuards()
+        sideCorrections += centerGuardCount
         let linearFactor = expf(-configuration.linearDamping * configuration.timeStep)
         let angularFactor = expf(-configuration.angularDamping * configuration.timeStep)
         for index in bubbles.indices {
@@ -141,6 +140,7 @@ public struct ReferenceWorld {
             bubbles[index].velocity = positionalVelocity * linearFactor
             bubbles[index].angularVelocity *= angularFactor
         }
+        applyBoundedFriction()
         let solverEnd = DispatchTime.now().uptimeNanoseconds
 
         return ReferenceWorldStepReport(
@@ -151,6 +151,7 @@ public struct ReferenceWorld {
             toiTestCount: toiTests,
             sideCorrectionCount: sideCorrections,
             ccdBudgetExhaustionCount: ccdBudgetExhaustions,
+            centerGuardCount: centerGuardCount,
             predictionMilliseconds: milliseconds(predictionEnd - predictionStart),
             broadPhaseMilliseconds: milliseconds(broadEnd - broadStart),
             contactMilliseconds: milliseconds(contactEnd - contactStart),
@@ -162,6 +163,54 @@ public struct ReferenceWorld {
                     || bubble.directionalDeformations.contains { !$0.depth.isFinite || !$0.pressure.isFinite }
             }
         )
+    }
+
+    private mutating func applyCenterGuards() -> Int {
+        var count = 0
+        for bubbleIndex in bubbles.indices {
+            for segment in segments {
+                let result = ReferenceCenterSegmentTOI.firstIntersection(
+                    bubble: bubbles[bubbleIndex], segment: segment, tolerance: configuration.positionTolerance
+                )
+                if case let .impact(fraction, _, _) = result {
+                    let movement = bubbles[bubbleIndex].center - bubbles[bubbleIndex].previousCenter
+                    let safeFraction = max(0, fraction - configuration.positionTolerance)
+                    bubbles[bubbleIndex].center = bubbles[bubbleIndex].previousCenter + movement * safeFraction
+                    count += 1
+                }
+                guard let sign = segment.collisionMode.allowedSide else { continue }
+                let edge = segment.currentB - segment.currentA
+                let allowedNormal = ReferenceVector2(x: -edge.y, y: edge.x)
+                    .normalized(or: .init(x: 0, y: 1)) * sign
+                let signed = (bubbles[bubbleIndex].center - segment.currentA).dot(allowedNormal)
+                if signed < 0 {
+                    bubbles[bubbleIndex].center = bubbles[bubbleIndex].center - allowedNormal * signed
+                    count += 1
+                }
+            }
+        }
+        return count
+    }
+
+    private mutating func applyBoundedFriction() {
+        let segmentMap = Dictionary(uniqueKeysWithValues: segments.map { ($0.id, $0) })
+        let bubbleIndices = Dictionary(uniqueKeysWithValues: bubbles.indices.map { (bubbles[$0].id, $0) })
+        for contact in contacts.contacts where contact.kind == .bubbleSegment && contact.pressure > 0 {
+            guard let index = bubbleIndices[contact.bubbleA], let segmentID = contact.segment,
+                  let segment = segmentMap[segmentID], segment.motion == .kinematic else { continue }
+            let tangent = ReferenceVector2(x: contact.normal.y, y: -contact.normal.x)
+                .normalized(or: .init(x: 1, y: 0))
+            let relativeSpeed = (segment.linearVelocity - bubbles[index].velocity).dot(tangent)
+            let desiredImpulse = relativeSpeed * bubbles[index].mass
+            let limit = configuration.surfaceFriction * contact.pressure * configuration.timeStep
+            let impulse = min(limit, max(-limit, desiredImpulse))
+            let impulseVector = tangent * impulse
+            bubbles[index].velocity = bubbles[index].velocity + impulseVector * bubbles[index].inverseMass
+            let lever = contact.pointQ - bubbles[index].center
+            let inertia = max(0.5 * bubbles[index].mass * bubbles[index].targetRadius * bubbles[index].targetRadius,
+                              Float.ulpOfOne)
+            bubbles[index].angularVelocity += lever.cross(impulseVector) / inertia
+        }
     }
 
     private mutating func recoverDeformations() {

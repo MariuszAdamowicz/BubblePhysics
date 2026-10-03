@@ -6,6 +6,7 @@ public struct ReferenceWorldStepReport: Sendable, Equatable {
     public var toiTestCount: Int
     public var sideCorrectionCount: Int
     public var ccdBudgetExhaustionCount: Int
+    public var centerGuardCount: Int
     public var generatedContourPointCount: Int
     public var predictionMilliseconds: Double
     public var broadPhaseMilliseconds: Double
@@ -22,6 +23,7 @@ public struct ReferenceWorldStepReport: Sendable, Equatable {
         toiTestCount: Int,
         sideCorrectionCount: Int,
         ccdBudgetExhaustionCount: Int,
+        centerGuardCount: Int = 0,
         generatedContourPointCount: Int = 0,
         predictionMilliseconds: Double,
         broadPhaseMilliseconds: Double,
@@ -37,6 +39,7 @@ public struct ReferenceWorldStepReport: Sendable, Equatable {
         self.toiTestCount = toiTestCount
         self.sideCorrectionCount = sideCorrectionCount
         self.ccdBudgetExhaustionCount = ccdBudgetExhaustionCount
+        self.centerGuardCount = centerGuardCount
         self.generatedContourPointCount = generatedContourPointCount
         self.predictionMilliseconds = predictionMilliseconds
         self.broadPhaseMilliseconds = broadPhaseMilliseconds
