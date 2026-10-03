@@ -16,6 +16,8 @@ public struct ReferenceConfiguration: Sendable, Equatable {
     public var pcgTolerance: Float
     public var pcgIterationLimit: Int
     public var stressTolerance: Float
+    public var contactStiffness: Float
+    public var contactDamping: Float
 
     public init(
         timeStep: Float = 1 / 60,
@@ -34,7 +36,9 @@ public struct ReferenceConfiguration: Sendable, Equatable {
         maximumContactPressure: Float = 1_000_000,
         pcgTolerance: Float = 0.001,
         pcgIterationLimit: Int = 24,
-        stressTolerance: Float = 0.01
+        stressTolerance: Float = 0.01,
+        contactStiffness: Float = 120,
+        contactDamping: Float = 8
     ) {
         self.timeStep = timeStep
         self.solverIterations = solverIterations
@@ -53,6 +57,8 @@ public struct ReferenceConfiguration: Sendable, Equatable {
         self.pcgTolerance = pcgTolerance
         self.pcgIterationLimit = pcgIterationLimit
         self.stressTolerance = stressTolerance
+        self.contactStiffness = contactStiffness
+        self.contactDamping = contactDamping
     }
 
     public var sanitized: ReferenceConfiguration {
@@ -76,6 +82,9 @@ public struct ReferenceConfiguration: Sendable, Equatable {
         value.pcgTolerance = value.pcgTolerance.isFinite && value.pcgTolerance > 0 ? value.pcgTolerance : 0.001
         value.pcgIterationLimit = max(1, value.pcgIterationLimit)
         value.stressTolerance = value.stressTolerance.isFinite && value.stressTolerance > 0 ? value.stressTolerance : 0.01
+        value.contactStiffness = value.contactStiffness.isFinite && value.contactStiffness > 0
+            ? value.contactStiffness : 120
+        value.contactDamping = finiteNonnegative(value.contactDamping, fallback: 8)
         return value
     }
 
