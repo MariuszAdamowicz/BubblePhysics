@@ -2,22 +2,21 @@ import XCTest
 @testable import BubblePhysicsReference
 
 final class ReferenceVisualSceneTests: XCTestCase {
-    func testFactoryBuildsFortyVariedBubblesFourWallsAndOneTriangle() throws {
+    func testFactoryBuildsReadableBubblesFourWallsAndOnePolygon() throws {
         let scene = try ReferenceVisualSceneFactory.make()
 
-        XCTAssertEqual(scene.world.bubbles.count, 40)
+        XCTAssertEqual(scene.world.bubbles.count, 6)
         XCTAssertEqual(scene.world.segments.count, 7)
         XCTAssertEqual(scene.world.segments.prefix(4).compactMap(\.collisionMode.allowedSide).count, 4)
         XCTAssertTrue(scene.world.segments.suffix(3).allSatisfy { $0.collisionMode == .twoSided })
         XCTAssertEqual(Set(scene.world.segments.suffix(3).compactMap(\.ownerID)), [scene.triangleOwnerID])
 
         let radii = scene.world.bubbles.map(\.targetRadius)
-        XCTAssertLessThanOrEqual(try XCTUnwrap(radii.min()), 8)
-        XCTAssertGreaterThanOrEqual(try XCTUnwrap(radii.max()), 60)
+        XCTAssertGreaterThanOrEqual(try XCTUnwrap(radii.min()), 28)
+        XCTAssertGreaterThanOrEqual(try XCTUnwrap(radii.max()), 90)
         XCTAssertGreaterThanOrEqual(Set(radii).count, 6)
 
-        let expected: [Int: Float] = [2: 8, 4: 11, 8: 16, 16: 22, 32: 30, 64: 39,
-                                      128: 49, 256: 58, 512: 66, 1024: 72, 2048: 75]
+        let expected: [Int: Float] = [2: 28, 8: 42, 32: 54, 128: 62, 512: 78, 2048: 96]
         XCTAssertEqual(Set(scene.valuesByBubbleID.values), Set(expected.keys))
         for bubble in scene.world.bubbles {
             XCTAssertEqual(bubble.targetRadius, expected[scene.valuesByBubbleID[bubble.id]!]!)

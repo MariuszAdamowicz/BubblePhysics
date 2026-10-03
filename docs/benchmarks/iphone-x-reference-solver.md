@@ -55,12 +55,13 @@ Sweep-and-prune jest lepszym wyborem dla tej sceny: ma niższe p50, p95 i koszt 
 ## Walidacja wizualna `CPU Wiz`
 
 Tryb `CPU Wiz` uruchamia osobną, deterministyczną scenę referencyjnego solvera CPU:
-40 baniek z wartościami `2...2048` jednoznacznie powiązanymi z promieniami
-`8...75`, cztery jednostronne ściany oraz obracający
-się trójkąt z trzech dwustronnych odcinków. Symulacja pracuje ze stałym krokiem
+sześć czytelnych baniek z wartościami `2...2048` jednoznacznie powiązanymi z
+promieniami `28...96`, cztery narysowane jednostronne ściany oraz trójkąt z trzech
+dwustronnych odcinków. Trójkąt jest sterowany przeciągnięciem palca, a jego ruch
+jest ograniczony do 18 punktów sceny na krok, żeby CCD mogło obserwować drogę
+przeszkody zamiast teleportacji. Symulacja pracuje ze stałym krokiem
 `1/60 s` i wykonuje najwyżej trzy kroki nadrabiające po opóźnieniu prezentacji.
-Pozycje startowe są pakowane deterministycznie, z penetracją nie większą niż 2
-punkty i bez środków wewnątrz trójkąta.
+Panel sterowania jest przy dolnej krawędzi i nie zakrywa głównego obszaru testu.
 
 Na iPhonie należy ocenić przede wszystkim, czy trójkąt nie przechodzi przez środki
 baniek, kontur reaguje natychmiast na nacisk, szybko wraca do kształtu po zwolnieniu
@@ -68,6 +69,11 @@ i czy bańki zajmują przestrzeń pozostawioną za przeszkodą. Przełącznik `P
 kontaktowe` pokazuje adaptacyjne próbki konturów; `Pauza` i `Reset` nie zmieniają
 pozostałych trybów benchmarku.
 
-Panel diagnostyczny pokazuje osobno liczbę iteracji zewnętrznych i PCG, normę
-naprężeń przed i po rozwiązaniu, maksymalną względną deformację, penetrację,
-interwencje ochrony środka, nieudane próby line search oraz stan `non-finite`.
+Panel diagnostyczny pokazuje iteracje Newtona i PCG, grupy zdarzeń wraz z flagą
+limitu, maksymalny ścisk, normę residualu przed i po rozwiązaniu, interwencje
+ochrony środka, kontakty trwałe oraz stan `non-finite`.
+
+Automatyczna bramka regresji obejmuje pojedynczy i obustronny nacisk, łańcuch
+trzech baniek, narożnik, ścianę, szybki ruch wielokąta, deterministyczność oraz
+zbieżność schematu midpoint przy podziale kroku czasu. Ostateczna akceptacja
+wyglądu konturów i reakcji na dotyk nadal odbywa się na fizycznym iPhonie X.

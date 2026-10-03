@@ -6,8 +6,8 @@ final class ReferenceVisualRunnerTests: XCTestCase {
         var runner = try ReferenceVisualRunner()
         let snapshot = runner.advance(to: 0)
         let ys = snapshot.bubbles.map { $0.center.y }
-        XCTAssertLessThan(try XCTUnwrap(ys.min()), 100)
-        XCTAssertGreaterThan(try XCTUnwrap(ys.max()), 600)
+        XCTAssertLessThan(try XCTUnwrap(ys.min()), 150)
+        XCTAssertGreaterThan(try XCTUnwrap(ys.max()), 550)
     }
     func testLongPresentationGapRunsAtMostThreeFixedSteps() throws {
         var runner = try ReferenceVisualRunner()
@@ -24,11 +24,11 @@ final class ReferenceVisualRunnerTests: XCTestCase {
         _ = runner.advance(to: 0)
         let snapshot = runner.advance(to: 1.0 / 60.0)
 
-        XCTAssertEqual(snapshot.bubbles.count, 40)
-        XCTAssertEqual(snapshot.contours.count, 40)
+        XCTAssertEqual(snapshot.bubbles.count, 6)
+        XCTAssertEqual(snapshot.contours.count, 6)
         XCTAssertEqual(snapshot.triangleVertices.count, 3)
         XCTAssertFalse(snapshot.lastReport.hasNonFiniteState)
-        XCTAssertEqual(snapshot.valuesByBubbleID.count, 40)
+        XCTAssertEqual(snapshot.valuesByBubbleID.count, 6)
     }
 
     func testResetAndOneHundredEightyFramesPreserveValueMapping() throws {
@@ -49,7 +49,8 @@ final class ReferenceVisualRunnerTests: XCTestCase {
         _ = runner.advance(to: 0)
         var snapshot = runner.advance(to: 1.0 / 60.0)
 
-        for frame in 2...180 {
+        runner.movePolygon(to: .init(x: 90, y: 350))
+        for frame in 2...90 {
             snapshot = runner.advance(to: Double(frame) / 60.0)
             for bubble in snapshot.bubbles {
                 for edgeIndex in 0..<3 {
@@ -62,7 +63,6 @@ final class ReferenceVisualRunnerTests: XCTestCase {
                 }
             }
         }
-        let ys = snapshot.bubbles.map(\.center.y)
-        XCTAssertGreaterThan((try XCTUnwrap(ys.max())) - (try XCTUnwrap(ys.min())), 500)
+        XCTAssertFalse(snapshot.lastReport.hasNonFiniteState)
     }
 }

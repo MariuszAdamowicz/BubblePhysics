@@ -20,9 +20,16 @@ struct ReferenceVisualPrototypeView: View {
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: isPaused)) { timeline in
             GeometryReader { proxy in
-                ZStack(alignment: .top) {
+                ZStack(alignment: .bottom) {
                     Canvas { context, size in render(snapshot, in: &context, size: size) }
                         .background(Color(red: 0.025, green: 0.04, blue: 0.07))
+                        .contentShape(Rectangle())
+                        .gesture(DragGesture(minimumDistance: 0).onChanged { drag in
+                            let scale = min(proxy.size.width / 375, proxy.size.height / 700)
+                            let offsetX = (proxy.size.width - 375 * scale) * 0.5
+                            let offsetY = (proxy.size.height - 700 * scale) * 0.5
+                            runner.movePolygon(to: .init(x: Float((drag.location.x - offsetX) / scale), y: Float((drag.location.y - offsetY) / scale)))
+                        })
                     controls
                 }
                 .onChange(of: timeline.date) { date in
@@ -35,16 +42,8 @@ struct ReferenceVisualPrototypeView: View {
 
     private var controls: some View {
         VStack(spacing: 6) {
-            Picker("Scena", selection: $selectedMode) {
-                Text("CPU Wiz").tag(PrototypeMode.referenceVisual)
-                Text("CPU").tag(PrototypeMode.reference)
-                Text("Radial").tag(PrototypeMode.radial)
-                Text("40").tag(PrototypeMode.inspection)
-                Text("300").tag(PrototypeMode.stress)
-            }
-            .pickerStyle(.segmented)
             HStack {
-                Text("CPU Wiz").font(.headline)
+                Text("Kontakty").font(.headline)
                 Spacer()
                 Button(showsDiagnostics ? "Ukryj dane" : "Dane") { showsDiagnostics.toggle() }
                 Button(isPaused ? "Wznów" : "Pauza") { isPaused.toggle() }
@@ -56,9 +55,9 @@ struct ReferenceVisualPrototypeView: View {
             if showsDiagnostics {
                 Toggle("Punkty kontaktowe", isOn: $showsPoints)
                 let report = snapshot.lastReport
-                Text(String(format: "%.2f ms · kontakty %d/%d · Newton %d · PCG %d", report.totalMilliseconds, report.generatedContactCount, report.persistentContactCount, report.solver.iterations, report.solver.pcgIterationCount))
-                Text(String(format: "naprężenie %.2f→%.2f · deformacja %.3f", report.solver.initialResidualNorm, report.solver.finalResidualNorm, report.solver.maximumRelativeDeformation))
-                Text(String(format: "penetracja %.4f · guard %d · line search %d · non-finite %@", report.solver.maximumPenetration, report.centerGuardCount, report.solver.lineSearchFailureCount, report.hasNonFiniteState ? "tak" : "nie"))
+                Text(String(format: "%.2f ms · Newton %d · PCG %d · grupy %d%@", report.totalMilliseconds, report.solver.iterations, report.solver.pcgIterationCount, report.eventGroupCount, report.didReachEventGroupLimit ? " LIMIT" : ""))
+                Text(String(format: "ścisk %.3f · residual %.2f→%.2f", report.solver.maximumCompression, report.solver.initialResidualNorm, report.solver.finalResidualNorm))
+                Text(String(format: "guard %d · kontakty %d · non-finite %@", report.centerGuardCount, report.persistentContactCount, report.hasNonFiniteState ? "tak" : "nie"))
             }
         }
         .font(.caption.monospacedDigit())
@@ -74,6 +73,10 @@ struct ReferenceVisualPrototypeView: View {
         func point(_ value: ReferenceVector2) -> CGPoint {
             CGPoint(x: offset.x + CGFloat(value.x) * scale, y: offset.y + CGFloat(value.y) * scale)
         }
+
+        var chamber = Path()
+        chamber.addRect(CGRect(x: offset.x, y: offset.y, width: 375 * scale, height: 700 * scale))
+        context.stroke(chamber, with: .color(.white.opacity(0.75)), lineWidth: 2)
 
         for bubble in snapshot.bubbles {
             guard let contour = snapshot.contours[bubble.id], contour.count >= 3 else { continue }
