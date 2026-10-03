@@ -5,6 +5,7 @@ public struct ReferenceVisualSnapshot: Sendable, Equatable {
     public var lastReport: ReferenceWorldStepReport
     public var simulationTime: Double
     public var stepsExecuted: Int
+    public var valuesByBubbleID: [ReferenceBubbleID: Int]
 }
 
 public struct ReferenceVisualRunner {
@@ -88,7 +89,8 @@ public struct ReferenceVisualRunner {
             triangleVertices: vertices,
             lastReport: lastReport,
             simulationTime: simulationTime,
-            stepsExecuted: stepsExecuted
+            stepsExecuted: stepsExecuted,
+            valuesByBubbleID: scene.valuesByBubbleID
         )
     }
 }

@@ -7,17 +7,20 @@ public struct ReferenceVisualScene {
     public let triangleOwnerID: Int
     public let triangleSegmentIDs: [ReferenceSegmentID]
     public let triangleLocalVertices: [ReferenceVector2]
+    public let valuesByBubbleID: [ReferenceBubbleID: Int]
 
     public init(
         world: ReferenceWorld,
         triangleOwnerID: Int,
         triangleSegmentIDs: [ReferenceSegmentID],
-        triangleLocalVertices: [ReferenceVector2]
+        triangleLocalVertices: [ReferenceVector2],
+        valuesByBubbleID: [ReferenceBubbleID: Int]
     ) {
         self.world = world
         self.triangleOwnerID = triangleOwnerID
         self.triangleSegmentIDs = triangleSegmentIDs
         self.triangleLocalVertices = triangleLocalVertices
+        self.valuesByBubbleID = valuesByBubbleID
     }
 }
 
@@ -28,24 +31,35 @@ public enum ReferenceVisualSceneFactory {
         configuration.maxContourSegmentLength = 6
         var world = ReferenceWorld(configuration: configuration, broadPhase: SweepAndPruneBroadPhase())
 
-        let radii: [Float] = [8, 12, 16, 22, 30, 42, 60, 75]
-        for index in 0..<40 {
-            let column = index % 5
-            let row = index / 5
-            let radius = radii[index % radii.count]
-            let center = ReferenceVector2(
-                x: 38 + Float(column) * 74 + Float(row % 2) * 9,
-                y: 42 + Float(row) * 86
-            )
+        let values = [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048]
+        let radii: [Float] = [8, 11, 16, 22, 30, 39, 49, 58, 66, 72, 75]
+        let radiusByValue = Dictionary(uniqueKeysWithValues: zip(values, radii))
+        let requestedValues = (values + Array(repeating: 2, count: 29)).sorted {
+            radiusByValue[$0]! > radiusByValue[$1]!
+        }
+        let localVertices = [
+            ReferenceVector2(x: -54, y: 38), ReferenceVector2(x: 54, y: 38), ReferenceVector2(x: 0, y: -62)
+        ]
+        let initialTriangle = triangleVertices(localVertices: localVertices, at: 0)
+        var placed: [(center: ReferenceVector2, radius: Float)] = []
+        var valuesByBubbleID: [ReferenceBubbleID: Int] = [:]
+        for (index, value) in requestedValues.enumerated() {
+            let radius = radiusByValue[value]!
+            guard let center = packedCenter(radius: radius, existing: placed, triangle: initialTriangle) else {
+                throw ReferenceModelError.nonFiniteValue
+            }
+            let id = ReferenceBubbleID(rawValue: index + 1)
             world.addBubble(try ReferenceBubble(
-                id: .init(rawValue: index + 1),
+                id: id,
                 center: center,
                 velocity: .zero,
                 mass: max(1, radius * radius * 0.02),
                 targetRadius: radius,
-                stiffness: 1.4,
+                stiffness: 24 / radius,
                 rotation: Float(index) * 0.31
             ))
+            placed.append((center, radius))
+            valuesByBubbleID[id] = value
         }
 
         world.addSegment(.staticSegment(
@@ -67,11 +81,6 @@ public enum ReferenceVisualSceneFactory {
 
         let ownerID = 100
         let segmentIDs = [5, 6, 7].map { ReferenceSegmentID(rawValue: $0) }
-        let localVertices = [
-            ReferenceVector2(x: -54, y: 38),
-            ReferenceVector2(x: 54, y: 38),
-            ReferenceVector2(x: 0, y: -62)
-        ]
         let vertices = triangleVertices(localVertices: localVertices, at: 0)
         for edgeIndex in 0..<3 {
             world.addSegment(.kinematicSegment(
@@ -89,8 +98,41 @@ public enum ReferenceVisualSceneFactory {
             world: world,
             triangleOwnerID: ownerID,
             triangleSegmentIDs: segmentIDs,
-            triangleLocalVertices: localVertices
+            triangleLocalVertices: localVertices,
+            valuesByBubbleID: valuesByBubbleID
         )
+    }
+
+    private static func packedCenter(
+        radius: Float, existing: [(center: ReferenceVector2, radius: Float)], triangle: [ReferenceVector2]
+    ) -> ReferenceVector2? {
+        let margin = max(0, radius - 2)
+        var y = margin
+        while y <= ReferenceVisualScene.size.y - margin {
+            var x = margin
+            while x <= ReferenceVisualScene.size.x - margin {
+                let point = ReferenceVector2(x: x, y: y)
+                let clearOfBubbles = existing.allSatisfy {
+                    (point - $0.center).length >= radius + $0.radius - 2
+                }
+                if clearOfBubbles && clearOfTriangle(point, radius: radius, vertices: triangle) { return point }
+                x += 4
+            }
+            y += 4
+        }
+        return nil
+    }
+
+    private static func clearOfTriangle(_ point: ReferenceVector2, radius: Float, vertices: [ReferenceVector2]) -> Bool {
+        let crosses = vertices.indices.map { index in
+            (vertices[(index + 1) % 3] - vertices[index]).cross(point - vertices[index])
+        }
+        if crosses.allSatisfy({ $0 >= 0 }) || crosses.allSatisfy({ $0 <= 0 }) { return false }
+        let required = max(0, radius - 2)
+        return vertices.indices.allSatisfy { index in
+            closestPoint(to: point, on: .init(a: vertices[index], b: vertices[(index + 1) % 3]))
+                .distanceSquared >= required * required
+        }
     }
 
     static func triangleVertices(

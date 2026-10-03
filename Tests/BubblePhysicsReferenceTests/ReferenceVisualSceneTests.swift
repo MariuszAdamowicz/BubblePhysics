@@ -15,5 +15,31 @@ final class ReferenceVisualSceneTests: XCTestCase {
         XCTAssertLessThanOrEqual(try XCTUnwrap(radii.min()), 8)
         XCTAssertGreaterThanOrEqual(try XCTUnwrap(radii.max()), 60)
         XCTAssertGreaterThanOrEqual(Set(radii).count, 6)
+
+        let expected: [Int: Float] = [2: 8, 4: 11, 8: 16, 16: 22, 32: 30, 64: 39,
+                                      128: 49, 256: 58, 512: 66, 1024: 72, 2048: 75]
+        XCTAssertEqual(Set(scene.valuesByBubbleID.values), Set(expected.keys))
+        for bubble in scene.world.bubbles {
+            XCTAssertEqual(bubble.targetRadius, expected[scene.valuesByBubbleID[bubble.id]!]!)
+        }
+        let ordered = scene.world.bubbles.sorted { scene.valuesByBubbleID[$0.id]! < scene.valuesByBubbleID[$1.id]! }
+        XCTAssertTrue(zip(ordered, ordered.dropFirst()).allSatisfy { $0.targetRadius <= $1.targetRadius })
+
+        for first in scene.world.bubbles.indices {
+            for second in scene.world.bubbles.indices where second > first {
+                let penetration = scene.world.bubbles[first].targetRadius + scene.world.bubbles[second].targetRadius
+                    - (scene.world.bubbles[second].center - scene.world.bubbles[first].center).length
+                XCTAssertLessThanOrEqual(penetration, 2.001)
+            }
+        }
+        let triangle = ReferenceVisualSceneFactory.triangleVertices(localVertices: scene.triangleLocalVertices, at: 0)
+        XCTAssertTrue(scene.world.bubbles.allSatisfy { !pointInTriangle($0.center, triangle) })
+    }
+
+    private func pointInTriangle(_ point: ReferenceVector2, _ vertices: [ReferenceVector2]) -> Bool {
+        let signs = vertices.indices.map { index in
+            (vertices[(index + 1) % 3] - vertices[index]).cross(point - vertices[index])
+        }
+        return signs.allSatisfy { $0 >= 0 } || signs.allSatisfy { $0 <= 0 }
     }
 }

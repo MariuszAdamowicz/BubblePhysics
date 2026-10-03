@@ -21,6 +21,20 @@ final class ReferenceVisualRunnerTests: XCTestCase {
         XCTAssertEqual(snapshot.contours.count, 40)
         XCTAssertEqual(snapshot.triangleVertices.count, 3)
         XCTAssertFalse(snapshot.lastReport.hasNonFiniteState)
+        XCTAssertEqual(snapshot.valuesByBubbleID.count, 40)
+    }
+
+    func testResetAndOneHundredEightyFramesPreserveValueMapping() throws {
+        var runner = try ReferenceVisualRunner()
+        let initial = runner.advance(to: 0)
+        var evolved = initial
+        for frame in 1...180 { evolved = runner.advance(to: Double(frame) / 60) }
+        XCTAssertEqual(evolved.valuesByBubbleID, initial.valuesByBubbleID)
+
+        runner.reset()
+        let reset = runner.advance(to: 0)
+        XCTAssertEqual(reset.valuesByBubbleID, initial.valuesByBubbleID)
+        XCTAssertEqual(reset.bubbles, initial.bubbles)
     }
 
     func testTriangleEdgesNeverPassThroughBubbleCenters() throws {

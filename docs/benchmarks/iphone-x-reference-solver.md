@@ -55,12 +55,19 @@ Sweep-and-prune jest lepszym wyborem dla tej sceny: ma niższe p50, p95 i koszt 
 ## Walidacja wizualna `CPU Wiz`
 
 Tryb `CPU Wiz` uruchamia osobną, deterministyczną scenę referencyjnego solvera CPU:
-40 baniek o wyraźnie różnych rozmiarach, cztery jednostronne ściany oraz obracający
+40 baniek z wartościami `2...2048` jednoznacznie powiązanymi z promieniami
+`8...75`, cztery jednostronne ściany oraz obracający
 się trójkąt z trzech dwustronnych odcinków. Symulacja pracuje ze stałym krokiem
 `1/60 s` i wykonuje najwyżej trzy kroki nadrabiające po opóźnieniu prezentacji.
+Pozycje startowe są pakowane deterministycznie, z penetracją nie większą niż 2
+punkty i bez środków wewnątrz trójkąta.
 
 Na iPhonie należy ocenić przede wszystkim, czy trójkąt nie przechodzi przez środki
 baniek, kontur reaguje natychmiast na nacisk, szybko wraca do kształtu po zwolnieniu
 i czy bańki zajmują przestrzeń pozostawioną za przeszkodą. Przełącznik `Punkty
 kontaktowe` pokazuje adaptacyjne próbki konturów; `Pauza` i `Reset` nie zmieniają
 pozostałych trybów benchmarku.
+
+Panel diagnostyczny pokazuje osobno liczbę iteracji zewnętrznych i PCG, normę
+naprężeń przed i po rozwiązaniu, maksymalną względną deformację, penetrację,
+interwencje ochrony środka, nieudane próby line search oraz stan `non-finite`.

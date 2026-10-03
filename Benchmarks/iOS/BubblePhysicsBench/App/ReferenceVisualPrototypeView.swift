@@ -53,8 +53,9 @@ struct ReferenceVisualPrototypeView: View {
             }
             Toggle("Punkty kontaktowe", isOn: $showsPoints)
             let report = snapshot.lastReport
-            Text(String(format: "%.2f ms · kontakty %d/%d · iteracje %d", report.totalMilliseconds, report.generatedContactCount, report.persistentContactCount, report.solver.iterations))
-            Text(String(format: "penetracja %.4f · TOI %d · limity %d · non-finite %@", report.solver.maximumPenetration, report.toiTestCount, report.ccdBudgetExhaustionCount, report.hasNonFiniteState ? "tak" : "nie"))
+            Text(String(format: "%.2f ms · kontakty %d/%d · Newton %d · PCG %d", report.totalMilliseconds, report.generatedContactCount, report.persistentContactCount, report.solver.iterations, report.solver.pcgIterationCount))
+            Text(String(format: "naprężenie %.2f→%.2f · deformacja %.3f", report.solver.initialResidualNorm, report.solver.finalResidualNorm, report.solver.maximumRelativeDeformation))
+            Text(String(format: "penetracja %.4f · guard %d · line search %d · non-finite %@", report.solver.maximumPenetration, report.centerGuardCount, report.solver.lineSearchFailureCount, report.hasNonFiniteState ? "tak" : "nie"))
         }
         .font(.caption.monospacedDigit())
         .padding(12)
@@ -82,7 +83,7 @@ struct ReferenceVisualPrototypeView: View {
             labelContext.translateBy(x: center.x, y: center.y)
             labelContext.rotate(by: .radians(Double(bubble.rotation)))
             labelContext.draw(
-                Text(String(1 << min(20, bubble.id.rawValue % 12 + 1)))
+                Text(String(snapshot.valuesByBubbleID[bubble.id] ?? 0))
                     .font(.system(size: max(8, CGFloat(bubble.targetRadius) * scale * 0.34), weight: .semibold)),
                 at: .zero,
                 anchor: .center
