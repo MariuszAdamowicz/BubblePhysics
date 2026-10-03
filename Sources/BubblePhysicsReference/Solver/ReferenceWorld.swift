@@ -172,7 +172,7 @@ public struct ReferenceWorld {
                 let result = ReferenceCenterSegmentTOI.firstIntersection(
                     bubble: bubbles[bubbleIndex], segment: segment, tolerance: configuration.positionTolerance
                 )
-                if case let .impact(fraction, _, _) = result {
+                if case .impact = result {
                     let previousEdge = segment.previousB - segment.previousA
                     let currentEdge = segment.currentB - segment.currentA
                     let previousNormal = ReferenceVector2(x: -previousEdge.y, y: previousEdge.x)
@@ -182,14 +182,11 @@ public struct ReferenceWorld {
                     let previousSide = (bubbles[bubbleIndex].previousCenter - segment.previousA).dot(previousNormal)
                     let desiredSign: Float = previousSide < 0 ? -1 : 1
                     let currentSide = (bubbles[bubbleIndex].center - segment.currentA).dot(currentNormal)
-                    let targetSide = desiredSign * max(configuration.positionTolerance, 1e-6)
-                    if currentSide * desiredSign <= 0 {
+                    let guardMargin = max(configuration.contactTolerance * 2, configuration.positionTolerance)
+                    let targetSide = desiredSign * guardMargin
+                    if currentSide * desiredSign < guardMargin {
                         bubbles[bubbleIndex].center = bubbles[bubbleIndex].center
                             + currentNormal * (targetSide - currentSide)
-                    } else {
-                        let movement = bubbles[bubbleIndex].center - bubbles[bubbleIndex].previousCenter
-                        let safeFraction = max(0, fraction - configuration.positionTolerance)
-                        bubbles[bubbleIndex].center = bubbles[bubbleIndex].previousCenter + movement * safeFraction
                     }
                     count += 1
                 }

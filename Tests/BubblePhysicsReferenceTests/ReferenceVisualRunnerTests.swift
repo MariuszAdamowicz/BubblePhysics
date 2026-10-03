@@ -2,6 +2,13 @@ import XCTest
 @testable import BubblePhysicsReference
 
 final class ReferenceVisualRunnerTests: XCTestCase {
+    func testInitialPackingUsesTheFullBoardHeight() throws {
+        var runner = try ReferenceVisualRunner()
+        let snapshot = runner.advance(to: 0)
+        let ys = snapshot.bubbles.map { $0.center.y }
+        XCTAssertLessThan(try XCTUnwrap(ys.min()), 100)
+        XCTAssertGreaterThan(try XCTUnwrap(ys.max()), 600)
+    }
     func testLongPresentationGapRunsAtMostThreeFixedSteps() throws {
         var runner = try ReferenceVisualRunner()
 
@@ -55,5 +62,7 @@ final class ReferenceVisualRunnerTests: XCTestCase {
                 }
             }
         }
+        let ys = snapshot.bubbles.map(\.center.y)
+        XCTAssertGreaterThan((try XCTUnwrap(ys.max())) - (try XCTUnwrap(ys.min())), 500)
     }
 }

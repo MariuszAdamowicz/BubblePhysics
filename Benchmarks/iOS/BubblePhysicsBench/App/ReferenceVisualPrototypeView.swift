@@ -7,6 +7,7 @@ struct ReferenceVisualPrototypeView: View {
     @State private var snapshot: ReferenceVisualSnapshot
     @State private var isPaused = false
     @State private var showsPoints = false
+    @State private var showsDiagnostics = false
 
     init(selectedMode: Binding<PrototypeMode>) {
         _selectedMode = selectedMode
@@ -33,7 +34,7 @@ struct ReferenceVisualPrototypeView: View {
     }
 
     private var controls: some View {
-        VStack(spacing: 7) {
+        VStack(spacing: 6) {
             Picker("Scena", selection: $selectedMode) {
                 Text("CPU Wiz").tag(PrototypeMode.referenceVisual)
                 Text("CPU").tag(PrototypeMode.reference)
@@ -45,17 +46,20 @@ struct ReferenceVisualPrototypeView: View {
             HStack {
                 Text("CPU Wiz").font(.headline)
                 Spacer()
+                Button(showsDiagnostics ? "Ukryj dane" : "Dane") { showsDiagnostics.toggle() }
                 Button(isPaused ? "Wznów" : "Pauza") { isPaused.toggle() }
                 Button("Reset") {
                     runner.reset()
                     snapshot = runner.advance(to: Date.timeIntervalSinceReferenceDate)
                 }
             }
-            Toggle("Punkty kontaktowe", isOn: $showsPoints)
-            let report = snapshot.lastReport
-            Text(String(format: "%.2f ms · kontakty %d/%d · Newton %d · PCG %d", report.totalMilliseconds, report.generatedContactCount, report.persistentContactCount, report.solver.iterations, report.solver.pcgIterationCount))
-            Text(String(format: "naprężenie %.2f→%.2f · deformacja %.3f", report.solver.initialResidualNorm, report.solver.finalResidualNorm, report.solver.maximumRelativeDeformation))
-            Text(String(format: "penetracja %.4f · guard %d · line search %d · non-finite %@", report.solver.maximumPenetration, report.centerGuardCount, report.solver.lineSearchFailureCount, report.hasNonFiniteState ? "tak" : "nie"))
+            if showsDiagnostics {
+                Toggle("Punkty kontaktowe", isOn: $showsPoints)
+                let report = snapshot.lastReport
+                Text(String(format: "%.2f ms · kontakty %d/%d · Newton %d · PCG %d", report.totalMilliseconds, report.generatedContactCount, report.persistentContactCount, report.solver.iterations, report.solver.pcgIterationCount))
+                Text(String(format: "naprężenie %.2f→%.2f · deformacja %.3f", report.solver.initialResidualNorm, report.solver.finalResidualNorm, report.solver.maximumRelativeDeformation))
+                Text(String(format: "penetracja %.4f · guard %d · line search %d · non-finite %@", report.solver.maximumPenetration, report.centerGuardCount, report.solver.lineSearchFailureCount, report.hasNonFiniteState ? "tak" : "nie"))
+            }
         }
         .font(.caption.monospacedDigit())
         .padding(12)

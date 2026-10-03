@@ -107,20 +107,23 @@ public enum ReferenceVisualSceneFactory {
         radius: Float, existing: [(center: ReferenceVector2, radius: Float)], triangle: [ReferenceVector2]
     ) -> ReferenceVector2? {
         let margin = max(0, radius - 2)
+        var best: (point: ReferenceVector2, score: Float)?
         var y = margin
         while y <= ReferenceVisualScene.size.y - margin {
             var x = margin
             while x <= ReferenceVisualScene.size.x - margin {
                 let point = ReferenceVector2(x: x, y: y)
-                let clearOfBubbles = existing.allSatisfy {
-                    (point - $0.center).length >= radius + $0.radius - 2
+                let gaps = existing.map { (point - $0.center).length - radius - $0.radius }
+                let clearOfBubbles = gaps.allSatisfy { $0 >= -2 }
+                if clearOfBubbles && clearOfTriangle(point, radius: radius, vertices: triangle) {
+                    let score = gaps.min() ?? 0
+                    if best == nil || score > best!.score { best = (point, score) }
                 }
-                if clearOfBubbles && clearOfTriangle(point, radius: radius, vertices: triangle) { return point }
                 x += 4
             }
             y += 4
         }
-        return nil
+        return best?.point
     }
 
     private static func clearOfTriangle(_ point: ReferenceVector2, radius: Float, vertices: [ReferenceVector2]) -> Bool {
