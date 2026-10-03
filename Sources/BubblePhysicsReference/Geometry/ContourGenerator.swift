@@ -4,12 +4,13 @@ public enum ReferenceContourGenerator {
     public static func points(
         for bubble: ReferenceBubble,
         contacts: [ReferenceContact],
+        segments: [ReferenceSegment] = [],
         configuration: ReferenceConfiguration
     ) -> [ReferenceVector2] {
         let config = configuration.sanitized
         let circumference = 2 * Float.pi * bubble.targetRadius
         let count = max(32, Int(ceilf(circumference / config.maxContourSegmentLength)))
-        let constraints = contourConstraints(for: bubble, contacts: contacts)
+        let constraints = contourConstraints(for: bubble, contacts: contacts, segments: segments)
         let fullTurn = 2 * Float.pi
         let directions = (0..<count).map { index in
             let angle = fullTurn * Float(index) / Float(count)
@@ -68,9 +69,29 @@ public enum ReferenceContourGenerator {
 
     private static func contourConstraints(
         for bubble: ReferenceBubble,
-        contacts: [ReferenceContact]
+        contacts: [ReferenceContact],
+        segments: [ReferenceSegment]
     ) -> [ReferenceContourConstraint] {
-        contacts.compactMap { contact in
+        let segmentByID = Dictionary(uniqueKeysWithValues: segments.map { ($0.id, $0) })
+        return contacts.compactMap { contact -> ReferenceContourConstraint? in
+            if contact.kind == .bubbleSegment,
+               let segmentID = contact.segment,
+               let segment = segmentByID[segmentID] {
+                let edge = segment.currentB - segment.currentA
+                var normal = ReferenceVector2(x: -edge.y, y: edge.x)
+                    .normalized(or: contact.normal)
+                if let allowedSide = segment.collisionMode.allowedSide {
+                    normal = normal * allowedSide
+                } else if (bubble.center - segment.currentA).dot(normal) < 0 {
+                    normal = -normal
+                }
+                return .init(
+                    contactID: contact.id,
+                    pointQ: segment.currentA,
+                    inwardNormal: normal,
+                    pressure: contact.pressure
+                )
+            }
             let inward: ReferenceVector2
             if contact.bubbleA == bubble.id {
                 inward = contact.kind == .bubbleBubble ? -contact.normal : contact.normal

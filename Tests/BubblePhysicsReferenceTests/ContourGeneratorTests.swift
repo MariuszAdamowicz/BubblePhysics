@@ -2,6 +2,30 @@ import XCTest
 @testable import BubblePhysicsReference
 
 final class ContourGeneratorTests: XCTestCase {
+    func testPolygonVertexContactUsesBothRealEdgePlanesInsteadOfTangentAtVertex() throws {
+        let bubble = try ReferenceBubble(
+            id: .init(rawValue: 1), center: .init(x: 6, y: 6), mass: 1, targetRadius: 10
+        )
+        let edges = [
+            ReferenceSegment.staticSegment(
+                id: .init(rawValue: 10), a: .init(x: 0, y: 0), b: .init(x: 12, y: 0)
+            ),
+            ReferenceSegment.staticSegment(
+                id: .init(rawValue: 11), a: .init(x: 0, y: 12), b: .init(x: 0, y: 0)
+            ),
+        ]
+        let contacts = edges.map {
+            ReferenceDiscreteContactGenerator.bubbleSegmentCandidate(bubble, $0)
+        }
+
+        let points = ReferenceContourGenerator.points(
+            for: bubble, contacts: contacts, segments: edges, configuration: .default
+        )
+
+        XCTAssertTrue(points.allSatisfy { $0.x >= -0.001 && $0.y >= -0.001 })
+        XCTAssertTrue(points.contains { abs($0.x) < 0.01 && $0.y > 0.5 })
+        XCTAssertTrue(points.contains { abs($0.y) < 0.01 && $0.x > 0.5 })
+    }
     func testNoContactsProduceExactNaturalCircle() throws {
         let bubble = try makeBubble(center: .init(x: 3, y: -2), radius: 10)
 

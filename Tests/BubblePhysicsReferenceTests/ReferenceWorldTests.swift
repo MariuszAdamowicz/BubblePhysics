@@ -2,6 +2,48 @@ import XCTest
 @testable import BubblePhysicsReference
 
 final class ReferenceWorldTests: XCTestCase {
+    func testBubbleCompressedAgainstWallAcceleratesBackIntoChamber() throws {
+        var configuration = ReferenceConfiguration.default
+        configuration.timeStep = 1 / 60
+        var world = ReferenceWorld(configuration: configuration, broadPhase: SweepAndPruneBroadPhase())
+        world.addBubble(try ReferenceBubble(
+            id: .init(rawValue: 1), center: .init(x: 2, y: 50), mass: 1,
+            targetRadius: 20
+        ))
+        world.addSegment(.staticSegment(
+            id: .init(rawValue: 1), a: .init(x: 0, y: 0), b: .init(x: 0, y: 100),
+            collisionMode: .oneSided(allowedSide: -1)
+        ))
+
+        var report = world.step()
+        for _ in 0..<29 { report = world.step() }
+
+        XCTAssertGreaterThan(world.bubbles[0].center.x, 2)
+        XCTAssertGreaterThan(world.bubbles[0].velocity.x, 0)
+        XCTAssertEqual(report.centerGuardCount, 0)
+        XCTAssertFalse(report.hasNonFiniteState)
+    }
+
+    func testOpposingWallsDriveCenterTowardMidplane() throws {
+        var world = ReferenceWorld(configuration: .default, broadPhase: SweepAndPruneBroadPhase())
+        world.addBubble(try ReferenceBubble(
+            id: .init(rawValue: 1), center: .init(x: 1, y: 50), mass: 1,
+            targetRadius: 20
+        ))
+        world.addSegment(.staticSegment(
+            id: .init(rawValue: 1), a: .init(x: 0, y: 0), b: .init(x: 0, y: 100),
+            collisionMode: .oneSided(allowedSide: -1)
+        ))
+        world.addSegment(.staticSegment(
+            id: .init(rawValue: 2), a: .init(x: 10, y: 100), b: .init(x: 10, y: 0),
+            collisionMode: .oneSided(allowedSide: -1)
+        ))
+
+        for _ in 0..<60 { _ = world.step() }
+
+        XCTAssertEqual(world.bubbles[0].center.x, 5, accuracy: 0.75)
+        XCTAssertFalse(world.bubbles[0].velocity.x.isNaN)
+    }
     func testContactHalfwayThroughFrameActsOnlyForRemainingTime() throws {
         var world = world(timeStep: 0.4)
         world.addBubble(try bubble(1, x: 0, velocity: 10))

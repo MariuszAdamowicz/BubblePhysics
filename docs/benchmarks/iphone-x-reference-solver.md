@@ -77,3 +77,10 @@ Automatyczna bramka regresji obejmuje pojedynczy i obustronny nacisk, łańcuch
 trzech baniek, narożnik, ścianę, szybki ruch wielokąta, deterministyczność oraz
 zbieżność schematu midpoint przy podziale kroku czasu. Ostateczna akceptacja
 wyglądu konturów i reakcji na dotyk nadal odbywa się na fizycznym iPhonie X.
+
+Po pierwszym teście urządzeniowym dodano regresję agresywnego przeciągania przez
+wszystkie cztery krawędzie. Sprężyna odcinka zachowuje ustaloną stronę kontaktu
+również dla próbnego położenia Newtona za płaszczyzną, dzięki czemu końcowy guard
+nie może utrwalać prędkości skierowanej poza komorę. Kontur wielokąta korzysta z
+prostych rzeczywistych krawędzi, a nie z płaszczyzny stycznej wyprowadzonej tylko
+z punktu `Q` wierzchołka.

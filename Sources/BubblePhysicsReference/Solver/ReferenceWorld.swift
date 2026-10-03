@@ -192,7 +192,7 @@ public struct ReferenceWorld {
         guard let bubble = bubbles.first(where: { $0.id == id }) else { return [] }
         let bubbleContacts = contacts.contacts.filter { $0.bubbleA == id || $0.bubbleB == id }
         return ReferenceContourGenerator.points(
-            for: bubble, contacts: bubbleContacts, configuration: configuration
+            for: bubble, contacts: bubbleContacts, segments: segments, configuration: configuration
         )
     }
 

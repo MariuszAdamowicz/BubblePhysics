@@ -2,6 +2,17 @@ import XCTest
 @testable import BubblePhysicsReference
 
 final class ReferenceContactSpringTests: XCTestCase {
+    func testSurfaceSpringKeepsContactSideWhenTrialCenterCrossesAnchor() {
+        let sample = ReferenceContactSpringState.evaluate(
+            centerA: .init(x: 2, y: 0), velocityA: .init(x: 50, y: 0), radiusA: 20,
+            centerB: nil, velocityB: .zero, pointQ: .zero,
+            normalFallback: .init(x: -1, y: 0), contactDistance: 20,
+            stiffness: 100, damping: 5
+        )
+
+        XCTAssertLessThan(sample.forceOnA.x, 0)
+        XCTAssertEqual(sample.normal, .init(x: -1, y: 0))
+    }
     func testSeparatedContactProducesNoForce() {
         let sample = evaluate(centerA: .init(x: 12, y: 0), centerB: .zero)
 

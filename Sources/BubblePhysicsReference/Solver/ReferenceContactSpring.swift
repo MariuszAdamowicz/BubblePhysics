@@ -34,7 +34,9 @@ public enum ReferenceContactSpringState {
         let anchor = centerB ?? pointQ ?? centerA
         let offset = centerA - anchor
         let fallback = normalFallback.normalized(or: .init(x: 1, y: 0))
-        let normal = offset.normalized(or: fallback)
+        let geometricNormal = offset.normalized(or: fallback)
+        let normal = centerB == nil && geometricNormal.dot(fallback) < 0
+            ? fallback : geometricNormal
         let compression = max(0, contactDistance - offset.length)
         guard compression > 0 else {
             return .init(compression: 0, normal: normal, forceOnA: .zero, tangentStiffness: 0)

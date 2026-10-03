@@ -65,4 +65,47 @@ final class ReferenceVisualRunnerTests: XCTestCase {
         }
         XCTAssertFalse(snapshot.lastReport.hasNonFiniteState)
     }
+
+    func testBubblePressedIntoWallReentersChamberAfterPolygonLeaves() throws {
+        var runner = try ReferenceVisualRunner()
+        _ = runner.advance(to: 0)
+        var frame = 1
+        runner.movePolygon(to: .init(x: 185, y: 650))
+        var snapshot = runner.advance(to: Double(frame) / 60)
+        for next in 2...50 { frame = next; snapshot = runner.advance(to: Double(frame) / 60) }
+
+        runner.movePolygon(to: .init(x: 185, y: 350))
+        for next in 51...350 { frame = next; snapshot = runner.advance(to: Double(frame) / 60) }
+
+        let bottomBubble = try XCTUnwrap(snapshot.bubbles.first { snapshot.valuesByBubbleID[$0.id] == 2048 })
+        XCTAssertLessThan(bottomBubble.center.y, ReferenceVisualScene.size.y - 2)
+        XCTAssertLessThan(abs(bottomBubble.velocity.y), 10)
+        XCTAssertFalse(snapshot.lastReport.hasNonFiniteState)
+    }
+
+    func testBubblesRecoverFromAllWallsAfterAggressiveDragging() throws {
+        var runner = try ReferenceVisualRunner()
+        _ = runner.advance(to: 0)
+        var frame = 0
+        var snapshot = runner.advance(to: 0)
+        for target in [
+            ReferenceVector2(x: 45, y: 50), .init(x: 330, y: 50),
+            .init(x: 330, y: 650), .init(x: 45, y: 650), .init(x: 187, y: 350),
+        ] {
+            runner.movePolygon(to: target)
+            for _ in 0..<75 { frame += 1; snapshot = runner.advance(to: Double(frame) / 60) }
+        }
+        runner.movePolygon(to: .init(x: 187, y: 350))
+        for _ in 0..<600 { frame += 1; snapshot = runner.advance(to: Double(frame) / 60) }
+
+        for bubble in snapshot.bubbles {
+            let distances = [bubble.center.x, 375 - bubble.center.x, bubble.center.y, 700 - bubble.center.y]
+            XCTAssertGreaterThan(
+                try XCTUnwrap(distances.min()), 1,
+                "bubble \(bubble.id.rawValue) remained at wall: center=\(bubble.center), velocity=\(bubble.velocity), report=\(snapshot.lastReport)"
+            )
+        }
+        XCTAssertEqual(snapshot.lastReport.centerGuardCount, 0)
+        XCTAssertFalse(snapshot.lastReport.hasNonFiniteState)
+    }
 }
