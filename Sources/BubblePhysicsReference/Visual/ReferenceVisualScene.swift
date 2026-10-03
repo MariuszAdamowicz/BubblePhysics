@@ -17,8 +17,9 @@ public enum ReferenceVisualSceneFactory {
         var configuration = ReferenceConfiguration.default
         configuration.timeStep = 1 / 60
         configuration.maxContourSegmentLength = 5
-        configuration.contactStiffness = 180
-        configuration.contactDamping = 12
+        configuration.contactStiffness = 300
+        configuration.contactDamping = 26
+        configuration.linearDamping = 0.8
         configuration.maximumEventGroups = 12
         var world = ReferenceWorld(configuration: configuration, broadPhase: SweepAndPruneBroadPhase())
         let specifications: [(Int, ReferenceVector2, Float)] = [

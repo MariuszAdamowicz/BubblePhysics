@@ -2,6 +2,19 @@ import XCTest
 @testable import BubblePhysicsReference
 
 final class ReferenceVisualSceneTests: XCTestCase {
+    func testVisualSceneUsesFastDampedMassNormalizedContactResponse() throws {
+        let configuration = try ReferenceVisualSceneFactory.make().world.configuration
+        let angularFrequency = sqrt(configuration.contactStiffness)
+        let dampingRatio = configuration.contactDamping / (2 * angularFrequency)
+        let settlingTime = 4 / (dampingRatio * angularFrequency)
+
+        XCTAssertGreaterThanOrEqual(angularFrequency, 16)
+        XCTAssertGreaterThanOrEqual(dampingRatio, 0.65)
+        XCTAssertLessThanOrEqual(dampingRatio, 0.8)
+        XCTAssertLessThanOrEqual(settlingTime, 0.35)
+        XCTAssertLessThanOrEqual(configuration.linearDamping, 0.8)
+    }
+
     func testFactoryBuildsReadableBubblesFourWallsAndOnePolygon() throws {
         let scene = try ReferenceVisualSceneFactory.make()
 

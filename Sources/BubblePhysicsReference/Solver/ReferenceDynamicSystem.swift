@@ -20,6 +20,28 @@ public struct ReferenceDynamicContact: Sendable, Equatable {
     }
 }
 
+enum ReferenceContactResponse {
+    static func effectiveMass(_ massA: Float, _ massB: Float?) -> Float {
+        let safeA = max(massA, Float.leastNonzeroMagnitude)
+        guard let massB else { return safeA }
+        let safeB = max(massB, Float.leastNonzeroMagnitude)
+        return (safeA * safeB) / (safeA + safeB)
+    }
+
+    static func coefficients(
+        massA: Float,
+        massB: Float?,
+        stiffnessPerUnitMass: Float,
+        dampingPerUnitMass: Float
+    ) -> (stiffness: Float, damping: Float) {
+        let mass = effectiveMass(massA, massB)
+        return (
+            max(0, stiffnessPerUnitMass) * mass,
+            max(0, dampingPerUnitMass) * mass
+        )
+    }
+}
+
 public struct ReferenceDynamicSystem: Sendable {
     private let startCenters: [ReferenceVector2]
     private let startVelocities: [ReferenceVector2]
@@ -72,12 +94,20 @@ public struct ReferenceDynamicSystem: Sendable {
         let midpointVelocities = endVelocities.indices.map {
             (startVelocities[$0] + endVelocities[$0]) * 0.5
         }
-        var forces = midpointVelocities.map { -$0 * globalDrag }
+        var forces = midpointVelocities.indices.map {
+            -midpointVelocities[$0] * (globalDrag * masses[$0])
+        }
 
         for contact in contacts {
             guard midpointCenters.indices.contains(contact.indexA) else { continue }
             let indexA = contact.indexA
             let indexB = contact.indexB.flatMap { midpointCenters.indices.contains($0) ? $0 : nil }
+            let response = ReferenceContactResponse.coefficients(
+                massA: masses[indexA],
+                massB: indexB.map { masses[$0] },
+                stiffnessPerUnitMass: stiffness,
+                dampingPerUnitMass: contactDamping
+            )
             let sample = ReferenceContactSpringState.evaluate(
                 centerA: midpointCenters[indexA],
                 velocityA: midpointVelocities[indexA],
@@ -87,8 +117,8 @@ public struct ReferenceDynamicSystem: Sendable {
                 pointQ: contact.pointQ,
                 normalFallback: contact.normalFallback,
                 contactDistance: contact.contactDistance,
-                stiffness: stiffness,
-                damping: contactDamping
+                stiffness: response.stiffness,
+                damping: response.damping
             )
             forces[indexA] = forces[indexA] + sample.forceOnA
             if let indexB {
@@ -124,12 +154,20 @@ public struct ReferenceDynamicSystem: Sendable {
         at endCenters: [ReferenceVector2]
     ) -> [ReferenceVector2] {
         precondition(endCenters.count == startCenters.count)
-        var diagonal = masses.map { 2 * $0 / timeStep + globalDrag }
-        let contactContribution = timeStep * stiffness * 0.5 + contactDamping
-        for contact in contacts where contactContribution > 0 {
+        var diagonal = masses.map { $0 * (2 / timeStep + globalDrag) }
+        for contact in contacts {
             guard diagonal.indices.contains(contact.indexA) else { continue }
+            let indexB = contact.indexB.flatMap { diagonal.indices.contains($0) ? $0 : nil }
+            let response = ReferenceContactResponse.coefficients(
+                massA: masses[contact.indexA],
+                massB: indexB.map { masses[$0] },
+                stiffnessPerUnitMass: stiffness,
+                dampingPerUnitMass: contactDamping
+            )
+            let contactContribution = timeStep * response.stiffness * 0.5 + response.damping
+            guard contactContribution > 0 else { continue }
             diagonal[contact.indexA] += contactContribution
-            if let indexB = contact.indexB, diagonal.indices.contains(indexB) {
+            if let indexB {
                 diagonal[indexB] += contactContribution
             }
         }

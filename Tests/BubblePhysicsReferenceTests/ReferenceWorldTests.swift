@@ -168,8 +168,10 @@ final class ReferenceWorldTests: XCTestCase {
     private func baseConfiguration(timeStep: Float) -> ReferenceConfiguration {
         var config = ReferenceConfiguration.default
         config.timeStep = timeStep
-        config.contactStiffness = 30
-        config.contactDamping = 1
+        // Pair contacts use the reduced mass (0.5 here), so these per-unit-mass
+        // coefficients preserve the response used by this event-topology fixture.
+        config.contactStiffness = 60
+        config.contactDamping = 2
         config.linearDamping = 0
         config.angularDamping = 0
         return config

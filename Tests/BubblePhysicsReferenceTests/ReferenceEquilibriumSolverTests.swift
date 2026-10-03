@@ -15,6 +15,32 @@ final class ReferenceEquilibriumSolverTests: XCTestCase {
         XCTAssertLessThan(report.finalResidualNorm, report.initialResidualNorm)
     }
 
+    func testContactResponseTimeDoesNotSlowDownForHeavierBubble() throws {
+        let wall = verticalWall(x: 0)
+        var light = [try ReferenceBubble(
+            id: .init(rawValue: 1), center: .init(x: 8, y: 0), velocity: .zero,
+            mass: 2, targetRadius: 10
+        )]
+        var heavy = [try ReferenceBubble(
+            id: .init(rawValue: 1), center: .init(x: 8, y: 0), velocity: .zero,
+            mass: 200, targetRadius: 10
+        )]
+        var lightContacts = ReferenceContactSet(contacts: [try contact(light[0], wall)])
+        var heavyContacts = ReferenceContactSet(contacts: [try contact(heavy[0], wall)])
+
+        _ = ReferenceEquilibriumSolver.solve(
+            bubbles: &light, segments: [wall], contacts: &lightContacts,
+            configuration: configuration(), timeStep: 0.1
+        )
+        _ = ReferenceEquilibriumSolver.solve(
+            bubbles: &heavy, segments: [wall], contacts: &heavyContacts,
+            configuration: configuration(), timeStep: 0.1
+        )
+
+        XCTAssertEqual(heavy[0].center.x, light[0].center.x, accuracy: 1e-4)
+        XCTAssertEqual(heavy[0].velocity.x, light[0].velocity.x, accuracy: 1e-3)
+    }
+
     func testBalancedContactsDoNotMoveCenter() throws {
         var bubbles = [try bubble(1, x: 0)]
         let left = verticalWall(x: -8)

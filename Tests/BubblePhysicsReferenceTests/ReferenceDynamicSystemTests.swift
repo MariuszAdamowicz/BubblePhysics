@@ -18,7 +18,7 @@ final class ReferenceDynamicSystemTests: XCTestCase {
         let system = makeSystem(
             centers: [.zero], velocities: [.init(x: 10, y: 0)], masses: [2], globalDrag: 4
         )
-        let expectedEndVelocity = Float(90.0 / 11.0)
+        let expectedEndVelocity = Float(20.0 / 3.0)
         let endCenters = [ReferenceVector2(x: (10 + expectedEndVelocity) * 0.05, y: 0)]
         let endVelocity = system.velocities(forEndCenters: endCenters)[0]
 
@@ -36,7 +36,7 @@ final class ReferenceDynamicSystemTests: XCTestCase {
 
         let residual = system.residual(endCenters: [.init(x: 8, y: 0)])[0]
 
-        XCTAssertEqual(residual.x, -2, accuracy: 1e-6)
+        XCTAssertEqual(residual.x, -4, accuracy: 1e-6)
         XCTAssertEqual(residual.y, 0, accuracy: 1e-6)
     }
 
@@ -58,7 +58,7 @@ final class ReferenceDynamicSystemTests: XCTestCase {
             centers: [.init(x: 8, y: 0)], velocities: [.zero], masses: [2],
             contacts: [surfaceContact(anchor: .zero)], stiffness: 10
         )
-        let exactEndX = Float(326.0 / 40.5)
+        let exactEndX = Float(332.0 / 41.0)
 
         assertVector(
             system.residual(endCenters: [.init(x: exactEndX, y: 0)])[0],

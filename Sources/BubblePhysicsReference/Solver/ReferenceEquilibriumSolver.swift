@@ -314,8 +314,15 @@ public enum ReferenceEquilibriumSolver {
             }
             contact.penetration = compression
             contact.accumulatedCompression = compression
-            contact.pressure = configuration.contactStiffness * compression
-            contact.effectiveStiffness = configuration.contactStiffness
+            let massB = original.bubbleB.flatMap { indices[$0] }.map { bubbles[$0].mass }
+            let response = ReferenceContactResponse.coefficients(
+                massA: bubbles[indexA].mass,
+                massB: massB,
+                stiffnessPerUnitMass: configuration.contactStiffness,
+                dampingPerUnitMass: configuration.contactDamping
+            )
+            contact.pressure = response.stiffness * compression
+            contact.effectiveStiffness = response.stiffness
             return contact
         }
     }
