@@ -4,6 +4,16 @@ import BubblePhysicsReference
 @testable import BubblePhysicsReferenceMetal
 
 final class ReferenceMetalPCGTests: XCTestCase {
+    // Added lanes or reordered fields corrupt the GPU control/readback contract.
+    func testPCGControlMatchesMetalABI() {
+        XCTAssertEqual(MemoryLayout<ReferenceMetalPCGControl>.size, 48)
+        XCTAssertEqual(MemoryLayout<ReferenceMetalPCGControl>.stride, 48)
+        XCTAssertEqual(MemoryLayout<ReferenceMetalPCGControl>.alignment, 16)
+        XCTAssertEqual(MemoryLayout<ReferenceMetalPCGControl>.offset(of: \.state), 0)
+        XCTAssertEqual(MemoryLayout<ReferenceMetalPCGControl>.offset(of: \.norms), 16)
+        XCTAssertEqual(MemoryLayout<ReferenceMetalPCGControl>.offset(of: \.recurrence), 32)
+    }
+
     // Wrong recurrence, preconditioner, or iteration accounting breaks the
     // comparison with the existing CPU solver operating on the same system.
     func testContactCorrectionsAndIterationCountsMatchCPU() async throws {
