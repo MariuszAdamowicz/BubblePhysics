@@ -29,6 +29,7 @@ final class ReferenceVisualRunnerTests: XCTestCase {
         XCTAssertEqual(snapshot.triangleVertices.count, 3)
         XCTAssertFalse(snapshot.lastReport.hasNonFiniteState)
         XCTAssertEqual(snapshot.valuesByBubbleID.count, 6)
+        XCTAssertEqual(snapshot.contacts, snapshot.contacts.sorted { $0.id < $1.id })
     }
 
     func testChangingDensityRebuildsSceneWithTwentyFourBubbles() throws {

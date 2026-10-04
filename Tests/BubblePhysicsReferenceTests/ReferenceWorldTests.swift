@@ -2,6 +2,50 @@ import XCTest
 @testable import BubblePhysicsReference
 
 final class ReferenceWorldTests: XCTestCase {
+    func testSmallerBubbleAbsorbsMoreOfPairDeformation() throws {
+        var configuration = ReferenceConfiguration.default
+        configuration.linearDamping = 0
+        var world = ReferenceWorld(
+            configuration: configuration, broadPhase: SweepAndPruneBroadPhase()
+        )
+        world.addBubble(try ReferenceBubble(
+            id: .init(rawValue: 1), center: .zero, mass: 10_000, targetRadius: 10
+        ))
+        world.addBubble(try ReferenceBubble(
+            id: .init(rawValue: 2), center: .init(x: 35, y: 0),
+            mass: 10_000, targetRadius: 30
+        ))
+
+        _ = world.step()
+
+        let contact = try XCTUnwrap(world.contacts.contacts.first)
+        XCTAssertGreaterThan(contact.compressionA, contact.compressionB)
+        XCTAssertEqual(
+            contact.compressionA + contact.compressionB,
+            contact.penetration,
+            accuracy: 0.001
+        )
+    }
+
+    func testMoreCompliantBubbleAbsorbsMoreOfPairDeformation() throws {
+        var world = ReferenceWorld(
+            configuration: .default, broadPhase: SweepAndPruneBroadPhase()
+        )
+        world.addBubble(try ReferenceBubble(
+            id: .init(rawValue: 1), center: .zero, mass: 10_000,
+            targetRadius: 20, stiffness: 0.5
+        ))
+        world.addBubble(try ReferenceBubble(
+            id: .init(rawValue: 2), center: .init(x: 35, y: 0), mass: 10_000,
+            targetRadius: 20, stiffness: 2
+        ))
+
+        _ = world.step()
+
+        let contact = try XCTUnwrap(world.contacts.contacts.first)
+        XCTAssertGreaterThan(contact.compressionA, contact.compressionB)
+    }
+
     func testBubbleCenterCannotRemainInsideClosedPolygon() throws {
         var world = ReferenceWorld(
             configuration: .default, broadPhase: SweepAndPruneBroadPhase()

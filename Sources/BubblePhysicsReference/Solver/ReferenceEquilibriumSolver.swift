@@ -268,8 +268,11 @@ public enum ReferenceEquilibriumSolver {
                 let normal = delta.normalized(or: fallback)
                 compression = max(0, bubbles[indexA].targetRadius + bubbles[indexB].targetRadius
                     - delta.length)
-                contact.compressionA = compression * 0.5
-                contact.compressionB = compression * 0.5
+                let stiffnessA = radialStiffness(of: bubbles[indexA])
+                let stiffnessB = radialStiffness(of: bubbles[indexB])
+                let stiffnessSum = stiffnessA + stiffnessB
+                contact.compressionA = compression * stiffnessB / stiffnessSum
+                contact.compressionB = compression * stiffnessA / stiffnessSum
                 contact.normal = normal
                 contact.pointQ = endCenters[indexA]
                     + normal * (bubbles[indexA].targetRadius - contact.compressionA)
@@ -277,16 +280,7 @@ public enum ReferenceEquilibriumSolver {
                 if distance > Float.ulpOfOne {
                     let radiusA = bubbles[indexA].targetRadius
                     let radiusB = bubbles[indexB].targetRadius
-                    let planeDistance: Float
-                    if distance >= abs(radiusA - radiusB) {
-                        // For two intersecting natural circles this is their exact common chord.
-                        planeDistance = (distance * distance + radiusA * radiusA - radiusB * radiusB)
-                            / (2 * distance)
-                    } else {
-                        // One natural circle contains the other. There is no radical chord, so place
-                        // a finite contact patch halfway between the two opposing radial surfaces.
-                        planeDistance = (radiusA + distance - radiusB) * 0.5
-                    }
+                    let planeDistance = radiusA - contact.compressionA
                     let clampedPlaneDistance = min(radiusA, max(-radiusA, planeDistance))
                     contact.pointQ = endCenters[indexA] + normal * clampedPlaneDistance
                     let halfSpanA = max(
@@ -327,6 +321,10 @@ public enum ReferenceEquilibriumSolver {
             contact.effectiveStiffness = response.stiffness
             return contact
         }
+    }
+
+    private static func radialStiffness(of bubble: ReferenceBubble) -> Float {
+        max(Float.leastNonzeroMagnitude, bubble.stiffness * bubble.targetRadius)
     }
 
     private static func velocities(

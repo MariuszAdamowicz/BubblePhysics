@@ -2,6 +2,7 @@ public struct ReferenceVisualSnapshot: Sendable, Equatable {
     public var bubbles: [ReferenceBubble]
     public var contours: [ReferenceBubbleID: [ReferenceVector2]]
     public var triangleVertices: [ReferenceVector2]
+    public var contacts: [ReferenceContact]
     public var lastReport: ReferenceWorldStepReport
     public var simulationTime: Double
     public var stepsExecuted: Int
@@ -55,7 +56,7 @@ public struct ReferenceVisualRunner {
     private func snapshot(stepsExecuted: Int) -> ReferenceVisualSnapshot {
         let contours = Dictionary(uniqueKeysWithValues: scene.world.bubbles.map { ($0.id, scene.world.contour(for: $0.id)) })
         let vertices = scene.polygonSegmentIDs.compactMap { id in scene.world.segments.first { $0.id == id }?.currentA }
-        return .init(bubbles: scene.world.bubbles, contours: contours, triangleVertices: vertices, lastReport: lastReport, simulationTime: simulationTime, stepsExecuted: stepsExecuted, valuesByBubbleID: scene.valuesByBubbleID)
+        return .init(bubbles: scene.world.bubbles, contours: contours, triangleVertices: vertices, contacts: scene.world.contacts.contacts, lastReport: lastReport, simulationTime: simulationTime, stepsExecuted: stepsExecuted, valuesByBubbleID: scene.valuesByBubbleID)
     }
 }
 

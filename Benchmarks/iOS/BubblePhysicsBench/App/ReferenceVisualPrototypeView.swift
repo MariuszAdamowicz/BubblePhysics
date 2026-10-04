@@ -8,6 +8,7 @@ struct ReferenceVisualPrototypeView: View {
     @State private var isPaused = false
     @State private var showsPoints = false
     @State private var showsDiagnostics = false
+    @State private var showsContactForces = false
     @State private var density = ReferenceVisualDensity.six
 
     init(selectedMode: Binding<PrototypeMode>) {
@@ -61,6 +62,7 @@ struct ReferenceVisualPrototypeView: View {
             }
             if showsDiagnostics {
                 Toggle("Punkty kontaktowe", isOn: $showsPoints)
+                Toggle("Siły kontaktów", isOn: $showsContactForces)
                 let report = snapshot.lastReport
                 Text(String(format: "%.2f ms · Newton %d · PCG %d · grupy %d%@", report.totalMilliseconds, report.solver.iterations, report.solver.pcgIterationCount, report.eventGroupCount, report.didReachEventGroupLimit ? " LIMIT" : ""))
                 Text(String(format: "ścisk %.3f · residual %.2f→%.2f", report.solver.maximumCompression, report.solver.initialResidualNorm, report.solver.finalResidualNorm))
@@ -125,6 +127,25 @@ struct ReferenceVisualPrototypeView: View {
             triangle.closeSubpath()
             context.fill(triangle, with: .color(.orange.opacity(0.9)))
             context.stroke(triangle, with: .color(.white.opacity(0.8)), lineWidth: 2)
+        }
+
+        if showsContactForces {
+            for contact in snapshot.contacts where contact.pressure > 0 {
+                let origin = point(contact.pointQ)
+                let length = min(28, max(5, CGFloat(log1p(contact.pressure)) * 2.5)) * scale
+                let direction = CGPoint(
+                    x: -CGFloat(contact.normal.x) * length,
+                    y: -CGFloat(contact.normal.y) * length
+                )
+                var force = Path()
+                force.move(to: origin)
+                force.addLine(to: CGPoint(x: origin.x + direction.x, y: origin.y + direction.y))
+                context.stroke(force, with: .color(.pink), lineWidth: 2)
+                context.fill(
+                    Path(ellipseIn: CGRect(x: origin.x - 2, y: origin.y - 2, width: 4, height: 4)),
+                    with: .color(.yellow)
+                )
+            }
         }
     }
 
