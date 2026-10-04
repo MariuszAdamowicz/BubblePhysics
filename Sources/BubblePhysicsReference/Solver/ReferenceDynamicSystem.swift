@@ -50,6 +50,7 @@ public struct ReferenceDynamicSystem: Sendable {
     private let contacts: [ReferenceDynamicContact]
     private let timeStep: Float
     private let stiffness: Float
+    private let nonlinearStiffening: Float
     private let contactDamping: Float
     private let globalDrag: Float
 
@@ -61,6 +62,7 @@ public struct ReferenceDynamicSystem: Sendable {
         contacts: [ReferenceDynamicContact],
         timeStep: Float,
         stiffness: Float,
+        nonlinearStiffening: Float = 0,
         contactDamping: Float,
         globalDrag: Float
     ) {
@@ -75,6 +77,7 @@ public struct ReferenceDynamicSystem: Sendable {
         self.contacts = contacts
         self.timeStep = timeStep
         self.stiffness = max(0, stiffness)
+        self.nonlinearStiffening = max(0, nonlinearStiffening)
         self.contactDamping = max(0, contactDamping)
         self.globalDrag = max(0, globalDrag)
     }
@@ -118,7 +121,8 @@ public struct ReferenceDynamicSystem: Sendable {
                 normalFallback: contact.normalFallback,
                 contactDistance: contact.contactDistance,
                 stiffness: response.stiffness,
-                damping: response.damping
+                damping: response.damping,
+                nonlinearStiffening: nonlinearStiffening
             )
             forces[indexA] = forces[indexA] + sample.forceOnA
             if let indexB {

@@ -28,7 +28,8 @@ public enum ReferenceContactSpringState {
         normalFallback: ReferenceVector2,
         contactDistance: Float,
         stiffness: Float,
-        damping: Float
+        damping: Float,
+        nonlinearStiffening: Float = 0
     ) -> ReferenceContactSpringSample {
         _ = radiusA
         let anchor = centerB ?? pointQ ?? centerA
@@ -43,14 +44,19 @@ public enum ReferenceContactSpringState {
         }
 
         let relativeNormalVelocity = (velocityA - velocityB).dot(normal)
+        let normalizedCompression = compression / max(contactDistance, Float.leastNonzeroMagnitude)
+        let stiffening = max(0, nonlinearStiffening)
         let elasticMagnitude = max(0, stiffness) * compression
+            * (1 + stiffening * normalizedCompression * normalizedCompression)
         let dampingMagnitude = max(0, damping) * relativeNormalVelocity
         let magnitude = max(0, elasticMagnitude - dampingMagnitude)
         return .init(
             compression: compression,
             normal: normal,
             forceOnA: normal * magnitude,
-            tangentStiffness: magnitude > 0 ? max(0, stiffness) : 0
+            tangentStiffness: magnitude > 0
+                ? max(0, stiffness) * (1 + 3 * stiffening * normalizedCompression * normalizedCompression)
+                : 0
         )
     }
 }

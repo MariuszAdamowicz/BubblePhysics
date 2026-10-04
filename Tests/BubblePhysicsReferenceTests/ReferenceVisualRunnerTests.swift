@@ -122,4 +122,59 @@ final class ReferenceVisualRunnerTests: XCTestCase {
         XCTAssertEqual(snapshot.lastReport.centerGuardCount, 0)
         XCTAssertFalse(snapshot.lastReport.hasNonFiniteState)
     }
+
+    func testAggressiveDraggingNeverLeavesOneBubbleContainedInsideAnother() throws {
+        var runner = try ReferenceVisualRunner(density: .twentyFour)
+        _ = runner.advance(to: 0)
+        var frame = 0
+        var consecutiveContainmentFrames = 0
+        var maximumContainmentFrames = 0
+        var diagnostic = ""
+
+        let targets: [ReferenceVector2] = [
+            .init(x: 45, y: 50), .init(x: 330, y: 650),
+            .init(x: 330, y: 50), .init(x: 45, y: 650),
+            .init(x: 187.5, y: 350),
+        ]
+        for cycle in 0..<2 {
+            for target in cycle.isMultiple(of: 2) ? targets : targets.reversed() {
+                runner.movePolygon(to: target)
+                for _ in 0..<45 {
+                    frame += 1
+                    let snapshot = runner.advance(to: Double(frame) / 60)
+                    var containedPair: (ReferenceBubble, ReferenceBubble)?
+                    let hasContainedPair = snapshot.bubbles.indices.contains { first in
+                        snapshot.bubbles.indices.contains { second in
+                            guard first < second else { return false }
+                            let a = snapshot.bubbles[first]
+                            let b = snapshot.bubbles[second]
+                            let distance = (b.center - a.center).length
+                            let contained = distance + min(a.targetRadius, b.targetRadius)
+                                < max(a.targetRadius, b.targetRadius) - 1
+                            if contained { containedPair = (a, b) }
+                            return contained
+                        }
+                    }
+                    consecutiveContainmentFrames = hasContainedPair
+                        ? consecutiveContainmentFrames + 1 : 0
+                    maximumContainmentFrames = max(
+                        maximumContainmentFrames, consecutiveContainmentFrames
+                    )
+                    if maximumContainmentFrames == consecutiveContainmentFrames,
+                       let pair = containedPair {
+                        let contactExists = snapshot.contacts.contains {
+                            Set([$0.bubbleA, $0.bubbleB].compactMap { $0 })
+                                == Set([pair.0.id, pair.1.id])
+                        }
+                        diagnostic = "frame=\(frame), pair=\(pair.0.id.rawValue)/\(pair.1.id.rawValue), contact=\(contactExists), penetration=\(snapshot.lastReport.solver.maximumPenetration), residual=\(snapshot.lastReport.solver.finalResidualNorm), lineSearchFailures=\(snapshot.lastReport.solver.lineSearchFailureCount)"
+                    }
+                }
+            }
+        }
+
+        XCTAssertLessThanOrEqual(
+            maximumContainmentFrames, 1,
+            "a bubble remained contained for \(maximumContainmentFrames) consecutive frames; \(diagnostic)"
+        )
+    }
 }

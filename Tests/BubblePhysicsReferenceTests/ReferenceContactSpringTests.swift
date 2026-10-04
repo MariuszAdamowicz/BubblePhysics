@@ -74,6 +74,25 @@ final class ReferenceContactSpringTests: XCTestCase {
         XCTAssertEqual(sample.forceOnA, .init(x: 20, y: 0))
     }
 
+    func testNonlinearStiffeningStronglyResistsDeepCompression() {
+        let shallow = ReferenceContactSpringState.evaluate(
+            centerA: .init(x: 9, y: 0), velocityA: .zero, radiusA: 5,
+            centerB: .zero, velocityB: .zero, pointQ: nil,
+            normalFallback: .init(x: 1, y: 0), contactDistance: 10,
+            stiffness: 10, damping: 0, nonlinearStiffening: 8
+        )
+        let deep = ReferenceContactSpringState.evaluate(
+            centerA: .init(x: 1, y: 0), velocityA: .zero, radiusA: 5,
+            centerB: .zero, velocityB: .zero, pointQ: nil,
+            normalFallback: .init(x: 1, y: 0), contactDistance: 10,
+            stiffness: 10, damping: 0, nonlinearStiffening: 8
+        )
+
+        XCTAssertEqual(shallow.forceOnA.x, 10.8, accuracy: 0.001)
+        XCTAssertEqual(deep.forceOnA.x, 673.2, accuracy: 0.01)
+        XCTAssertGreaterThan(deep.tangentStiffness, shallow.tangentStiffness)
+    }
+
     private func evaluate(
         centerA: ReferenceVector2,
         velocityA: ReferenceVector2 = .zero,

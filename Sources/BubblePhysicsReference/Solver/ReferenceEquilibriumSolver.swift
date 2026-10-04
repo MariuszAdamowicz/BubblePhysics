@@ -200,6 +200,7 @@ public enum ReferenceEquilibriumSolver {
             },
             timeStep: timeStep,
             stiffness: configuration.contactStiffness,
+            nonlinearStiffening: configuration.nonlinearStiffening,
             contactDamping: configuration.contactDamping,
             globalDrag: configuration.linearDamping
         )
