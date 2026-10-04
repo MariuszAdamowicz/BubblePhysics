@@ -40,7 +40,7 @@ final class ReferenceBenchmarkMatrixTests: XCTestCase {
         let text = report.plainText(deviceName: "iPhone Test", systemVersion: "iOS 20.0")
         XCTAssertTrue(text.contains("iPhone Test"))
         XCTAssertTrue(text.contains("iOS 20.0"))
-        XCTAssertTrue(text.contains("interactive24"))
+        XCTAssertTrue(text.contains("interactive-24"))
         XCTAssertTrue(text.contains("limit"))
         XCTAssertTrue(text.contains("full_p95_ms"))
         XCTAssertTrue(text.contains("penetration_p95"))

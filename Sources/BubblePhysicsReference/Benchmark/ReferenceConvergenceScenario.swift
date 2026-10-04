@@ -1,6 +1,6 @@
 public enum ReferenceConvergenceScene: String, Sendable, CaseIterable {
-    case interactive24
-    case stress300
+    case interactive24 = "interactive-24"
+    case stress300 = "stress-300"
 }
 
 public struct ReferenceConvergenceScenario: Sendable, Equatable {
