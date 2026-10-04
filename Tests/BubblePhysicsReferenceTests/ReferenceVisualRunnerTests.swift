@@ -31,6 +31,19 @@ final class ReferenceVisualRunnerTests: XCTestCase {
         XCTAssertEqual(snapshot.valuesByBubbleID.count, 6)
     }
 
+    func testChangingDensityRebuildsSceneWithTwentyFourBubbles() throws {
+        var runner = try ReferenceVisualRunner()
+        _ = runner.advance(to: 0)
+
+        runner.setDensity(.twentyFour)
+        let snapshot = runner.advance(to: 1)
+
+        XCTAssertEqual(snapshot.bubbles.count, 24)
+        XCTAssertEqual(snapshot.contours.count, 24)
+        XCTAssertEqual(snapshot.valuesByBubbleID.count, 24)
+        XCTAssertFalse(snapshot.lastReport.hasNonFiniteState)
+    }
+
     func testResetAndOneHundredEightyFramesPreserveValueMapping() throws {
         var runner = try ReferenceVisualRunner()
         let initial = runner.advance(to: 0)

@@ -10,23 +10,26 @@ public struct ReferenceVisualScene {
     public var triangleLocalVertices: [ReferenceVector2] { polygonLocalVertices }
 }
 
+public enum ReferenceVisualDensity: Int, Sendable, CaseIterable {
+    case six = 6
+    case twentyFour = 24
+}
+
 public enum ReferenceVisualSceneFactory {
     public static let initialPolygonCenter = ReferenceVector2(x: 187.5, y: 350)
 
-    public static func make() throws -> ReferenceVisualScene {
+    public static func make(density: ReferenceVisualDensity = .six) throws -> ReferenceVisualScene {
         var configuration = ReferenceConfiguration.default
         configuration.timeStep = 1 / 60
         configuration.maxContourSegmentLength = 5
         configuration.contactStiffness = 300
         configuration.contactDamping = 26
         configuration.linearDamping = 0.8
+        configuration.angularDamping = 6
+        configuration.angularFrictionCoupling = 0.3
         configuration.maximumEventGroups = 12
         var world = ReferenceWorld(configuration: configuration, broadPhase: SweepAndPruneBroadPhase())
-        let specifications: [(Int, ReferenceVector2, Float)] = [
-            (2, .init(x: 72, y: 125), 28), (8, .init(x: 182, y: 128), 42),
-            (32, .init(x: 305, y: 130), 54), (128, .init(x: 82, y: 350), 62),
-            (512, .init(x: 292, y: 365), 78), (2048, .init(x: 185, y: 590), 96),
-        ]
+        let specifications = density == .six ? sparseSpecifications : denseSpecifications
         var values: [ReferenceBubbleID: Int] = [:]
         for (index, item) in specifications.enumerated() {
             let id = ReferenceBubbleID(rawValue: index + 1)
@@ -42,6 +45,25 @@ public enum ReferenceVisualSceneFactory {
         }
         return .init(world: world, polygonOwnerID: 100, polygonSegmentIDs: ids, polygonLocalVertices: local, valuesByBubbleID: values)
     }
+
+    private static let sparseSpecifications: [(Int, ReferenceVector2, Float)] = [
+            (2, .init(x: 72, y: 125), 28), (8, .init(x: 182, y: 128), 42),
+            (32, .init(x: 305, y: 130), 54), (128, .init(x: 82, y: 350), 62),
+            (512, .init(x: 292, y: 365), 78), (2048, .init(x: 185, y: 590), 96),
+    ]
+
+    private static let denseSpecifications: [(Int, ReferenceVector2, Float)] = {
+        let xs: [Float] = [45, 140, 235, 330]
+        let ys: [Float] = [50, 170, 285, 415, 530, 650]
+        let values = [2, 8, 32, 128, 512, 2048]
+        let radii: [Float] = [18, 22, 26, 30, 34, 36]
+        return ys.enumerated().flatMap { row, y in
+            xs.enumerated().map { column, x in
+                let index = (row * xs.count + column) % values.count
+                return (values[index], ReferenceVector2(x: x, y: y), radii[index])
+            }
+        }
+    }()
 
     private static func addWalls(to world: inout ReferenceWorld) {
         world.addSegment(.staticSegment(id: .init(rawValue: 1), a: .init(x: 0, y: 0), b: .init(x: 0, y: 700), collisionMode: .oneSided(allowedSide: -1)))

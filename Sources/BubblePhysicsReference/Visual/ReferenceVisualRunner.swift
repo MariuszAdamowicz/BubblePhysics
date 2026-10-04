@@ -18,9 +18,17 @@ public struct ReferenceVisualRunner {
     private var lastReport = ReferenceWorldStepReport.empty
     private var polygonCenter = ReferenceVisualSceneFactory.initialPolygonCenter
     private var requestedPolygonCenter = ReferenceVisualSceneFactory.initialPolygonCenter
+    private var density: ReferenceVisualDensity
 
-    public init() throws { scene = try ReferenceVisualSceneFactory.make() }
-    public mutating func reset() { scene = try! ReferenceVisualSceneFactory.make(); lastPresentationTime = nil; accumulator = 0; simulationTime = 0; polygonCenter = ReferenceVisualSceneFactory.initialPolygonCenter; requestedPolygonCenter = polygonCenter; lastReport = .empty }
+    public init(density: ReferenceVisualDensity = .six) throws {
+        self.density = density
+        scene = try ReferenceVisualSceneFactory.make(density: density)
+    }
+    public mutating func reset() { scene = try! ReferenceVisualSceneFactory.make(density: density); lastPresentationTime = nil; accumulator = 0; simulationTime = 0; polygonCenter = ReferenceVisualSceneFactory.initialPolygonCenter; requestedPolygonCenter = polygonCenter; lastReport = .empty }
+    public mutating func setDensity(_ density: ReferenceVisualDensity) {
+        self.density = density
+        reset()
+    }
     public mutating func movePolygon(to point: ReferenceVector2) { requestedPolygonCenter = .init(x: min(330, max(45, point.x)), y: min(650, max(50, point.y))) }
 
     public mutating func advance(to presentationTime: Double) -> ReferenceVisualSnapshot {

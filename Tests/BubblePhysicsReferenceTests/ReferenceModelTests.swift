@@ -42,5 +42,15 @@ final class ReferenceModelTests: XCTestCase {
         XCTAssertTrue(configuration.linearDamping.isFinite)
         XCTAssertTrue(configuration.angularDamping.isFinite)
         XCTAssertTrue(configuration.surfaceFriction.isFinite)
+        XCTAssertEqual(configuration.angularFrictionCoupling, 1)
+    }
+
+    func testAngularFrictionCouplingIsClampedToUnitInterval() {
+        var configuration = ReferenceConfiguration.default
+        configuration.angularFrictionCoupling = 2
+        XCTAssertEqual(configuration.sanitized.angularFrictionCoupling, 1)
+
+        configuration.angularFrictionCoupling = -1
+        XCTAssertEqual(configuration.sanitized.angularFrictionCoupling, 0)
     }
 }

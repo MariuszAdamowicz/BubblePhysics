@@ -9,6 +9,7 @@ public struct ReferenceConfiguration: Sendable, Equatable {
     public var linearDamping: Float
     public var angularDamping: Float
     public var surfaceFriction: Float
+    public var angularFrictionCoupling: Float
     public var toiIterationBudget: Int
     public var maxContourSegmentLength: Float
     public var deformationRecoveryRate: Float
@@ -33,6 +34,7 @@ public struct ReferenceConfiguration: Sendable, Equatable {
         linearDamping: Float = 1.5,
         angularDamping: Float = 2,
         surfaceFriction: Float = 0.2,
+        angularFrictionCoupling: Float = 1,
         toiIterationBudget: Int = 8,
         maxContourSegmentLength: Float = 8,
         deformationRecoveryRate: Float = 12,
@@ -56,6 +58,7 @@ public struct ReferenceConfiguration: Sendable, Equatable {
         self.linearDamping = linearDamping
         self.angularDamping = angularDamping
         self.surfaceFriction = surfaceFriction
+        self.angularFrictionCoupling = angularFrictionCoupling
         self.toiIterationBudget = toiIterationBudget
         self.maxContourSegmentLength = maxContourSegmentLength
         self.deformationRecoveryRate = deformationRecoveryRate
@@ -83,6 +86,8 @@ public struct ReferenceConfiguration: Sendable, Equatable {
         value.linearDamping = finiteNonnegative(value.linearDamping, fallback: 1.5)
         value.angularDamping = finiteNonnegative(value.angularDamping, fallback: 2)
         value.surfaceFriction = min(1, finiteNonnegative(value.surfaceFriction, fallback: 0.2))
+        value.angularFrictionCoupling = value.angularFrictionCoupling.isFinite
+            ? min(1, max(0, value.angularFrictionCoupling)) : 1
         value.maxContourSegmentLength = value.maxContourSegmentLength.isFinite && value.maxContourSegmentLength > 0
             ? value.maxContourSegmentLength : 8
         value.deformationRecoveryRate = finiteNonnegative(value.deformationRecoveryRate, fallback: 12)

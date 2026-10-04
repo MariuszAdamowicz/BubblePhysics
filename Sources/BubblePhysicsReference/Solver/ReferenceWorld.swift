@@ -407,7 +407,8 @@ public struct ReferenceWorld {
             let lever = contact.pointQ - bubbles[index].center
             let inertia = max(0.5 * bubbles[index].mass * bubbles[index].targetRadius * bubbles[index].targetRadius,
                               Float.ulpOfOne)
-            bubbles[index].angularVelocity += lever.cross(impulseVector) / inertia
+            bubbles[index].angularVelocity += configuration.angularFrictionCoupling
+                * lever.cross(impulseVector) / inertia
         }
     }
 

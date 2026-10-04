@@ -8,6 +8,7 @@ struct ReferenceVisualPrototypeView: View {
     @State private var isPaused = false
     @State private var showsPoints = false
     @State private var showsDiagnostics = false
+    @State private var density = ReferenceVisualDensity.six
 
     init(selectedMode: Binding<PrototypeMode>) {
         _selectedMode = selectedMode
@@ -44,6 +45,12 @@ struct ReferenceVisualPrototypeView: View {
         VStack(spacing: 6) {
             HStack {
                 Text("Kontakty").font(.headline)
+                Picker("Liczba baniek", selection: $density) {
+                    Text("6").tag(ReferenceVisualDensity.six)
+                    Text("24").tag(ReferenceVisualDensity.twentyFour)
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 100)
                 Spacer()
                 Button(showsDiagnostics ? "Ukryj dane" : "Dane") { showsDiagnostics.toggle() }
                 Button(isPaused ? "Wznów" : "Pauza") { isPaused.toggle() }
@@ -65,6 +72,10 @@ struct ReferenceVisualPrototypeView: View {
         .background(.ultraThinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 14))
         .padding()
+        .onChange(of: density) { value in
+            runner.setDensity(value)
+            snapshot = runner.advance(to: Date.timeIntervalSinceReferenceDate)
+        }
     }
 
     private func render(_ snapshot: ReferenceVisualSnapshot, in context: inout GraphicsContext, size: CGSize) {

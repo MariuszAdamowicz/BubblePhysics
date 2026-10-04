@@ -13,6 +13,22 @@ final class ReferenceVisualSceneTests: XCTestCase {
         XCTAssertLessThanOrEqual(dampingRatio, 0.8)
         XCTAssertLessThanOrEqual(settlingTime, 0.35)
         XCTAssertLessThanOrEqual(configuration.linearDamping, 0.8)
+        XCTAssertGreaterThanOrEqual(configuration.angularDamping, 6)
+        XCTAssertEqual(configuration.angularFrictionCoupling, 0.3, accuracy: 0.001)
+    }
+
+    func testDenseFactoryBuildsTwentyFourFiniteBubblesOutsidePolygon() throws {
+        let scene = try ReferenceVisualSceneFactory.make(density: .twentyFour)
+
+        XCTAssertEqual(scene.world.bubbles.count, 24)
+        XCTAssertEqual(scene.valuesByBubbleID.count, 24)
+        XCTAssertTrue(scene.world.bubbles.allSatisfy {
+            $0.center.isFinite && $0.targetRadius.isFinite && $0.targetRadius >= 18
+        })
+        let triangle = ReferenceVisualSceneFactory.triangleVertices(
+            localVertices: scene.triangleLocalVertices, at: 0
+        )
+        XCTAssertTrue(scene.world.bubbles.allSatisfy { !pointInTriangle($0.center, triangle) })
     }
 
     func testFactoryBuildsReadableBubblesFourWallsAndOnePolygon() throws {
