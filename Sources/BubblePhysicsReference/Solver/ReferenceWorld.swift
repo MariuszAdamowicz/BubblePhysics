@@ -155,7 +155,9 @@ public struct ReferenceWorld {
         if !hasSolverReport {
             combinedSolver = emptySolverReport()
         }
-        let centerGuardCount = applyCenterGuards()
+        let edgeGuardCount = applyCenterGuards()
+        let polygonGuardCount = applyClosedPolygonGuards()
+        let centerGuardCount = edgeGuardCount + polygonGuardCount
         applyBoundedFriction(timeStep: dt)
         let angularFactor = expf(-configuration.angularDamping * dt)
         for index in bubbles.indices {
@@ -389,6 +391,66 @@ public struct ReferenceWorld {
             }
         }
         return count
+    }
+
+    private mutating func applyClosedPolygonGuards() -> Int {
+        let ownedSegments = Dictionary(grouping: segments.compactMap { segment in
+            segment.ownerID.map { ($0, segment) }
+        }, by: { $0.0 }).mapValues { $0.map(\.1) }
+        var correctedOwnersByBubble: [ReferenceBubbleID: Set<Int>] = [:]
+        var count = 0
+
+        for bubbleIndex in bubbles.indices {
+            for (ownerID, polygonSegments) in ownedSegments where polygonSegments.count >= 3 {
+                let center = bubbles[bubbleIndex].center
+                guard isInsideClosedPolygon(center, edges: polygonSegments) else { continue }
+                guard let nearest = polygonSegments.map({ segment in
+                    (segment, closestPoint(
+                        to: center,
+                        on: .init(a: segment.currentA, b: segment.currentB)
+                    ))
+                }).min(by: { $0.1.distanceSquared < $1.1.distanceSquared }) else { continue }
+
+                let margin = max(configuration.contactTolerance * 2, configuration.positionTolerance)
+                let outward = (nearest.1.point - center).normalized(or: nearest.0.currentA - center)
+                bubbles[bubbleIndex].center = nearest.1.point + outward * margin
+
+                let relativeVelocity = bubbles[bubbleIndex].velocity - nearest.0.linearVelocity
+                let inwardSpeed = relativeVelocity.dot(outward)
+                if inwardSpeed < 0 {
+                    bubbles[bubbleIndex].velocity = bubbles[bubbleIndex].velocity
+                        - outward * inwardSpeed
+                }
+                correctedOwnersByBubble[bubbles[bubbleIndex].id, default: []].insert(ownerID)
+                count += 1
+            }
+        }
+
+        if !correctedOwnersByBubble.isEmpty {
+            let segmentOwners = Dictionary(uniqueKeysWithValues: segments.compactMap { segment in
+                segment.ownerID.map { (segment.id, $0) }
+            })
+            contacts.replaceContacts(contacts.contacts.filter { contact in
+                guard let segmentID = contact.segment,
+                      let ownerID = segmentOwners[segmentID] else { return true }
+                return correctedOwnersByBubble[contact.bubbleA]?.contains(ownerID) != true
+            })
+        }
+        return count
+    }
+
+    private func isInsideClosedPolygon(
+        _ point: ReferenceVector2, edges: [ReferenceSegment]
+    ) -> Bool {
+        var inside = false
+        for edge in edges {
+            let a = edge.currentA
+            let b = edge.currentB
+            guard (a.y > point.y) != (b.y > point.y) else { continue }
+            let crossingX = (b.x - a.x) * (point.y - a.y) / (b.y - a.y) + a.x
+            if point.x < crossingX { inside.toggle() }
+        }
+        return inside
     }
 
     private mutating func applyBoundedFriction(timeStep: Float) {

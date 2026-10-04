@@ -2,6 +2,33 @@ import XCTest
 @testable import BubblePhysicsReference
 
 final class ReferenceWorldTests: XCTestCase {
+    func testBubbleCenterCannotRemainInsideClosedPolygon() throws {
+        var world = ReferenceWorld(
+            configuration: .default, broadPhase: SweepAndPruneBroadPhase()
+        )
+        world.addBubble(try ReferenceBubble(
+            id: .init(rawValue: 1), center: .zero, mass: 1, targetRadius: 2
+        ))
+        let vertices = [
+            ReferenceVector2(x: -10, y: 8),
+            ReferenceVector2(x: 10, y: 8),
+            ReferenceVector2(x: 0, y: -10),
+        ]
+        for index in vertices.indices {
+            world.addSegment(.staticSegment(
+                id: .init(rawValue: index + 1),
+                a: vertices[index], b: vertices[(index + 1) % vertices.count],
+                ownerID: 100, collisionMode: .twoSided
+            ))
+        }
+
+        let report = world.step()
+
+        XCTAssertFalse(pointInPolygon(world.bubbles[0].center, vertices))
+        XCTAssertGreaterThan(report.centerGuardCount, 0)
+        XCTAssertTrue(world.bubbles[0].center.isFinite)
+    }
+
     func testStationaryContactIsRemovedAfterSegmentMovesAway() throws {
         var world = ReferenceWorld(
             configuration: .default, broadPhase: SweepAndPruneBroadPhase()
@@ -240,5 +267,20 @@ final class ReferenceWorldTests: XCTestCase {
             id: .init(rawValue: id), center: .init(x: x, y: 0),
             velocity: .init(x: velocity, y: 0), mass: 1, targetRadius: radius
         )
+    }
+
+    private func pointInPolygon(
+        _ point: ReferenceVector2, _ vertices: [ReferenceVector2]
+    ) -> Bool {
+        var inside = false
+        for index in vertices.indices {
+            let a = vertices[index]
+            let b = vertices[(index + 1) % vertices.count]
+            if (a.y > point.y) != (b.y > point.y) {
+                let crossingX = (b.x - a.x) * (point.y - a.y) / (b.y - a.y) + a.x
+                if point.x < crossingX { inside.toggle() }
+            }
+        }
+        return inside
     }
 }
