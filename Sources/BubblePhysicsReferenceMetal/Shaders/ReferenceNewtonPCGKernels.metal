@@ -166,3 +166,111 @@ kernel void referenceReduceDot(device const float2 *lhs [[buffer(0)]], device co
     }
     if (lane == 0) blocks[group] = values[0];
 }
+
+struct ReferencePCGControl {
+    uint4 state; // active, iterations, non-finite, rejected initial norm
+    float4 norms; // initial, final, threshold, reserved
+    float4 recurrence; // r·z, beta, reserved, reserved
+};
+
+// Norm and r·z accumulate in ascending row order, matching the CPU oracle.
+// The operator denominator uses the fixed-block reduction above. No scalar is
+// observed by the CPU until initialize/advance/direction/finalize all finish.
+kernel void referencePCGInitialize(device const float2 *rhs [[buffer(0)]],
+    device const float2 *diagonal [[buffer(1)]], device float2 *solution [[buffer(2)]],
+    device float2 *residual [[buffer(3)]], device float2 *preconditioned [[buffer(4)]],
+    device float2 *direction [[buffer(5)]], device ReferencePCGControl &control [[buffer(8)]],
+    constant uint4 &counts [[buffer(9)]], constant float &tolerance [[buffer(10)]],
+    uint lane [[thread_position_in_grid]]) {
+    if (lane != 0) return;
+    control.state = uint4(0);
+    control.norms = float4(0);
+    control.recurrence = float4(0);
+    float squaredNorm = 0, rz = 0;
+    bool finiteInput = true;
+    for (uint i = 0; i < counts.x; ++i) {
+        solution[i] = float2(0);
+        residual[i] = rhs[i];
+        preconditioned[i] = rhs[i] * diagonal[i];
+        direction[i] = preconditioned[i];
+        squaredNorm += referenceDot(residual[i], residual[i]);
+        rz += referenceDot(residual[i], preconditioned[i]);
+        finiteInput = finiteInput && all(isfinite(rhs[i]));
+    }
+    float initialNorm = sqrt(max(0.0f, squaredNorm));
+    if (!finiteInput || !isfinite(squaredNorm) || !isfinite(initialNorm)) {
+        control.state.z = 1;
+        control.state.w = 1;
+        return;
+    }
+    control.norms = float4(initialNorm, initialNorm, max(0.0f, tolerance) * initialNorm, 0);
+    control.recurrence.x = rz;
+    control.state.x = initialNorm > 0x1p-23f && counts.y > 0 ? 1 : 0;
+}
+
+kernel void referencePCGAdvance(device const float2 *diagonal [[buffer(1)]],
+    device float2 *solution [[buffer(2)]], device float2 *residual [[buffer(3)]],
+    device float2 *preconditioned [[buffer(4)]], device const float2 *direction [[buffer(5)]],
+    device const float2 *applied [[buffer(6)]], device const float *denominator [[buffer(7)]],
+    device ReferencePCGControl &control [[buffer(8)]], constant uint4 &counts [[buffer(9)]],
+    uint lane [[thread_position_in_grid]]) {
+    if (lane != 0 || control.state.x == 0) return;
+    float rz = control.recurrence.x;
+    float divisor = denominator[0];
+    // Preserve the CPU guards, including finite non-positive denominators:
+    // they stop without reporting a non-finite state or counting an iteration.
+    if (!isfinite(divisor) || divisor <= 0x1p-23f || !isfinite(rz)) {
+        control.state.x = 0;
+        control.state.z = !isfinite(divisor) || !isfinite(rz) ? 1 : 0;
+        return;
+    }
+    float alpha = rz / divisor;
+    float squaredNorm = 0;
+    for (uint i = 0; i < counts.x; ++i) {
+        solution[i] = solution[i] + direction[i] * alpha;
+        residual[i] = residual[i] + applied[i] * -alpha;
+        squaredNorm += referenceDot(residual[i], residual[i]);
+    }
+    control.state.y += 1;
+    float currentNorm = sqrt(max(0.0f, squaredNorm));
+    control.norms.y = currentNorm;
+    if (!isfinite(squaredNorm) || !isfinite(currentNorm)) {
+        control.state.x = 0;
+        control.state.z = 1;
+        return;
+    }
+    if (currentNorm <= control.norms.z) { control.state.x = 0; return; }
+    float nextRZ = 0;
+    for (uint i = 0; i < counts.x; ++i) {
+        preconditioned[i] = residual[i] * diagonal[i];
+        nextRZ += referenceDot(residual[i], preconditioned[i]);
+    }
+    if (!isfinite(nextRZ)) {
+        control.state.x = 0;
+        control.state.z = 1;
+        return;
+    }
+    control.recurrence.y = nextRZ / rz;
+    control.recurrence.x = nextRZ;
+}
+
+kernel void referencePCGUpdateDirection(device const float2 *preconditioned [[buffer(4)]],
+    device float2 *direction [[buffer(5)]], device const ReferencePCGControl &control [[buffer(8)]],
+    constant uint4 &counts [[buffer(9)]], uint i [[thread_position_in_grid]]) {
+    if (i < counts.x && control.state.x != 0)
+        direction[i] = preconditioned[i] + direction[i] * control.recurrence.y;
+}
+
+kernel void referencePCGFinalize(device const float2 *solution [[buffer(2)]],
+    device const float2 *residual [[buffer(3)]], device ReferencePCGControl &control [[buffer(8)]],
+    constant uint4 &counts [[buffer(9)]], uint lane [[thread_position_in_grid]]) {
+    if (lane != 0) return;
+    float squaredNorm = 0;
+    for (uint i = 0; i < counts.x; ++i) {
+        squaredNorm += referenceDot(residual[i], residual[i]);
+        if (!all(isfinite(solution[i]))) control.state.z = 1;
+    }
+    // CPU reports zero norms when the initial norm was rejected.
+    control.norms.y = control.state.w != 0 ? 0 : sqrt(max(0.0f, squaredNorm));
+    control.state.x = 0;
+}

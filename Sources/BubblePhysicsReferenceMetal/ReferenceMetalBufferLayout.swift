@@ -89,3 +89,11 @@ struct ReferenceMetalFrameOutput: Equatable, Sendable {
     let centers: [SIMD2<Float>]
     let velocities: [SIMD2<Float>]
 }
+
+// Shared Swift/MSL control record. Only GPU kernels mutate it during PCG.
+// A fixed dispatch schedule continues after convergence; active freezes state.
+struct ReferenceMetalPCGControl {
+    var state: SIMD4<UInt32> // active, iteration count, non-finite, rejected initial norm
+    var norms: SIMD4<Float> // initial norm, final norm, threshold, reserved
+    var recurrence: SIMD4<Float> // r·z, beta, reserved, reserved
+}
