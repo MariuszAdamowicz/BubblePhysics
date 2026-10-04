@@ -11,12 +11,14 @@ let package = Package(
         .library(name: "BubblePhysics", targets: ["BubblePhysics"]),
         .library(name: "BubblePhysicsCore", targets: ["BubblePhysicsCore"]),
         .library(name: "BubblePhysicsMetal", targets: ["BubblePhysicsMetal"]),
-        .library(name: "BubblePhysicsReference", targets: ["BubblePhysicsReference"])
+        .library(name: "BubblePhysicsReference", targets: ["BubblePhysicsReference"]),
+        .library(name: "BubblePhysicsReferenceMetal", targets: ["BubblePhysicsReferenceMetal"])
     ],
     targets: [
         .target(name: "BubblePhysics"),
         .target(name: "BubblePhysicsCore"),
         .target(name: "BubblePhysicsReference"),
+        .target(name: "BubblePhysicsReferenceMetal", dependencies: ["BubblePhysicsReference"]),
         .target(
             name: "BubblePhysicsMetal",
             dependencies: ["BubblePhysics"],
@@ -25,6 +27,7 @@ let package = Package(
         .testTarget(name: "BubblePhysicsTests", dependencies: ["BubblePhysics"]),
         .testTarget(name: "BubblePhysicsCoreTests", dependencies: ["BubblePhysicsCore"]),
         .testTarget(name: "BubblePhysicsReferenceTests", dependencies: ["BubblePhysicsReference"]),
+        .testTarget(name: "BubblePhysicsReferenceMetalTests", dependencies: ["BubblePhysicsReferenceMetal"]),
         .testTarget(name: "BubblePhysicsMetalTests", dependencies: ["BubblePhysics", "BubblePhysicsMetal"])
     ]
 )
