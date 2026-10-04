@@ -130,12 +130,16 @@ struct ReferenceVisualPrototypeView: View {
         }
 
         if showsContactForces {
+            let bubblesByID = Dictionary(uniqueKeysWithValues: snapshot.bubbles.map { ($0.id, $0) })
             for contact in snapshot.contacts where contact.pressure > 0 {
+                guard let bubble = bubblesByID[contact.bubbleA] else { continue }
                 let origin = point(contact.pointQ)
                 let length = min(28, max(5, CGFloat(log1p(contact.pressure)) * 2.5)) * scale
+                let forceDirection = (bubble.center - contact.pointQ)
+                    .normalized(or: -contact.normal)
                 let direction = CGPoint(
-                    x: -CGFloat(contact.normal.x) * length,
-                    y: -CGFloat(contact.normal.y) * length
+                    x: CGFloat(forceDirection.x) * length,
+                    y: CGFloat(forceDirection.y) * length
                 )
                 var force = Path()
                 force.move(to: origin)
