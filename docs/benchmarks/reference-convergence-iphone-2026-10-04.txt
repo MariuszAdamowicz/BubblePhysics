@@ -1,0 +1,23 @@
+BubblePhysics reference convergence benchmark
+device: iPhone
+system: iOS 16.7.16
+scene: interactive-24
+seed: 2842869
+warmup: 30 measured: 300
+limit full_p50_ms full_p95_ms full_max_ms solver_p95_ms contour_p95_ms render_p95_ms penetration_p95 penetration_max residual_p95 residual_max unconverged_components containment non_finite
+4 0.7272 1.9065 3.0040 1.6592 0.3159 0.0015 35.3938 45.6981 1087.7268 6406.6611 8 0 no
+8 0.9528 3.4988 6.0616 3.1991 0.3214 0.0015 34.3268 46.8025 887.6981 5735.8413 9 0 no
+12 1.3498 4.1580 6.4748 3.9088 0.3382 0.0015 37.5273 47.2105 1252.8853 5404.7920 8 0 no
+16 1.6613 5.1245 6.7489 4.8719 0.3228 0.0015 36.6320 45.5833 588.9160 7680.3110 9 0 no
+
+BubblePhysics reference convergence benchmark
+device: iPhone
+system: iOS 16.7.16
+scene: stress-300
+seed: 2842869
+warmup: 30 measured: 300
+limit full_p50_ms full_p95_ms full_max_ms solver_p95_ms contour_p95_ms render_p95_ms penetration_p95 penetration_max residual_p95 residual_max unconverged_components containment non_finite
+4 17.5512 92.9683 123.3586 87.0617 7.5302 0.0129 23.3652 26.5906 1615.4941 2447.8291 37 25 no
+8 25.9199 164.5931 228.6555 159.5598 6.9046 0.0131 23.3981 25.1758 1196.1299 1728.5229 39 10 no
+12 35.5934 222.8277 270.7369 216.2671 7.1289 0.0140 23.0360 25.6253 1283.8585 2506.5288 37 16 no
+16 44.7875 277.4367 406.3531 272.9760 6.8897 0.0131 23.3974 26.3413 1053.3779 2103.9270 39 26 no
