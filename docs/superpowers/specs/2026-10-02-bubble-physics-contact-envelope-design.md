@@ -103,6 +103,7 @@ currentA, currentB
 linearVelocity
 angularVelocity
 ownerID
+collisionMode
 ```
 
 Najbliższy punkt odcinka względem środka bańki `P` jest wyznaczany jednym
@@ -117,9 +118,17 @@ Q = A + t * (B-A)
 Nie wykonuje się osobnych testów początku, końca ani środka odcinka.
 
 Kontakt występuje, gdy odległość `P-Q` jest mniejsza od
-`supportRadius(direction(P-Q))`. Dla kontaktu zapamiętywana jest dozwolona
-strona odcinka. Żadna korekta innego kontaktu nie może pozostawić środka po
-stronie zabronionej.
+`supportRadius(direction(P-Q))`. Odcinek ma jawny tryb kolizji:
+
+- `oneSided` dla ścian i innych granic półprzestrzeni; środek nie może
+  opuścić dozwolonej strony;
+- `twoSided` dla krawędzi przeszkód, do których można podejść z obu stron.
+
+Dla odcinka dwustronnego normalna wynika z wektora `Q -> P` w chwili
+kontaktu, a nie ze stałej orientacji krawędzi. Zmiana znaku względem prostej
+zawierającej odcinek jest dozwolona, jeżeli ciągły tor środka nie przeciął
+odcinka pogrubionego o kierunkowy promień bańki. Dzięki temu bańka może obejść
+koniec odcinka i znaleźć się po jego drugiej stronie bez fałszywej korekty.
 
 Publicznym obiektem może pozostać wielokąt, lecz narrow phase operuje na jego
 zewnętrznych odcinkach. Wewnętrzne przekątne triangulacji nie są powierzchnią
@@ -175,9 +184,11 @@ Dla odcinka obracającego się używane jest conservative advancement:
 5. zakończ po znalezieniu kontaktu, końca kroku albo małego, stałego limitu
    iteracji.
 
-Zmiana zapamiętanej strony odcinka bez zarejestrowanego kontaktu uruchamia
-awaryjną korektę środka do ostatniej dozwolonej strony oraz licznik
-diagnostyczny. Jest to zabezpieczenie, a nie podstawowy mechanizm solvera.
+Dla odcinka jednostronnego zmiana zabronionej strony bez zarejestrowanego
+kontaktu uruchamia awaryjną korektę środka oraz licznik diagnostyczny. Dla
+odcinka dwustronnego sama zmiana strony nigdy nie uruchamia korekty: o kolizji
+decyduje wyłącznie TOI punktu względem skończonego odcinka pogrubionego o
+promień. Jest to szczególnie ważne w pobliżu końców odcinka.
 
 ## Rekord kontaktu i trwałość
 
@@ -190,7 +201,7 @@ normal
 pointQ
 penetration
 timeOfImpact
-allowedSide
+allowedSide tylko dla kontaktu jednostronnego
 accumulatedCompression
 age
 ```
@@ -216,7 +227,8 @@ Jedna iteracja ma kolejność:
 6. aktualizacja kierunkowych deformacji i nacisków;
 7. wykrycie nowych kontaktów powstałych wskutek zastosowanych korekt.
 
-Sztywne odcinki są ograniczeniami bezwzględnymi. Przykładowo, gdy bańka jest
+Aktywne powierzchnie sztywnych odcinków są ograniczeniami bezwzględnymi.
+Przykładowo, gdy bańka jest
 dociskana przez drugą bańkę do ściany, solver nie może rozwiązać konfliktu
 przez przepchnięcie jej środka przez ścianę. Niedostępne przesunięcie zostaje
 przeniesione na drugą bańkę albo pochłonięte jako deformacja.
@@ -261,8 +273,9 @@ się deformować niezależnie od tego kąta.
 ```
 
 Obsługa wielu zdarzeń TOI wewnątrz jednego kroku ma stały budżet. Po jego
-wyczerpaniu solver zachowuje jednostronne ograniczenia odcinków i zgłasza
-zdarzenie diagnostyczne, zamiast kontynuować nieograniczoną pętlę.
+wyczerpaniu solver zachowuje jednostronne ograniczenia ścian, nie pozwala
+zaakceptować wykrytej penetracji przeszkody dwustronnej i zgłasza zdarzenie
+diagnostyczne, zamiast kontynuować nieograniczoną pętlę.
 
 ## Struktura pakietu
 
@@ -373,6 +386,24 @@ audio i reguły `2KBubbles` pozostają poza pierwszym kamieniem milowym. Model
 danych nie może ich uniemożliwiać, ale nie będą implementowane przed
 potwierdzeniem poprawności i kosztu podstawowego solvera.
 
+## Wizualna walidacja solvera referencyjnego
+
+Przed portem Metal istniejąca aplikacja `BubblePhysicsBench` otrzymuje osobny
+tryb `CPU Wiz`. Nie jest to renderer gry, lecz scena diagnostyczna sprawdzająca,
+czy zatwierdzony model daje wiarygodny ruch.
+
+- scena zawiera 40 baniek o wyraźnie zróżnicowanych promieniach, cztery
+  jednostronne ściany i obracający się trójkąt z trzech dwustronnych odcinków;
+- symulacja używa stałego kroku `1/60 s` i ograniczonej liczby kroków
+  nadrabiających;
+- Canvas rysuje adaptacyjne kontury zwrócone przez solver, liczby obrócone
+  zgodnie z centralnymi ciałami oraz opcjonalne punkty diagnostyczne;
+- ekran udostępnia pauzę, reset i telemetrię kontaktów, penetracji, iteracji
+  oraz czasu klatki;
+- sukces oznacza brak przechodzenia trójkąta przez środki, natychmiastową
+  reakcję konturu na nacisk, szybki powrót po zwolnieniu nacisku i wypełnianie
+  przestrzeni pozostawionej za przeszkodą.
+
 ## Decyzje zatwierdzone przez CEO
 
 - nowy solver powstaje jako biblioteka i jest najpierw oceniany benchmarkiem;
@@ -381,6 +412,9 @@ potwierdzeniem poprawności i kosztu podstawowego solvera.
 - sztywne granice są odcinkami, a najbliższy punkt kontaktu to pojedyncze
   `Q`, które może pokryć się z końcem odcinka;
 - wykrywanie uwzględnia ruch bańki i odcinka oraz czas pierwszego kontaktu;
+- ściany są jednostronne, natomiast krawędzie przeszkód są dwustronne; zmiana
+  strony skończonego odcinka bez przecięcia jego pogrubionej powierzchni jest
+  dozwolona;
 - równowaga, aktywne kontakty i kierunkowe deformacje są aktualizowane
   iteracyjnie;
 - pełny kontur nie jest liczony w pętli solvera;

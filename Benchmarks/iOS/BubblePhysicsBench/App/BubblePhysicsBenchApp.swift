@@ -1,5 +1,6 @@
 import BubblePhysics
 import BubblePhysicsMetal
+import BubblePhysicsReference
 import MetalKit
 import SwiftUI
 
@@ -9,12 +10,16 @@ enum PrototypeMode: Equatable {
     case inspection
     case stress
     case radial
+    case reference
+    case referenceVisual
 
     var legacyScene: PrototypeSceneSize? {
         switch self {
         case .inspection: return .inspection
         case .stress: return .stress
         case .radial: return nil
+        case .reference: return nil
+        case .referenceVisual: return nil
         }
     }
 }
@@ -33,13 +38,18 @@ private struct PrototypeScreen: View {
     @StateObject private var model = PrototypeViewModel()
     var body: some View {
         ZStack(alignment: .top) {
-            if model.scene == .radial {
+            if model.scene == .referenceVisual {
+                ReferenceVisualPrototypeView(selectedMode: $model.scene).ignoresSafeArea()
+            } else if model.scene == .reference {
+                ReferenceBenchmarkView().ignoresSafeArea()
+            } else if model.scene == .radial {
                 RadialBubblePrototypeView(model: model).ignoresSafeArea()
             } else {
                 MetalPrototypeView(model: model).ignoresSafeArea()
             }
-            VStack(spacing: 8) {
-                HStack { Picker("Scena", selection: $model.scene) { Text("Radial").tag(PrototypeMode.radial); Text("40").tag(PrototypeMode.inspection); Text("300").tag(PrototypeMode.stress) }.pickerStyle(.segmented); Button(model.isPaused ? "Wznów" : "Pauza") { model.isPaused.toggle() }; Button("Reset") { model.resetGeneration += 1; model.errorMessage = nil } }
+            if model.scene != .referenceVisual { VStack(spacing: 8) {
+                HStack { Picker("Scena", selection: $model.scene) { Text("CPU Wiz").tag(PrototypeMode.referenceVisual); Text("CPU").tag(PrototypeMode.reference); Text("Radial").tag(PrototypeMode.radial); Text("40").tag(PrototypeMode.inspection); Text("300").tag(PrototypeMode.stress) }.pickerStyle(.segmented); if model.scene != .reference { Button(model.isPaused ? "Wznów" : "Pauza") { model.isPaused.toggle() }; Button("Reset") { model.resetGeneration += 1; model.errorMessage = nil } } }
+                if model.scene != .reference {
                 HStack { Toggle("Punkty", isOn: $model.diagnostics); Toggle("Pauza △", isOn: $model.trianglePaused) }
                 Text(String(format: "%.0f FPS · p50 %.2f · p95 %.2f ms", model.telemetry.fps, model.telemetry.p50Milliseconds, model.telemetry.p95Milliseconds)).font(.caption.monospacedDigit())
                 if model.scene == .radial {
@@ -51,7 +61,8 @@ private struct PrototypeScreen: View {
                     Text(String(format: "kontur %.2f · remesh %.2f · render %.2f ms · overflow %@ · non-finite %@", model.telemetry.contourMilliseconds, model.telemetry.remeshingMilliseconds, model.telemetry.renderingMilliseconds, model.telemetry.didOverflow ? "tak" : "nie", model.telemetry.didEncounterNonFinite ? "tak" : "nie")).font(.caption2.monospacedDigit())
                 }
                 if let error = model.errorMessage { Text(error).foregroundStyle(.red).font(.caption) }
-            }.padding(10).background(.ultraThinMaterial).clipShape(RoundedRectangle(cornerRadius: 14)).padding()
+                }
+            }.padding(10).background(.ultraThinMaterial).clipShape(RoundedRectangle(cornerRadius: 14)).padding() }
         }
     }
 }

@@ -1,2 +1,5 @@
 .build/
 .worktrees/
+.swiftpm/
+xcuserdata/
+*.xcuserstate

@@ -9,16 +9,22 @@ let package = Package(
     ],
     products: [
         .library(name: "BubblePhysics", targets: ["BubblePhysics"]),
-        .library(name: "BubblePhysicsMetal", targets: ["BubblePhysicsMetal"])
+        .library(name: "BubblePhysicsCore", targets: ["BubblePhysicsCore"]),
+        .library(name: "BubblePhysicsMetal", targets: ["BubblePhysicsMetal"]),
+        .library(name: "BubblePhysicsReference", targets: ["BubblePhysicsReference"])
     ],
     targets: [
         .target(name: "BubblePhysics"),
+        .target(name: "BubblePhysicsCore"),
+        .target(name: "BubblePhysicsReference"),
         .target(
             name: "BubblePhysicsMetal",
             dependencies: ["BubblePhysics"],
             resources: [.copy("Shaders/BubblePhysicsKernels.metal"), .copy("Shaders/LBVHKernels.metal"), .copy("Shaders/ContactKernels.metal"), .copy("Shaders/ContourContactKernels.metal"), .copy("Shaders/RemeshKernels.metal"), .copy("Shaders/PolygonKernels.metal"), .copy("Shaders/InteractionKernels.metal"), .copy("Shaders/RenderKernels.metal"), .copy("Shaders/RadialBubbleKernels.metal"), .copy("Shaders/RadialContactKernels.metal"), .copy("Shaders/RadialWorldKernels.metal"), .copy("Shaders/RadialWorldPairKernels.metal")]
         ),
         .testTarget(name: "BubblePhysicsTests", dependencies: ["BubblePhysics"]),
+        .testTarget(name: "BubblePhysicsCoreTests", dependencies: ["BubblePhysicsCore"]),
+        .testTarget(name: "BubblePhysicsReferenceTests", dependencies: ["BubblePhysicsReference"]),
         .testTarget(name: "BubblePhysicsMetalTests", dependencies: ["BubblePhysics", "BubblePhysicsMetal"])
     ]
 )
