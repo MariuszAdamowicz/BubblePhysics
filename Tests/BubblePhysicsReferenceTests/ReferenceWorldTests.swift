@@ -2,6 +2,35 @@ import XCTest
 @testable import BubblePhysicsReference
 
 final class ReferenceWorldTests: XCTestCase {
+    func testStationaryContactIsRemovedAfterSegmentMovesAway() throws {
+        var world = ReferenceWorld(
+            configuration: .default, broadPhase: SweepAndPruneBroadPhase()
+        )
+        let id = ReferenceBubbleID(rawValue: 1)
+        world.addBubble(try ReferenceBubble(
+            id: id, center: .zero, mass: 1, targetRadius: 10
+        ))
+        world.addSegment(.staticSegment(
+            id: .init(rawValue: 1), a: .init(x: 5, y: -20), b: .init(x: 5, y: 20),
+            collisionMode: .twoSided
+        ))
+        _ = world.step()
+        XCTAssertFalse(world.contacts.contacts.isEmpty)
+
+        var restingBubble = world.bubbles[0]
+        restingBubble.velocity = .zero
+        world.updateBubble(restingBubble)
+        world.updateSegment(.staticSegment(
+            id: .init(rawValue: 1), a: .init(x: 100, y: -20), b: .init(x: 100, y: 20),
+            collisionMode: .twoSided
+        ))
+        _ = world.step()
+
+        XCTAssertTrue(world.contacts.contacts.isEmpty)
+        let radii = world.contour(for: id).map { ($0 - world.bubbles[0].center).length }
+        XCTAssertTrue(radii.allSatisfy { abs($0 - 10) < 0.01 })
+    }
+
     func testBubbleDeeplyCompressedByTwoSidedPolygonEdgeIsEjected() throws {
         var configuration = ReferenceConfiguration.default
         configuration.timeStep = 1 / 60

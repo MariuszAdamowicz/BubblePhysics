@@ -212,7 +212,9 @@ public enum ReferenceEquilibriumSolver {
                 candidate = ReferenceDiscreteContactGenerator.bubbleSegmentCandidate(geometryBubbles[indexA], segment)
                 separatingSpeed = (endVelocities[indexA] - segment.linearVelocity).dot(candidate.normal)
             }
-            if candidate.penetration > configuration.contactTolerance || separatingSpeed <= 0 {
+            let remainsNearSurface = candidate.penetration >= -configuration.separationTolerance
+            if candidate.penetration > configuration.contactTolerance
+                || (remainsNearSurface && separatingSpeed <= 0) {
                 candidatesByID[candidate.id] = preservingHistory(candidate, from: old)
             }
         }

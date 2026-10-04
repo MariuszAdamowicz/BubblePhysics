@@ -56,7 +56,7 @@ public enum ReferenceVisualSceneFactory {
         let xs: [Float] = [45, 140, 235, 330]
         let ys: [Float] = [50, 170, 285, 415, 530, 650]
         let values = [2, 8, 32, 128, 512, 2048]
-        let radii: [Float] = [18, 22, 26, 30, 34, 36]
+        let radii: [Float] = [30, 36, 42, 46, 50, 54]
         return ys.enumerated().flatMap { row, y in
             xs.enumerated().map { column, x in
                 let index = (row * xs.count + column) % values.count

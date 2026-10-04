@@ -23,8 +23,11 @@ final class ReferenceVisualSceneTests: XCTestCase {
         XCTAssertEqual(scene.world.bubbles.count, 24)
         XCTAssertEqual(scene.valuesByBubbleID.count, 24)
         XCTAssertTrue(scene.world.bubbles.allSatisfy {
-            $0.center.isFinite && $0.targetRadius.isFinite && $0.targetRadius >= 18
+            $0.center.isFinite && $0.targetRadius.isFinite && $0.targetRadius >= 26
         })
+        XCTAssertGreaterThan(scene.world.bubbles.reduce(0) {
+            $0 + Float.pi * $1.targetRadius * $1.targetRadius
+        }, ReferenceVisualScene.size.x * ReferenceVisualScene.size.y * 0.4)
         let triangle = ReferenceVisualSceneFactory.triangleVertices(
             localVertices: scene.triangleLocalVertices, at: 0
         )
