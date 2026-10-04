@@ -82,11 +82,38 @@ public enum ReferenceEquilibriumSolver {
                     masses: masses, radii: radii, contacts: trialContacts,
                     indices: indices, timeStep: dt, configuration: config
                 )
-                let trialNorm = vectorNorm(trialSystem.residual(endCenters: trial))
-                if trialNorm.isFinite, trialNorm < acceptedNorm {
-                    acceptedCenters = trial
-                    acceptedContacts = trialContacts
-                    acceptedNorm = trialNorm
+                let trialResidual = trialSystem.residual(endCenters: trial)
+                var linkedByID = Dictionary(uniqueKeysWithValues: activeContacts.map { ($0.id, $0) })
+                for contact in trialContacts { linkedByID[contact.id] = contact }
+                let linkedContacts = Array(linkedByID.values)
+                let improving = ReferenceResidualComponents.improvingBubbleIndices(
+                    current: residual, trial: trialResidual,
+                    contacts: linkedContacts, indices: indices
+                )
+                guard !improving.isEmpty else { continue }
+
+                let mixed = endCenters.indices.map {
+                    improving.contains($0) ? trial[$0] : endCenters[$0]
+                }
+                let mixedVelocities = velocities(
+                    startCenters: startCenters, startVelocities: startVelocities,
+                    endCenters: mixed, timeStep: dt
+                )
+                let mixedContacts = refreshedContacts(
+                    previous: activeContacts, endCenters: mixed, endVelocities: mixedVelocities,
+                    bubbles: bubbles, segments: segments, candidatePairs: candidatePairs,
+                    indices: indices, configuration: config
+                )
+                let mixedSystem = dynamicSystem(
+                    startCenters: startCenters, startVelocities: startVelocities,
+                    masses: masses, radii: radii, contacts: mixedContacts,
+                    indices: indices, timeStep: dt, configuration: config
+                )
+                let mixedNorm = vectorNorm(mixedSystem.residual(endCenters: mixed))
+                if mixedNorm.isFinite, mixedNorm < acceptedNorm {
+                    acceptedCenters = mixed
+                    acceptedContacts = mixedContacts
+                    acceptedNorm = mixedNorm
                     break
                 }
             }
@@ -281,7 +308,15 @@ public enum ReferenceEquilibriumSolver {
                     let radiusA = bubbles[indexA].targetRadius
                     let radiusB = bubbles[indexB].targetRadius
                     let planeDistance = radiusA - contact.compressionA
-                    let clampedPlaneDistance = min(radiusA, max(-radiusA, planeDistance))
+                    let patchInset = max(
+                        configuration.positionTolerance,
+                        min(radiusA, radiusB) * 0.01
+                    )
+                    let minimumPlane = max(-radiusA + patchInset, distance - radiusB + patchInset)
+                    let maximumPlane = min(radiusA - patchInset, distance + radiusB - patchInset)
+                    let clampedPlaneDistance = min(
+                        maximumPlane, max(minimumPlane, planeDistance)
+                    )
                     contact.pointQ = endCenters[indexA] + normal * clampedPlaneDistance
                     let halfSpanA = max(
                         0, radiusA * radiusA - clampedPlaneDistance * clampedPlaneDistance

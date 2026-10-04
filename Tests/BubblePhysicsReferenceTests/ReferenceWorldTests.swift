@@ -2,6 +2,26 @@ import XCTest
 @testable import BubblePhysicsReference
 
 final class ReferenceWorldTests: XCTestCase {
+    func testDeeplyOverlappingUnequalBubblesSeparateInsteadOfContainingOneAnother() throws {
+        var configuration = ReferenceConfiguration.default
+        configuration.linearDamping = 0.8
+        var world = ReferenceWorld(
+            configuration: configuration, broadPhase: SweepAndPruneBroadPhase()
+        )
+        world.addBubble(try ReferenceBubble(
+            id: .init(rawValue: 1), center: .zero, mass: 18, targetRadius: 30
+        ))
+        world.addBubble(try ReferenceBubble(
+            id: .init(rawValue: 2), center: .init(x: 8, y: 0), mass: 4, targetRadius: 10
+        ))
+
+        for _ in 0..<120 { _ = world.step() }
+
+        let distance = (world.bubbles[1].center - world.bubbles[0].center).length
+        XCTAssertGreaterThan(distance, 39)
+        XCTAssertFalse(world.bubbles.contains { !$0.center.isFinite || !$0.velocity.isFinite })
+    }
+
     func testSmallerBubbleAbsorbsMoreOfPairDeformation() throws {
         var configuration = ReferenceConfiguration.default
         configuration.linearDamping = 0
