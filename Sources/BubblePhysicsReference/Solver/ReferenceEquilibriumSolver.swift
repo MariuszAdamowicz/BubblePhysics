@@ -146,7 +146,14 @@ public enum ReferenceEquilibriumSolver {
             masses: masses, radii: radii, contacts: finalContacts,
             indices: indices, timeStep: dt, configuration: config
         )
-        finalResidual = vectorNorm(finalSystem.residual(endCenters: endCenters))
+        let finalResidualVectors = finalSystem.residual(endCenters: endCenters)
+        finalResidual = vectorNorm(finalResidualVectors)
+        let componentSummary = ReferenceResidualComponents.summary(
+            residual: finalResidualVectors,
+            contacts: finalContacts,
+            indices: indices,
+            tolerance: config.stressTolerance
+        )
         converged = converged || finalResidual <= config.stressTolerance
         nonFinite = nonFinite || !finalResidual.isFinite
             || bubbles.contains { !$0.center.isFinite || !$0.velocity.isFinite }
@@ -168,7 +175,10 @@ public enum ReferenceEquilibriumSolver {
             finalResidualNorm: finalResidual,
             maximumRelativeDeformation: maximumRelative,
             lineSearchFailureCount: lineSearchFailures,
-            hasNonFiniteState: nonFinite
+            hasNonFiniteState: nonFinite,
+            contactComponentCount: componentSummary.componentCount,
+            unconvergedContactComponentCount: componentSummary.unconvergedCount,
+            maximumComponentResidualNorm: componentSummary.maximumNorm
         )
     }
 

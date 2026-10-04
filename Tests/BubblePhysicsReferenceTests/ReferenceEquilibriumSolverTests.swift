@@ -38,6 +38,22 @@ final class ReferenceEquilibriumSolverTests: XCTestCase {
         XCTAssertLessThanOrEqual(report.iterations, 8)
     }
 
+    func testEquilibriumReportPublishesFinalComponentQuality() throws {
+        var bubbles = [try bubble(1, x: 8)]
+        let wall = verticalWall(x: 0)
+        var contacts = ReferenceContactSet(contacts: [try contact(bubbles[0], wall)])
+
+        let report = ReferenceEquilibriumSolver.solve(
+            bubbles: &bubbles, segments: [wall], contacts: &contacts,
+            configuration: configuration(), timeStep: 0.1
+        )
+
+        XCTAssertEqual(report.contactComponentCount, 1)
+        XCTAssertGreaterThanOrEqual(report.unconvergedContactComponentCount, 0)
+        XCTAssertTrue(report.maximumComponentResidualNorm.isFinite)
+        XCTAssertGreaterThanOrEqual(report.maximumComponentResidualNorm, 0)
+    }
+
     func testUnbalancedContactChangesVelocityInForceDirection() throws {
         var bubbles = [try bubble(1, x: 8)]
         let wall = verticalWall(x: 0)

@@ -11,6 +11,9 @@ public struct ReferenceSolverReport: Sendable, Equatable {
     public var maximumRelativeDeformation: Float
     public var lineSearchFailureCount: Int
     public var hasNonFiniteState: Bool
+    public var contactComponentCount: Int
+    public var unconvergedContactComponentCount: Int
+    public var maximumComponentResidualNorm: Float
 
     public var newtonIterationCount: Int { iterations }
     public var maximumCompression: Float { maximumPenetration }
@@ -28,7 +31,10 @@ public struct ReferenceSolverReport: Sendable, Equatable {
         finalResidualNorm: Float = 0,
         maximumRelativeDeformation: Float = 0,
         lineSearchFailureCount: Int = 0,
-        hasNonFiniteState: Bool = false
+        hasNonFiniteState: Bool = false,
+        contactComponentCount: Int = 0,
+        unconvergedContactComponentCount: Int = 0,
+        maximumComponentResidualNorm: Float = 0
     ) {
         self.iterations = iterations
         self.maximumPenetration = maximumPenetration
@@ -42,5 +48,8 @@ public struct ReferenceSolverReport: Sendable, Equatable {
         self.maximumRelativeDeformation = maximumRelativeDeformation
         self.lineSearchFailureCount = lineSearchFailureCount
         self.hasNonFiniteState = hasNonFiniteState
+        self.contactComponentCount = contactComponentCount
+        self.unconvergedContactComponentCount = unconvergedContactComponentCount
+        self.maximumComponentResidualNorm = maximumComponentResidualNorm
     }
 }

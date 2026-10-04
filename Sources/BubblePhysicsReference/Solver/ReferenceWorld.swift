@@ -504,6 +504,13 @@ public struct ReferenceWorld {
         )
         aggregate.lineSearchFailureCount += report.lineSearchFailureCount
         aggregate.hasNonFiniteState = aggregate.hasNonFiniteState || report.hasNonFiniteState
+        aggregate.contactComponentCount = max(aggregate.contactComponentCount, report.contactComponentCount)
+        aggregate.unconvergedContactComponentCount = max(
+            aggregate.unconvergedContactComponentCount, report.unconvergedContactComponentCount
+        )
+        aggregate.maximumComponentResidualNorm = max(
+            aggregate.maximumComponentResidualNorm, report.maximumComponentResidualNorm
+        )
     }
 
     private func sweptBounds(
