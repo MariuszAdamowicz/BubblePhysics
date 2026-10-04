@@ -6,6 +6,7 @@ public final class ReferenceMetalSolver {
     public let device: MTLDevice
     public let loadedFunctionNames: Set<String>
     private let residualPipeline: MTLComputePipelineState
+    let capacityManager: ReferenceMetalCapacityManager
 
     public init?(device: MTLDevice? = MTLCreateSystemDefaultDevice()) {
         guard let device,
@@ -15,6 +16,7 @@ public final class ReferenceMetalSolver {
         else { return nil }
 
         self.device = device
+        capacityManager = ReferenceMetalCapacityManager(device: device)
         residualPipeline = pipeline
         loadedFunctionNames = [function.name]
     }
