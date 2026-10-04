@@ -19,6 +19,51 @@ private struct ReferenceMetalOperatorParameters {
     var drag: SIMD4<Float>
 }
 
+struct ReferenceMetalPreparedComponent {
+    let bubbleIDs: [ReferenceBubbleID]
+    let contactIDs: [ReferenceContactID]
+}
+
+struct ReferenceMetalPreparedFrame {
+    let predictedCenters: [ReferenceVector2]
+    let centers: [ReferenceVector2]
+    let contacts: [ReferenceContact]
+    let candidatePairs: [ReferencePair]
+    let eventGroups: [ReferenceContactEventGroup]
+    let allEvents: [ReferenceContactEvent]
+    let impactContacts: [ReferenceContact]
+    let didReachEventGroupLimit: Bool
+    let ccdBudgetExhaustionCount: Int
+    let sideCorrectionCount: Int
+    let componentLabels: [Int?]
+    let components: [ReferenceMetalPreparedComponent]
+    let didOverflow: Bool
+    let attemptCount: Int
+}
+
+struct ReferenceMetalGeometryParameters {
+    var counts: SIMD4<UInt32>
+    var capacities: SIMD4<UInt32>
+    var physics: SIMD4<Float>
+    var events: SIMD4<Float>
+    var limits: SIMD4<UInt32>
+}
+
+struct ReferenceMetalGeometryControl {
+    var counts: SIMD4<UInt32>
+    var required: SIMD4<UInt32>
+    var flags: SIMD4<UInt32>
+    var grouping: SIMD4<UInt32>
+}
+
+struct ReferenceMetalGeometryEvent {
+    var contact: ReferenceMetalContact
+    var timing: SIMD4<Float>
+    var grouping: SIMD4<UInt32>
+}
+
+enum ReferenceMetalGeometryError: Error { case nonFiniteState, invalidOverflowReport }
+
 /// Numerical operators for the iOS reference backend. macOS is a test host.
 /// World stepping and backend selection are implemented separately.
 public final class ReferenceMetalSolver {
@@ -32,6 +77,7 @@ public final class ReferenceMetalSolver {
     private let pcgAdvancePipeline: MTLComputePipelineState
     private let pcgDirectionPipeline: MTLComputePipelineState
     private let pcgFinalizePipeline: MTLComputePipelineState
+    private let geometryPipelines: [String: MTLComputePipelineState]
     private let commandQueue: MTLCommandQueue
     private var operatorBuffers: [String: MTLBuffer] = [:]
     private var evaluationInFlight = false
@@ -61,8 +107,18 @@ public final class ReferenceMetalSolver {
               let pcgDirectionPipeline = try? device.makeComputePipelineState(function: pcgDirection),
               let pcgFinalizePipeline = try? device.makeComputePipelineState(function: pcgFinalize),
               dotPipeline.maxTotalThreadsPerThreadgroup >= 256,
-              let commandQueue = device.makeCommandQueue()
+              let commandQueue = device.makeCommandQueue(),
+              let geometryURL = Bundle.module.url(forResource: "ReferenceGeometryKernels", withExtension: "metal"),
+              let geometrySource = try? String(contentsOf: geometryURL, encoding: .utf8),
+              let geometryLibrary = try? device.makeLibrary(source: geometrySource, options: options)
         else { return nil }
+
+        var geometryPipelines: [String: MTLComputePipelineState] = [:]
+        for name in ["referencePredict", "referenceEmitCandidatePairs", "referenceRefreshContacts", "referenceFindTOI", "referenceLabelComponents"] {
+            guard let function = geometryLibrary.makeFunction(name: name),
+                  let state = try? device.makeComputePipelineState(function: function) else { return nil }
+            geometryPipelines[name] = state
+        }
 
         self.device = device
         capacityManager = ReferenceMetalCapacityManager(device: device)
@@ -75,8 +131,9 @@ public final class ReferenceMetalSolver {
         self.pcgDirectionPipeline = pcgDirectionPipeline
         self.pcgFinalizePipeline = pcgFinalizePipeline
         self.commandQueue = commandQueue
-        loadedFunctionNames = [function.name, jacobian.name, diagonal.name, dot.name,
-                              pcgInitialize.name, pcgAdvance.name, pcgDirection.name, pcgFinalize.name]
+        self.geometryPipelines = geometryPipelines
+        loadedFunctionNames = Set([function.name, jacobian.name, diagonal.name, dot.name,
+                              pcgInitialize.name, pcgAdvance.name, pcgDirection.name, pcgFinalize.name]).union(geometryPipelines.keys)
     }
 
     func evaluateOperatorsForTesting(snapshot: ReferenceMetalSnapshot, endCenters: [ReferenceVector2],
@@ -255,6 +312,148 @@ public final class ReferenceMetalSolver {
         result.finalResidualNorm = status.norms.y
         result.hasNonFiniteState = status.state.z != 0
         return result
+    }
+
+    /// Preparation only: ballistic prediction, CPU-equilibrium contact refresh,
+    /// independent CCD/event scan and contact partition. No solve or finalization.
+    /// `centers` is a guarded trial, while refresh/CCD use `predictedCenters`.
+    func prepareFrameForTesting(snapshot: ReferenceMetalSnapshot, step: Int) async throws -> ReferenceMetalPreparedFrame {
+        guard !evaluationInFlight else { throw ReferenceMetalOperatorError.evaluationInFlight }
+        let n = snapshot.bubbles.count, segmentCount = snapshot.segments.count
+        let (square, squareOverflow) = n.multipliedReportingOverflow(by: max(0, n - 1))
+        let (segmentPairs, segmentOverflow) = n.multipliedReportingOverflow(by: segmentCount)
+        let (pairUpper, pairOverflow) = (square / 2).addingReportingOverflow(segmentPairs)
+        let (contactUpper, contactOverflow) = pairUpper.addingReportingOverflow(snapshot.contacts.count)
+        guard !squareOverflow, !segmentOverflow, !pairOverflow, !contactOverflow,
+              snapshot.centers.count == n, snapshot.velocities.count == n,
+              let bubbles = UInt32(exactly: n), let segments = UInt32(exactly: segmentCount),
+              let previous = UInt32(exactly: snapshot.contacts.count),
+              let upper = UInt32(exactly: contactUpper), let step = UInt32(exactly: step),
+              let budget = UInt32(exactly: snapshot.configuration.toiIterationBudget),
+              let groupLimit = UInt32(exactly: snapshot.configuration.maximumEventGroups),
+              snapshot.configuration.timeStep.isFinite, snapshot.configuration.timeStep > 0
+        else { throw ReferenceMetalOperatorError.invalidInput }
+        evaluationInFlight = true
+        defer { evaluationInFlight = false }
+        var pairCapacity = max(1, (operatorBuffers["geometryPairs"]?.length ?? 0) / MemoryLayout<SIMD4<UInt32>>.stride)
+        var contactCapacity = max(1, snapshot.contacts.count,
+            (operatorBuffers["geometryContacts"]?.length ?? 0) / MemoryLayout<ReferenceMetalContact>.stride)
+        var componentCapacity = max(1, (operatorBuffers["geometryComponents"]?.length ?? 0) / MemoryLayout<SIMD4<UInt32>>.stride)
+        var attempts = 0, didOverflow = false
+        while true {
+            try Task.checkCancellation()
+            attempts += 1
+            let inputs = try [upload(snapshot.bubbles, name: "geometryBubbles"),
+                upload(snapshot.centers, name: "geometryStart"), upload(snapshot.velocities, name: "geometryVelocity"),
+                upload(snapshot.segments, name: "geometrySegments"), upload(snapshot.contacts, name: "geometryPrevious")]
+            let vectorStride = MemoryLayout<SIMD2<Float>>.stride
+            let predicted = try buffer(name: "geometryPredicted", count: n, stride: vectorStride)
+            let guarded = try buffer(name: "geometryGuarded", count: n, stride: vectorStride)
+            let pairs = try buffer(name: "geometryPairs", count: pairCapacity, stride: MemoryLayout<SIMD4<UInt32>>.stride)
+            let contacts = try buffer(name: "geometryContacts", count: contactCapacity, stride: MemoryLayout<ReferenceMetalContact>.stride)
+            let events = try buffer(name: "geometryEvents", count: pairCapacity, stride: MemoryLayout<ReferenceMetalGeometryEvent>.stride)
+            let labels = try buffer(name: "geometryLabels", count: n, stride: MemoryLayout<UInt32>.stride)
+            let touched = try buffer(name: "geometryTouched", count: n, stride: MemoryLayout<UInt32>.stride)
+            let components = try buffer(name: "geometryComponents", count: componentCapacity, stride: MemoryLayout<SIMD4<UInt32>>.stride)
+            let control = try buffer(name: "geometryControl", count: 1, stride: MemoryLayout<ReferenceMetalGeometryControl>.stride)
+            memset(control.contents(), 0, control.length)
+            let buffers = inputs + [predicted, guarded, pairs, contacts, events, labels, touched, components, control]
+            guard let command = commandQueue.makeCommandBuffer() else { throw ReferenceMetalOperatorError.commandSetupFailed }
+            let config = snapshot.configuration
+            var parameters = ReferenceMetalGeometryParameters(counts: SIMD4(bubbles, segments, previous, UInt32(pairCapacity)),
+                capacities: SIMD4(UInt32(contactCapacity), UInt32(componentCapacity), 0, 0),
+                physics: SIMD4(config.timeStep, config.contactTolerance, config.separationTolerance, config.positionTolerance),
+                events: SIMD4(config.simultaneousEventTolerance, 0, 0, 0), limits: SIMD4(budget, groupLimit, upper, step))
+            func encode(_ name: String, parallel: Bool = false) throws {
+                guard !parallel || n > 0 else { return }
+                guard let pipeline = geometryPipelines[name], let encoder = command.makeComputeCommandEncoder()
+                else { throw ReferenceMetalOperatorError.commandSetupFailed }
+                encoder.setComputePipelineState(pipeline)
+                for (i, buffer) in buffers.enumerated() { encoder.setBuffer(buffer, offset: 0, index: i) }
+                encoder.setBytes(&parameters, length: MemoryLayout<ReferenceMetalGeometryParameters>.stride, index: 14)
+                encoder.dispatchThreads(MTLSize(width: parallel ? n : 1, height: 1, depth: 1),
+                    threadsPerThreadgroup: MTLSize(width: parallel ? min(256, pipeline.maxTotalThreadsPerThreadgroup) : 1, height: 1, depth: 1))
+                encoder.endEncoding()
+            }
+            try encode("referencePredict", parallel: true)
+            try encode("referenceEmitCandidatePairs")
+            try encode("referenceRefreshContacts")
+            try encode("referenceFindTOI")
+            parameters.capacities.z = 1
+            try encode("referencePredict", parallel: true)
+            try encode("referenceLabelComponents")
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                command.addCompletedHandler { completed in
+                    if completed.status == .completed { continuation.resume() }
+                    else { continuation.resume(throwing: ReferenceMetalOperatorError.executionFailed(completed.error?.localizedDescription ?? "Metal command failed")) }
+                }
+                command.commit()
+            }
+            try Task.checkCancellation()
+            let state = control.contents().load(as: ReferenceMetalGeometryControl.self)
+            if state.flags.x != 0 {
+                let required = [Int(state.required.x), Int(state.required.y), Int(state.required.z)]
+                guard required[0] > pairCapacity || required[1] > contactCapacity || required[2] > componentCapacity
+                else { throw ReferenceMetalGeometryError.invalidOverflowReport }
+                pairCapacity = max(pairCapacity, required[0])
+                contactCapacity = max(contactCapacity, required[1])
+                componentCapacity = max(componentCapacity, required[2])
+                didOverflow = true
+                continue // Discard all partial results; reupload the immutable snapshot.
+            }
+            guard state.flags.y == 0 else { throw ReferenceMetalGeometryError.nonFiniteState }
+            func values<T>(_ buffer: MTLBuffer, count: Int, type: T.Type) -> [T] {
+                Array(UnsafeBufferPointer(start: buffer.contents().bindMemory(to: T.self, capacity: count), count: count))
+            }
+            func vectors(_ buffer: MTLBuffer) -> [ReferenceVector2] {
+                values(buffer, count: n, type: SIMD2<Float>.self).map { .init(x: $0.x, y: $0.y) }
+            }
+            let packedContacts = values(contacts, count: Int(state.counts.y), type: ReferenceMetalContact.self)
+            let resultContacts = packedContacts.map(Self.unpackContact)
+            let resultEvents = values(events, count: Int(state.counts.z), type: ReferenceMetalGeometryEvent.self)
+            let allEvents = resultEvents.map { ReferenceContactEvent(time: $0.timing.x, contactID: .init(rawValue: $0.contact.identity.x)) }
+            let groups = (0..<min(Int(state.grouping.x), Int(groupLimit))).map { group in
+                let members = resultEvents.filter { Int($0.grouping.x) == group }
+                return ReferenceContactEventGroup(time: members[0].timing.z, events: members.map {
+                    .init(time: $0.timing.x, contactID: .init(rawValue: $0.contact.identity.x))
+                })
+            }
+            let roots = values(labels, count: n, type: UInt32.self)
+            let membership = values(touched, count: n, type: UInt32.self)
+            let records = values(components, count: Int(state.counts.w), type: SIMD4<UInt32>.self)
+            let resultComponents = records.map { record in
+                let ids = (0..<n).filter { membership[$0] != 0 && roots[$0] == record.x }.map {
+                    ReferenceBubbleID(rawValue: Int(snapshot.bubbles[$0].identity.x))
+                }
+                let idSet = Set(ids)
+                return ReferenceMetalPreparedComponent(bubbleIDs: ids, contactIDs: resultContacts.filter {
+                    idSet.contains($0.bubbleA) || $0.bubbleB.map(idSet.contains) == true
+                }.map(\.id))
+            }
+            let rootToLabel = Dictionary(uniqueKeysWithValues: records.enumerated().map { ($0.element.x, $0.offset) })
+            let resultPairs = values(pairs, count: Int(state.counts.x), type: SIMD4<UInt32>.self).filter { $0.x == 0 }.map {
+                ReferencePair(.init(rawValue: Int(snapshot.bubbles[Int($0.y)].identity.x)),
+                              .init(rawValue: Int(snapshot.bubbles[Int($0.z)].identity.x)))
+            }
+            return .init(predictedCenters: vectors(predicted), centers: vectors(guarded), contacts: resultContacts,
+                candidatePairs: resultPairs, eventGroups: groups, allEvents: allEvents,
+                impactContacts: resultEvents.map { Self.unpackContact($0.contact) }, didReachEventGroupLimit: state.grouping.y != 0,
+                ccdBudgetExhaustionCount: Int(state.flags.z), sideCorrectionCount: Int(state.flags.w),
+                componentLabels: (0..<n).map { membership[$0] == 0 ? nil : rootToLabel[roots[$0]] },
+                components: resultComponents, didOverflow: didOverflow, attemptCount: attempts)
+        }
+    }
+
+    private static func unpackContact(_ c: ReferenceMetalContact) -> ReferenceContact {
+        let flags = c.identity.y
+        return .init(id: .init(rawValue: c.identity.x), kind: flags & 1 != 0 ? .bubbleSegment : .bubbleBubble,
+            bubbleA: .init(rawValue: Int(c.bubbles.x)), bubbleB: flags & 2 != 0 ? .init(rawValue: Int(c.bubbles.y)) : nil,
+            segment: flags & 4 != 0 ? .init(rawValue: Int(c.segmentAndAge.x)) : nil,
+            normal: .init(x: c.geometry.x, y: c.geometry.y), pointQ: .init(x: c.geometry.z, y: c.geometry.w),
+            penetration: c.timing.x, timeOfImpact: flags & 8 != 0 ? c.timing.y : nil,
+            allowedSide: flags & 16 != 0 ? c.timing.z : nil, accumulatedCompression: c.compression.x,
+            compressionA: c.compression.y, compressionB: c.compression.z, pressure: c.compression.w,
+            effectiveStiffness: c.response.x, age: Int(c.segmentAndAge.y), contourHalfLength: flags & 32 != 0 ? c.timing.w : nil)
     }
 
     private func buffer(name: String, count: Int, stride: Int) throws -> MTLBuffer {

@@ -73,7 +73,9 @@ struct ReferenceMetalSnapshot: Equatable, Sendable {
     let segments: [ReferenceMetalSegment]
     let contacts: [ReferenceMetalContact]
 
-    init(world: ReferenceWorld) {
+    /// Optional contacts let a prepared contact phase become the next immutable
+    /// input without mutating the CPU world's privately owned contact set.
+    init(world: ReferenceWorld, contacts: [ReferenceContact]? = nil) {
         configuration = world.configuration
         let sorted = world.bubbles.sorted { $0.id < $1.id }
         bubbles = sorted.map(ReferenceMetalBubble.init)
@@ -81,7 +83,7 @@ struct ReferenceMetalSnapshot: Equatable, Sendable {
         previousCenters = sorted.map { SIMD2($0.previousCenter.x, $0.previousCenter.y) }
         velocities = sorted.map { SIMD2($0.velocity.x, $0.velocity.y) }
         segments = world.segments.sorted { $0.id < $1.id }.map(ReferenceMetalSegment.init)
-        contacts = world.contacts.contacts.sorted { $0.id < $1.id }.map(ReferenceMetalContact.init)
+        self.contacts = (contacts ?? world.contacts.contacts).sorted { $0.id < $1.id }.map(ReferenceMetalContact.init)
     }
 }
 
