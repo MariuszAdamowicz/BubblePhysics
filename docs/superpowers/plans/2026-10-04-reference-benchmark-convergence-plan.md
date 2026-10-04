@@ -321,7 +321,7 @@ Expected: FAIL, ponieważ generation token i stan macierzy nie istnieją.
 
 - [ ] **Step 3: Implement benchmark controls and report view**
 
-Zastąp wybór `40/300/1000` wyborem `24/300`; pozostaw broad phase tylko jeśli raport nadal porównuje oba warianty, w przeciwnym razie ustaw zatwierdzony sweep-and-prune bez kontrolki. Tabela pokazuje po jednym wierszu na limit z `full p50/p95/max`, `solver p95`, `contour p95`, penetracją p95/max, końcową resztą p95/max, niezbieżnymi komponentami, zawarciem i `non-finite`. Tekst raportu ma `.textSelection(.enabled)` oraz przycisk kopiowania przez `UIPasteboard`.
+Zastąp wybór `40/300/1000` wyborem `24/300` i usuń kontrolkę broad phase; zatwierdzony benchmark zbieżności zawsze używa sweep-and-prune, a istniejące mikrobenchmarki zachowują porównanie z AABB tree. Tabela pokazuje po jednym wierszu na limit z `full p50/p95/max`, `solver p95`, `contour p95`, penetracją p95/max, końcową resztą p95/max, niezbieżnymi komponentami, zawarciem i `non-finite`. Tekst raportu ma `.textSelection(.enabled)` oraz przycisk kopiowania przez `UIPasteboard`.
 
 - [ ] **Step 4: Document device procedure**
 
