@@ -2,6 +2,42 @@ import XCTest
 @testable import BubblePhysicsReference
 
 final class ReferenceEquilibriumSolverTests: XCTestCase {
+    func testDefaultConfigurationPreservesFourIterationBehavior() {
+        XCTAssertEqual(ReferenceConfiguration.default.solverIterations, 4)
+    }
+
+    func testSolverHonorsConfiguredNewtonLimitAboveFour() throws {
+        var config = configuration()
+        config.solverIterations = 8
+        config.pcgIterationLimit = 1
+        config.stressTolerance = Float.leastNonzeroMagnitude
+        config.contactStiffness = 800
+        config.nonlinearStiffening = 20
+
+        var bubbles = [
+            try bubble(1, x: 4, y: -3),
+            try bubble(2, x: 17, y: 2),
+            try bubble(3, x: 30, y: -2),
+        ]
+        let wall = verticalWall(x: 0)
+        var contacts = ReferenceContactSet(contacts: [
+            try contact(bubbles[0], wall),
+            try pair(bubbles[0], bubbles[1]),
+            try pair(bubbles[1], bubbles[2]),
+        ])
+
+        let report = ReferenceEquilibriumSolver.solve(
+            bubbles: &bubbles,
+            segments: [wall],
+            contacts: &contacts,
+            configuration: config,
+            timeStep: 0.2
+        )
+
+        XCTAssertGreaterThan(report.iterations, 4)
+        XCTAssertLessThanOrEqual(report.iterations, 8)
+    }
+
     func testUnbalancedContactChangesVelocityInForceDirection() throws {
         var bubbles = [try bubble(1, x: 8)]
         let wall = verticalWall(x: 0)

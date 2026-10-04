@@ -25,7 +25,7 @@ public struct ReferenceConfiguration: Sendable, Equatable {
 
     public init(
         timeStep: Float = 1 / 60,
-        solverIterations: Int = 12,
+        solverIterations: Int = 4,
         contactTolerance: Float = 0.001,
         separationTolerance: Float = 0.002,
         positionTolerance: Float = 0.0001,

@@ -15,7 +15,7 @@ public enum ReferenceEquilibriumSolver {
         let radii = bubbles.map(\.targetRadius)
         let indices = Dictionary(uniqueKeysWithValues: bubbles.indices.map { (bubbles[$0].id, $0) })
         let segmentMap = Dictionary(uniqueKeysWithValues: segments.map { ($0.id, $0) })
-        let newtonLimit = min(4, max(1, config.solverIterations))
+        let newtonLimit = max(1, config.solverIterations)
         let pcgLimit = min(16, max(1, config.pcgIterationLimit))
 
         var endCenters = bubbles.indices.map { startCenters[$0] + startVelocities[$0] * dt }
