@@ -296,6 +296,66 @@ final class ReferenceMetalContactPipelineTests: XCTestCase {
         catch ReferenceMetalGeometryError.nonFiniteState { }
     }
 
+    func testCollapsingAllowedSideSegmentMatchesCPUWorldFallbackNormal() async throws {
+        var world = makeWorld()
+        world.addBubble(try .init(id: .init(rawValue: 1), center: .init(x: 1, y: -1), mass: 1, targetRadius: 0.01))
+        world.addSegment(.kinematicSegment(id: .init(rawValue: 4), previousA: .init(x: 0, y: -5), previousB: .init(x: 0, y: 5),
+            currentA: .zero, currentB: .zero, timeStep: 1, collisionMode: .oneSided(allowedSide: 1)))
+        let snapshot = ReferenceMetalSnapshot(world: world)
+        let cpuReport = world.step()
+        XCTAssertEqual(world.bubbles[0].center, .init(x: 1, y: 0))
+        XCTAssertEqual(cpuReport.sideCorrectionCount, 1)
+        XCTAssertTrue(world.contacts.contacts.isEmpty)
+        XCTAssertEqual(cpuReport.eventGroupCount, 0)
+        let result = try await solver().prepareFrameForTesting(snapshot: snapshot, step: 0)
+        XCTAssertEqual(result.centers, world.bubbles.map(\.center))
+        XCTAssertEqual(result.sideCorrectionCount, cpuReport.sideCorrectionCount)
+        XCTAssertTrue(result.contacts.isEmpty)
+        XCTAssertTrue(result.allEvents.isEmpty)
+    }
+
+    func testCCDIntermediateOverflowAtOneE20RejectsRatherThanDroppingEvent() async throws {
+        var world = makeWorld()
+        world.addBubble(try bubble(1, -1e20, 0, velocity: .init(x: 2e20, y: 0)))
+        world.addBubble(try bubble(2, 1e20, 0, velocity: .init(x: -2e20, y: 0)))
+        let snapshot = ReferenceMetalSnapshot(world: world)
+        XCTAssertTrue(snapshot.centers.allSatisfy { $0.x.isFinite && $0.y.isFinite })
+        XCTAssertTrue(snapshot.velocities.allSatisfy { $0.x.isFinite && $0.y.isFinite })
+        do { _ = try await solver().prepareFrameForTesting(snapshot: snapshot, step: 0); XCTFail("CCD overflow was reported as an event-free success") }
+        catch ReferenceMetalGeometryError.nonFiniteState { }
+    }
+
+    func testCCDDiscriminantOverflowRejectsBubbleAndPointSegmentPaths() async throws {
+        for segmentPath in [false, true] {
+            var world = makeWorld()
+            world.addBubble(try bubble(1, 3, 0, velocity: .init(x: -1e19, y: 0)))
+            if segmentPath { world.addSegment(.staticSegment(id: .init(rawValue: 4), a: .zero, b: .zero)) }
+            else { world.addBubble(try bubble(2, 0, 0)) }
+            // Squared movement and initial separation are finite; q*q and the
+            // discriminant overflow, so checking only those inputs is insufficient.
+            do { _ = try await solver().prepareFrameForTesting(snapshot: .init(world: world), step: 0); XCTFail("non-finite quadratic was discarded silently") }
+            catch ReferenceMetalGeometryError.nonFiniteState { }
+        }
+    }
+
+    func testConservativeCCDRejectsOverflowingSegmentProjection() async throws {
+        var world = makeWorld(); world.addBubble(try bubble(1, 3, 0))
+        world.addSegment(.kinematicSegment(id: .init(rawValue: 4), previousA: .init(x: -1e19, y: -1), previousB: .init(x: 1e19, y: -1),
+            currentA: .init(x: -1e19, y: 1), currentB: .init(x: 1e19, y: 2), timeStep: 1))
+        do { _ = try await solver().prepareFrameForTesting(snapshot: .init(world: world), step: 0); XCTFail("invalid conservative CCD projection was discarded silently") }
+        catch ReferenceMetalGeometryError.nonFiniteState { }
+    }
+
+    func testCenterGuardRejectsOverflowingPolynomialEvenWhenCCDContactIsActive() async throws {
+        var world = makeWorld(); world.addBubble(try bubble(1, 1e20, 1e20))
+        let segment = ReferenceSegment.staticSegment(id: .init(rawValue: 4), a: .zero, b: .init(x: 0, y: 1e20))
+        world.addSegment(segment)
+        var old = ReferenceDiscreteContactGenerator.bubbleSegmentCandidate(world.bubbles[0], segment)
+        old.penetration = 0 // Finite prior contact; active IDs bypass the event scan.
+        do { _ = try await solver().prepareFrameForTesting(snapshot: .init(world: world, contacts: [old]), step: 0); XCTFail("invalid center crossing polynomial was discarded silently") }
+        catch ReferenceMetalGeometryError.nonFiniteState { }
+    }
+
     private func makeWorld() -> ReferenceWorld {
         ReferenceWorld(configuration: .init(timeStep: 1, linearDamping: 0), broadPhase: BruteForceBroadPhase())
     }
