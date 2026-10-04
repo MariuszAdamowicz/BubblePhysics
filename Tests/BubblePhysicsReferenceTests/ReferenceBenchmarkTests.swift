@@ -3,6 +3,62 @@ import Foundation
 @testable import BubblePhysicsReference
 
 final class ReferenceBenchmarkTests: XCTestCase {
+    func testTimingSummaryUsesLiteralNearestRankP50P95AndMaximum() {
+        let summary = ReferenceTimingSummary(values: [1, 2, 3, 100])
+        XCTAssertEqual(summary.p50Milliseconds, 2)
+        XCTAssertEqual(summary.p95Milliseconds, 100)
+        XCTAssertEqual(summary.maximumMilliseconds, 100)
+    }
+
+    func testMeasuredReportAggregatesContourQualityAndContainment() throws {
+        let scenario = ReferenceConvergenceScenario(scene: .interactive24, seed: 9, newtonIterationLimit: 4)
+        let report = try ReferenceBenchmarkRunner.measure(
+            scenario: scenario, warmupSteps: 1, measuredSteps: 3
+        )
+
+        XCTAssertEqual(report.benchmarkVersion, "reference-convergence-v1")
+        XCTAssertEqual(report.newtonIterationLimit, 4)
+        XCTAssertEqual(report.scene, .interactive24)
+        XCTAssertGreaterThan(report.contour.p95Milliseconds, 0)
+        XCTAssertGreaterThan(report.maximumContourPointCount, 0)
+        XCTAssertTrue(report.penetration.p95.isFinite)
+        XCTAssertTrue(report.finalResidual.p95.isFinite)
+        XCTAssertGreaterThanOrEqual(report.maximumUnconvergedContactComponents, 0)
+        XCTAssertGreaterThanOrEqual(report.maximumConsecutiveContainmentFrames, 0)
+    }
+
+    func testZeroMeasuredStepsProducesFiniteZeroSummaries() throws {
+        let report = try ReferenceBenchmarkRunner.measure(
+            scenario: .init(scene: .interactive24, seed: 10, newtonIterationLimit: 8),
+            warmupSteps: 0,
+            measuredSteps: 0
+        )
+
+        for value in [report.fullFrame.p50Milliseconds, report.fullFrame.p95Milliseconds,
+                      report.fullFrame.maximumMilliseconds, report.penetration.p95,
+                      report.finalResidual.maximum] {
+            XCTAssertEqual(value, 0)
+            XCTAssertTrue(value.isFinite)
+        }
+    }
+
+    func testReportRecordsEveryConfigurationValueNeededForComparison() throws {
+        let scenario = ReferenceConvergenceScenario(
+            scene: .stress300, seed: 0xCAFE, newtonIterationLimit: 12, broadPhase: .aabbTree
+        )
+        let report = try ReferenceBenchmarkRunner.measure(scenario: scenario, warmupSteps: 0, measuredSteps: 1)
+
+        XCTAssertEqual(report.scene, .stress300)
+        XCTAssertEqual(report.seed, 0xCAFE)
+        XCTAssertEqual(report.broadPhase, .aabbTree)
+        XCTAssertEqual(report.newtonIterationLimit, 12)
+        XCTAssertEqual(report.pcgIterationLimit, ReferenceConfiguration.default.pcgIterationLimit)
+        XCTAssertEqual(report.timeStep, ReferenceConfiguration.default.timeStep)
+        XCTAssertEqual(report.stressTolerance, ReferenceConfiguration.default.stressTolerance)
+        XCTAssertEqual(report.warmupSteps, 0)
+        XCTAssertEqual(report.measuredSteps, 1)
+    }
+
     func testNamedScenariosHaveExpectedObjectCounts() throws {
         let expectations: [(ReferenceBenchmarkScenario, Int, Int)] = [
             (.twoBubbles, 2, 0),
