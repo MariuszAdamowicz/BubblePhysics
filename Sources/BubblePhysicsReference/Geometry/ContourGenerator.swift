@@ -11,54 +11,15 @@ public enum ReferenceContourGenerator {
         let circumference = 2 * Float.pi * bubble.targetRadius
         let count = max(32, Int(ceilf(circumference / config.maxContourSegmentLength)))
         let constraints = contourConstraints(for: bubble, contacts: contacts, segments: segments)
-        let fullTurn = 2 * Float.pi
-        let directions = (0..<count).map { index in
-            let angle = fullTurn * Float(index) / Float(count)
-            return ReferenceVector2(x: cosf(angle), y: sinf(angle))
-        }
-
-        var limits: [Float] = []
-        var dominant: [Int?] = []
-        for direction in directions {
-            let sample = radialLimit(
-                from: bubble.center,
-                direction: direction,
-                naturalRadius: bubble.targetRadius,
-                constraints: constraints,
-                finiteSegmentClearance: max(config.positionTolerance, config.contactTolerance * 2)
-            )
-            limits.append(sample.radius)
-            dominant.append(sample.constraintIndex)
-        }
-
-        var radii = limits
-        for _ in 0..<4 where !constraints.isEmpty {
-            let previous = radii
-            for index in radii.indices {
-                let before = (index + count - 1) % count
-                let after = (index + 1) % count
-                let isFlatInterior = dominant[index] != nil
-                    && dominant[index] == dominant[before]
-                    && dominant[index] == dominant[after]
-                if isFlatInterior {
-                    radii[index] = limits[index]
-                    continue
-                }
-                let pressure = localPressure(
-                    indices: [dominant[before], dominant[index], dominant[after]],
-                    constraints: constraints
-                )
-                let smoothing = config.contourSurfaceTension
-                    / max(config.contourSurfaceTension + pressure, Float.ulpOfOne)
-                let neighborRadius = (previous[before] + 2 * previous[index] + previous[after]) * 0.25
-                let proposed = previous[index] + (neighborRadius - previous[index]) * smoothing
-                radii[index] = min(limits[index], max(0, proposed))
-            }
-        }
-
-        return directions.indices.map { index in
-            bubble.center + directions[index] * radii[index]
-        }
+        return sampledContour(
+            center: bubble.center,
+            naturalRadius: bubble.targetRadius,
+            count: count,
+            maximumEdgeLength: config.maxContourSegmentLength,
+            constraints: constraints,
+            tolerance: config.positionTolerance,
+            surfaceTension: config.contourSurfaceTension
+        )
     }
 
     public static func points(
@@ -95,7 +56,6 @@ public enum ReferenceContourGenerator {
                let segmentID = contact.segment,
                let segment = segmentByID[segmentID] {
                 let endpoints = ReferenceSegmentEndpoints(a: segment.currentA, b: segment.currentB)
-                let closest = closestPoint(to: bubble.center, on: endpoints)
                 let edge = segment.currentB - segment.currentA
                 var normal = ReferenceVector2(x: -edge.y, y: edge.x)
                     .normalized(or: contact.normal)
@@ -109,8 +69,7 @@ public enum ReferenceContourGenerator {
                     pointQ: segment.currentA,
                     inwardNormal: normal,
                     pressure: contact.pressure,
-                    finiteSegment: endpoints,
-                    usesRoundedContactProfile: closest.t > 0.001 && closest.t < 0.999
+                    finiteSegment: endpoints
                 )
             }
             let inward: ReferenceVector2
@@ -135,29 +94,17 @@ public enum ReferenceContourGenerator {
         direction: ReferenceVector2,
         naturalRadius: Float,
         constraints: [ReferenceContourConstraint],
-        finiteSegmentClearance: Float = 0
+        clearance: Float
     ) -> (radius: Float, constraintIndex: Int?) {
         var radius = naturalRadius
         var limitingIndex: Int?
         for index in constraints.indices {
             let constraint = constraints[index]
-            if constraint.usesRoundedContactProfile,
-               let candidate = roundedContactRadius(
-                   center: center,
-                   direction: direction,
-                   naturalRadius: naturalRadius,
-                   pointOnPlane: constraint.pointQ,
-                   inwardNormal: constraint.inwardNormal
-               ), candidate < radius {
-                radius = max(0, candidate)
-                limitingIndex = index
-            }
-            if !constraint.usesRoundedContactProfile,
-               let segment = constraint.finiteSegment,
+            if let segment = constraint.finiteSegment,
                let candidate = rayIntersectionDistance(
                    origin: center, direction: direction, segment: segment
                ), candidate < radius {
-                radius = max(0, candidate - finiteSegmentClearance)
+                radius = max(0, candidate - clearance)
                 limitingIndex = index
                 continue
             }
@@ -174,35 +121,170 @@ public enum ReferenceContourGenerator {
         return (radius, limitingIndex)
     }
 
-    private static func roundedContactRadius(
+    private static func sampledContour(
         center: ReferenceVector2,
-        direction: ReferenceVector2,
         naturalRadius: Float,
-        pointOnPlane: ReferenceVector2,
-        inwardNormal: ReferenceVector2
-    ) -> Float? {
-        let normal = inwardNormal.normalized(or: .init(x: 1, y: 0))
-        let signedDistance = (center - pointOnPlane).dot(normal)
-        guard signedDistance >= 0, signedDistance < naturalRadius else { return nil }
+        count: Int,
+        maximumEdgeLength: Float,
+        constraints: [ReferenceContourConstraint],
+        tolerance: Float,
+        surfaceTension: Float
+    ) -> [ReferenceVector2] {
+        let fullTurn = 2 * Float.pi
+        let directions = (0..<count).map { index in
+            let angle = fullTurn * Float(index) / Float(count)
+            return ReferenceVector2(x: cosf(angle), y: sinf(angle))
+        }
+        let samples = directions.map {
+            radialLimit(
+                from: center, direction: $0, naturalRadius: naturalRadius,
+                constraints: constraints, clearance: tolerance
+            )
+        }
+        var points = directions.indices.map { center + directions[$0] * samples[$0].radius }
+        let allowedLength = maximumEdgeLength + max(tolerance, maximumEdgeLength * 1e-4)
+        let naturalTurn = 2 * Float.pi / Float(count)
+        let maximumTurn = max(naturalTurn * 2.5, 0.18)
+        let relaxation = min(0.8, max(0.25, surfaceTension / (surfaceTension + 10)))
 
-        // An offset ellipse is tangent to the rigid line at the compressed side,
-        // while its far side remains at the natural radius. This avoids turning a
-        // deeply compressed bubble into a circle cut by a long flat chord.
-        let normalRadius = max((naturalRadius + signedDistance) * 0.5, 1e-5)
-        let centerOffset = (naturalRadius - signedDistance) * 0.5
-        let tangentRadius = naturalRadius
-        let alongNormal = direction.dot(normal)
-        let alongTangent = direction.cross(normal)
-        let inverseNormalSquared = 1 / (normalRadius * normalRadius)
-        let inverseTangentSquared = 1 / (tangentRadius * tangentRadius)
-        let quadraticA = alongNormal * alongNormal * inverseNormalSquared
-            + alongTangent * alongTangent * inverseTangentSquared
-        let quadraticB = -2 * alongNormal * centerOffset * inverseNormalSquared
-        let quadraticC = centerOffset * centerOffset * inverseNormalSquared - 1
-        let discriminant = quadraticB * quadraticB - 4 * quadraticA * quadraticC
-        guard quadraticA > Float.ulpOfOne, discriminant >= 0 else { return nil }
-        let radius = (-quadraticB + discriminant.squareRoot()) / (2 * quadraticA)
-        return radius.isFinite && radius >= 0 ? radius : nil
+        for pass in 0..<12 {
+            var changed = false
+            for index in points.indices {
+                let radial = (points[index] - center).normalized(or: directions[index])
+                let target = center + radial * naturalRadius
+                let candidate = points[index] + (target - points[index]) * 0.08
+                let projected = projectToAllowedRegion(
+                    candidate, center: center, naturalRadius: naturalRadius,
+                    constraints: constraints, tolerance: tolerance
+                )
+                if (projected - points[index]).length > tolerance {
+                    points[index] = projected
+                    changed = true
+                }
+            }
+
+            let traversal = pass.isMultiple(of: 2) ? Array(0..<count) : Array((0..<count).reversed())
+            for middle in traversal {
+                let before = (middle + count - 1) % count
+                let after = (middle + 1) % count
+                let pointBefore = points[before]
+                let pointMiddle = points[middle]
+                let pointAfter = points[after]
+                let originalScore = localViolation(
+                    pointBefore, pointMiddle, pointAfter,
+                    maximumEdgeLength: allowedLength, maximumTurn: maximumTurn
+                )
+                guard originalScore > tolerance else { continue }
+
+                let middleTarget = (pointBefore + pointAfter) * 0.5
+                let middleCandidate = projectToAllowedRegion(
+                    pointMiddle + (middleTarget - pointMiddle) * relaxation,
+                    center: center, naturalRadius: naturalRadius,
+                    constraints: constraints, tolerance: tolerance
+                )
+                let middleScore = localViolation(
+                    pointBefore, middleCandidate, pointAfter,
+                    maximumEdgeLength: allowedLength, maximumTurn: maximumTurn
+                )
+                if middleScore + tolerance < originalScore {
+                    points[middle] = middleCandidate
+                    changed = true
+                    continue
+                }
+
+                let beforeCandidate = projectToAllowedRegion(
+                    pointBefore + (pointMiddle * 2 - pointAfter - pointBefore) * (relaxation * 0.5),
+                    center: center, naturalRadius: naturalRadius,
+                    constraints: constraints, tolerance: tolerance
+                )
+                let afterCandidate = projectToAllowedRegion(
+                    pointAfter + (pointMiddle * 2 - pointBefore - pointAfter) * (relaxation * 0.5),
+                    center: center, naturalRadius: naturalRadius,
+                    constraints: constraints, tolerance: tolerance
+                )
+                let outerScore = localViolation(
+                    beforeCandidate, pointMiddle, afterCandidate,
+                    maximumEdgeLength: allowedLength, maximumTurn: maximumTurn
+                )
+                if outerScore + tolerance < originalScore {
+                    points[before] = beforeCandidate
+                    points[after] = afterCandidate
+                    changed = true
+                }
+            }
+
+            for first in 0..<count {
+                let second = (first + 1) % count
+                let delta = points[second] - points[first]
+                guard delta.length > allowedLength else { continue }
+                let correction = delta.normalized(or: directions[second])
+                    * ((delta.length - maximumEdgeLength) * 0.5)
+                let firstCandidate = projectToAllowedRegion(
+                    points[first] + correction, center: center, naturalRadius: naturalRadius,
+                    constraints: constraints, tolerance: tolerance
+                )
+                let secondCandidate = projectToAllowedRegion(
+                    points[second] - correction, center: center, naturalRadius: naturalRadius,
+                    constraints: constraints, tolerance: tolerance
+                )
+                if (secondCandidate - firstCandidate).length + tolerance < delta.length {
+                    points[first] = firstCandidate
+                    points[second] = secondCandidate
+                    changed = true
+                }
+            }
+            if !changed { break }
+        }
+
+        return points.map {
+            projectToAllowedRegion(
+                $0, center: center, naturalRadius: naturalRadius,
+                constraints: constraints, tolerance: tolerance
+            )
+        }
+    }
+
+    private static func projectToAllowedRegion(
+        _ point: ReferenceVector2,
+        center: ReferenceVector2,
+        naturalRadius: Float,
+        constraints: [ReferenceContourConstraint],
+        tolerance: Float
+    ) -> ReferenceVector2 {
+        let offset = point - center
+        guard offset.lengthSquared > Float.ulpOfOne else { return center }
+        let direction = offset.normalized()
+        let limit = radialLimit(
+            from: center, direction: direction, naturalRadius: naturalRadius,
+            constraints: constraints, clearance: tolerance
+        ).radius
+        return center + direction * min(offset.length, limit)
+    }
+
+    private static func turnAngle(
+        incoming: ReferenceVector2,
+        outgoing: ReferenceVector2
+    ) -> Float {
+        guard incoming.lengthSquared > Float.ulpOfOne,
+              outgoing.lengthSquared > Float.ulpOfOne else { return .pi }
+        let first = incoming.normalized()
+        let second = outgoing.normalized()
+        return acosf(min(1, max(-1, first.dot(second))))
+    }
+
+    private static func localViolation(
+        _ before: ReferenceVector2,
+        _ middle: ReferenceVector2,
+        _ after: ReferenceVector2,
+        maximumEdgeLength: Float,
+        maximumTurn: Float
+    ) -> Float {
+        let incoming = middle - before
+        let outgoing = after - middle
+        let edgeViolation = max(0, incoming.length - maximumEdgeLength)
+            + max(0, outgoing.length - maximumEdgeLength)
+        let angularViolation = max(0, turnAngle(incoming: incoming, outgoing: outgoing) - maximumTurn)
+        return edgeViolation / max(maximumEdgeLength, Float.ulpOfOne) + angularViolation
     }
 
     private static func rayIntersectionDistance(
@@ -220,10 +302,4 @@ public enum ReferenceContourGenerator {
         return distance
     }
 
-    private static func localPressure(
-        indices: [Int?],
-        constraints: [ReferenceContourConstraint]
-    ) -> Float {
-        indices.compactMap { $0.map { constraints[$0].pressure } }.max() ?? 0
-    }
 }

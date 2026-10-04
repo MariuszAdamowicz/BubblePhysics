@@ -2,7 +2,7 @@ import XCTest
 @testable import BubblePhysicsReference
 
 final class ContourGeneratorTests: XCTestCase {
-    func testInteriorRigidEdgeContactProducesRoundedOvalInsteadOfFlatHalfCircle() throws {
+    func testInteriorRigidEdgeUsesOnlyContactLineNaturalCircleAndSurfaceTensionTransition() throws {
         let bubble = try makeBubble(center: .init(x: 0, y: 5), radius: 10)
         let segment = ReferenceSegment.staticSegment(
             id: .init(rawValue: 1), a: .init(x: -20, y: 0), b: .init(x: 20, y: 0)
@@ -13,11 +13,35 @@ final class ContourGeneratorTests: XCTestCase {
             for: bubble, contacts: [contact], segments: [segment], configuration: configuration()
         )
 
-        XCTAssertTrue(points.allSatisfy { $0.y >= -0.01 })
-        let nearContact = points.filter { abs($0.y) < 0.05 }
-        XCTAssertLessThan(nearContact.map { abs($0.x) }.max() ?? 100, 2)
-        XCTAssertGreaterThan(points.map(\.x).max() ?? 0, 8)
-        XCTAssertLessThan(points.map(\.y).max() ?? 100, 15.1)
+        XCTAssertTrue(points.allSatisfy { $0.y >= -0.001 })
+        XCTAssertTrue(points.contains { abs($0.y) < 0.001 })
+        XCTAssertTrue(points.contains { abs(($0 - bubble.center).length - 10) < 0.001 })
+        XCTAssertLessThanOrEqual(maximumEdgeLength(points), 1.05)
+    }
+
+    func testPerpendicularWallContactsStayInsideChamberAndRespectSurfaceTensionLength() throws {
+        let bubble = try makeBubble(center: .init(x: 68, y: 52), radius: 96)
+        let walls = [
+            ReferenceSegment.staticSegment(
+                id: .init(rawValue: 1), a: .init(x: 0, y: 0), b: .init(x: 0, y: 300),
+                collisionMode: .oneSided(allowedSide: -1)
+            ),
+            ReferenceSegment.staticSegment(
+                id: .init(rawValue: 2), a: .init(x: 0, y: 0), b: .init(x: 300, y: 0),
+                collisionMode: .oneSided(allowedSide: 1)
+            ),
+        ]
+        let contacts = walls.compactMap {
+            ReferenceDiscreteContactGenerator.bubbleSegment(bubble, $0)
+        }
+
+        let points = ReferenceContourGenerator.points(
+            for: bubble, contacts: contacts, segments: walls, configuration: configuration()
+        )
+
+        XCTAssertEqual(contacts.count, 2)
+        XCTAssertTrue(points.allSatisfy { $0.x >= -0.001 && $0.y >= -0.001 })
+        XCTAssertLessThanOrEqual(maximumEdgeLength(points), 1.5)
     }
 
     func testSmallBubbleCreatesOnlyFiniteSharedChordOnLargeBubble() throws {
@@ -112,9 +136,10 @@ final class ContourGeneratorTests: XCTestCase {
 
         XCTAssertGreaterThanOrEqual(flat.count, 3)
         XCTAssertTrue(flat.allSatisfy { abs($0.x - 8) < 1e-3 })
+        XCTAssertLessThan(maximumTurnAngle(points), 0.35)
     }
 
-    func testCornerRoundsSeveralSamplesWithoutCollapsingRadius() throws {
+    func testCornerContactsRespectBothPlanesAndSurfaceTensionLength() throws {
         let bubble = try makeBubble(radius: 10)
         let contacts = [
             segmentContact(id: 1, pointQ: .init(x: 7, y: 0), inward: .init(x: -1, y: 0), compression: 3),
@@ -126,7 +151,7 @@ final class ContourGeneratorTests: XCTestCase {
 
         XCTAssertGreaterThanOrEqual(corner.count, 3)
         XCTAssertTrue(corner.allSatisfy { $0.length > 5 && $0.x <= 7.001 && $0.y <= 7.001 })
-        XCTAssertTrue(corner.contains { $0.x < 6.9 && $0.y < 6.9 })
+        XCTAssertLessThanOrEqual(maximumEdgeLength(points), 1.001)
     }
 
     func testOppositeContactsChooseEnvelopeInsteadOfSummingHole() throws {
@@ -201,5 +226,22 @@ final class ContourGeneratorTests: XCTestCase {
             return (b - a).cross(point - a)
         }
         return signs.allSatisfy { $0 > 1e-5 } || signs.allSatisfy { $0 < -1e-5 }
+    }
+
+    private func maximumEdgeLength(_ points: [ReferenceVector2]) -> Float {
+        points.indices.map { index in
+            (points[(index + 1) % points.count] - points[index]).length
+        }.max() ?? 0
+    }
+
+    private func maximumTurnAngle(_ points: [ReferenceVector2]) -> Float {
+        points.indices.map { index in
+            let previous = points[(index + points.count - 1) % points.count]
+            let current = points[index]
+            let next = points[(index + 1) % points.count]
+            let incoming = (current - previous).normalized(or: .init(x: 1, y: 0))
+            let outgoing = (next - current).normalized(or: incoming)
+            return acosf(min(1, max(-1, incoming.dot(outgoing))))
+        }.max() ?? 0
     }
 }
