@@ -8,6 +8,7 @@ public struct ReferenceWorld {
     public private(set) var contacts = ReferenceContactSet()
 
     private var broadPhase: any ReferenceBroadPhase
+    private var preparedContours: [ReferenceBubbleID: [ReferenceVector2]] = [:]
 
     public init(configuration: ReferenceConfiguration, broadPhase: any ReferenceBroadPhase) {
         self.configuration = configuration.sanitized
@@ -15,6 +16,7 @@ public struct ReferenceWorld {
     }
 
     public mutating func addBubble(_ bubble: ReferenceBubble) {
+        preparedContours = [:]
         if let index = bubbles.firstIndex(where: { $0.id == bubble.id }) {
             bubbles[index] = bubble
         } else {
@@ -26,6 +28,7 @@ public struct ReferenceWorld {
     public mutating func updateBubble(_ bubble: ReferenceBubble) { addBubble(bubble) }
 
     public mutating func addSegment(_ segment: ReferenceSegment) {
+        preparedContours = [:]
         if let index = segments.firstIndex(where: { $0.id == segment.id }) {
             segments[index] = segment
         } else {
@@ -35,6 +38,7 @@ public struct ReferenceWorld {
     }
 
     public mutating func updateSegment(_ segment: ReferenceSegment) {
+        preparedContours = [:]
         guard let index = segments.firstIndex(where: { $0.id == segment.id }) else {
             addSegment(segment)
             return
@@ -43,10 +47,12 @@ public struct ReferenceWorld {
     }
 
     public mutating func removeSegment(id: ReferenceSegmentID) {
+        preparedContours = [:]
         segments.removeAll { $0.id == id }
     }
 
     public mutating func step() -> ReferenceWorldStepReport {
+        preparedContours = [:]
         let totalStart = DispatchTime.now().uptimeNanoseconds
         let dt = configuration.timeStep
         for index in bubbles.indices {
@@ -191,11 +197,24 @@ public struct ReferenceWorld {
     }
 
     public func contour(for id: ReferenceBubbleID) -> [ReferenceVector2] {
+        if let points = preparedContours[id] { return points }
         guard let bubble = bubbles.first(where: { $0.id == id }) else { return [] }
         let bubbleContacts = contacts.contacts.filter { $0.bubbleA == id || $0.bubbleB == id }
         return ReferenceContourGenerator.points(
             for: bubble, contacts: bubbleContacts, segments: segments, configuration: configuration
         )
+    }
+
+    /// Backend publication boundary. The Metal module validates a complete
+    /// frame before calling this; the ordinary CPU `step()` remains unchanged.
+    @_spi(ReferenceMetal)
+    public mutating func publishPreparedFrame(
+        bubbles: [ReferenceBubble], contacts: [ReferenceContact],
+        contours: [ReferenceBubbleID: [ReferenceVector2]]
+    ) {
+        self.bubbles = bubbles
+        self.contacts = ReferenceContactSet(contacts: contacts)
+        preparedContours = contours
     }
 
     private struct EventScan {

@@ -99,3 +99,21 @@ struct ReferenceMetalPCGControl {
     var norms: SIMD4<Float> // initial norm, final norm, threshold, reserved
     var recurrence: SIMD4<Float> // r·z, beta, reserved, reserved
 }
+
+struct ReferenceMetalWorldParameters {
+    var counts: SIMD4<UInt32>
+    var physics: SIMD4<Float>
+    var damping: SIMD4<Float>
+    var tolerances: SIMD4<Float>
+    var shape: SIMD4<Float>
+    var limits: SIMD4<UInt32>
+}
+
+struct ReferenceMetalWorldControl {
+    var solverCounts: SIMD4<UInt32>
+    var solverQuality: SIMD4<Float>
+    var solverComponents: SIMD4<Float>
+    var work: SIMD4<UInt32>
+    var events: SIMD4<UInt32>
+    var failure: SIMD4<UInt32>
+}

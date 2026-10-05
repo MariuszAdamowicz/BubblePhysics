@@ -229,7 +229,7 @@ float gCircleFraction(float2 origin,float2 movement,float2 center,float radius,t
     float t=gCCDScalar(gCCDScalar(-q-sqrt(disc),valid)/gCCDScalar(2*a,valid),valid);
     return valid && t>=0&&t<=1 ? t:-1;
 }
-float gSegmentTOI(GBubble bubble,float2 begin,float2 end,GSegment seg,constant GParameters &p,
+float gSegmentTOI(GBubble bubble,float2 begin,float2 end,GSegment seg,GParameters p,
                   thread float2 &normal,thread float2 &point,thread bool &exhausted,thread bool &valid) {
     float2 movement=gCCDVector(end-begin,valid),da=gCCDVector(seg.current.xy-seg.previous.xy,valid),db=gCCDVector(seg.current.zw-seg.previous.zw,valid);
     float2 difference=gCCDVector(da-db,valid);float translationSquare=gCCDDot(difference,difference,valid);

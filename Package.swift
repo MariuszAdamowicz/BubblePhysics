@@ -19,7 +19,7 @@ let package = Package(
         .target(name: "BubblePhysicsCore"),
         .target(name: "BubblePhysicsReference"),
         .target(name: "BubblePhysicsReferenceMetal", dependencies: ["BubblePhysicsReference"],
-                resources: [.copy("Shaders/ReferenceNewtonPCGKernels.metal"), .copy("Shaders/ReferenceGeometryKernels.metal")]),
+                resources: [.copy("Shaders/ReferenceNewtonPCGKernels.metal"), .copy("Shaders/ReferenceGeometryKernels.metal"), .copy("Shaders/ReferencePostSolveKernels.metal")]),
         .target(
             name: "BubblePhysicsMetal",
             dependencies: ["BubblePhysics"],

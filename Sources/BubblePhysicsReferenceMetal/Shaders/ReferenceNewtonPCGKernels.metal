@@ -62,7 +62,7 @@ inline float2 referenceMidVelocity(uint i, device const float2 *start, device co
 }
 inline float2 referenceResidual(uint i, device const ReferenceMetalBubble *bubbles,
     device const float2 *start, device const float2 *velocity, device const ReferenceMetalContact *contacts,
-    device const float2 *end, device const float2 *vector, constant ReferenceOperatorParameters &p, float shift) {
+    device const float2 *end, device const float2 *vector, ReferenceOperatorParameters p, float shift) {
     float dt = p.physics.x;
     float mass = max(bubbles[i].physical.x, referenceMinimumMass);
     float2 force = -referenceMidVelocity(i, start, velocity, end, vector, shift, dt) * (max(0.0f, p.drag.x) * mass);
