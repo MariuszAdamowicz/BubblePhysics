@@ -120,13 +120,19 @@ WReport wSolve(device GBubble *b,device const GSegment *s,device float2 *v,
         if(iteration==0)report.quality.x=norm;report.quality.y=norm;
         if(!isfinite(norm)){report.counts.w|=4;break;}
         if(norm<=p.tolerances.w){report.counts.w|=1;break;}
-        for(uint i=0;i<n;++i){float d=max(b[i].physical.x,referenceMinimumMass)*(2/dt+max(0.0f,p.damping.x));
+        for(uint i=0;i<n;++i){float d=gCCDScalar(max(b[i].physical.x,referenceMinimumMass)*
+                gCCDScalar(gCCDScalar(2/dt,valid)+max(0.0f,p.damping.x),valid),valid);
             for(uint k=0;k<activeCount;++k){GContact x=active[k];uint a=gBubbleIndex(x.bubbles.x,b,n);
                 uint other=(x.identity.y&2)?gBubbleIndex(x.bubbles.y,b,n):n;
-                float mass=referenceEffectiveMass(b[a].physical.x,other<n?b[other].physical.x:0,other<n);
-                float contribution=dt*(p.physics.y*mass)*.5f+p.physics.w*mass;
-                if(contribution>0){if(i==a)d+=contribution;if(other<n&&i==other)d+=contribution;}}
-            diagonal[i]=float2(1/max(d,referenceMinimumMass));solution[i]=0;r[i]=-residual[i];z[i]=r[i]*diagonal[i];direction[i]=z[i];}
+                float mass=gCCDScalar(referenceEffectiveMass(b[a].physical.x,other<n?b[other].physical.x:0,other<n),valid);
+                float spring=gCCDScalar(gCCDScalar(dt*gCCDScalar(p.physics.y*mass,valid),valid)*.5f,valid);
+                float contribution=gCCDScalar(spring+gCCDScalar(p.physics.w*mass,valid),valid);
+                if(contribution>0){if(i==a)d=gCCDScalar(d+contribution,valid);if(other<n&&i==other)d=gCCDScalar(d+contribution,valid);}}
+            // Preserve failures before max(d, minimumMass) or 1/Inf masks them.
+            if(!valid){report.counts.w|=4;return report;}
+            diagonal[i]=float2(gCCDScalar(1/max(d,referenceMinimumMass),valid));
+            solution[i]=0;r[i]=-residual[i];z[i]=gCCDVector(r[i]*diagonal[i],valid);direction[i]=z[i];
+            if(!valid){report.counts.w|=4;return report;}}
         float rz=0;for(uint i=0;i<n;++i)rz+=gDot(r[i],z[i]);
         float threshold=p.shape.z*norm;
         for(uint k=0;k<p.limits.y&&norm>FLT_EPSILON;++k){
@@ -224,6 +230,10 @@ uint wScan(device const GBubble *b,device const GSegment *s,device const float2 
             if(exhausted)++control.work.w;
             if(!valid){control.failure.x=1;return 0;}if(fraction<0)continue;
             if(!all(isfinite(candidate.geometry))||!all(isfinite(candidate.timing))){control.failure.x=1;return 0;}
+            // CPU stores every event time but candidates[stableKey] is updated
+            // in scan order. Even a later event outside the activation window
+            // supplies the candidate for earlier events with the same key.
+            for(uint k=0;k<count;++k)if(out[k].contact.identity.x==candidate.identity.x)out[k].contact=candidate;
             GEvent event={};event.contact=candidate;event.timing=float4(duration*fraction,0,0,0);
             uint at=count++;while(at>0&&(out[at-1].timing.x>event.timing.x||(out[at-1].timing.x==event.timing.x&&out[at-1].contact.identity.x>candidate.identity.x))){out[at]=out[at-1];--at;}out[at]=event;}
     return count;

@@ -162,6 +162,73 @@ final class ReferenceMetalWorldRunnerTests: XCTestCase {
         XCTAssertEqual(world.contacts.contacts.map(\.id), cpu.contacts.contacts.map(\.id))
     }
 
+    func testOverflowingInverseDiagonalTriggersWholeFrameCPUFallback() async throws {
+        var world = ReferenceWorld(configuration: .init(timeStep: 1, linearDamping: 1),
+            broadPhase: BruteForceBroadPhase())
+        world.addBubble(try .init(id: .init(rawValue: 1), center: .zero,
+            velocity: .init(x: 1e-25, y: 0), mass: 2e38, targetRadius: 1))
+        var cpu = world
+        let expected = cpu.step()
+        XCTAssertTrue(expected.solver.finalResidualNorm.isFinite)
+        XCTAssertGreaterThan(expected.solver.finalResidualNorm, 1e13)
+        let runner = ReferenceMetalWorldRunner(executor: try executor())
+        let actual = await runner.step(world: &world, scenarioStep: 0)
+        XCTAssertEqual(runner.telemetry.backend, .cpu)
+        XCTAssertEqual(runner.telemetry.fallbackReason, "nonFiniteState")
+        XCTAssertEqual(world.bubbles, cpu.bubbles)
+        XCTAssertEqual(actual.solver, expected.solver)
+    }
+
+    func testStableKeyCollisionActivatesCPUScanLastWriter() async throws {
+        var world = ReferenceWorld(configuration: .init(linearDamping: 0), broadPhase: BruteForceBroadPhase())
+        let ids = [1, 2, 4_294_967_297, 4_294_967_298]
+        let xs: [Float] = [0, 1.5, 100, 101.5]
+        for i in ids.indices {
+            world.addBubble(try .init(id: .init(rawValue: ids[i]), center: .init(x: xs[i], y: 0), mass: 1, targetRadius: 1))
+        }
+        var cpu = world
+        let expected = cpu.step()
+        let cpuContact = try XCTUnwrap(cpu.contacts.contacts.first)
+        XCTAssertEqual(cpu.contacts.contacts.count, 1)
+        XCTAssertEqual(cpuContact.bubbleA.rawValue, 4_294_967_297)
+        XCTAssertEqual(cpuContact.bubbleB?.rawValue, 4_294_967_298)
+        let runner = ReferenceMetalWorldRunner(executor: try executor())
+        let actual = await runner.step(world: &world, scenarioStep: 0)
+        XCTAssertEqual(runner.telemetry.backend, .metal)
+        XCTAssertEqual(world.contacts.contacts.map(\.bubbleA), cpu.contacts.contacts.map(\.bubbleA))
+        XCTAssertEqual(world.contacts.contacts.map(\.bubbleB), cpu.contacts.contacts.map(\.bubbleB))
+        XCTAssertEqual(actual.generatedContactCount, expected.generatedContactCount)
+        for (a, b) in zip(world.bubbles, cpu.bubbles) {
+            XCTAssertEqual(a.center.x, b.center.x, accuracy: 0.001)
+            XCTAssertEqual(a.center.y, b.center.y, accuracy: 0.001)
+        }
+    }
+
+    func testStableKeyLastWriterOutsideActivationWindowMatchesCPU() async throws {
+        var world = ReferenceWorld(configuration: .init(timeStep: 1, linearDamping: 0, maximumEventGroups: 1),
+            broadPhase: BruteForceBroadPhase())
+        world.addBubble(try .init(id: .init(rawValue: 1), center: .zero, mass: 1, targetRadius: 1))
+        world.addBubble(try .init(id: .init(rawValue: 2), center: .init(x: 1.5, y: 0), mass: 1, targetRadius: 1))
+        world.addBubble(try .init(id: .init(rawValue: 4_294_967_297), center: .init(x: 100, y: 0),
+            velocity: .init(x: 0.75, y: 0), mass: 1, targetRadius: 1))
+        world.addBubble(try .init(id: .init(rawValue: 4_294_967_298), center: .init(x: 103, y: 0),
+            velocity: .init(x: -0.75, y: 0), mass: 1, targetRadius: 1))
+        var cpu = world
+        let expected = cpu.step()
+        XCTAssertEqual(expected.generatedContactCount, 1)
+        XCTAssertEqual(cpu.contacts.contacts.map { $0.bubbleA.rawValue }, [4_294_967_297])
+        let runner = ReferenceMetalWorldRunner(executor: try executor())
+        let actual = await runner.step(world: &world, scenarioStep: 0)
+        XCTAssertEqual(runner.telemetry.backend, .metal)
+        XCTAssertEqual(actual.generatedContactCount, expected.generatedContactCount)
+        XCTAssertEqual(actual.didReachEventGroupLimit, expected.didReachEventGroupLimit)
+        XCTAssertEqual(world.contacts.contacts.map(\.bubbleA), cpu.contacts.contacts.map(\.bubbleA))
+        XCTAssertEqual(world.contacts.contacts.map(\.bubbleB), cpu.contacts.contacts.map(\.bubbleB))
+        for (a, b) in zip(world.bubbles, cpu.bubbles) {
+            XCTAssertEqual(a.center.x, b.center.x, accuracy: 0.001)
+        }
+    }
+
     private func executor() throws -> ReferenceMetalSolver {
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("Metal unavailable") }
         return try XCTUnwrap(ReferenceMetalSolver(device: device))
