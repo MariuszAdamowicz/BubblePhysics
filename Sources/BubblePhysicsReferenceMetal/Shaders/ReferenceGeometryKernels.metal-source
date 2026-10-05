@@ -62,12 +62,16 @@ float2 gClosest(float2 p, float2 a, float2 b) {
 ulong gPairID(long a, long b) { return (ulong(uint(min(a,b)))<<32) | ulong(uint(max(a,b))); }
 ulong gSegmentID(long a,long s) { return (1ul<<63) | (ulong(uint(a))<<32) | ulong(uint(s)); }
 uint gBubbleIndex(long id, device const GBubble *b, uint n) {
-    for(uint i=0;i<n;++i) if(b[i].identity.x==id) return i;
-    return n;
+    // Immutable snapshots keep full signed IDs sorted; ordered contact writers
+    // can resolve them without a serial scan of every bubble for every contact.
+    uint low=0,high=n;
+    while(low<high){uint mid=low+(high-low)/2;if(b[mid].identity.x<id)low=mid+1;else high=mid;}
+    return low<n&&b[low].identity.x==id?low:n;
 }
 uint gSegmentIndex(long id, device const GSegment *s, uint n) {
-    for(uint i=0;i<n;++i) if(s[i].identity.x==id) return i;
-    return n;
+    uint low=0,high=n;
+    while(low<high){uint mid=low+(high-low)/2;if(s[mid].identity.x<id)low=mid+1;else high=mid;}
+    return low<n&&s[low].identity.x==id?low:n;
 }
 float2 gFallback(GBubble bubble,GSegment segment,float2 a,float2 b) {
     float sign=segment.flags.z ? segment.collision.x : (((bubble.identity.x^segment.identity.x)&1)==0 ? 1.0f:-1.0f);

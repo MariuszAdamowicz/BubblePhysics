@@ -77,6 +77,12 @@ public struct ReferenceMetalFrameTelemetry: Equatable, Sendable {
     public let didEncounterNonFinite: Bool
     public let fallbackReason: String?
     public let gpuFailure: ReferenceMetalGPUFailure?
+    /// GPU work counts are absent on CPU/fallback frames. A tentative solve
+    /// counts even when CCD subsequently discards its scratch result.
+    public let solveCallCount: Int?
+    public let tentativeSolveCallCount: Int?
+    public let contactCount: Int?
+    public let ccdGroupCount: Int?
 
     public init(
         backend: ReferenceSimulationBackend = .cpu,
@@ -88,7 +94,11 @@ public struct ReferenceMetalFrameTelemetry: Equatable, Sendable {
         didOverflow: Bool = false,
         didEncounterNonFinite: Bool = false,
         fallbackReason: String? = nil,
-        gpuFailure: ReferenceMetalGPUFailure? = nil
+        gpuFailure: ReferenceMetalGPUFailure? = nil,
+        solveCallCount: Int? = nil,
+        tentativeSolveCallCount: Int? = nil,
+        contactCount: Int? = nil,
+        ccdGroupCount: Int? = nil
     ) {
         self.backend = backend
         self.frameMilliseconds = frameMilliseconds
@@ -100,5 +110,9 @@ public struct ReferenceMetalFrameTelemetry: Equatable, Sendable {
         self.didEncounterNonFinite = didEncounterNonFinite
         self.fallbackReason = fallbackReason
         self.gpuFailure = gpuFailure
+        self.solveCallCount = solveCallCount
+        self.tentativeSolveCallCount = tentativeSolveCallCount
+        self.contactCount = contactCount
+        self.ccdGroupCount = ccdGroupCount
     }
 }

@@ -117,3 +117,16 @@ struct ReferenceMetalWorldControl {
     var events: SIMD4<UInt32>
     var failure: SIMD4<UInt32>
 }
+
+struct ReferenceMetalWorldStage {
+    var flow: SIMD4<UInt32>
+    var event: SIMD4<UInt32>
+    var time: SIMD4<Float>
+    var newton: SIMD4<UInt32>
+    var currentCounts: SIMD4<UInt32>
+    var currentQuality: SIMD4<Float>
+    var currentComponents: SIMD4<Float>
+    var op: ReferenceMetalOperatorParameters
+    var pcgCounts: SIMD4<UInt32>
+    var diagnostics: SIMD4<UInt32> // all solve calls, tentative calls, reserved
+}

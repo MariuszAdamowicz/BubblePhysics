@@ -13,7 +13,7 @@ enum ReferenceMetalOperatorError: Error {
     case invalidInput, commandSetupFailed, executionFailed(String), evaluationInFlight
 }
 
-private struct ReferenceMetalOperatorParameters {
+struct ReferenceMetalOperatorParameters {
     var counts: SIMD4<UInt32>
     var physics: SIMD4<Float>
     var drag: SIMD4<Float>
@@ -82,9 +82,14 @@ public final class ReferenceMetalSolver {
     private let commandQueue: MTLCommandQueue
     private var operatorBuffers: [String: MTLBuffer] = [:]
     private var evaluationInFlight = false
+    private let completeFrameCommand: @MainActor (MTLCommandBuffer, String, Int) async throws -> Void
     let capacityManager: ReferenceMetalCapacityManager
 
-    public init?(device: MTLDevice? = MTLCreateSystemDefaultDevice()) {
+    public convenience init?(device: MTLDevice? = MTLCreateSystemDefaultDevice()) {
+        self.init(device: device, completeFrameCommand: Self.complete)
+    }
+
+    init?(device: MTLDevice?, completeFrameCommand: @escaping @MainActor (MTLCommandBuffer, String, Int) async throws -> Void) {
         let options = MTLCompileOptions()
         options.fastMathEnabled = false
         options.languageVersion = .version2_4 // iOS 16 baseline, including copied runtime resources.
@@ -127,13 +132,22 @@ public final class ReferenceMetalSolver {
               let worldLibrary = try? device.makeLibrary(source: "#define REFERENCE_WORLD_RUNTIME 1\n" + source + "\n" + geometrySource + "\n" + postSource, options: options)
         else { return nil }
         var worldPipelines: [String: MTLComputePipelineState] = [:]
-        for name in ["referenceAdvanceWorld", "referenceApplyCenterGuards", "referenceGenerateContours", "referencePrepareRenderData"] {
+        for name in ["referenceWorldInitialize", "referenceWorldBeginSolve", "referenceWorldBeginNewton",
+                     "referenceWorldCheckNewton", "referenceWorldBuildRHS", "referenceWorldConfigurePCGOperator", "referenceWorldCollectPCG",
+                     "referenceWorldTrialVectors", "referenceWorldRefreshTrial", "referenceWorldJoinTrial",
+                     "referenceWorldMixTrial", "referenceWorldRefreshMixed", "referenceWorldAcceptMixed",
+                     "referenceWorldEndNewton", "referenceWorldPrepareFinalResidual", "referenceWorldCommitSolve",
+                     "referenceWorldFinish", "referenceApplyCenterGuards", "referenceGenerateContours", "referencePrepareRenderData",
+                     "referencePCGInitializeVectors", "referencePCGInitializeScalars", "referencePCGStepScalars",
+                     "referencePCGStepVectors", "referencePCGCheckResidual", "referencePCGPreconditionVectors",
+                     "referencePCGDirectionScalars"] {
             guard let function = worldLibrary.makeFunction(name: name),
                   let state = try? device.makeComputePipelineState(function: function) else { return nil }
             worldPipelines[name] = state
         }
 
         self.device = device
+        self.completeFrameCommand = completeFrameCommand
         capacityManager = ReferenceMetalCapacityManager(device: device)
         residualPipeline = pipeline
         self.jacobianPipeline = jacobianPipeline
@@ -503,37 +517,199 @@ public final class ReferenceMetalSolver {
             let contacts = try buffer(name: "worldContacts", count: contactCapacity, stride: 5 * MemoryLayout<ReferenceMetalContact>.stride)
             let intervalSegments = try buffer(name: "worldIntervalSegments", count: segmentCount, stride: MemoryLayout<ReferenceMetalSegment>.stride)
             let events = try buffer(name: "worldEvents", count: contactCapacity, stride: MemoryLayout<ReferenceMetalGeometryEvent>.stride)
-            let labels = try buffer(name: "worldLabels", count: n, stride: 2 * MemoryLayout<UInt32>.stride)
+            let labels = try buffer(name: "worldLabels", count: n, stride: 3 * MemoryLayout<UInt32>.stride)
             let control = try buffer(name: "worldControl", count: 1, stride: MemoryLayout<ReferenceMetalWorldControl>.stride)
+            let staged = try buffer(name: "worldStage", count: 1, stride: MemoryLayout<ReferenceMetalWorldStage>.stride)
+            let pcgControl = try buffer(name: "worldPCGControl", count: 1, stride: MemoryLayout<ReferenceMetalPCGControl>.stride)
+            let blockCount = max(1, (n + 255) / 256)
+            let dotBlocks = try buffer(name: "worldDotBlocks", count: blockCount, stride: MemoryLayout<Float>.stride)
+            let denominator = try buffer(name: "worldDenominator", count: 1, stride: MemoryLayout<Float>.stride)
             let rangeBuffer = try upload(ranges, name: "worldContourRanges")
             let points = try buffer(name: "worldContourPoints", count: pointCount, stride: MemoryLayout<SIMD2<Float>>.stride)
             let render = try buffer(name: "worldRender", count: n, stride: MemoryLayout<SIMD4<Float>>.stride)
             let buffers = inputBuffers + [vectors, contacts, intervalSegments, events, labels, control, rangeBuffer, points, render]
-            let command = try makeCommand(stage: "referenceWorldFrame", scenarioStep: scenarioStep)
             guard let capacity = UInt32(exactly: contactCapacity)
             else { throw ReferenceMetalOperatorError.commandSetupFailed }
-            var parameters = ReferenceMetalWorldParameters(counts: SIMD4(bubbleCount, segments, oldCount, capacity),
+            let parameters = ReferenceMetalWorldParameters(counts: SIMD4(bubbleCount, segments, oldCount, capacity),
                 physics: SIMD4(config.timeStep, config.contactStiffness, config.nonlinearStiffening, config.contactDamping),
                 damping: SIMD4(config.linearDamping, config.angularDamping, config.surfaceFriction, config.angularFrictionCoupling),
                 tolerances: SIMD4(config.contactTolerance, config.separationTolerance, config.positionTolerance, config.stressTolerance),
                 shape: SIMD4(config.maxContourSegmentLength, config.contourSurfaceTension, config.pcgTolerance, config.simultaneousEventTolerance),
                 limits: SIMD4(newtonLimit, UInt32(min(16, config.pcgIterationLimit)), toiLimit, eventLimit))
-            for name in ["referenceAdvanceWorld", "referenceApplyCenterGuards", "referenceGenerateContours", "referencePrepareRenderData"] {
-                let width = name == "referenceGenerateContours" ? n : 1
-                if width == 0 { continue }
+            var gpuTime = 0.0
+            let vectorStride = MemoryLayout<SIMD2<Float>>.stride
+            let operatorOffset = MemoryLayout<ReferenceMetalWorldStage>.offset(of: \.op)!
+            let pcgCountsOffset = MemoryLayout<ReferenceMetalWorldStage>.offset(of: \.pcgCounts)!
+
+            func encodeWorld(_ name: String, command: MTLCommandBuffer, parallel: Bool = false, search: Int? = nil) throws {
                 guard let pipeline = worldPipelines[name], let encoder = command.makeComputeCommandEncoder()
                 else { throw ReferenceMetalOperatorError.commandSetupFailed }
                 encoder.label = name
                 encoder.setComputePipelineState(pipeline)
                 for (index, buffer) in buffers.enumerated() { encoder.setBuffer(buffer, offset: 0, index: index) }
-                encoder.setBytes(&parameters, length: MemoryLayout<ReferenceMetalWorldParameters>.stride, index: 14)
+                var packed = parameters
+                if let search { packed.limits.z = UInt32(search) }
+                encoder.setBytes(&packed, length: MemoryLayout<ReferenceMetalWorldParameters>.stride, index: 14)
+                encoder.setBuffer(staged, offset: 0, index: 15)
+                encoder.setBuffer(pcgControl, offset: 0, index: 16)
+                let width = parallel ? max(1, n) : 1
                 encoder.dispatchThreads(.init(width: width, height: 1, depth: 1),
-                    threadsPerThreadgroup: .init(width: min(width, pipeline.maxTotalThreadsPerThreadgroup), height: 1, depth: 1))
+                    threadsPerThreadgroup: .init(width: min(256, width, pipeline.maxTotalThreadsPerThreadgroup), height: 1, depth: 1))
                 encoder.endEncoding()
             }
-            try await Self.complete(command, stage: "referenceWorldFrame", scenarioStep: scenarioStep)
+            func encodeOperator(_ pipeline: MTLComputePipelineState, command: MTLCommandBuffer,
+                                label: String = "referenceBuildResidual",
+                                contactSlice: Int = 2, endSlice: Int = 4, outputSlice: Int = 5) throws {
+                guard let encoder = command.makeComputeCommandEncoder() else { throw ReferenceMetalOperatorError.commandSetupFailed }
+                encoder.label = label
+                encoder.setComputePipelineState(pipeline)
+                encoder.setBuffer(inputBuffers[0], offset: 0, index: 0)
+                encoder.setBuffer(vectors, offset: 2 * n * vectorStride, index: 1)
+                encoder.setBuffer(vectors, offset: 3 * n * vectorStride, index: 2)
+                encoder.setBuffer(contacts, offset: contactSlice * contactCapacity * MemoryLayout<ReferenceMetalContact>.stride, index: 3)
+                encoder.setBuffer(vectors, offset: endSlice * n * vectorStride, index: 4)
+                encoder.setBuffer(vectors, offset: 12 * n * vectorStride, index: 5)
+                encoder.setBuffer(vectors, offset: outputSlice * n * vectorStride, index: 6)
+                encoder.setBuffer(staged, offset: operatorOffset, index: 7)
+                encoder.dispatchThreads(.init(width: max(1, n), height: 1, depth: 1),
+                    threadsPerThreadgroup: .init(width: min(256, pipeline.maxTotalThreadsPerThreadgroup), height: 1, depth: 1))
+                encoder.endEncoding()
+            }
+            func encodePCG(_ name: String, command: MTLCommandBuffer, parallel: Bool = false) throws {
+                let pipeline: MTLComputePipelineState?
+                switch name {
+                case "referencePCGUpdateDirection": pipeline = pcgDirectionPipeline
+                case "referencePCGFinalize": pipeline = pcgFinalizePipeline
+                default: pipeline = worldPipelines[name]
+                }
+                guard let pipeline, let encoder = command.makeComputeCommandEncoder()
+                else { throw ReferenceMetalOperatorError.commandSetupFailed }
+                encoder.label = name
+                encoder.setComputePipelineState(pipeline)
+                for (index, slice) in [8, 14, 9, 10, 11, 12, 13].enumerated() {
+                    encoder.setBuffer(vectors, offset: slice * n * vectorStride, index: index)
+                }
+                encoder.setBuffer(denominator, offset: 0, index: 7)
+                encoder.setBuffer(pcgControl, offset: 0, index: 8)
+                encoder.setBuffer(staged, offset: pcgCountsOffset, index: 9)
+                var tolerance = config.pcgTolerance
+                encoder.setBytes(&tolerance, length: MemoryLayout<Float>.stride, index: 10)
+                let width = parallel ? max(1, n) : 1
+                encoder.dispatchThreads(.init(width: width, height: 1, depth: 1),
+                    threadsPerThreadgroup: .init(width: min(256, width, pipeline.maxTotalThreadsPerThreadgroup), height: 1, depth: 1))
+                encoder.endEncoding()
+            }
+            func encodeDot(command: MTLCommandBuffer) throws {
+                for phase: UInt32 in n > 0 ? [0, 1] : [1] {
+                    guard let encoder = command.makeComputeCommandEncoder() else { throw ReferenceMetalOperatorError.commandSetupFailed }
+                    encoder.label = "referenceWorld.dot.phase.\(phase)"
+                    encoder.setComputePipelineState(dotPipeline)
+                    encoder.setBuffer(vectors, offset: 12 * n * vectorStride, index: 0)
+                    encoder.setBuffer(vectors, offset: 13 * n * vectorStride, index: 1)
+                    encoder.setBuffer(dotBlocks, offset: 0, index: 2)
+                    encoder.setBuffer(denominator, offset: 0, index: 3)
+                    var reduction = SIMD4<UInt32>(bubbleCount, UInt32(blockCount), phase, 0)
+                    encoder.setBytes(&reduction, length: MemoryLayout<SIMD4<UInt32>>.stride, index: 4)
+                    encoder.dispatchThreadgroups(.init(width: phase == 0 ? blockCount : 1, height: 1, depth: 1),
+                        threadsPerThreadgroup: .init(width: phase == 0 ? 256 : 1, height: 1, depth: 1))
+                    encoder.endEncoding()
+                }
+            }
+            func completeStage(_ command: MTLCommandBuffer, _ name: String) async throws {
+                try Task.checkCancellation()
+                try await completeFrameCommand(command, name, scenarioStep)
+                gpuTime += max(0, command.gpuEndTime - command.gpuStartTime) * 1_000
+            }
+
+            let geometry = try makeCommand(stage: "referenceWorld.geometry", scenarioStep: scenarioStep)
+            try encodeWorld("referenceWorldInitialize", command: geometry)
+            try encodeWorld("referenceWorldBeginSolve", command: geometry)
+            try await completeStage(geometry, "referenceWorld.geometry")
+            // Only capacity/non-finite status is read here. All solve state stays
+            // GPU owned until the complete final output is available.
+            let initialState = control.contents().load(as: ReferenceMetalWorldControl.self)
+            if initialState.failure.y != 0 {
+                guard Int(initialState.failure.z) > contactCapacity else { throw ReferenceMetalGeometryError.invalidOverflowReport }
+                contactCapacity = Int(initialState.failure.z)
+                didOverflow = true
+                continue
+            }
+            guard initialState.failure.x == 0 else { throw ReferenceMetalGeometryError.nonFiniteState }
+
+            // At most one tentative and one event interval solve per activated
+            // group, then one final remainder. Converged/done GPU controls freeze
+            // work, never change the scenario's configured dispatch limits.
+            for slot in 0..<(2 * config.maximumEventGroups + 1) {
+                if slot > 0 {
+                    let beginStage = "referenceWorld.solve.\(slot)"
+                    let begin = try makeCommand(stage: beginStage, scenarioStep: scenarioStep)
+                    try encodeWorld("referenceWorldBeginSolve", command: begin)
+                    try await completeStage(begin, beginStage)
+                }
+                for iteration in 0..<config.solverIterations {
+                    let newtonStage = "referenceWorld.newton.\(slot).\(iteration)"
+                    let newton = try makeCommand(stage: newtonStage, scenarioStep: scenarioStep)
+                    try encodeWorld("referenceWorldBeginNewton", command: newton)
+                    try encodeOperator(residualPipeline, command: newton)
+                    try encodeWorld("referenceWorldCheckNewton", command: newton)
+                    try encodeOperator(diagonalPipeline, command: newton, label: "referenceBuildInverseDiagonal", outputSlice: 14)
+                    try encodeWorld("referenceWorldBuildRHS", command: newton, parallel: true)
+                    try encodePCG("referencePCGInitializeVectors", command: newton, parallel: true)
+                    try encodePCG("referencePCGInitializeScalars", command: newton)
+                    try await completeStage(newton, newtonStage)
+
+                    let pcgStage = "referenceWorld.pcg.\(slot).\(iteration)"
+                    let pcgCommand = try makeCommand(stage: pcgStage, scenarioStep: scenarioStep)
+                    for _ in 0..<min(16, config.pcgIterationLimit) {
+                        try encodeWorld("referenceWorldConfigurePCGOperator", command: pcgCommand)
+                        try encodeOperator(jacobianPipeline, command: pcgCommand, label: "referenceApplyJacobian", outputSlice: 13)
+                        try encodeDot(command: pcgCommand)
+                        try encodePCG("referencePCGStepScalars", command: pcgCommand)
+                        try encodePCG("referencePCGStepVectors", command: pcgCommand, parallel: true)
+                        try encodePCG("referencePCGCheckResidual", command: pcgCommand)
+                        try encodePCG("referencePCGPreconditionVectors", command: pcgCommand, parallel: true)
+                        try encodePCG("referencePCGDirectionScalars", command: pcgCommand)
+                        try encodePCG("referencePCGUpdateDirection", command: pcgCommand, parallel: true)
+                    }
+                    try encodePCG("referencePCGFinalize", command: pcgCommand)
+                    try encodeWorld("referenceWorldCollectPCG", command: pcgCommand)
+                    try await completeStage(pcgCommand, pcgStage)
+
+                    let lineStage = "referenceWorld.lineSearch.\(slot).\(iteration)"
+                    let line = try makeCommand(stage: lineStage, scenarioStep: scenarioStep)
+                    for search in 0..<6 {
+                        try encodeWorld("referenceWorldTrialVectors", command: line, parallel: true, search: search)
+                        try encodeWorld("referenceWorldRefreshTrial", command: line)
+                        try encodeOperator(residualPipeline, command: line, contactSlice: 3, endSlice: 6, outputSlice: 8)
+                        try encodeWorld("referenceWorldJoinTrial", command: line)
+                        try encodeWorld("referenceWorldMixTrial", command: line, parallel: true)
+                        try encodeWorld("referenceWorldRefreshMixed", command: line)
+                        try encodeOperator(residualPipeline, command: line, contactSlice: 4, endSlice: 15, outputSlice: 8)
+                        try encodeWorld("referenceWorldAcceptMixed", command: line)
+                    }
+                    try encodeWorld("referenceWorldEndNewton", command: line)
+                    try await completeStage(line, lineStage)
+                }
+                let finishStage = "referenceWorld.ccd.\(slot)"
+                let finish = try makeCommand(stage: finishStage, scenarioStep: scenarioStep)
+                try encodeWorld("referenceWorldPrepareFinalResidual", command: finish)
+                try encodeOperator(residualPipeline, command: finish)
+                try encodeWorld("referenceWorldCommitSolve", command: finish)
+                try await completeStage(finish, finishStage)
+            }
+            for (name, stageName, parallel) in [
+                ("referenceWorldFinish", "referenceWorld.finish", false),
+                ("referenceApplyCenterGuards", "referenceWorld.guards", false),
+                ("referenceGenerateContours", "referenceWorld.contours", true),
+                ("referencePrepareRenderData", "referenceWorld.render", false)
+            ] {
+                let command = try makeCommand(stage: stageName, scenarioStep: scenarioStep)
+                try encodeWorld(name, command: command, parallel: parallel)
+                try await completeStage(command, stageName)
+            }
             try Task.checkCancellation()
             let state = control.contents().load(as: ReferenceMetalWorldControl.self)
+            let finalStage = staged.contents().load(as: ReferenceMetalWorldStage.self)
             if state.failure.y != 0 {
                 guard Int(state.failure.z) > contactCapacity else { throw ReferenceMetalGeometryError.invalidOverflowReport }
                 contactCapacity = Int(state.failure.z)
@@ -573,7 +749,6 @@ public final class ReferenceMetalSolver {
                 contactComponentCount: Int(state.solverComponents.x), unconvergedContactComponentCount: Int(state.solverComponents.y),
                 maximumComponentResidualNorm: state.solverComponents.z)
             let elapsed = Double(DispatchTime.now().uptimeNanoseconds - startTime) / 1_000_000
-            let gpuTime = max(0, command.gpuEndTime - command.gpuStartTime) * 1_000
             let report = ReferenceWorldStepReport(solver: reportSolver, candidatePairCount: Int(state.work.x),
                 generatedContactCount: Int(state.work.y), persistentContactCount: resultContacts.count,
                 toiTestCount: Int(state.work.z), sideCorrectionCount: Int(state.events.x), ccdBudgetExhaustionCount: Int(state.work.w),
@@ -586,7 +761,9 @@ public final class ReferenceMetalSolver {
                 telemetry: .init(backend: .metal, frameMilliseconds: elapsed, gpuMilliseconds: gpuTime,
                     finalResidual: reportSolver.finalResidualNorm, newtonIterations: reportSolver.iterations,
                     pcgIterations: reportSolver.pcgIterationCount, didOverflow: didOverflow,
-                    didEncounterNonFinite: report.hasNonFiniteState))
+                    didEncounterNonFinite: report.hasNonFiniteState,
+                    solveCallCount: Int(finalStage.diagnostics.x), tentativeSolveCallCount: Int(finalStage.diagnostics.y),
+                    contactCount: resultContacts.count, ccdGroupCount: report.eventGroupCount))
         }
     }
 

@@ -21,6 +21,18 @@ struct WControl {
     uint4 events; // guard count, event groups, substeps, event-limit flag
     uint4 failure; // non-finite, overflow, required capacity, failed guard
 };
+// Persistent GPU state: phase 0 finished, 1 tentative, 2 event interval,
+// 3 final remainder. CPU dispatches configured bounds without reading it.
+struct WStage {
+    uint4 flow; // phase, Newton active, active contacts, aggregate present
+    uint4 event; // previous contacts, all events, first group, prefix activation
+    float4 time; // elapsed, remaining, solve duration, earliest interval
+    uint4 newton; // iteration, accepted line search, trial count, mixed count
+    WReport current;
+    ReferenceOperatorParameters op;
+    uint4 pcgCounts;
+    uint4 diagnostics; // all solve calls, tentative calls, reserved
+};
 #define WARGS device GBubble *b [[buffer(0)]], device const float2 *input [[buffer(1)]], \
     device const float2 *inputVelocity [[buffer(2)]], device const GSegment *segments [[buffer(3)]], \
     device const GContact *prior [[buffer(4)]], device float2 *v [[buffer(5)]], \
@@ -28,7 +40,8 @@ struct WControl {
     device GEvent *events [[buffer(8)]], device uint *labels [[buffer(9)]], \
     device WControl &control [[buffer(10)]], device const uint2 *ranges [[buffer(11)]], \
     device float2 *points [[buffer(12)]], device float4 *render [[buffer(13)]], \
-    constant WParameters &p [[buffer(14)]], uint tid [[thread_position_in_grid]]
+    constant WParameters &p [[buffer(14)]], device WStage &stage [[buffer(15)]], \
+    device ReferencePCGControl &pcg [[buffer(16)]], uint tid [[thread_position_in_grid]]
 
 float wNorm(device const float2 *a,uint n) {float sum=0;for(uint i=0;i<n;++i)sum+=gDot(a[i],a[i]);return sqrt(sum);}
 void wInsert(GContact value,device GContact *out,thread uint &count) {
@@ -58,14 +71,6 @@ uint wRefresh(device const GBubble *b,device const GSegment *s,device const floa
 ReferenceOperatorParameters wOperator(WParameters p,uint count,float dt) {
     ReferenceOperatorParameters result;result.counts=uint4(p.counts.x,count,0,0);
     result.physics=float4(dt,p.physics.yzw);result.drag=float4(p.damping.x,0,0,0);return result;
-}
-float wResidual(device const GBubble *b,device const float2 *start,device const float2 *velocity,
-    device const GContact *contacts,device const float2 *end,device float2 *out,
-    device const float2 *direction,ReferenceOperatorParameters p) {
-    for(uint i=0;i<p.counts.x;++i)out[i]=referenceResidual(i,
-        reinterpret_cast<device const ReferenceMetalBubble *>(b),start,velocity,
-        reinterpret_cast<device const ReferenceMetalContact *>(contacts),end,direction,p,0);
-    return wNorm(out,p.counts.x);
 }
 void wJoin(device uint *labels,device const GBubble *b,uint n,device const GContact *contacts,uint count) {
     for(uint i=0;i<count;++i){if(!(contacts[i].identity.y&2))continue;
@@ -97,103 +102,6 @@ void wAnnotate(device const GBubble *b,device const GSegment *segments,device co
         x.response.x=p.physics.y*mass;x.compression.w=x.response.x*compression;contacts[i]=x;}
 }
 
-// Ordered GPU orchestration preserves the CPU's component line search and CCD
-// activation semantics. Serial orchestration is a correctness baseline; device
-// acceptance still measures the entire command buffer, including this dispatch.
-WReport wSolve(device GBubble *b,device const GSegment *s,device float2 *v,
-    device GContact *c,thread uint &count,device uint *labels,WParameters p,float dt) {
-    uint n=p.counts.x,capacity=p.counts.w;
-    device float2 *center=v,*velocity=v+n,*start=v+2*n,*startVelocity=v+3*n,*end=v+4*n;
-    device float2 *residual=v+5*n,*trial=v+6*n,*trialVelocity=v+7*n,*trialResidual=v+8*n;
-    device float2 *solution=v+9*n,*r=v+10*n,*z=v+11*n,*direction=v+12*n,*applied=v+13*n,*diagonal=v+14*n;
-    device float2 *mixed=v+15*n,*mixedVelocity=v+16*n;
-    device GContact *active=c+2*capacity,*trialContacts=c+3*capacity,*mixedContacts=c+4*capacity;
-    WReport report={};
-    for(uint i=0;i<n;++i){start[i]=center[i];startVelocity[i]=velocity[i];end[i]=center[i]+velocity[i]*dt;}
-    bool valid=true;
-    uint activeCount=wRefresh(b,s,end,startVelocity,c,count,active,p,valid);
-    if(!valid){report.counts.w|=4;return report;}
-    for(uint iteration=0;iteration<p.limits.x;++iteration){
-        report.counts.x=iteration+1;
-        ReferenceOperatorParameters op=wOperator(p,activeCount,dt);
-        float norm=wResidual(b,start,startVelocity,active,end,residual,direction,op);
-        if(iteration==0)report.quality.x=norm;report.quality.y=norm;
-        if(!isfinite(norm)){report.counts.w|=4;break;}
-        if(norm<=p.tolerances.w){report.counts.w|=1;break;}
-        for(uint i=0;i<n;++i){float d=gCCDScalar(max(b[i].physical.x,referenceMinimumMass)*
-                gCCDScalar(gCCDScalar(2/dt,valid)+max(0.0f,p.damping.x),valid),valid);
-            for(uint k=0;k<activeCount;++k){GContact x=active[k];uint a=gBubbleIndex(x.bubbles.x,b,n);
-                uint other=(x.identity.y&2)?gBubbleIndex(x.bubbles.y,b,n):n;
-                float mass=gCCDScalar(referenceEffectiveMass(b[a].physical.x,other<n?b[other].physical.x:0,other<n),valid);
-                float spring=gCCDScalar(gCCDScalar(dt*gCCDScalar(p.physics.y*mass,valid),valid)*.5f,valid);
-                float contribution=gCCDScalar(spring+gCCDScalar(p.physics.w*mass,valid),valid);
-                if(contribution>0){if(i==a)d=gCCDScalar(d+contribution,valid);if(other<n&&i==other)d=gCCDScalar(d+contribution,valid);}}
-            // Preserve failures before max(d, minimumMass) or 1/Inf masks them.
-            if(!valid){report.counts.w|=4;return report;}
-            diagonal[i]=float2(gCCDScalar(1/max(d,referenceMinimumMass),valid));
-            solution[i]=0;r[i]=-residual[i];z[i]=gCCDVector(r[i]*diagonal[i],valid);direction[i]=z[i];
-            if(!valid){report.counts.w|=4;return report;}}
-        float rz=0;for(uint i=0;i<n;++i)rz+=gDot(r[i],z[i]);
-        float threshold=p.shape.z*norm;
-        for(uint k=0;k<p.limits.y&&norm>FLT_EPSILON;++k){
-            bool nonzero=false;for(uint i=0;i<n;++i)if(gDot(direction[i],direction[i])>0)nonzero=true;
-            float denominator=0;
-            for(uint i=0;i<n;++i){float2 plus=referenceResidual(i,reinterpret_cast<device const ReferenceMetalBubble *>(b),start,startVelocity,
-                    reinterpret_cast<device const ReferenceMetalContact *>(active),end,direction,op,referenceEpsilon);
-                float2 minus=referenceResidual(i,reinterpret_cast<device const ReferenceMetalBubble *>(b),start,startVelocity,
-                    reinterpret_cast<device const ReferenceMetalContact *>(active),end,direction,op,-referenceEpsilon);
-                applied[i]=nonzero?(plus-minus)/(2*referenceEpsilon):float2(0);
-                denominator+=gDot(direction[i],applied[i]);}
-            if(!isfinite(denominator)||!isfinite(rz)){report.counts.w|=4;break;}
-            if(denominator<=FLT_EPSILON)break;
-            float alpha=rz/denominator;
-            for(uint i=0;i<n;++i){solution[i]+=direction[i]*alpha;r[i]+=applied[i]*-alpha;}
-            ++report.counts.y;float rNorm=wNorm(r,n);
-            if(!isfinite(rNorm)){report.counts.w|=4;break;}if(rNorm<=threshold)break;
-            float next=0;for(uint i=0;i<n;++i){z[i]=r[i]*diagonal[i];next+=gDot(r[i],z[i]);}
-            if(!isfinite(next)){report.counts.w|=4;break;}
-            for(uint i=0;i<n;++i)direction[i]=z[i]+direction[i]*(next/rz);rz=next;
-        }
-        bool accepted=false;
-        for(uint search=0;search<6;++search){float lambda=1.0f/float(1u<<search);bool finite=true;
-            for(uint i=0;i<n;++i){trial[i]=end[i]+solution[i]*lambda;trialVelocity[i]=(trial[i]-start[i])*(2/dt)-startVelocity[i];finite=finite&&all(isfinite(trial[i]));}
-            if(!finite)continue;
-            uint trialCount=wRefresh(b,s,trial,trialVelocity,active,activeCount,trialContacts,p,valid);
-            if(!valid){report.counts.w|=4;return report;}
-            wResidual(b,start,startVelocity,trialContacts,trial,trialResidual,direction,wOperator(p,trialCount,dt));
-            for(uint i=0;i<n;++i)labels[i]=i;
-            wJoin(labels,b,n,active,activeCount);wJoin(labels,b,n,trialContacts,trialCount);
-            bool improving=false;
-            for(uint i=0;i<n;++i){uint root=gRoot(i,labels);float before=0,after=0;
-                for(uint j=0;j<n;++j)if(gRoot(j,labels)==root){before+=gDot(residual[j],residual[j]);after+=gDot(trialResidual[j],trialResidual[j]);}
-                bool use=isfinite(after)&&after<before;improving=improving||use;
-                mixed[i]=use?trial[i]:end[i];mixedVelocity[i]=(mixed[i]-start[i])*(2/dt)-startVelocity[i];}
-            if(!improving)continue;
-            uint mixedCount=wRefresh(b,s,mixed,mixedVelocity,active,activeCount,mixedContacts,p,valid);
-            if(!valid){report.counts.w|=4;return report;}
-            float mixedNorm=wResidual(b,start,startVelocity,mixedContacts,mixed,trialResidual,direction,wOperator(p,mixedCount,dt));
-            if(isfinite(mixedNorm)&&mixedNorm<norm){for(uint i=0;i<n;++i)end[i]=mixed[i];
-                for(uint k=0;k<mixedCount;++k)active[k]=mixedContacts[k];activeCount=mixedCount;report.quality.y=mixedNorm;accepted=true;break;}
-        }
-        if(!accepted){++report.counts.z;break;}
-    }
-    for(uint i=0;i<n;++i){center[i]=end[i];velocity[i]=(end[i]-start[i])*(2/dt)-startVelocity[i];}
-    wAnnotate(b,s,end,active,activeCount,p);count=activeCount;for(uint k=0;k<count;++k)c[k]=active[k];
-    report.quality.y=wResidual(b,start,startVelocity,active,end,residual,direction,wOperator(p,count,dt));
-    if(report.quality.y<=p.tolerances.w)report.counts.w|=1;
-    if(!(report.counts.w&1)&&report.counts.x>=p.limits.x)report.counts.w|=2;
-    if(!isfinite(report.quality.y))report.counts.w|=4;
-    for(uint i=0;i<n;++i){labels[i]=i;labels[n+i]=0;if(!all(isfinite(center[i]))||!all(isfinite(velocity[i])))report.counts.w|=4;}
-    wJoin(labels,b,n,c,count);
-    for(uint k=0;k<count;++k){GContact x=c[k];uint a=gBubbleIndex(x.bubbles.x,b,n);
-        labels[n+a]=1;if(x.identity.y&2)labels[n+gBubbleIndex(x.bubbles.y,b,n)]=1;
-        report.quality.z=max(report.quality.z,x.compression.x);report.quality.w=max(report.quality.w,x.compression.y/max(b[a].physical.z,FLT_EPSILON));}
-    for(uint root=0;root<n;++root){float sum=0;bool member=false;
-        for(uint i=0;i<n;++i)if(labels[n+i]&&gRoot(i,labels)==root){member=true;sum+=gDot(residual[i],residual[i]);}
-        if(member){float norm=sqrt(sum);++report.components.x;if(!isfinite(norm)||norm>p.tolerances.w)++report.components.y;
-            if(isfinite(norm))report.components.z=max(report.components.z,norm);}}
-    return report;
-}
 void wMerge(WReport next,thread WReport &aggregate,thread bool &hasReport) {
     if(!hasReport){aggregate=next;hasReport=true;return;}
     aggregate.counts.xyz+=next.counts.xyz;
@@ -238,50 +146,199 @@ uint wScan(device const GBubble *b,device const GSegment *s,device const float2 
             uint at=count++;while(at>0&&(out[at-1].timing.x>event.timing.x||(out[at-1].timing.x==event.timing.x&&out[at-1].contact.identity.x>candidate.identity.x))){out[at]=out[at-1];--at;}out[at]=event;}
     return count;
 }
-kernel void referenceAdvanceWorld(WARGS) {
-    if(tid)return;control={};control.solver.counts.w=1;
-    // Grow before entering any interval. Every possible key fits, including old
-    // keys; this is a resource bound, never a semantic contact/event limit.
+bool wFailed(device const WControl &control) {
+    return control.failure.x||control.failure.y||control.failure.w;
+}
+kernel void referenceWorldInitialize(WARGS) {
+    if(tid)return;control={};stage={};pcg={};control.solver.counts.w=1;
     ulong required=ulong(p.counts.x)*(p.counts.x?ulong(p.counts.x-1):0)/2+ulong(p.counts.x)*p.counts.y+p.counts.z;
     if(required>p.counts.w){control.failure.y=1;control.failure.z=uint(required);return;}
-    uint n=p.counts.x,count=p.counts.z,capacity=p.counts.w;
+    uint n=p.counts.x;
     for(uint i=0;i<n;++i){v[i]=input[i];v[n+i]=inputVelocity[i];
         if(!all(isfinite(input[i]))||!all(isfinite(inputVelocity[i]))||!all(isfinite(b[i].physical))||!all(isfinite(b[i].angular)))control.failure.x=1;}
     for(uint k=0;k<p.counts.y;++k)if(!all(isfinite(segments[k].previous))||!all(isfinite(segments[k].current))||!all(isfinite(segments[k].velocity)))control.failure.x=1;
-    for(uint k=0;k<count;++k)c[k]=prior[k];
-    if(control.failure.x)return;
-    float elapsed=0,remaining=p.physics.x,epsilon=max(p.tolerances.z,1e-7f);WReport aggregate={};bool hasReport=false;
-    while(remaining>epsilon){uint previousCount=count;
+    for(uint k=0;k<p.counts.z;++k)c[k]=prior[k];
+    control.failure.z=p.counts.z;
+    stage.time=float4(0,p.physics.x,0,0);
+    stage.flow.x=p.physics.x>max(p.tolerances.z,1e-7f)?1:0;
+}
+kernel void referenceWorldBeginSolve(WARGS) {
+    if(tid)return;
+    stage.flow.y=0;stage.op=wOperator(p,0,1);stage.op.counts.x=0;stage.pcgCounts=uint4(0);
+    if(wFailed(control)||!stage.flow.x)return;
+    ++stage.diagnostics.x;
+    if(stage.flow.x==1)++stage.diagnostics.y;
+    uint n=p.counts.x,count=control.failure.z,capacity=p.counts.w;
+    if(stage.flow.x==1){
+        stage.event.x=count;
         for(uint i=0;i<n;++i){v[17*n+i]=v[i];v[18*n+i]=v[n+i];}
         for(uint k=0;k<count;++k)c[capacity+k]=c[k];
-        wSegments(segments,intervalSegments,p,elapsed,remaining);
-        WReport tentative=wSolve(b,intervalSegments,v,c,count,labels,p,remaining);
-        if(tentative.counts.w&4){control.failure.x=1;return;}
-        uint eventCount=wScan(b,intervalSegments,v+17*n,v,c+capacity,previousCount,events,control,p,remaining);
-        if(control.failure.x)return;
-        if(!eventCount){wMerge(tentative,aggregate,hasReport);++control.events.z;elapsed+=remaining;remaining=0;break;}
-        for(uint i=0;i<n;++i){v[i]=v[17*n+i];v[n+i]=v[18*n+i];}
-        count=previousCount;for(uint k=0;k<count;++k)c[k]=c[capacity+k];
-        float interval=events[0].timing.x,anchor=interval;uint firstCount=1,groups=1,activationCount=1;
-        for(uint k=1;k<eventCount;++k){if(events[k].timing.x-anchor>p.shape.w){anchor=events[k].timing.x;++groups;}
-            if(groups==1)++firstCount;if(groups<=p.limits.w)activationCount=k+1;}
-        if(interval>epsilon){wSegments(segments,intervalSegments,p,elapsed,interval);
-            WReport report=wSolve(b,intervalSegments,v,c,count,labels,p,interval);if(report.counts.w&4){control.failure.x=1;return;}
-            wMerge(report,aggregate,hasReport);++control.events.z;elapsed+=interval;remaining=max(0.0f,remaining-interval);}
-        for(uint k=0;k<firstCount;++k){bool exists=false;for(uint j=0;j<count;++j)if(c[j].identity.x==events[k].contact.identity.x)exists=true;if(!exists)wInsert(events[k].contact,c,count);}
-        control.work.y+=firstCount;++control.events.y;
-        if(groups>p.limits.w||control.events.y>=p.limits.w){control.events.w=groups>p.limits.w||remaining>epsilon;
-            // Match the CPU queue's existing semantic group limit. The event
-            // buffer still retains the complete scan; only activation is bounded.
-            for(uint k=firstCount;k<activationCount;++k){bool exists=false;for(uint j=0;j<count;++j)if(c[j].identity.x==events[k].contact.identity.x)exists=true;if(!exists)wInsert(events[k].contact,c,count);}
-            control.work.y+=activationCount-firstCount;
-            if(remaining>epsilon){wSegments(segments,intervalSegments,p,elapsed,remaining);
-                WReport report=wSolve(b,intervalSegments,v,c,count,labels,p,remaining);if(report.counts.w&4){control.failure.x=1;return;}
-                wMerge(report,aggregate,hasReport);++control.events.z;remaining=0;}break;}
     }
-    if(hasReport)control.solver=aggregate;
-    // Contact count is stored outside the solver report's quality fields.
+    stage.time.z=stage.flow.x==2?stage.time.w:stage.time.y;
+    wSegments(segments,intervalSegments,p,stage.time.x,stage.time.z);
+    for(uint i=0;i<n;++i){v[2*n+i]=v[i];v[3*n+i]=v[n+i];v[4*n+i]=v[i]+v[n+i]*stage.time.z;}
+    bool valid=true;
+    stage.flow.z=wRefresh(b,intervalSegments,v+4*n,v+3*n,c,count,c+2*capacity,p,valid);
+    if(!valid){control.failure.x=1;return;}
+    stage.current={};stage.newton=uint4(0);stage.flow.y=1;
+}
+kernel void referenceWorldBeginNewton(WARGS) {
+    if(tid)return;
+    stage.op=wOperator(p,stage.flow.z,stage.time.z);stage.pcgCounts=uint4(0);
+    if(wFailed(control)||!stage.flow.x||!stage.flow.y){stage.op.counts.x=0;return;}
+    ++stage.newton.x;stage.current.counts.x=stage.newton.x;stage.newton.y=0;
+}
+kernel void referenceWorldCheckNewton(WARGS) {
+    if(tid)return;
+    if(wFailed(control)||!stage.flow.x||!stage.flow.y)return;
+    float norm=wNorm(v+5*p.counts.x,p.counts.x);
+    if(stage.newton.x==1)stage.current.quality.x=norm;
+    stage.current.quality.y=norm;
+    if(!isfinite(norm)){stage.current.counts.w|=4;control.failure.x=1;stage.flow.y=0;}
+    else if(norm<=p.tolerances.w){stage.current.counts.w|=1;stage.flow.y=0;}
+    if(!stage.flow.y){stage.op.counts.x=0;return;}
+    stage.pcgCounts=uint4(p.counts.x,p.limits.y,0,0);
+}
+kernel void referenceWorldBuildRHS(WARGS) {
+    if(tid<stage.op.counts.x)v[8*p.counts.x+tid]=-v[5*p.counts.x+tid];
+}
+kernel void referenceWorldConfigurePCGOperator(WARGS) {
+    if(tid)return;
+    // Fixed encoders after PCG convergence skip the expensive matrix-free
+    // Jacobian as well as vector updates, without a CPU scalar readback.
+    stage.op.counts.x=pcg.state.x&&!wFailed(control)?p.counts.x:0;
+}
+kernel void referenceWorldCollectPCG(WARGS) {
+    if(tid||!stage.flow.x||!stage.flow.y||wFailed(control))return;
+    stage.current.counts.y+=pcg.state.y;
+    if(pcg.state.z){stage.current.counts.w|=4;control.failure.x=1;stage.flow.y=0;}
+}
+kernel void referenceWorldTrialVectors(WARGS) {
+    if(tid>=p.counts.x||!stage.flow.x||!stage.flow.y||stage.newton.y||wFailed(control))return;
+    // search index is supplied in limits.z by the encoder for these kernels.
+    uint n=p.counts.x;float lambda=1.0f/float(1u<<p.limits.z);
+    v[6*n+tid]=v[4*n+tid]+v[9*n+tid]*lambda;
+    v[7*n+tid]=(v[6*n+tid]-v[2*n+tid])*(2/stage.time.z)-v[3*n+tid];
+}
+kernel void referenceWorldRefreshTrial(WARGS) {
+    if(tid)return;
+    stage.op=wOperator(p,0,stage.time.z);stage.op.counts.x=0;
+    if(!stage.flow.x||!stage.flow.y||stage.newton.y||wFailed(control))return;
+    uint n=p.counts.x;
+    for(uint i=0;i<n;++i)if(!all(isfinite(v[6*n+i])))return;
+    bool valid=true;
+    stage.newton.z=wRefresh(b,intervalSegments,v+6*n,v+7*n,c+2*p.counts.w,stage.flow.z,c+3*p.counts.w,p,valid);
+    if(!valid){control.failure.x=1;return;}
+    stage.op=wOperator(p,stage.newton.z,stage.time.z);
+}
+kernel void referenceWorldJoinTrial(WARGS) {
+    if(tid||!stage.op.counts.x)return;
+    uint n=p.counts.x;
+    for(uint i=0;i<n;++i)labels[i]=i;
+    wJoin(labels,b,n,c+2*p.counts.w,stage.flow.z);
+    wJoin(labels,b,n,c+3*p.counts.w,stage.newton.z);
+}
+kernel void referenceWorldMixTrial(WARGS) {
+    if(tid>=stage.op.counts.x)return;
+    uint n=p.counts.x,root=gRoot(tid,labels);float before=0,after=0;
+    for(uint j=0;j<n;++j)if(gRoot(j,labels)==root){before+=gDot(v[5*n+j],v[5*n+j]);after+=gDot(v[8*n+j],v[8*n+j]);}
+    bool use=isfinite(after)&&after<before;
+    labels[2*n+tid]=use?1:0;
+    v[15*n+tid]=use?v[6*n+tid]:v[4*n+tid];
+    v[16*n+tid]=(v[15*n+tid]-v[2*n+tid])*(2/stage.time.z)-v[3*n+tid];
+}
+kernel void referenceWorldRefreshMixed(WARGS) {
+    if(tid)return;
+    bool improving=false;
+    if(stage.op.counts.x)for(uint i=0;i<p.counts.x;++i)if(labels[2*p.counts.x+i])improving=true;
+    stage.op.counts.x=0;if(!improving)return;
+    bool valid=true;uint n=p.counts.x;
+    stage.newton.w=wRefresh(b,intervalSegments,v+15*n,v+16*n,c+2*p.counts.w,stage.flow.z,c+4*p.counts.w,p,valid);
+    if(!valid){control.failure.x=1;return;}
+    stage.op=wOperator(p,stage.newton.w,stage.time.z);
+}
+kernel void referenceWorldAcceptMixed(WARGS) {
+    if(tid||!stage.op.counts.x)return;
+    uint n=p.counts.x;float norm=wNorm(v+8*n,n);
+    if(isfinite(norm)&&norm<stage.current.quality.y){
+        for(uint i=0;i<n;++i)v[4*n+i]=v[15*n+i];
+        for(uint k=0;k<stage.newton.w;++k)c[2*p.counts.w+k]=c[4*p.counts.w+k];
+        stage.flow.z=stage.newton.w;stage.current.quality.y=norm;stage.newton.y=1;
+    }
+}
+kernel void referenceWorldEndNewton(WARGS) {
+    if(tid||!stage.flow.x||!stage.flow.y||wFailed(control))return;
+    if(!stage.newton.y){++stage.current.counts.z;stage.flow.y=0;}
+}
+kernel void referenceWorldPrepareFinalResidual(WARGS) {
+    if(tid)return;
+    stage.op=wOperator(p,stage.flow.z,stage.time.z);
+    if(wFailed(control)||!stage.flow.x)stage.op.counts.x=0;
+    else wAnnotate(b,intervalSegments,v+4*p.counts.x,c+2*p.counts.w,stage.flow.z,p);
+}
+void wAggregate(device WControl &control,device WStage &stage) {
+    WReport aggregate=control.solver;bool present=stage.flow.w!=0;
+    wMerge(stage.current,aggregate,present);
+    control.solver=aggregate;stage.flow.w=present?1:0;
+    ++control.events.z;
+}
+void wActivateEvents(device GContact *c,device const GEvent *events,device WControl &control,device WStage &stage,WParameters p) {
+    uint count=control.failure.z;
+    for(uint k=0;k<stage.event.z;++k){bool exists=false;for(uint j=0;j<count;++j)if(c[j].identity.x==events[k].contact.identity.x)exists=true;
+        if(!exists)wInsert(events[k].contact,c,count);}
+    control.work.y+=stage.event.z;++control.events.y;
+    float epsilon=max(p.tolerances.z,1e-7f);
+    if(stage.event.y>p.limits.w||control.events.y>=p.limits.w){
+        control.events.w=stage.event.y>p.limits.w||stage.time.y>epsilon;
+        for(uint k=stage.event.z;k<stage.event.w;++k){bool exists=false;for(uint j=0;j<count;++j)if(c[j].identity.x==events[k].contact.identity.x)exists=true;
+            if(!exists)wInsert(events[k].contact,c,count);}
+        control.work.y+=stage.event.w-stage.event.z;stage.flow.x=stage.time.y>epsilon?3:0;
+    }else stage.flow.x=stage.time.y>epsilon?1:0;
     control.failure.z=count;
+}
+kernel void referenceWorldCommitSolve(WARGS) {
+    if(tid||wFailed(control)||!stage.flow.x)return;
+    uint n=p.counts.x,count=stage.flow.z;WReport report=stage.current;
+    for(uint i=0;i<n;++i){v[i]=v[4*n+i];v[n+i]=(v[4*n+i]-v[2*n+i])*(2/stage.time.z)-v[3*n+i];}
+    for(uint k=0;k<count;++k)c[k]=c[2*p.counts.w+k];
+    report.quality.y=wNorm(v+5*n,n);
+    if(report.quality.y<=p.tolerances.w)report.counts.w|=1;
+    if(!(report.counts.w&1)&&report.counts.x>=p.limits.x)report.counts.w|=2;
+    if(!isfinite(report.quality.y))report.counts.w|=4;
+    for(uint i=0;i<n;++i){labels[i]=i;labels[n+i]=0;if(!all(isfinite(v[i]))||!all(isfinite(v[n+i])))report.counts.w|=4;}
+    wJoin(labels,b,n,c,count);
+    for(uint k=0;k<count;++k){GContact x=c[k];uint a=gBubbleIndex(x.bubbles.x,b,n);
+        labels[n+a]=1;if(x.identity.y&2)labels[n+gBubbleIndex(x.bubbles.y,b,n)]=1;
+        report.quality.z=max(report.quality.z,x.compression.x);report.quality.w=max(report.quality.w,x.compression.y/max(b[a].physical.z,FLT_EPSILON));}
+    for(uint root=0;root<n;++root){float sum=0;bool member=false;
+        for(uint i=0;i<n;++i)if(labels[n+i]&&gRoot(i,labels)==root){member=true;sum+=gDot(v[5*n+i],v[5*n+i]);}
+        if(member){float norm=sqrt(sum);++report.components.x;if(!isfinite(norm)||norm>p.tolerances.w)++report.components.y;
+            if(isfinite(norm))report.components.z=max(report.components.z,norm);}}
+    stage.current=report;control.failure.z=count;
+    if(report.counts.w&4){control.failure.x=1;return;}
+    if(stage.flow.x==3){wAggregate(control,stage);stage.time.y=0;stage.flow.x=0;return;}
+    if(stage.flow.x==2){
+        wAggregate(control,stage);stage.time.x+=stage.time.w;stage.time.y=max(0.0f,stage.time.y-stage.time.w);
+        wActivateEvents(c,events,control,stage,p);return;
+    }
+    stage.event.y=wScan(b,intervalSegments,v+17*n,v,c+p.counts.w,stage.event.x,events,control,p,stage.time.y);
+    if(control.failure.x)return;
+    if(!stage.event.y){wAggregate(control,stage);stage.time.x+=stage.time.y;stage.time.y=0;stage.flow.x=0;return;}
+    for(uint i=0;i<n;++i){v[i]=v[17*n+i];v[n+i]=v[18*n+i];}
+    count=stage.event.x;for(uint k=0;k<count;++k)c[k]=c[p.counts.w+k];control.failure.z=count;
+    float interval=events[0].timing.x,anchor=interval;uint firstCount=1,groups=1,activationCount=1;
+    for(uint k=1;k<stage.event.y;++k){if(events[k].timing.x-anchor>p.shape.w){anchor=events[k].timing.x;++groups;}
+        if(groups==1)++firstCount;if(groups<=p.limits.w)activationCount=k+1;}
+    stage.time.w=interval;stage.event.z=firstCount;stage.event.w=activationCount;
+    // groups must survive PCG's counts updates during the interval solve.
+    stage.event.y=groups;
+    if(interval>max(p.tolerances.z,1e-7f))stage.flow.x=2;
+    else wActivateEvents(c,events,control,stage,p);
+}
+kernel void referenceWorldFinish(WARGS) {
+    if(tid||wFailed(control))return;
+    // The fixed 2*eventGroups+1 schedule must consume the complete frame.
+    if(stage.flow.x)control.failure.w=1;
 }
 
 bool wInside(float2 point,device const GSegment *s,uint count,long owner) {

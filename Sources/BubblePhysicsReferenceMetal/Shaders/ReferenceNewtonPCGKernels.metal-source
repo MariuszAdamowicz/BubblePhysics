@@ -128,6 +128,7 @@ kernel void referenceBuildInverseDiagonal(device const ReferenceMetalBubble *bub
     constant ReferenceOperatorParameters &p [[buffer(7)]], uint i [[thread_position_in_grid]]) {
     if (i >= p.counts.x) return;
     float diagonal = max(bubbles[i].physical.x, referenceMinimumMass) * (2 / p.physics.x + max(0.0f, p.drag.x));
+    bool finite = isfinite(diagonal);
     for (uint c = 0; c < p.counts.y; ++c) {
         ReferenceMetalContact contact = contacts[c];
         int a = referenceBubbleIndex(contact.bubbles.x, bubbles, p.counts.x);
@@ -135,12 +136,15 @@ kernel void referenceBuildInverseDiagonal(device const ReferenceMetalBubble *bub
         int b = (contact.identity.y & 2) ? referenceBubbleIndex(contact.bubbles.y, bubbles, p.counts.x) : -1;
         float mass = referenceEffectiveMass(bubbles[a].physical.x, b >= 0 ? bubbles[b].physical.x : 0, b >= 0);
         float contribution = p.physics.x * (max(0.0f, p.physics.y) * mass) * 0.5f + max(0.0f, p.physics.w) * mass;
+        finite = finite && isfinite(mass) && isfinite(contribution);
         if (contribution > 0) {
             if (i == uint(a)) diagonal += contribution;
             if (b >= 0 && i == uint(b)) diagonal += contribution;
+            finite = finite && isfinite(diagonal);
         }
     }
-    output[i] = float2(1 / max(diagonal, referenceMinimumMass));
+    // 1/Inf must not turn an invalid operator into a finite zero inverse.
+    output[i] = finite ? float2(1 / max(diagonal, referenceMinimumMass)) : float2(NAN);
 }
 
 // First dispatch: 256-lane binary tree in each block, padding with exact zero.
@@ -273,4 +277,59 @@ kernel void referencePCGFinalize(device const float2 *solution [[buffer(2)]],
     // CPU reports zero norms when the initial norm was rejected.
     control.norms.y = control.state.w != 0 ? 0 : sqrt(max(0.0f, squaredNorm));
     control.state.x = 0;
+}
+
+// Production PCG separates ordered scalar decisions from independent row
+// updates. Reduction order remains the CPU order; expensive Jacobian and all
+// solution/residual/preconditioner/direction updates run across bubble lanes.
+#define PARALLEL_PCG_ARGS device const float2 *rhs [[buffer(0)]], \
+    device const float2 *diagonal [[buffer(1)]], device float2 *solution [[buffer(2)]], \
+    device float2 *residual [[buffer(3)]], device float2 *preconditioned [[buffer(4)]], \
+    device float2 *direction [[buffer(5)]], device const float2 *applied [[buffer(6)]], \
+    device const float *denominator [[buffer(7)]], device ReferencePCGControl &control [[buffer(8)]], \
+    constant uint4 &counts [[buffer(9)]], constant float &tolerance [[buffer(10)]], \
+    uint i [[thread_position_in_grid]]
+
+kernel void referencePCGInitializeVectors(PARALLEL_PCG_ARGS) {
+    if(i>=counts.x)return;
+    solution[i]=0;residual[i]=rhs[i];preconditioned[i]=rhs[i]*diagonal[i];direction[i]=preconditioned[i];
+}
+kernel void referencePCGInitializeScalars(PARALLEL_PCG_ARGS) {
+    if(i)return;
+    control={};float square=0,rz=0;bool finite=true;
+    for(uint j=0;j<counts.x;++j){square+=referenceDot(residual[j],residual[j]);rz+=referenceDot(residual[j],preconditioned[j]);
+        finite=finite&&all(isfinite(rhs[j]))&&all(isfinite(diagonal[j]))&&all(isfinite(preconditioned[j]));}
+    float norm=sqrt(max(0.0f,square));
+    if(!finite||!isfinite(square)||!isfinite(norm)){control.state.zw=uint2(1);return;}
+    control.norms=float4(norm,norm,max(0.0f,tolerance)*norm,0);control.recurrence.x=rz;
+    control.state.x=norm>0x1p-23f&&counts.y>0?1:0;
+}
+kernel void referencePCGStepScalars(PARALLEL_PCG_ARGS) {
+    if(i||!control.state.x)return;
+    float divisor=denominator[0],rz=control.recurrence.x;
+    if(!isfinite(divisor)||divisor<=0x1p-23f||!isfinite(rz)){
+        control.state.x=0;control.state.z=!isfinite(divisor)||!isfinite(rz)?1:0;return;}
+    control.recurrence.z=rz/divisor;
+}
+kernel void referencePCGStepVectors(PARALLEL_PCG_ARGS) {
+    if(i>=counts.x||!control.state.x)return;
+    solution[i]=solution[i]+direction[i]*control.recurrence.z;
+    residual[i]=residual[i]+applied[i]*-control.recurrence.z;
+}
+kernel void referencePCGCheckResidual(PARALLEL_PCG_ARGS) {
+    if(i||!control.state.x)return;
+    ++control.state.y;float square=0;
+    for(uint j=0;j<counts.x;++j)square+=referenceDot(residual[j],residual[j]);
+    float norm=sqrt(max(0.0f,square));control.norms.y=norm;
+    if(!isfinite(square)||!isfinite(norm)){control.state.x=0;control.state.z=1;return;}
+    if(norm<=control.norms.z)control.state.x=0;
+}
+kernel void referencePCGPreconditionVectors(PARALLEL_PCG_ARGS) {
+    if(i<counts.x&&control.state.x)preconditioned[i]=residual[i]*diagonal[i];
+}
+kernel void referencePCGDirectionScalars(PARALLEL_PCG_ARGS) {
+    if(i||!control.state.x)return;
+    float next=0;for(uint j=0;j<counts.x;++j)next+=referenceDot(residual[j],preconditioned[j]);
+    if(!isfinite(next)){control.state.x=0;control.state.z=1;return;}
+    control.recurrence.y=next/control.recurrence.x;control.recurrence.x=next;
 }
