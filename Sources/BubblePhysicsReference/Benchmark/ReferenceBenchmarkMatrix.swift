@@ -49,6 +49,9 @@ public struct ReferenceBenchmarkMatrixReport: Sendable, Equatable {
             "warmup: \(configuration.warmupSteps) measured: \(configuration.measuredSteps)",
             "limit full_p50_ms full_p95_ms full_max_ms solver_p95_ms contour_p95_ms render_p95_ms penetration_p95 penetration_max residual_p95 residual_max unconverged_components containment non_finite backend cpu_frames metal_frames fallbacks warmup_fallbacks gpu_measurement",
         ]
+        if configuration.backend == .metal {
+            lines.insert("Uwaga GPU: solver_p95_ms obejmuje cały command buffer GPU; contour_p95_ms mierzy pobranie/pakowanie konturów na hoście; fallbacki zachowują czasy CPU.", at: 6)
+        }
         for run in runs {
             lines.append([
                 "\(run.newtonIterationLimit)",

@@ -35,6 +35,28 @@ final class ReferenceMetalBenchmarkTests: XCTestCase {
         XCTAssertTrue(report.plainText(deviceName: "test", systemVersion: "test").contains("metal 1 2 1 1 ineligible"))
     }
 
+    func testCopiedGPUReportExplainsCompleteCommandBufferAndHostContourTiming() async throws {
+        let report = try await measure(warmup: 0, measured: 1)
+        let text = report.plainText(deviceName: "test host", systemVersion: "test")
+        XCTAssertTrue(text.contains("solver_p95_ms obejmuje cały command buffer GPU"))
+        XCTAssertTrue(text.contains("contour_p95_ms mierzy pobranie/pakowanie konturów na hoście"))
+    }
+
+    func testCPUReportKeepsExistingFormatWithoutGPUExplanation() async throws {
+        let report = try await ReferenceBenchmarkMatrixRunner.measure(configuration: .init(
+            scene: .interactive24, warmupSteps: 0, measuredSteps: 0, iterationLimits: [4]))
+        XCTAssertEqual(report.plainText(deviceName: "test host", systemVersion: "test"), """
+        BubblePhysics reference convergence benchmark
+        device: test host
+        system: test
+        scene: interactive-24
+        seed: 2842869
+        warmup: 0 measured: 0
+        limit full_p50_ms full_p95_ms full_max_ms solver_p95_ms contour_p95_ms render_p95_ms penetration_p95 penetration_max residual_p95 residual_max unconverged_components containment non_finite backend cpu_frames metal_frames fallbacks warmup_fallbacks gpu_measurement
+        4 0.0000 0.0000 0.0000 0.0000 0.0000 0.0000 0.0000 0.0000 0.0000 0.0000 0 0 no cpu 0 0 0 0 not_applicable
+        """)
+    }
+
     func testMeasuredFallbackDisqualifiesRunAndKeepsCPUQuality() async throws {
         let report = try await measure(warmup: 0, measured: 1, failingStep: 0)
         let gpu = try XCTUnwrap(report.runs.first)

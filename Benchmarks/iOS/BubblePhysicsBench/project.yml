@@ -18,6 +18,8 @@ targets:
         product: BubblePhysicsMetal
       - package: BubblePhysics
         product: BubblePhysicsReference
+      - package: BubblePhysics
+        product: BubblePhysicsReferenceMetal
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.mariuszadamowicz.BubblePhysicsBench
