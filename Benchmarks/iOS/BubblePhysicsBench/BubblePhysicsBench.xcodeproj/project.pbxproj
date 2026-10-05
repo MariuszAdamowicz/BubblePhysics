@@ -14,6 +14,7 @@
 		400C6DD42752722E6154A68C /* BubblePhysics in Frameworks */ = {isa = PBXBuildFile; productRef = 30D026171047D8A2CA0CBBC5 /* BubblePhysics */; };
 		A11B22C33D44E55F66000001 /* BubblePhysicsMetal in Frameworks */ = {isa = PBXBuildFile; productRef = A11B22C33D44E55F66000002 /* BubblePhysicsMetal */; };
 		C0DE00010000000000000003 /* BubblePhysicsReference in Frameworks */ = {isa = PBXBuildFile; productRef = C0DE00010000000000000004 /* BubblePhysicsReference */; };
+		C0DE00070000000000000001 /* BubblePhysicsReferenceMetal in Frameworks */ = {isa = PBXBuildFile; productRef = C0DE00070000000000000002 /* BubblePhysicsReferenceMetal */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -33,6 +34,7 @@
 				400C6DD42752722E6154A68C /* BubblePhysics in Frameworks */,
 				A11B22C33D44E55F66000001 /* BubblePhysicsMetal in Frameworks */,
 				C0DE00010000000000000003 /* BubblePhysicsReference in Frameworks */,
+				C0DE00070000000000000001 /* BubblePhysicsReferenceMetal in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -94,6 +96,7 @@
 				30D026171047D8A2CA0CBBC5 /* BubblePhysics */,
 				A11B22C33D44E55F66000002 /* BubblePhysicsMetal */,
 				C0DE00010000000000000004 /* BubblePhysicsReference */,
+				C0DE00070000000000000002 /* BubblePhysicsReferenceMetal */,
 			);
 			productName = BubblePhysicsBench;
 			productReference = 70DEEBEF64919AF7D59AE563 /* BubblePhysicsBench.app */;
@@ -344,6 +347,10 @@
 		C0DE00010000000000000004 /* BubblePhysicsReference */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = BubblePhysicsReference;
+		};
+		C0DE00070000000000000002 /* BubblePhysicsReferenceMetal */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = BubblePhysicsReferenceMetal;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

@@ -20,6 +20,24 @@ public struct ReferenceBenchmarkFrameResult: Sendable, Equatable {
     public var fullFrameMilliseconds: Double
     public var contourPointCount: Int
     public var preparedBubbles: [ReferencePreparedBubble]
+    public var backend: ReferenceSimulationBackend = .cpu
+    public var fallbackReason: String? = nil
+
+    public init(worldReport: ReferenceWorldStepReport, simulationMilliseconds: Double,
+                contourMilliseconds: Double, renderPreparationMilliseconds: Double,
+                fullFrameMilliseconds: Double, contourPointCount: Int,
+                preparedBubbles: [ReferencePreparedBubble], backend: ReferenceSimulationBackend = .cpu,
+                fallbackReason: String? = nil) {
+        self.worldReport = worldReport
+        self.simulationMilliseconds = simulationMilliseconds
+        self.contourMilliseconds = contourMilliseconds
+        self.renderPreparationMilliseconds = renderPreparationMilliseconds
+        self.fullFrameMilliseconds = fullFrameMilliseconds
+        self.contourPointCount = contourPointCount
+        self.preparedBubbles = preparedBubbles
+        self.backend = backend
+        self.fallbackReason = fallbackReason
+    }
 }
 
 public enum ReferenceBenchmarkFrame {

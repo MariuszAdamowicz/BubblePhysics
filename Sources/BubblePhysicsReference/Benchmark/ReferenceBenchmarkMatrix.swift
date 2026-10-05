@@ -7,6 +7,7 @@ public struct ReferenceBenchmarkMatrixConfiguration: Sendable, Equatable {
     public var warmupSteps: Int
     public var measuredSteps: Int
     public var iterationLimits: [Int]
+    public var backend: ReferenceSimulationBackend
 
     public init(
         scene: ReferenceConvergenceScene,
@@ -14,7 +15,8 @@ public struct ReferenceBenchmarkMatrixConfiguration: Sendable, Equatable {
         broadPhase: ReferenceBroadPhaseSelection = .sweepAndPrune,
         warmupSteps: Int,
         measuredSteps: Int,
-        iterationLimits: [Int] = [4, 8, 12, 16]
+        iterationLimits: [Int] = [4, 8, 12, 16],
+        backend: ReferenceSimulationBackend = .cpu
     ) {
         self.scene = scene
         self.seed = seed
@@ -22,6 +24,7 @@ public struct ReferenceBenchmarkMatrixConfiguration: Sendable, Equatable {
         self.warmupSteps = max(0, warmupSteps)
         self.measuredSteps = max(0, measuredSteps)
         self.iterationLimits = iterationLimits.map { max(1, $0) }
+        self.backend = backend
     }
 }
 
@@ -44,7 +47,7 @@ public struct ReferenceBenchmarkMatrixReport: Sendable, Equatable {
             "scene: \(configuration.scene.rawValue)",
             "seed: \(configuration.seed)",
             "warmup: \(configuration.warmupSteps) measured: \(configuration.measuredSteps)",
-            "limit full_p50_ms full_p95_ms full_max_ms solver_p95_ms contour_p95_ms render_p95_ms penetration_p95 penetration_max residual_p95 residual_max unconverged_components containment non_finite",
+            "limit full_p50_ms full_p95_ms full_max_ms solver_p95_ms contour_p95_ms render_p95_ms penetration_p95 penetration_max residual_p95 residual_max unconverged_components containment non_finite backend cpu_frames metal_frames fallbacks warmup_fallbacks gpu_measurement",
         ]
         for run in runs {
             lines.append([
@@ -62,7 +65,18 @@ public struct ReferenceBenchmarkMatrixReport: Sendable, Equatable {
                 "\(run.maximumUnconvergedContactComponents)",
                 "\(run.maximumConsecutiveContainmentFrames)",
                 run.hasNonFiniteState ? "yes" : "no",
+                run.backend.rawValue,
+                "\(run.cpuFrameCount)",
+                "\(run.metalFrameCount)",
+                "\(run.fallbackCount)",
+                "\(run.warmupFallbackCount)",
+                run.isGPUAcceptanceMeasurementEligible ? "eligible" : (run.backend == .cpu ? "not_applicable" : "ineligible"),
             ].joined(separator: " "))
+        }
+        for run in runs where !run.fallbackReasons.isEmpty {
+            for reason in run.fallbackReasons.keys.sorted() {
+                lines.append("fallback_reason limit=\(run.newtonIterationLimit) count=\(run.fallbackReasons[reason]!) reason=\(reason)")
+            }
         }
         return lines.joined(separator: "\n")
     }
@@ -73,7 +87,7 @@ public struct ReferenceBenchmarkMatrixReport: Sendable, Equatable {
 }
 
 public enum ReferenceBenchmarkMatrixRunner {
-    typealias Run = @Sendable (
+    public typealias Run = @Sendable (
         _ scenario: ReferenceConvergenceScenario,
         _ warmupSteps: Int,
         _ measuredSteps: Int,
@@ -84,7 +98,8 @@ public enum ReferenceBenchmarkMatrixRunner {
         configuration: ReferenceBenchmarkMatrixConfiguration,
         progress: @escaping @Sendable (ReferenceBenchmarkProgress) async -> Void = { _ in }
     ) async throws -> ReferenceBenchmarkMatrixReport {
-        try await measure(
+        guard configuration.backend == .cpu else { throw ReferenceBenchmarkError.backendRequiresFrameExecutor }
+        return try await measure(
             configuration: configuration,
             progress: progress,
             run: { scenario, warmup, measured, localProgress in
@@ -98,7 +113,7 @@ public enum ReferenceBenchmarkMatrixRunner {
         )
     }
 
-    static func measure(
+    public static func measure(
         configuration: ReferenceBenchmarkMatrixConfiguration,
         progress: @escaping @Sendable (ReferenceBenchmarkProgress) async -> Void,
         run: @escaping Run

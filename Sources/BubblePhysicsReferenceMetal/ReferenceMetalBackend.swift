@@ -1,7 +1,4 @@
-public enum ReferenceSimulationBackend: Equatable, Sendable {
-    case cpu
-    case metal
-}
+@_exported import BubblePhysicsReference
 
 public struct ReferenceMetalFrameTelemetry: Equatable, Sendable {
     public let backend: ReferenceSimulationBackend

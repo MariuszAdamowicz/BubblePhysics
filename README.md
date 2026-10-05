@@ -18,7 +18,7 @@ let report = try ReferenceBenchmarkRunner.measure(
 
 `ReferenceBenchmarkReport` contains p50/p95 for the complete step and its prediction, broad-phase, contact and solver phases, together with candidate/contact/TOI counts, maximum penetration, iteration-limit events, side corrections and non-finite-state detection. Use `.aabbTree` with the same seed to compare spatial indices on identical input. CPU timings are a diagnostic correctness baseline, not the iPhone acceptance threshold.
 
-The next implementation stage is a new Metal backend reproducing the reference solver's behaviour. It has not been implemented or approved as part of this milestone.
+Nowy `BubblePhysicsReferenceMetal` implementuje referencyjny backend GPU na iOS 16+. CPU pozostaje domyślnym backendem, wyrocznią jakości i fallbackiem całej klatki. Testy pipeline'ów na macOS służą wyłącznie diagnostyce; publiczny wybór Metal poza iOS raportuje `unsupportedRuntime` i wykonuje CPU.
 
 ## Benchmark scenario
 
@@ -30,18 +30,23 @@ Acceptance on a physical iPhone X remains p95 ≤ 16.67 ms for the complete inte
 
 The committed XCTest scenario verifies construction and determinism. It is not a device-performance verdict: that requires a signed iOS host installed on the phone.
 
-The host is in `Benchmarks/iOS/BubblePhysicsBench`. Open `BubblePhysicsBench.xcodeproj` specifically in Xcode 26.6, choose the connected iPhone X and run. The `CPU` tab runs the reference convergence benchmark for deterministic 24/300-bubble scenes; the remaining tabs expose legacy experiments. See `docs/benchmarks/iphone-x-reference-solver.md` for the current checklist.
+Host jest w `Benchmarks/iOS/BubblePhysicsBench`. Otwórz `BubblePhysicsBench.xcodeproj` w Xcode 26.6 i wybierz podłączony iPhone. Zakładka `CPU` zawiera benchmark zbieżności z wyborem `CPU reference` / `GPU reference`; pozostałe zakładki udostępniają historyczne eksperymenty. Checklistę CPU opisuje `docs/benchmarks/iphone-x-reference-solver.md`.
 
-### Device convergence benchmark
+### Benchmark zbieżności na urządzeniu
 
-Before installing on a phone, verify the unsigned host build:
+Przed instalacją sprawdź niepodpisany build hosta w Release:
 
 ```bash
+DEVELOPER_DIR=/Applications/Xcode-26.6.app/Contents/Developer \
 xcodebuild -project Benchmarks/iOS/BubblePhysicsBench/BubblePhysicsBench.xcodeproj \
-  -scheme BubblePhysicsBench -destination 'generic/platform=iOS' \
+  -scheme BubblePhysicsBench -configuration Release -destination 'generic/platform=iOS' \
   CODE_SIGNING_ALLOWED=NO build
 ```
 
-For decision-grade numbers, run the app in **Release** on a physical iPhone. Open the `CPU` tab, select `24 bubbles`, choose the full `4/8/12/16` matrix, and let the default 30 warmup plus 300 measured frames complete. Copy the text report, then repeat for `300 bubbles`. The working CPU budget is `10 ms p95` for the complete measured frame; it is interpreted together with penetration, residual, unconverged-component, containment and non-finite metrics rather than used as a test assertion.
+Uruchom aplikację w Release na fizycznym iPhonie. W zakładce `CPU` wybierz `GPU reference`, scenę `24 bańki`, macierz `4/8/12/16` i domyślne 30 klatek rozgrzewki oraz 300 mierzonych. Skopiuj cały raport; powtórz dla `300 baniek`. Oba backendy używają identycznego seeda, ruchu wielokąta, kroków i limitów. CPU nadal uruchamia dotychczasową ścieżkę benchmarku.
 
-Return both complete text reports with the device and iOS version recorded by the app. Those physical-device results decide whether the next work targets the solver GPU, contours/broad phase, or adaptive component convergence. macOS measurements are diagnostic only and must not be used to approve the GPU decision.
+Raport zachowuje dotychczasowe kolumny czasu i jakości oraz dopisuje `backend cpu_frames metal_frames fallbacks warmup_fallbacks gpu_measurement`. Liczniki CPU/GPU i fallbacków obejmują także rozgrzewkę. Każdy fallback, również tylko podczas rozgrzewki, daje `gpu_measurement=ineligible`; powody są wypisane pod tabelą. `eligible` oznacza wyłącznie kompletny przebieg GPU bez fallbacku i bez `non-finite`, przygotowany do porównania urządzeniowego — nie zatwierdzenie bramki. Pusty przebieg nie jest kwalifikowany.
+
+`full_p95_ms` obejmuje aktualizację sceny, upload, oczekiwanie CPU+GPU, retry, readback, walidację i przygotowanie klatki. Dla GPU `solver_p95_ms` pochodzi z czasu całego command buffera (obejmuje również geometrię i generowanie konturów); `contour_p95_ms` mierzy pobranie gotowych konturów, a `render_p95_ms` pakowanie danych na CPU. Backend nie udostępnia osobnych znaczników GPU dla tych faz, więc te kolumny nie dowodzą kosztu samego Newton/PCG ani konturów na GPU. Pełna klatka pozostaje porównywalną miarą bramki.
+
+Zapisz rzeczywiste raporty obu scen w `docs/benchmarks/reference-gpu-iphone-YYYY-MM-DD.txt` oraz analizę w `docs/benchmarks/reference-gpu-YYYY-MM-DD.md`. Porównaj każdy limit z niezmienionym baseline'em `reference-convergence-iphone-2026-10-04.txt`: penetrację p95/max, resztę p95/max, niezbieżne komponenty, zawarcia i `non-finite`. Pierwsza bramka dla limitu 4 wymaga `stress-300 full_p95_ms <= 10 ms`, jakości nie gorszej od CPU oraz stabilnego `interactive-24` w budżecie. Limity 8/12/16 pozostają porównaniem, bez adaptacji iteracji. CEO podejmuje decyzję na podstawie rzeczywistych danych; build iOS, symulator i testy hostowe nie zastępują pomiaru fizycznego urządzenia.

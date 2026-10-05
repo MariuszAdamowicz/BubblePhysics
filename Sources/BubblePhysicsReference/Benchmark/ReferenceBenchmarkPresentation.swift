@@ -16,6 +16,7 @@ public final class ReferenceBenchmarkPresentation: ObservableObject {
     @Published public var scene: ReferenceConvergenceScene = .interactive24
     @Published public var mode: ReferenceBenchmarkMode = .matrix
     @Published public var selectedLimit = 4
+    @Published public var backend: ReferenceSimulationBackend = .cpu
     @Published public private(set) var progress = 0.0
     @Published public private(set) var reportText: String?
     @Published public private(set) var errorMessage: String?
@@ -47,7 +48,8 @@ public final class ReferenceBenchmarkPresentation: ObservableObject {
             scene: scene,
             warmupSteps: warmupSteps,
             measuredSteps: measuredSteps,
-            iterationLimits: limits
+            iterationLimits: limits,
+            backend: backend
         )
         progress = 0
         reportText = nil

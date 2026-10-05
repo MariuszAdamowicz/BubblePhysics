@@ -1,14 +1,24 @@
 import BubblePhysicsReference
+import BubblePhysicsReferenceMetal
 import SwiftUI
 import UIKit
 
 struct ReferenceBenchmarkView: View {
-    @StateObject private var model = ReferenceBenchmarkPresentation()
+    @StateObject private var model = ReferenceBenchmarkPresentation { configuration, progress in
+        try await ReferenceMetalBenchmarkRunner.measure(configuration: configuration, progress: progress)
+    }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                Text("Benchmark zbieżności CPU").font(.title2.bold())
+                Text("Benchmark zbieżności CPU/GPU").font(.title2.bold())
+
+                Picker("Backend", selection: $model.backend) {
+                    Text("CPU reference").tag(ReferenceSimulationBackend.cpu)
+                    Text("GPU reference").tag(ReferenceSimulationBackend.metal)
+                }
+                .pickerStyle(.segmented)
+                .disabled(model.isRunning)
 
                 Picker("Scena", selection: $model.scene) {
                     Text("24 bańki").tag(ReferenceConvergenceScene.interactive24)

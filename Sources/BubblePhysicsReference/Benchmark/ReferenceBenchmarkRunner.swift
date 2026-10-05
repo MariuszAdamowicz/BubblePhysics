@@ -1,6 +1,59 @@
 import Foundation
 
+public enum ReferenceBenchmarkError: Error {
+    case backendRequiresFrameExecutor
+}
+
 public enum ReferenceBenchmarkRunner {
+    public typealias FrameExecutor = @MainActor (
+        _ world: inout ReferenceWorld, _ scenario: ReferenceConvergenceScenario, _ step: Int
+    ) async -> ReferenceBenchmarkFrameResult
+
+    /// Neutral integration seam; the reference module does not depend on Metal.
+    @MainActor
+    public static func measureAsync(
+        scenario: ReferenceConvergenceScenario,
+        warmupSteps: Int,
+        measuredSteps: Int,
+        backend: ReferenceSimulationBackend,
+        frameExecutor: FrameExecutor,
+        progress: @escaping @Sendable (Int, Int) async -> Void = { _, _ in }
+    ) async throws -> ReferenceBenchmarkReport {
+        var world = try scenario.makeWorld()
+        let warmup = max(0, warmupSteps)
+        let measured = max(0, measuredSteps)
+        let total = warmup + measured
+        var frames: [ReferenceBenchmarkFrameResult] = []
+        var tracker = ReferenceContainmentTracker(positionTolerance: world.configuration.positionTolerance)
+        var cpuFrames = 0, metalFrames = 0, fallbacks = 0, warmupFallbacks = 0
+        var reasons: [String: Int] = [:]
+        for step in 0..<total {
+            try Task.checkCancellation()
+            let result = await frameExecutor(&world, scenario, step)
+            if result.backend == .metal { metalFrames += 1 } else { cpuFrames += 1 }
+            if let reason = result.fallbackReason {
+                fallbacks += 1
+                if step < warmup { warmupFallbacks += 1 }
+                reasons[reason, default: 0] += 1
+            }
+            if step >= warmup {
+                tracker.observe(world.bubbles)
+                frames.append(result)
+            }
+            await progress(step + 1, total)
+        }
+        try Task.checkCancellation()
+        var report = makeConvergenceReport(scenario: scenario, warmup: warmup, measured: measured,
+                                           frames: frames, tracker: tracker)
+        report.backend = backend
+        report.cpuFrameCount = cpuFrames
+        report.metalFrameCount = metalFrames
+        report.fallbackCount = fallbacks
+        report.warmupFallbackCount = warmupFallbacks
+        report.fallbackReasons = reasons
+        return report
+    }
+
     public static func measure(
         scenario: ReferenceConvergenceScenario,
         warmupSteps: Int,
@@ -248,7 +301,8 @@ public enum ReferenceBenchmarkRunner {
             maximumComponentResidualNorm: reports.map(\.solver.maximumComponentResidualNorm).max() ?? 0,
             maximumPCGIterations: reports.map(\.solver.pcgIterationCount).max() ?? 0,
             maximumConsecutiveContainmentFrames: tracker.maximumConsecutiveFrames,
-            maximumContourPointCount: frames.map(\.contourPointCount).max() ?? 0
+            maximumContourPointCount: frames.map(\.contourPointCount).max() ?? 0,
+            cpuFrameCount: warmup + measured
         )
     }
 

@@ -1,3 +1,8 @@
+public enum ReferenceSimulationBackend: String, Equatable, Sendable, CaseIterable {
+    case cpu
+    case metal
+}
+
 public struct ReferenceTimingSummary: Sendable, Equatable {
     public var p50Milliseconds: Double
     public var p95Milliseconds: Double
@@ -80,4 +85,19 @@ public struct ReferenceBenchmarkReport: Sendable, Equatable {
     public var maximumPCGIterations: Int = 0
     public var maximumConsecutiveContainmentFrames: Int = 0
     public var maximumContourPointCount: Int = 0
+    public var backend: ReferenceSimulationBackend = .cpu
+    // Counts include warmup: a fallback there changes the measured trajectory.
+    public var cpuFrameCount: Int = 0
+    public var metalFrameCount: Int = 0
+    public var fallbackCount: Int = 0
+    public var warmupFallbackCount: Int = 0
+    public var fallbackReasons: [String: Int] = [:]
+
+    /// Eligibility for device comparison, never an acceptance verdict. Physical
+    /// device, Release, timing budget and CPU quality still need verification.
+    public var isGPUAcceptanceMeasurementEligible: Bool {
+        backend == .metal && measuredSteps > 0 && cpuFrameCount == 0
+            && metalFrameCount == warmupSteps + measuredSteps
+            && fallbackCount == 0 && !hasNonFiniteState
+    }
 }
