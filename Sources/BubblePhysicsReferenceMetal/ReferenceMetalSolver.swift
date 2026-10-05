@@ -175,14 +175,15 @@ public final class ReferenceMetalSolver {
         let blockCount = count / 256 + (count % 256 == 0 ? 0 : 1)
         let blocks = try buffer(name: "dotBlocks", count: blockCount, stride: MemoryLayout<Float>.stride)
         let dot = try buffer(name: "dot", count: 1, stride: MemoryLayout<Float>.stride)
-        guard let command = commandQueue.makeCommandBuffer() else { throw ReferenceMetalOperatorError.commandSetupFailed }
+        let command = try makeCommand(stage: "referenceOperators", scenarioStep: -1)
         let config = snapshot.configuration
         var parameters = ReferenceMetalOperatorParameters(counts: SIMD4(bubbleCount, contactCount, 0, 0),
             physics: SIMD4(config.timeStep, config.contactStiffness, config.nonlinearStiffening, config.contactDamping),
             drag: SIMD4(config.linearDamping, 0, 0, 0))
         if count > 0 {
-            for (pipeline, output) in [(residualPipeline, residual), (jacobianPipeline, jacobian), (diagonalPipeline, diagonal)] {
+            for (name, pipeline, output) in [("referenceBuildResidual", residualPipeline, residual), ("referenceApplyJacobian", jacobianPipeline, jacobian), ("referenceBuildInverseDiagonal", diagonalPipeline, diagonal)] {
                 guard let encoder = command.makeComputeCommandEncoder() else { throw ReferenceMetalOperatorError.commandSetupFailed }
+                encoder.label = name
                 encoder.setComputePipelineState(pipeline)
                 for (index, input) in inputs.enumerated() { encoder.setBuffer(input, offset: 0, index: index) }
                 encoder.setBuffer(output, offset: 0, index: 6)
@@ -194,6 +195,7 @@ public final class ReferenceMetalSolver {
         }
         for phase: UInt32 in count > 0 ? [0, 1] : [1] {
             guard let encoder = command.makeComputeCommandEncoder() else { throw ReferenceMetalOperatorError.commandSetupFailed }
+            encoder.label = "referenceDotProduct.phase.\(phase)"
             encoder.setComputePipelineState(dotPipeline)
             encoder.setBuffer(inputs[5], offset: 0, index: 0)
             encoder.setBuffer(jacobian, offset: 0, index: 1)
@@ -206,13 +208,7 @@ public final class ReferenceMetalSolver {
             encoder.endEncoding()
         }
         // All numerical work and both reduction phases finish before any readback.
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            command.addCompletedHandler { completed in
-                if completed.status == .completed { continuation.resume() }
-                else { continuation.resume(throwing: ReferenceMetalOperatorError.executionFailed(completed.error?.localizedDescription ?? "Metal command failed")) }
-            }
-            command.commit()
-        }
+        try await Self.complete(command, stage: "referenceOperators", scenarioStep: -1)
         try Task.checkCancellation()
         func vectors(_ buffer: MTLBuffer) -> [ReferenceVector2] {
             let pointer = buffer.contents().bindMemory(to: SIMD2<Float>.self, capacity: count)
@@ -253,7 +249,7 @@ public final class ReferenceMetalSolver {
         let blocks = try buffer(name: "dotBlocks", count: blockCount, stride: MemoryLayout<Float>.stride)
         let denominator = try buffer(name: "dot", count: 1, stride: MemoryLayout<Float>.stride)
         let control = try buffer(name: "pcgControl", count: 1, stride: MemoryLayout<ReferenceMetalPCGControl>.stride)
-        guard let command = commandQueue.makeCommandBuffer() else { throw ReferenceMetalOperatorError.commandSetupFailed }
+        let command = try makeCommand(stage: "referencePCG", scenarioStep: -1)
         let config = snapshot.configuration
         var parameters = ReferenceMetalOperatorParameters(counts: SIMD4(bubbleCount, contactCount, 0, 0),
             physics: SIMD4(config.timeStep, config.contactStiffness, config.nonlinearStiffening, config.contactDamping),
@@ -264,6 +260,7 @@ public final class ReferenceMetalSolver {
         func encodeOperator(_ pipeline: MTLComputePipelineState, output: MTLBuffer) throws {
             guard count > 0 else { return }
             guard let encoder = command.makeComputeCommandEncoder() else { throw ReferenceMetalOperatorError.commandSetupFailed }
+            encoder.label = pipeline.label ?? "referencePCG.operator"
             encoder.setComputePipelineState(pipeline)
             for (index, input) in inputs.enumerated() { encoder.setBuffer(input, offset: 0, index: index) }
             encoder.setBuffer(direction, offset: 0, index: 5)
@@ -275,6 +272,7 @@ public final class ReferenceMetalSolver {
         }
         func encodePCG(_ pipeline: MTLComputePipelineState, parallel: Bool = false) throws {
             guard let encoder = command.makeComputeCommandEncoder() else { throw ReferenceMetalOperatorError.commandSetupFailed }
+            encoder.label = pipeline.label ?? "referencePCG.iteration"
             encoder.setComputePipelineState(pipeline)
             for (index, buffer) in [rhs, diagonal, solution, residual, preconditioned, direction, applied, denominator, control].enumerated() {
                 encoder.setBuffer(buffer, offset: 0, index: index)
@@ -293,6 +291,7 @@ public final class ReferenceMetalSolver {
             try encodeOperator(jacobianPipeline, output: applied)
             for phase: UInt32 in count > 0 ? [0, 1] : [1] {
                 guard let encoder = command.makeComputeCommandEncoder() else { throw ReferenceMetalOperatorError.commandSetupFailed }
+                encoder.label = "referenceDotProduct.phase.\(phase)"
                 encoder.setComputePipelineState(dotPipeline)
                 for (index, buffer) in [direction, applied, blocks, denominator].enumerated() {
                     encoder.setBuffer(buffer, offset: 0, index: index)
@@ -307,13 +306,7 @@ public final class ReferenceMetalSolver {
             try encodePCG(pcgDirectionPipeline, parallel: true)
         }
         try encodePCG(pcgFinalizePipeline)
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            command.addCompletedHandler { completed in
-                if completed.status == .completed { continuation.resume() }
-                else { continuation.resume(throwing: ReferenceMetalOperatorError.executionFailed(completed.error?.localizedDescription ?? "Metal command failed")) }
-            }
-            command.commit()
-        }
+        try await Self.complete(command, stage: "referencePCG", scenarioStep: -1)
         try Task.checkCancellation()
         // The CPU result has no public initializer. An empty zero-iteration solve
         // only constructs the value; every reported field comes from final GPU readback.
@@ -372,7 +365,7 @@ public final class ReferenceMetalSolver {
             let control = try buffer(name: "geometryControl", count: 1, stride: MemoryLayout<ReferenceMetalGeometryControl>.stride)
             memset(control.contents(), 0, control.length)
             let buffers = inputs + [predicted, guarded, pairs, contacts, events, labels, touched, components, control]
-            guard let command = commandQueue.makeCommandBuffer() else { throw ReferenceMetalOperatorError.commandSetupFailed }
+            let command = try makeCommand(stage: "referenceGeometry", scenarioStep: Int(step))
             let config = snapshot.configuration
             var parameters = ReferenceMetalGeometryParameters(counts: SIMD4(bubbles, segments, previous, UInt32(pairCapacity)),
                 capacities: SIMD4(UInt32(contactCapacity), UInt32(componentCapacity), 0, 0),
@@ -382,6 +375,7 @@ public final class ReferenceMetalSolver {
                 guard !parallel || n > 0 else { return }
                 guard let pipeline = geometryPipelines[name], let encoder = command.makeComputeCommandEncoder()
                 else { throw ReferenceMetalOperatorError.commandSetupFailed }
+                encoder.label = name
                 encoder.setComputePipelineState(pipeline)
                 for (i, buffer) in buffers.enumerated() { encoder.setBuffer(buffer, offset: 0, index: i) }
                 encoder.setBytes(&parameters, length: MemoryLayout<ReferenceMetalGeometryParameters>.stride, index: 14)
@@ -396,13 +390,7 @@ public final class ReferenceMetalSolver {
             parameters.capacities.z = 1
             try encode("referencePredict", parallel: true)
             try encode("referenceLabelComponents")
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                command.addCompletedHandler { completed in
-                    if completed.status == .completed { continuation.resume() }
-                    else { continuation.resume(throwing: ReferenceMetalOperatorError.executionFailed(completed.error?.localizedDescription ?? "Metal command failed")) }
-                }
-                command.commit()
-            }
+            try await Self.complete(command, stage: "referenceGeometry", scenarioStep: Int(step))
             try Task.checkCancellation()
             let state = control.contents().load(as: ReferenceMetalGeometryControl.self)
             if state.flags.x != 0 {
@@ -521,7 +509,8 @@ public final class ReferenceMetalSolver {
             let points = try buffer(name: "worldContourPoints", count: pointCount, stride: MemoryLayout<SIMD2<Float>>.stride)
             let render = try buffer(name: "worldRender", count: n, stride: MemoryLayout<SIMD4<Float>>.stride)
             let buffers = inputBuffers + [vectors, contacts, intervalSegments, events, labels, control, rangeBuffer, points, render]
-            guard let command = commandQueue.makeCommandBuffer(), let capacity = UInt32(exactly: contactCapacity)
+            let command = try makeCommand(stage: "referenceWorldFrame", scenarioStep: scenarioStep)
+            guard let capacity = UInt32(exactly: contactCapacity)
             else { throw ReferenceMetalOperatorError.commandSetupFailed }
             var parameters = ReferenceMetalWorldParameters(counts: SIMD4(bubbleCount, segments, oldCount, capacity),
                 physics: SIMD4(config.timeStep, config.contactStiffness, config.nonlinearStiffening, config.contactDamping),
@@ -534,6 +523,7 @@ public final class ReferenceMetalSolver {
                 if width == 0 { continue }
                 guard let pipeline = worldPipelines[name], let encoder = command.makeComputeCommandEncoder()
                 else { throw ReferenceMetalOperatorError.commandSetupFailed }
+                encoder.label = name
                 encoder.setComputePipelineState(pipeline)
                 for (index, buffer) in buffers.enumerated() { encoder.setBuffer(buffer, offset: 0, index: index) }
                 encoder.setBytes(&parameters, length: MemoryLayout<ReferenceMetalWorldParameters>.stride, index: 14)
@@ -541,13 +531,7 @@ public final class ReferenceMetalSolver {
                     threadsPerThreadgroup: .init(width: min(width, pipeline.maxTotalThreadsPerThreadgroup), height: 1, depth: 1))
                 encoder.endEncoding()
             }
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                command.addCompletedHandler { completed in
-                    if completed.status == .completed { continuation.resume() }
-                    else { continuation.resume(throwing: ReferenceMetalOperatorError.executionFailed(completed.error?.localizedDescription ?? "Metal command failed")) }
-                }
-                command.commit()
-            }
+            try await Self.complete(command, stage: "referenceWorldFrame", scenarioStep: scenarioStep)
             try Task.checkCancellation()
             let state = control.contents().load(as: ReferenceMetalWorldControl.self)
             if state.failure.y != 0 {
@@ -606,12 +590,40 @@ public final class ReferenceMetalSolver {
         }
     }
 
+    private func makeCommand(stage: String, scenarioStep: Int) throws -> MTLCommandBuffer {
+        // Descriptor and encoder diagnostics are available from iOS 14; the
+        // reference runtime requires iOS 16. Keep retainedReferences enabled.
+        let descriptor = MTLCommandBufferDescriptor()
+        descriptor.errorOptions = .encoderExecutionStatus
+        descriptor.retainedReferences = true
+        guard let command = commandQueue.makeCommandBuffer(descriptor: descriptor)
+        else { throw ReferenceMetalOperatorError.commandSetupFailed }
+        command.label = "\(stage).step.\(scenarioStep)"
+        return command
+    }
+
+    private static func complete(_ command: MTLCommandBuffer, stage: String, scenarioStep: Int) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            command.addCompletedHandler { completed in
+                if completed.status == .completed {
+                    continuation.resume()
+                } else {
+                    let error = completed.error.map { $0 as NSError }
+                    continuation.resume(throwing: ReferenceMetalGPUFailure(stage: stage, scenarioStep: scenarioStep,
+                        error: error, commandBufferStatus: Int(completed.status.rawValue)))
+                }
+            }
+            command.commit()
+        }
+    }
+
     private func buffer(name: String, count: Int, stride: Int) throws -> MTLBuffer {
         let length = try ReferenceMetalCapacityManager.byteLength(count: count, stride: stride, maximum: device.maxBufferLength)
         if let existing = operatorBuffers[name], existing.length >= length { return existing }
         guard let buffer = device.makeBuffer(length: length, options: .storageModeShared) else {
             throw ReferenceMetalCapacityError.allocationFailed
         }
+        buffer.label = name
         operatorBuffers[name] = buffer
         return buffer
     }

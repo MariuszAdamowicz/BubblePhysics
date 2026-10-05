@@ -1,5 +1,6 @@
 import Foundation
 import Dispatch
+import Metal
 @_spi(ReferenceMetal) import BubblePhysicsReference
 
 @MainActor
@@ -27,6 +28,9 @@ public final class ReferenceMetalWorldRunner {
     public private(set) var telemetry = ReferenceMetalFrameTelemetry()
     public private(set) var contours: [ReferenceBubbleID: [ReferenceVector2]] = [:]
     public private(set) var renderData: [SIMD4<Float>] = []
+    public private(set) var firstGPUFailure: ReferenceMetalGPUFailure?
+    /// The runner owns one session. Only creating a new runner clears this latch.
+    public private(set) var fatalGPUFailure: ReferenceMetalGPUFailure?
     private let backend: ReferenceSimulationBackend
     private let executor: (any ReferenceMetalFrameExecuting)?
     private let availabilityError: ReferenceMetalWorldError?
@@ -54,6 +58,9 @@ public final class ReferenceMetalWorldRunner {
     public func step(world: inout ReferenceWorld, scenarioStep: Int) async -> ReferenceWorldStepReport {
         let start = DispatchTime.now().uptimeNanoseconds
         if backend == .cpu { return cpuFrame(world: &world, start: start, reason: nil) }
+        if let failure = fatalGPUFailure {
+            return cpuFrame(world: &world, start: start, reason: "GPU session disabled: \(failure)", gpuFailure: failure)
+        }
         guard !inFlight else {
             return cpuFrame(world: &world, start: start, reason: String(describing: ReferenceMetalWorldError.frameInFlight))
         }
@@ -75,13 +82,25 @@ public final class ReferenceMetalWorldRunner {
             telemetry = frame.telemetry
             return frame.report
         } catch {
+            let failure: ReferenceMetalGPUFailure?
+            if let gpuError = error as? ReferenceMetalGPUFailure {
+                failure = gpuError
+            } else if (error as NSError).domain == MTLCommandBufferErrorDomain {
+                failure = .init(stage: "executeFrame", scenarioStep: scenarioStep, error: error as NSError)
+            } else {
+                failure = nil
+            }
+            if let failure {
+                if firstGPUFailure == nil { firstGPUFailure = failure }
+                if failure.isFatal { fatalGPUFailure = failure }
+            }
             // The world is still the original frame input. CPU reruns its entire
             // next step, including prediction, events, solve and post-solve.
-            return cpuFrame(world: &world, start: start, reason: String(describing: error))
+            return cpuFrame(world: &world, start: start, reason: failure?.description ?? String(describing: error), gpuFailure: failure)
         }
     }
 
-    private func cpuFrame(world: inout ReferenceWorld, start: UInt64, reason: String?) -> ReferenceWorldStepReport {
+    private func cpuFrame(world: inout ReferenceWorld, start: UInt64, reason: String?, gpuFailure: ReferenceMetalGPUFailure? = nil) -> ReferenceWorldStepReport {
         let report = world.step()
         contours = [:]
         renderData = []
@@ -89,7 +108,7 @@ public final class ReferenceMetalWorldRunner {
             frameMilliseconds: Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000,
             finalResidual: report.solver.finalResidualNorm, newtonIterations: report.solver.iterations,
             pcgIterations: report.solver.pcgIterationCount,
-            didEncounterNonFinite: report.hasNonFiniteState, fallbackReason: reason)
+            didEncounterNonFinite: report.hasNonFiniteState, fallbackReason: reason, gpuFailure: gpuFailure)
         return report
     }
 
