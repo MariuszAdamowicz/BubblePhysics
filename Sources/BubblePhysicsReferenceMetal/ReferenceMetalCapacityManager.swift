@@ -119,8 +119,11 @@ final class ReferenceMetalCapacityManager {
         guard count >= 0, stride > 0 else { throw ReferenceMetalCapacityError.capacityOverflow }
         let (length, overflow) = count.multipliedReportingOverflow(by: stride)
         guard !overflow else { throw ReferenceMetalCapacityError.capacityOverflow }
-        guard max(16, length) <= maximum else { throw ReferenceMetalCapacityError.allocationFailed }
-        return max(16, length)
+        // Metal API Validation requires room for one pointed-to ABI record,
+        // even when a kernel's logical count is zero and it never reads it.
+        let required = max(16, stride, length)
+        guard required <= maximum else { throw ReferenceMetalCapacityError.allocationFailed }
+        return required
     }
 
     private func upload(_ snapshot: ReferenceMetalSnapshot) throws -> [String: MTLBuffer] {

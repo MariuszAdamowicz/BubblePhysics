@@ -4,6 +4,30 @@ import BubblePhysicsReference
 @testable import BubblePhysicsReferenceMetal
 
 final class ReferenceMetalCapacityManagerTests: XCTestCase {
+    // Metal validates one pointed-to record even when the GPU count is zero.
+    // Empty typed buffers must satisfy their ABI, not only a 16-byte floor.
+    func testEmptyTypedInputsReserveCompleteMetalABIRecords() async throws {
+        let manager = ReferenceMetalCapacityManager(device: try XCTUnwrap(MTLCreateSystemDefaultDevice()))
+        let snapshot = ReferenceMetalSnapshot(world: ReferenceWorld(configuration: .default, broadPhase: BruteForceBroadPhase()))
+        _ = try await manager.retryingFrame(requirements: .init(snapshot: snapshot)) { attempt in
+            XCTAssertGreaterThanOrEqual(try XCTUnwrap(attempt.inputBuffers["bubbles"]).length, 48)
+            XCTAssertGreaterThanOrEqual(try XCTUnwrap(attempt.inputBuffers["segments"]).length, 96)
+            XCTAssertGreaterThanOrEqual(try XCTUnwrap(attempt.inputBuffers["contacts"]).length, 112)
+            XCTAssertGreaterThanOrEqual(try XCTUnwrap(attempt.buffers[.contacts]).length, 112)
+            XCTAssertGreaterThanOrEqual(try XCTUnwrap(attempt.buffers[.components]).length, 32)
+            return .init(output: .init(centers: [], velocities: []), telemetry: .init())
+        }
+        XCTAssertEqual(manager.publishedOutput?.centers, [])
+    }
+
+    func testEmptyABIRecordCannotBypassPhysicalBufferLimit() throws {
+        XCTAssertThrowsError(try ReferenceMetalCapacityManager.byteLength(count: 0, stride: 112, maximum: 64)) {
+            guard case ReferenceMetalCapacityError.allocationFailed = $0 else {
+                return XCTFail("Expected physical allocation rejection, got \($0)")
+            }
+        }
+    }
+
     func testOverflowRetriesFromUnchangedInputAndPublishesOnlyRetryResult() async throws {
         let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
         let manager = ReferenceMetalCapacityManager(device: device)
