@@ -20,6 +20,12 @@ struct ReferenceBenchmarkView: View {
                 .pickerStyle(.segmented)
                 .disabled(model.isRunning)
 
+                if model.backend == .metal {
+                    Text("Smoke: 24 bańki, jeden limit 4. Macierze uruchom po smoke bez fallbacku i hang. Raport podaje ukończone czasy etapów GPU, liczniki solve/CCD i pierwszy fatalny błąd. Każdy fallback wyklucza kwalifikację GPU.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 Picker("Scena", selection: $model.scene) {
                     Text("24 bańki").tag(ReferenceConvergenceScene.interactive24)
                     Text("300 baniek").tag(ReferenceConvergenceScene.stress300)

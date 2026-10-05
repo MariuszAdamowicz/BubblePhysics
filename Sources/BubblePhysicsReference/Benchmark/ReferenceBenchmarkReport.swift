@@ -46,6 +46,46 @@ public struct ReferenceScalarSummary: Sendable, Equatable {
     }
 }
 
+/// Reference-owned values keep benchmark reporting independent of Metal APIs.
+public struct ReferenceBenchmarkGPUFailureSummary: Sendable, Equatable {
+    public var stage: String
+    public var scenarioStep: Int
+    public var reason: String
+    public var classification: String
+    public var isFatal: Bool
+
+    public init(stage: String, scenarioStep: Int, reason: String, classification: String, isFatal: Bool) {
+        self.stage = stage
+        self.scenarioStep = scenarioStep
+        self.reason = reason
+        self.classification = classification
+        self.isFatal = isFatal
+    }
+}
+
+public struct ReferenceBenchmarkGPUFrameTelemetry: Sendable, Equatable {
+    /// Sum of completed command buffers of a successfully published Metal frame.
+    /// Absent on CPU/fallback, including attempts failing after partial GPU work.
+    public var completedCommandBuffersMilliseconds: Double?
+    public var failure: ReferenceBenchmarkGPUFailureSummary?
+    public var solveCallCount: Int?
+    public var tentativeSolveCallCount: Int?
+    public var contactCount: Int?
+    public var ccdGroupCount: Int?
+
+    public init(completedCommandBuffersMilliseconds: Double? = nil,
+                failure: ReferenceBenchmarkGPUFailureSummary? = nil,
+                solveCallCount: Int? = nil, tentativeSolveCallCount: Int? = nil,
+                contactCount: Int? = nil, ccdGroupCount: Int? = nil) {
+        self.completedCommandBuffersMilliseconds = completedCommandBuffersMilliseconds
+        self.failure = failure
+        self.solveCallCount = solveCallCount
+        self.tentativeSolveCallCount = tentativeSolveCallCount
+        self.contactCount = contactCount
+        self.ccdGroupCount = ccdGroupCount
+    }
+}
+
 public struct ReferenceBenchmarkReport: Sendable, Equatable {
     public var benchmarkVersion: String = "legacy-microbenchmark-v1"
     public var scene: ReferenceConvergenceScene? = nil
@@ -92,12 +132,25 @@ public struct ReferenceBenchmarkReport: Sendable, Equatable {
     public var fallbackCount: Int = 0
     public var warmupFallbackCount: Int = 0
     public var fallbackReasons: [String: Int] = [:]
+    // These summaries contain measured frames only; absent telemetry is not zero.
+    public var completedMetalTiming: ReferenceTimingSummary = .init(values: [])
+    public var completedMetalSampleCount: Int = 0
+    public var cpuFallbackFullFrameTiming: ReferenceTimingSummary = .init(values: [])
+    public var cpuFallbackSampleCount: Int = 0
+    public var maximumGPUSolveCalls: Int? = nil
+    public var maximumGPUTentativeSolveCalls: Int? = nil
+    public var maximumGPUContacts: Int? = nil
+    public var maximumGPUCCDGroups: Int? = nil
+    // Failure retention includes warmup and survives latched CPU frames.
+    public var firstGPUFailure: ReferenceBenchmarkGPUFailureSummary? = nil
+    public var firstFatalGPUFailure: ReferenceBenchmarkGPUFailureSummary? = nil
 
     /// Eligibility for device comparison, never an acceptance verdict. Physical
     /// device, Release, timing budget and CPU quality still need verification.
     public var isGPUAcceptanceMeasurementEligible: Bool {
         backend == .metal && measuredSteps > 0 && cpuFrameCount == 0
             && metalFrameCount == warmupSteps + measuredSteps
-            && fallbackCount == 0 && !hasNonFiniteState
+            && completedMetalSampleCount == measuredSteps
+            && fallbackCount == 0 && firstFatalGPUFailure == nil && !hasNonFiniteState
     }
 }

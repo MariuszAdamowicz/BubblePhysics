@@ -27,14 +27,22 @@ public enum ReferenceBenchmarkRunner {
         var tracker = ReferenceContainmentTracker(positionTolerance: world.configuration.positionTolerance)
         var cpuFrames = 0, metalFrames = 0, fallbacks = 0, warmupFallbacks = 0
         var reasons: [String: Int] = [:]
+        var firstFailure: ReferenceBenchmarkGPUFailureSummary?
+        var fatalFailure: ReferenceBenchmarkGPUFailureSummary?
         for step in 0..<total {
             try Task.checkCancellation()
             let result = await frameExecutor(&world, scenario, step)
             if result.backend == .metal { metalFrames += 1 } else { cpuFrames += 1 }
-            if let reason = result.fallbackReason {
+            let fallbackReason = result.fallbackReason
+                ?? (backend == .metal && result.backend == .cpu ? "missingGPUFallbackReason" : nil)
+            if let reason = fallbackReason {
                 fallbacks += 1
                 if step < warmup { warmupFallbacks += 1 }
                 reasons[reason, default: 0] += 1
+            }
+            if let failure = result.gpuTelemetry?.failure {
+                if firstFailure == nil { firstFailure = failure }
+                if failure.isFatal && fatalFailure == nil { fatalFailure = failure }
             }
             if step >= warmup {
                 tracker.observe(world.bubbles)
@@ -51,6 +59,20 @@ public enum ReferenceBenchmarkRunner {
         report.fallbackCount = fallbacks
         report.warmupFallbackCount = warmupFallbacks
         report.fallbackReasons = reasons
+        report.firstGPUFailure = firstFailure
+        report.firstFatalGPUFailure = fatalFailure
+        let completed = frames.filter { $0.backend == .metal && $0.fallbackReason == nil }
+        let gpuTimes = completed.compactMap { $0.gpuTelemetry?.completedCommandBuffersMilliseconds }
+            .filter { $0.isFinite && $0 >= 0 }
+        report.completedMetalTiming = .init(values: gpuTimes)
+        report.completedMetalSampleCount = gpuTimes.count
+        let fallbackFrames = frames.filter { backend == .metal && ($0.backend == .cpu || $0.fallbackReason != nil) }
+        report.cpuFallbackSampleCount = fallbackFrames.count
+        report.cpuFallbackFullFrameTiming = .init(values: fallbackFrames.map(\.fullFrameMilliseconds))
+        report.maximumGPUSolveCalls = completed.compactMap { $0.gpuTelemetry?.solveCallCount }.max()
+        report.maximumGPUTentativeSolveCalls = completed.compactMap { $0.gpuTelemetry?.tentativeSolveCallCount }.max()
+        report.maximumGPUContacts = completed.compactMap { $0.gpuTelemetry?.contactCount }.max()
+        report.maximumGPUCCDGroups = completed.compactMap { $0.gpuTelemetry?.ccdGroupCount }.max()
         return report
     }
 

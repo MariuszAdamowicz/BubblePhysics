@@ -16,7 +16,7 @@ final class ReferenceMetalBenchmarkTests: XCTestCase {
         let text = report.plainText(deviceName: "test host", systemVersion: "test")
         let header = "limit full_p50_ms full_p95_ms full_max_ms solver_p95_ms contour_p95_ms render_p95_ms penetration_p95 penetration_max residual_p95 residual_max unconverged_components containment non_finite"
         XCTAssertTrue(text.contains(header + " backend cpu_frames metal_frames fallbacks warmup_fallbacks gpu_measurement"))
-        let row = try XCTUnwrap(text.split(separator: "\n").last).split(separator: " ")
+        let row = try XCTUnwrap(text.split(separator: "\n").first { $0.hasPrefix("4 ") }).split(separator: " ")
         XCTAssertEqual(row[0], "4")
         XCTAssertEqual(row[11], Substring(String(run.maximumUnconvergedContactComponents)))
         XCTAssertEqual(Array(row.suffix(6)), ["metal", "0", "3", "0", "0", "eligible"])
@@ -117,6 +117,51 @@ final class ReferenceMetalBenchmarkTests: XCTestCase {
         XCTAssertFalse(try XCTUnwrap(report.runs.first).isGPUAcceptanceMeasurementEligible)
     }
 
+    // Catches a report that silently merges completed GPU time and fallback CPU
+    // time, or loses the original failure after the session latch takes over.
+    func testFatalLatchCountsEveryCPUFrameAndReportsOnlyCompletedMetalTiming() async throws {
+        let failure = ReferenceMetalGPUFailure(stage: "pcg.direction\nforged_row", scenarioStep: 1,
+            error: NSError(domain: MTLCommandBufferErrorDomain, code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "watchdog\nreason=forged"]), commandBufferStatus: 5)
+        let report = try await ReferenceMetalBenchmarkRunner.measure(configuration: .init(
+            scene: .interactive24, warmupSteps: 0, measuredSteps: 3, iterationLimits: [4], backend: .metal),
+            makeRunner: {
+                ReferenceMetalWorldRunner(executor: RecordingBenchmarkExecutor(
+                    solver: try self.solver(), failingStep: 1, gpuFailure: failure, fixedTelemetry: true))
+            })
+        let run = try XCTUnwrap(report.runs.first)
+        XCTAssertEqual(run.metalFrameCount, 1)
+        XCTAssertEqual(run.cpuFrameCount, 2)
+        XCTAssertEqual(run.fallbackCount, 2)
+        XCTAssertFalse(run.isGPUAcceptanceMeasurementEligible)
+        let text = report.plainText(deviceName: "test", systemVersion: "test")
+        XCTAssertTrue(text.contains("gpu_completed limit=4 measured_frames=1 command_buffers_p50_ms=2.0000 command_buffers_p95_ms=2.0000 command_buffers_max_ms=2.0000"))
+        XCTAssertTrue(text.contains("cpu_fallback limit=4 measured_frames=2"))
+        XCTAssertTrue(text.contains("gpu_work limit=4 scope=completed_measured_frames solve_calls_max=7 tentative_solve_calls_max=3 contacts_max=11 ccd_groups_max=2"))
+        XCTAssertTrue(text.contains("gpu_fatal_failure limit=4 stage=pcg.direction forged_row step=1 classification=timeout reason=watchdog reason=forged"))
+        XCTAssertFalse(text.contains("\nforged_row"))
+        XCTAssertFalse(text.contains("\nreason=forged"))
+    }
+
+    // A warmup success must not become a measured GPU sample after fatal failure.
+    func testFatalFailureAfterWarmupLeavesNoMeasuredGPUTime() async throws {
+        let failure = ReferenceMetalGPUFailure(stage: "geometry", scenarioStep: 1,
+            error: NSError(domain: MTLCommandBufferErrorDomain, code: 2))
+        let report = try await ReferenceMetalBenchmarkRunner.measure(configuration: .init(
+            scene: .interactive24, warmupSteps: 1, measuredSteps: 2, iterationLimits: [4], backend: .metal),
+            makeRunner: {
+                ReferenceMetalWorldRunner(executor: RecordingBenchmarkExecutor(
+                    solver: try self.solver(), failingStep: 1, gpuFailure: failure, fixedTelemetry: true))
+            })
+        let run = try XCTUnwrap(report.runs.first)
+        XCTAssertEqual(run.warmupFallbackCount, 0)
+        XCTAssertEqual(run.fallbackCount, 2)
+        XCTAssertFalse(run.isGPUAcceptanceMeasurementEligible)
+        let text = report.plainText(deviceName: "test", systemVersion: "test")
+        XCTAssertTrue(text.contains("gpu_completed limit=4 measured_frames=0 command_buffers_p50_ms=unavailable command_buffers_p95_ms=unavailable command_buffers_max_ms=unavailable"))
+        XCTAssertTrue(text.contains("gpu_work limit=4 scope=completed_measured_frames solve_calls_max=unavailable"))
+    }
+
     func testCPUOnlyMatrixCannotSilentlyLabelMetalConfigurationAsGPU() async throws {
         do {
             _ = try await ReferenceBenchmarkMatrixRunner.measure(configuration: .init(
@@ -144,18 +189,33 @@ private final class RecordingBenchmarkExecutor: ReferenceMetalFrameExecuting {
     enum Failure: Error { case injectedFailure }
     let solver: ReferenceMetalSolver
     let failingStep: Int?
+    let gpuFailure: ReferenceMetalGPUFailure?
+    let fixedTelemetry: Bool
     var steps: [Int] = []
     var limits: [Int] = []
     var firstCenters: [SIMD2<Float>]?
-    init(solver: ReferenceMetalSolver, failingStep: Int? = nil) {
+    init(solver: ReferenceMetalSolver, failingStep: Int? = nil,
+         gpuFailure: ReferenceMetalGPUFailure? = nil, fixedTelemetry: Bool = false) {
         self.solver = solver
         self.failingStep = failingStep
+        self.gpuFailure = gpuFailure
+        self.fixedTelemetry = fixedTelemetry
     }
     func executeFrame(snapshot: ReferenceMetalSnapshot, scenarioStep: Int) async throws -> ReferenceMetalWorldFrame {
         steps.append(scenarioStep)
         limits.append(snapshot.configuration.solverIterations)
         if firstCenters == nil { firstCenters = snapshot.centers }
-        if scenarioStep == failingStep { throw Failure.injectedFailure }
-        return try await solver.executeFrame(snapshot: snapshot, scenarioStep: scenarioStep)
+        if scenarioStep == failingStep {
+            if let gpuFailure { throw gpuFailure }
+            throw Failure.injectedFailure
+        }
+        var frame = try await solver.executeFrame(snapshot: snapshot, scenarioStep: scenarioStep)
+        if fixedTelemetry {
+            frame.telemetry = .init(backend: .metal, frameMilliseconds: 900, gpuMilliseconds: 2,
+                finalResidual: frame.report.solver.finalResidualNorm,
+                solveCallCount: 7, tentativeSolveCallCount: 3, contactCount: 11, ccdGroupCount: 2)
+            frame.report.solverMilliseconds = 999
+        }
+        return frame
     }
 }

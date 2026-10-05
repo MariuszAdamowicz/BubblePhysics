@@ -59,7 +59,16 @@ extension ReferenceMetalWorldRunner {
             renderPreparationMilliseconds: Self.benchmarkMilliseconds(contourEnd.duration(to: end)),
             fullFrameMilliseconds: Self.benchmarkMilliseconds(fullStart.duration(to: end)),
             contourPointCount: prepared.reduce(0) { $0 + $1.contour.count }, preparedBubbles: prepared,
-            backend: telemetry.backend, fallbackReason: telemetry.fallbackReason)
+            backend: telemetry.backend, fallbackReason: telemetry.fallbackReason,
+            gpuTelemetry: .init(
+                completedCommandBuffersMilliseconds: telemetry.backend == .metal && telemetry.fallbackReason == nil
+                    ? telemetry.gpuMilliseconds : nil,
+                failure: telemetry.gpuFailure.map {
+                    .init(stage: $0.stage, scenarioStep: $0.scenarioStep, reason: $0.reason,
+                          classification: $0.classification.rawValue, isFatal: $0.isFatal)
+                },
+                solveCallCount: telemetry.solveCallCount, tentativeSolveCallCount: telemetry.tentativeSolveCallCount,
+                contactCount: telemetry.contactCount, ccdGroupCount: telemetry.ccdGroupCount))
     }
 
     private static func benchmarkMilliseconds(_ duration: Duration) -> Double {

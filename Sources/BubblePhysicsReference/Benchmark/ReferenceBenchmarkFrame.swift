@@ -22,12 +22,13 @@ public struct ReferenceBenchmarkFrameResult: Sendable, Equatable {
     public var preparedBubbles: [ReferencePreparedBubble]
     public var backend: ReferenceSimulationBackend = .cpu
     public var fallbackReason: String? = nil
+    public var gpuTelemetry: ReferenceBenchmarkGPUFrameTelemetry? = nil
 
     public init(worldReport: ReferenceWorldStepReport, simulationMilliseconds: Double,
                 contourMilliseconds: Double, renderPreparationMilliseconds: Double,
                 fullFrameMilliseconds: Double, contourPointCount: Int,
                 preparedBubbles: [ReferencePreparedBubble], backend: ReferenceSimulationBackend = .cpu,
-                fallbackReason: String? = nil) {
+                fallbackReason: String? = nil, gpuTelemetry: ReferenceBenchmarkGPUFrameTelemetry? = nil) {
         self.worldReport = worldReport
         self.simulationMilliseconds = simulationMilliseconds
         self.contourMilliseconds = contourMilliseconds
@@ -37,6 +38,7 @@ public struct ReferenceBenchmarkFrameResult: Sendable, Equatable {
         self.preparedBubbles = preparedBubbles
         self.backend = backend
         self.fallbackReason = fallbackReason
+        self.gpuTelemetry = gpuTelemetry
     }
 }
 
