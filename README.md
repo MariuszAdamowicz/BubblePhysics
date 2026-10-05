@@ -43,6 +43,14 @@ xcodebuild -project Benchmarks/iOS/BubblePhysicsBench/BubblePhysicsBench.xcodepr
   CODE_SIGNING_ALLOWED=NO build
 ```
 
+Przed instalacją sprawdź też zasoby gotowej aplikacji:
+
+```bash
+sh Benchmarks/iOS/BubblePhysicsBench/verify-reference-metal-resources.sh /ścieżka/do/BubblePhysicsBench.app
+```
+
+Backend referencyjny kompiluje źródła Metal podczas uruchomienia. Trzy pliki `.metal-source` muszą być obecne w pakiecie aplikacji; samo `default.metallib` nie wystarcza. Skrypt sprawdza ich obecność i zgodność z repozytorium.
+
 Uruchom aplikację w Release na fizycznym iPhonie. W zakładce `CPU` wybierz `GPU reference`, scenę `24 bańki`, macierz `4/8/12/16` i domyślne 30 klatek rozgrzewki oraz 300 mierzonych. Skopiuj cały raport; powtórz dla `300 baniek`. Oba backendy używają identycznego seeda, ruchu wielokąta, kroków i limitów. CPU nadal uruchamia dotychczasową ścieżkę benchmarku.
 
 Raport zachowuje dotychczasowe kolumny czasu i jakości oraz dopisuje `backend cpu_frames metal_frames fallbacks warmup_fallbacks gpu_measurement`. Liczniki CPU/GPU i fallbacków obejmują także rozgrzewkę. Każdy fallback, również tylko podczas rozgrzewki, daje `gpu_measurement=ineligible`; powody są wypisane pod tabelą. `eligible` oznacza wyłącznie kompletny przebieg GPU bez fallbacku i bez `non-finite`, przygotowany do porównania urządzeniowego — nie zatwierdzenie bramki. Pusty przebieg nie jest kwalifikowany.

@@ -89,7 +89,7 @@ public final class ReferenceMetalSolver {
         options.fastMathEnabled = false
         options.languageVersion = .version2_4 // iOS 16 baseline, including copied runtime resources.
         guard let device,
-              let url = Bundle.module.url(forResource: "ReferenceNewtonPCGKernels", withExtension: "metal"),
+              let url = Bundle.module.url(forResource: "ReferenceNewtonPCGKernels", withExtension: "metal-source"),
               let source = try? String(contentsOf: url, encoding: .utf8),
               let library = try? device.makeLibrary(source: source, options: options),
               let function = library.makeFunction(name: "referenceBuildResidual"),
@@ -110,7 +110,7 @@ public final class ReferenceMetalSolver {
               let pcgFinalizePipeline = try? device.makeComputePipelineState(function: pcgFinalize),
               dotPipeline.maxTotalThreadsPerThreadgroup >= 256,
               let commandQueue = device.makeCommandQueue(),
-              let geometryURL = Bundle.module.url(forResource: "ReferenceGeometryKernels", withExtension: "metal"),
+              let geometryURL = Bundle.module.url(forResource: "ReferenceGeometryKernels", withExtension: "metal-source"),
               let geometrySource = try? String(contentsOf: geometryURL, encoding: .utf8),
               let geometryLibrary = try? device.makeLibrary(source: geometrySource, options: options)
         else { return nil }
@@ -122,7 +122,7 @@ public final class ReferenceMetalSolver {
             geometryPipelines[name] = state
         }
 
-        guard let postURL = Bundle.module.url(forResource: "ReferencePostSolveKernels", withExtension: "metal"),
+        guard let postURL = Bundle.module.url(forResource: "ReferencePostSolveKernels", withExtension: "metal-source"),
               let postSource = try? String(contentsOf: postURL, encoding: .utf8),
               let worldLibrary = try? device.makeLibrary(source: "#define REFERENCE_WORLD_RUNTIME 1\n" + source + "\n" + geometrySource + "\n" + postSource, options: options)
         else { return nil }
