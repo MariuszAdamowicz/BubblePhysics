@@ -83,7 +83,7 @@ struct ReferenceBenchmarkView: View {
                 }
             }
             .padding(.horizontal, 18)
-            .padding(.top, 90)
+            .padding(.top, 18)
             .padding(.bottom, 30)
         }
         .background(Color(.systemBackground))

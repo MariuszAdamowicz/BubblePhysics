@@ -2,7 +2,6 @@ import BubblePhysicsReference
 import SwiftUI
 
 struct ReferenceVisualPrototypeView: View {
-    @Binding var selectedMode: PrototypeMode
     @State private var runner: ReferenceVisualRunner
     @State private var snapshot: ReferenceVisualSnapshot
     @State private var isPaused = false
@@ -11,8 +10,7 @@ struct ReferenceVisualPrototypeView: View {
     @State private var showsContactForces = false
     @State private var density = ReferenceVisualDensity.six
 
-    init(selectedMode: Binding<PrototypeMode>) {
-        _selectedMode = selectedMode
+    init() {
         var runner = try! ReferenceVisualRunner()
         let snapshot = runner.advance(to: 0)
         _runner = State(initialValue: runner)
