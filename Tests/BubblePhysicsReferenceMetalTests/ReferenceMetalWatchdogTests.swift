@@ -97,6 +97,36 @@ final class ReferenceMetalWatchdogTests: XCTestCase {
         XCTAssertEqual(executor.steps, [12])
     }
 
+    // Metal may report a failed command buffer without an NSError. Preserve a
+    // useful structured failure and keep the non-fatal fallback retryable.
+    func testMissingCommandBufferErrorKeepsFallbackDiagnosticsAndDoesNotLatch() async throws {
+        let failure = ReferenceMetalGPUFailure(stage: "referencePCG", scenarioStep: 4,
+                                               error: nil, commandBufferStatus: 5)
+        let executor = FailingWatchdogExecutor(error: failure)
+        let runner = ReferenceMetalWorldRunner(executor: executor)
+        var world = try makeWorld()
+        var oracle = world
+        for step in 4...5 {
+            let expected = oracle.step()
+            let actual = await runner.step(world: &world, scenarioStep: step)
+            XCTAssertEqual(world.bubbles, oracle.bubbles)
+            XCTAssertEqual(actual.solver, expected.solver)
+            XCTAssertEqual(runner.telemetry.backend, .cpu)
+            let recorded = try XCTUnwrap(runner.telemetry.gpuFailure)
+            XCTAssertEqual(recorded.stage, "referencePCG")
+            XCTAssertEqual(recorded.scenarioStep, 4)
+            XCTAssertEqual(recorded.reason, "Metal command failed")
+            XCTAssertNil(recorded.commandBufferErrorCode)
+            XCTAssertNil(recorded.errorDomain)
+            XCTAssertEqual(recorded.commandBufferStatus, 5)
+            XCTAssertTrue(recorded.encoderFailures.isEmpty)
+            XCTAssertEqual(recorded.classification, .ordinary)
+            XCTAssertFalse(recorded.isFatal)
+        }
+        XCTAssertEqual(executor.steps, [4, 5])
+        XCTAssertNil(runner.fatalGPUFailure)
+    }
+
     private func makeWorld() throws -> ReferenceWorld {
         var world = ReferenceWorld(configuration: .init(linearDamping: 0), broadPhase: BruteForceBroadPhase())
         world.addBubble(try .init(id: .init(rawValue: 3), center: .init(x: 2, y: 1),
