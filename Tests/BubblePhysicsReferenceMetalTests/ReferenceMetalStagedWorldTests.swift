@@ -9,7 +9,11 @@ final class ReferenceMetalStagedWorldTests: XCTestCase {
         var world = ReferenceWorld(configuration: .default, broadPhase: BruteForceBroadPhase())
         var cpu = world
         let expected = cpu.step()
-        let runner = ReferenceMetalWorldRunner(executor: try makeSolver { command, _, _ in try await Self.complete(command) })
+        var stages: [String] = []
+        let runner = ReferenceMetalWorldRunner(executor: try makeSolver { command, stage, _ in
+            try await Self.complete(command)
+            stages.append(stage)
+        })
         let actual = await runner.step(world: &world, scenarioStep: 0)
         XCTAssertEqual(runner.telemetry.backend, .metal)
         XCTAssertEqual(actual.solver, expected.solver)
@@ -17,6 +21,10 @@ final class ReferenceMetalStagedWorldTests: XCTestCase {
         XCTAssertEqual(runner.telemetry.tentativeSolveCallCount, 1)
         XCTAssertEqual(runner.telemetry.contactCount, 0)
         XCTAssertEqual(runner.telemetry.ccdGroupCount, 0)
+        XCTAssertLessThan(stages.count, 20)
+        XCTAssertFalse(stages.contains { $0.hasPrefix("referenceWorld.solve.") })
+        XCTAssertFalse(stages.contains { $0.hasPrefix("referenceWorld.pcg.") || $0.hasPrefix("referenceWorld.lineSearch.") })
+        XCTAssertEqual(stages.filter { $0.hasPrefix("referenceWorld.newton.") }, ["referenceWorld.newton.0.0"])
     }
 
     func testFailureAfterPCGDiscardsSolvedScratchAndLaterFrameStartsFromFreshInput() async throws {
@@ -32,12 +40,18 @@ final class ReferenceMetalStagedWorldTests: XCTestCase {
         let scenario = ReferenceConvergenceScenario(scene: .interactive24, newtonIterationLimit: 4)
         var world = try scenario.makeWorld()
         var cpu = try scenario.makeWorld()
-        for step in 1...2 {
+        // The first frame converges before PCG. Start failure injection on the
+        // second frame, whose active solve actually reaches PCG.
+        scenario.updatePolygon(in: &world, fromStep: 0, toStep: 1)
+        scenario.updatePolygon(in: &cpu, fromStep: 0, toStep: 1)
+        _ = world.step()
+        _ = cpu.step()
+        for step in 2...3 {
             scenario.updatePolygon(in: &world, fromStep: step - 1, toStep: step)
             scenario.updatePolygon(in: &cpu, fromStep: step - 1, toStep: step)
             let expected = cpu.step()
             let actual = await runner.step(world: &world, scenarioStep: step)
-            if step == 1 {
+            if step == 2 {
                 XCTAssertEqual(world.bubbles, cpu.bubbles)
                 XCTAssertEqual(world.contacts.contacts, cpu.contacts.contacts)
                 XCTAssertEqual(actual.solver, expected.solver)

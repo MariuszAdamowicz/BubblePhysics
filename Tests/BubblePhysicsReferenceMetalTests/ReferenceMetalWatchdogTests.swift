@@ -5,6 +5,44 @@ import BubblePhysicsReference
 
 @MainActor
 final class ReferenceMetalWatchdogTests: XCTestCase {
+    func testFatalFailureAfterCompletedCCDDiscardsScratchAndStopsSubmissions() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("Metal unavailable") }
+        var stages: [String] = []
+        let solver = try XCTUnwrap(ReferenceMetalSolver(device: device, completeFrameCommand: { command, stage, step in
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                command.addCompletedHandler { result in
+                    if result.status == .completed { continuation.resume() }
+                    else { continuation.resume(throwing: result.error ?? ReferenceMetalOperatorError.commandSetupFailed) }
+                }
+                command.commit()
+            }
+            stages.append(stage)
+            if stage == "referenceWorld.ccd.0" {
+                throw ReferenceMetalGPUFailure(stage: stage, scenarioStep: step,
+                    error: NSError(domain: MTLCommandBufferErrorDomain, code: 2), commandBufferStatus: 5)
+            }
+        }))
+        let runner = ReferenceMetalWorldRunner(executor: solver)
+        var world = try makeWorld()
+        var oracle = world
+        var firstSubmissions = 0
+        for step in 1...2 {
+            let expected = oracle.step()
+            let actual = await runner.step(world: &world, scenarioStep: step)
+            XCTAssertEqual(world.bubbles, oracle.bubbles)
+            XCTAssertEqual(world.contacts.contacts, oracle.contacts.contacts)
+            XCTAssertEqual(actual.solver, expected.solver)
+            XCTAssertEqual(runner.telemetry.backend, .cpu)
+            XCTAssertEqual(runner.fatalGPUFailure?.stage, "referenceWorld.ccd.0")
+            XCTAssertTrue(runner.contours.isEmpty)
+            XCTAssertTrue(runner.renderData.isEmpty)
+            if step == 1 { firstSubmissions = stages.count }
+            else { XCTAssertEqual(stages.count, firstSubmissions) }
+        }
+        XCTAssertEqual(stages.last, "referenceWorld.ccd.0")
+        XCTAssertFalse(stages.contains { $0.hasPrefix("referenceWorld.pcg.") || $0.hasPrefix("referenceWorld.lineSearch.") })
+    }
+
     // Removing the fatal latch must cause a second submission and fail this test.
     func testFatalGPUFailureRerunsWholeFrameAndRejectsLaterSubmissions() async throws {
         let errors = [

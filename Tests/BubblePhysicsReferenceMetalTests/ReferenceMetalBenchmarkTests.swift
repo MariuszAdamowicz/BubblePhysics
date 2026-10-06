@@ -71,16 +71,47 @@ final class ReferenceMetalBenchmarkTests: XCTestCase {
             backend: .metal, gpuDiagnosticsEnabled: true))
         let run = try XCTUnwrap(report.runs.first)
         XCTAssertEqual(run.gpuProfileSampleCount, 1)
-        // 242 staged commands + the first capacity-discovery geometry retry.
-        // Each retry geometry has two encoders; the regular frame has 14897.
-        XCTAssertEqual(run.gpuProfileCommandBuffers.p50Milliseconds, 243)
-        XCTAssertEqual(run.gpuProfileEncoders.p50Milliseconds, 14899)
+        // Active work replaces the old fixed 242-command schedule.
+        XCTAssertGreaterThan(run.gpuProfileCommandBuffers.p50Milliseconds, 0)
+        XCTAssertLessThan(run.gpuProfileCommandBuffers.p50Milliseconds, 242)
+        XCTAssertGreaterThan(run.gpuProfileEncoders.p50Milliseconds, run.gpuProfileCommandBuffers.p50Milliseconds)
         XCTAssertEqual(Set(run.gpuProfileStages.keys), Set(["geometry", "newton", "pcg", "lineSearch", "ccd", "guards", "contours", "render"]))
         XCTAssertEqual(run.gpuProfileStages.values.reduce(0) { $0 + $1.p50Milliseconds },
                        run.completedMetalTiming.p50Milliseconds, accuracy: 0.000001)
         XCTAssertGreaterThan(run.gpuProfileHostEncoding.p50Milliseconds, 0)
         XCTAssertGreaterThan(run.gpuProfileHostWaiting.p50Milliseconds, 0)
         XCTAssertGreaterThan(run.gpuProfileHostReadback.p50Milliseconds, 0)
+    }
+
+    func testProfileCountsCompletedSubmissionsIncludingOverflowRetry() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
+        var stages: [String] = []
+        let solver = try XCTUnwrap(ReferenceMetalSolver(device: device, gpuDiagnosticsEnabled: true,
+            completeFrameCommand: { command, stage, _ in
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                    command.addCompletedHandler { result in
+                        if result.status == .completed { continuation.resume() }
+                        else { continuation.resume(throwing: result.error ?? ReferenceMetalOperatorError.commandSetupFailed) }
+                    }
+                    command.commit()
+                }
+                stages.append(stage)
+            }))
+        let world = try ReferenceConvergenceScenario(scene: .interactive24, newtonIterationLimit: 4).makeWorld()
+        let snapshot = ReferenceMetalSnapshot(world: world)
+        let first = try await solver.executeFrame(snapshot: snapshot, scenarioStep: 0)
+        let firstProfile = try XCTUnwrap(first.telemetry.profile)
+        XCTAssertEqual(firstProfile.commandBufferCount, stages.count)
+        XCTAssertTrue(first.telemetry.didOverflow)
+        XCTAssertEqual(stages.filter { $0 == "referenceWorld.geometry" }.count, 2)
+        stages.removeAll()
+        let second = try await solver.executeFrame(snapshot: snapshot, scenarioStep: 0)
+        let secondProfile = try XCTUnwrap(second.telemetry.profile)
+        XCTAssertEqual(secondProfile.commandBufferCount, stages.count)
+        XCTAssertFalse(second.telemetry.didOverflow)
+        XCTAssertEqual(stages.filter { $0 == "referenceWorld.geometry" }.count, 1)
+        XCTAssertEqual(firstProfile.commandBufferCount - secondProfile.commandBufferCount, 1)
+        XCTAssertEqual(firstProfile.encoderCount - secondProfile.encoderCount, 2)
     }
 
     func testGPUReportPreservesQualityColumnsAndRecordsActualFrames() async throws {

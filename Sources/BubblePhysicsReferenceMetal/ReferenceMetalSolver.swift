@@ -657,8 +657,8 @@ public final class ReferenceMetalSolver {
             try encodeWorld("referenceWorldInitialize", command: geometry)
             try encodeWorld("referenceWorldBeginSolve", command: geometry)
             try await completeStage(geometry, "referenceWorld.geometry")
-            // Only capacity/non-finite status is read here. All solve state stays
-            // GPU owned until the complete final output is available.
+            // Shared control is read only after command completion; numerical
+            // scratch remains GPU owned until atomic final publication.
             let initialState = control.contents().load(as: ReferenceMetalWorldControl.self)
             if initialState.failure.y != 0 {
                 guard Int(initialState.failure.z) > contactCapacity else { throw ReferenceMetalGeometryError.invalidOverflowReport }
@@ -669,9 +669,10 @@ public final class ReferenceMetalSolver {
             guard initialState.failure.x == 0 else { throw ReferenceMetalGeometryError.nonFiniteState }
 
             // At most one tentative and one event interval solve per activated
-            // group, then one final remainder. Converged/done GPU controls freeze
-            // work, never change the scenario's configured dispatch limits.
+            // group, then one final remainder. Read completed GPU decisions to
+            // skip inactive slots without changing configured iteration limits.
             for slot in 0..<(2 * config.maximumEventGroups + 1) {
+                guard staged.contents().load(as: ReferenceMetalWorldStage.self).flow.x != 0 else { break }
                 if slot > 0 {
                     let beginStage = "referenceWorld.solve.\(slot)"
                     let begin = try makeStage(beginStage)
@@ -679,6 +680,7 @@ public final class ReferenceMetalSolver {
                     try await completeStage(begin, beginStage)
                 }
                 for iteration in 0..<config.solverIterations {
+                    guard staged.contents().load(as: ReferenceMetalWorldStage.self).flow.y != 0 else { break }
                     let newtonStage = "referenceWorld.newton.\(slot).\(iteration)"
                     let newton = try makeStage(newtonStage)
                     try encodeWorld("referenceWorldBeginNewton", command: newton)
@@ -689,6 +691,8 @@ public final class ReferenceMetalSolver {
                     try encodePCG("referencePCGInitializeVectors", command: newton, parallel: true)
                     try encodePCG("referencePCGInitializeScalars", command: newton)
                     try await completeStage(newton, newtonStage)
+                    // CheckNewton can converge before any PCG or line search.
+                    guard staged.contents().load(as: ReferenceMetalWorldStage.self).flow.y != 0 else { break }
 
                     let pcgStage = "referenceWorld.pcg.\(slot).\(iteration)"
                     let pcgCommand = try makeStage(pcgStage)
@@ -706,6 +710,7 @@ public final class ReferenceMetalSolver {
                     try encodePCG("referencePCGFinalize", command: pcgCommand)
                     try encodeWorld("referenceWorldCollectPCG", command: pcgCommand)
                     try await completeStage(pcgCommand, pcgStage)
+                    guard staged.contents().load(as: ReferenceMetalWorldStage.self).flow.y != 0 else { break }
 
                     let lineStage = "referenceWorld.lineSearch.\(slot).\(iteration)"
                     let line = try makeStage(lineStage)
