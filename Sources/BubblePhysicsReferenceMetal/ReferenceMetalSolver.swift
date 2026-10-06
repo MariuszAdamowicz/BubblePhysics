@@ -82,14 +82,17 @@ public final class ReferenceMetalSolver {
     private let commandQueue: MTLCommandQueue
     private var operatorBuffers: [String: MTLBuffer] = [:]
     private var evaluationInFlight = false
+    private let gpuDiagnosticsEnabled: Bool
     private let completeFrameCommand: @MainActor (MTLCommandBuffer, String, Int) async throws -> Void
     let capacityManager: ReferenceMetalCapacityManager
 
-    public convenience init?(device: MTLDevice? = MTLCreateSystemDefaultDevice()) {
-        self.init(device: device, completeFrameCommand: Self.complete)
+    public convenience init?(device: MTLDevice? = MTLCreateSystemDefaultDevice(), gpuDiagnosticsEnabled: Bool = false) {
+        self.init(device: device, gpuDiagnosticsEnabled: gpuDiagnosticsEnabled, completeFrameCommand: Self.complete)
     }
 
-    init?(device: MTLDevice?, completeFrameCommand: @escaping @MainActor (MTLCommandBuffer, String, Int) async throws -> Void) {
+    init?(device: MTLDevice?, gpuDiagnosticsEnabled: Bool = false,
+          completeFrameCommand: @escaping @MainActor (MTLCommandBuffer, String, Int) async throws -> Void) {
+        self.gpuDiagnosticsEnabled = gpuDiagnosticsEnabled
         let options = MTLCompileOptions()
         options.fastMathEnabled = false
         options.languageVersion = .version2_4 // iOS 16 baseline, including copied runtime resources.
@@ -508,6 +511,13 @@ public final class ReferenceMetalSolver {
         var contactCapacity = max(1, snapshot.contacts.count,
             (operatorBuffers["worldContacts"]?.length ?? 0) / (5 * MemoryLayout<ReferenceMetalContact>.stride))
         var didOverflow = false
+        // Completed retries belong to this published frame. A thrown attempt
+        // never publishes either this profile or a partial completed GPU time.
+        var gpuTime = 0.0
+        var profile: ReferenceBenchmarkGPUFrameProfile? = gpuDiagnosticsEnabled ? .init(
+            commandBufferCount: 0, encoderCount: 0,
+            stageGPUMilliseconds: Dictionary(uniqueKeysWithValues: ReferenceBenchmarkGPUFrameProfile.stages.map { ($0, 0) }),
+            hostEncodingMilliseconds: 0, hostWaitingMilliseconds: 0, hostReadbackMilliseconds: 0) : nil
         while true {
             try Task.checkCancellation()
             let inputBuffers = try [upload(snapshot.bubbles, name: "worldBubbles"),
@@ -536,7 +546,11 @@ public final class ReferenceMetalSolver {
                 tolerances: SIMD4(config.contactTolerance, config.separationTolerance, config.positionTolerance, config.stressTolerance),
                 shape: SIMD4(config.maxContourSegmentLength, config.contourSurfaceTension, config.pcgTolerance, config.simultaneousEventTolerance),
                 limits: SIMD4(newtonLimit, UInt32(min(16, config.pcgIterationLimit)), toiLimit, eventLimit))
-            var gpuTime = 0.0
+            var encodingStart: UInt64 = 0
+            func makeStage(_ name: String) throws -> MTLCommandBuffer {
+                if gpuDiagnosticsEnabled { encodingStart = DispatchTime.now().uptimeNanoseconds }
+                return try makeCommand(stage: name, scenarioStep: scenarioStep)
+            }
             let vectorStride = MemoryLayout<SIMD2<Float>>.stride
             let operatorOffset = MemoryLayout<ReferenceMetalWorldStage>.offset(of: \.op)!
             let pcgCountsOffset = MemoryLayout<ReferenceMetalWorldStage>.offset(of: \.pcgCounts)!
@@ -544,6 +558,7 @@ public final class ReferenceMetalSolver {
             func encodeWorld(_ name: String, command: MTLCommandBuffer, parallel: Bool = false, search: Int? = nil) throws {
                 guard let pipeline = worldPipelines[name], let encoder = command.makeComputeCommandEncoder()
                 else { throw ReferenceMetalOperatorError.commandSetupFailed }
+                profile?.encoderCount += 1
                 encoder.label = name
                 encoder.setComputePipelineState(pipeline)
                 for (index, buffer) in buffers.enumerated() { encoder.setBuffer(buffer, offset: 0, index: index) }
@@ -561,6 +576,7 @@ public final class ReferenceMetalSolver {
                                 label: String = "referenceBuildResidual",
                                 contactSlice: Int = 2, endSlice: Int = 4, outputSlice: Int = 5) throws {
                 guard let encoder = command.makeComputeCommandEncoder() else { throw ReferenceMetalOperatorError.commandSetupFailed }
+                profile?.encoderCount += 1
                 encoder.label = label
                 encoder.setComputePipelineState(pipeline)
                 encoder.setBuffer(inputBuffers[0], offset: 0, index: 0)
@@ -584,6 +600,7 @@ public final class ReferenceMetalSolver {
                 }
                 guard let pipeline, let encoder = command.makeComputeCommandEncoder()
                 else { throw ReferenceMetalOperatorError.commandSetupFailed }
+                profile?.encoderCount += 1
                 encoder.label = name
                 encoder.setComputePipelineState(pipeline)
                 for (index, slice) in [8, 14, 9, 10, 11, 12, 13].enumerated() {
@@ -602,6 +619,7 @@ public final class ReferenceMetalSolver {
             func encodeDot(command: MTLCommandBuffer) throws {
                 for phase: UInt32 in n > 0 ? [0, 1] : [1] {
                     guard let encoder = command.makeComputeCommandEncoder() else { throw ReferenceMetalOperatorError.commandSetupFailed }
+                    profile?.encoderCount += 1
                     encoder.label = "referenceWorld.dot.phase.\(phase)"
                     encoder.setComputePipelineState(dotPipeline)
                     encoder.setBuffer(vectors, offset: 12 * n * vectorStride, index: 0)
@@ -617,11 +635,25 @@ public final class ReferenceMetalSolver {
             }
             func completeStage(_ command: MTLCommandBuffer, _ name: String) async throws {
                 try Task.checkCancellation()
+                let waitStart = gpuDiagnosticsEnabled ? DispatchTime.now().uptimeNanoseconds : 0
+                if gpuDiagnosticsEnabled {
+                    profile?.hostEncodingMilliseconds += Double(waitStart - encodingStart) / 1_000_000
+                }
                 try await completeFrameCommand(command, name, scenarioStep)
-                gpuTime += max(0, command.gpuEndTime - command.gpuStartTime) * 1_000
+                let milliseconds = max(0, command.gpuEndTime - command.gpuStartTime) * 1_000
+                gpuTime += milliseconds
+                if gpuDiagnosticsEnabled {
+                    profile?.hostWaitingMilliseconds += Double(DispatchTime.now().uptimeNanoseconds - waitStart) / 1_000_000
+                    profile?.commandBufferCount += 1
+                    let component = String(name.split(separator: ".")[1])
+                    // BeginSolve/Finish execute interval/CCD control. PCG setup
+                    // in the Newton buffer remains charged to that whole buffer.
+                    let stage = component == "solve" || component == "finish" ? "ccd" : component
+                    profile?.stageGPUMilliseconds[stage, default: 0] += milliseconds
+                }
             }
 
-            let geometry = try makeCommand(stage: "referenceWorld.geometry", scenarioStep: scenarioStep)
+            let geometry = try makeStage("referenceWorld.geometry")
             try encodeWorld("referenceWorldInitialize", command: geometry)
             try encodeWorld("referenceWorldBeginSolve", command: geometry)
             try await completeStage(geometry, "referenceWorld.geometry")
@@ -642,13 +674,13 @@ public final class ReferenceMetalSolver {
             for slot in 0..<(2 * config.maximumEventGroups + 1) {
                 if slot > 0 {
                     let beginStage = "referenceWorld.solve.\(slot)"
-                    let begin = try makeCommand(stage: beginStage, scenarioStep: scenarioStep)
+                    let begin = try makeStage(beginStage)
                     try encodeWorld("referenceWorldBeginSolve", command: begin)
                     try await completeStage(begin, beginStage)
                 }
                 for iteration in 0..<config.solverIterations {
                     let newtonStage = "referenceWorld.newton.\(slot).\(iteration)"
-                    let newton = try makeCommand(stage: newtonStage, scenarioStep: scenarioStep)
+                    let newton = try makeStage(newtonStage)
                     try encodeWorld("referenceWorldBeginNewton", command: newton)
                     try encodeOperator(residualPipeline, command: newton)
                     try encodeWorld("referenceWorldCheckNewton", command: newton)
@@ -659,7 +691,7 @@ public final class ReferenceMetalSolver {
                     try await completeStage(newton, newtonStage)
 
                     let pcgStage = "referenceWorld.pcg.\(slot).\(iteration)"
-                    let pcgCommand = try makeCommand(stage: pcgStage, scenarioStep: scenarioStep)
+                    let pcgCommand = try makeStage(pcgStage)
                     for _ in 0..<min(16, config.pcgIterationLimit) {
                         try encodeWorld("referenceWorldConfigurePCGOperator", command: pcgCommand)
                         try encodeOperator(jacobianPipeline, command: pcgCommand, label: "referenceApplyJacobian", outputSlice: 13)
@@ -676,7 +708,7 @@ public final class ReferenceMetalSolver {
                     try await completeStage(pcgCommand, pcgStage)
 
                     let lineStage = "referenceWorld.lineSearch.\(slot).\(iteration)"
-                    let line = try makeCommand(stage: lineStage, scenarioStep: scenarioStep)
+                    let line = try makeStage(lineStage)
                     for search in 0..<6 {
                         try encodeWorld("referenceWorldTrialVectors", command: line, parallel: true, search: search)
                         try encodeWorld("referenceWorldRefreshTrial", command: line)
@@ -691,7 +723,7 @@ public final class ReferenceMetalSolver {
                     try await completeStage(line, lineStage)
                 }
                 let finishStage = "referenceWorld.ccd.\(slot)"
-                let finish = try makeCommand(stage: finishStage, scenarioStep: scenarioStep)
+                let finish = try makeStage(finishStage)
                 try encodeWorld("referenceWorldPrepareFinalResidual", command: finish)
                 try encodeOperator(residualPipeline, command: finish)
                 try encodeWorld("referenceWorldCommitSolve", command: finish)
@@ -703,11 +735,12 @@ public final class ReferenceMetalSolver {
                 ("referenceGenerateContours", "referenceWorld.contours", true),
                 ("referencePrepareRenderData", "referenceWorld.render", false)
             ] {
-                let command = try makeCommand(stage: stageName, scenarioStep: scenarioStep)
+                let command = try makeStage(stageName)
                 try encodeWorld(name, command: command, parallel: parallel)
                 try await completeStage(command, stageName)
             }
             try Task.checkCancellation()
+            let readbackStart = gpuDiagnosticsEnabled ? DispatchTime.now().uptimeNanoseconds : 0
             let state = control.contents().load(as: ReferenceMetalWorldControl.self)
             let finalStage = staged.contents().load(as: ReferenceMetalWorldStage.self)
             if state.failure.y != 0 {
@@ -740,6 +773,10 @@ public final class ReferenceMetalSolver {
             let resultContours = Dictionary(uniqueKeysWithValues: (0..<n).map { i in
                 (resultBubbles[i].id, pointValues[Int(ranges[i].x)..<(Int(ranges[i].x) + Int(ranges[i].y))].map { ReferenceVector2(x: $0.x, y: $0.y) })
             })
+            let resultRenderData = values(render, count: n, type: SIMD4<Float>.self)
+            if gpuDiagnosticsEnabled {
+                profile?.hostReadbackMilliseconds = Double(DispatchTime.now().uptimeNanoseconds - readbackStart) / 1_000_000
+            }
             let flags = state.solverCounts.w
             let reportSolver = ReferenceSolverReport(iterations: Int(state.solverCounts.x), maximumPenetration: state.solverQuality.z,
                 converged: flags & 1 != 0, didReachIterationLimit: flags & 2 != 0, positionCorrectionCount: 0,
@@ -757,13 +794,13 @@ public final class ReferenceMetalSolver {
                 predictionMilliseconds: 0, broadPhaseMilliseconds: 0, contactMilliseconds: 0,
                 solverMilliseconds: gpuTime, totalMilliseconds: elapsed, hasNonFiniteState: flags & 4 != 0)
             return .init(bubbles: resultBubbles, contacts: resultContacts, contours: resultContours,
-                renderData: values(render, count: n, type: SIMD4<Float>.self), report: report,
+                renderData: resultRenderData, report: report,
                 telemetry: .init(backend: .metal, frameMilliseconds: elapsed, gpuMilliseconds: gpuTime,
                     finalResidual: reportSolver.finalResidualNorm, newtonIterations: reportSolver.iterations,
                     pcgIterations: reportSolver.pcgIterationCount, didOverflow: didOverflow,
                     didEncounterNonFinite: report.hasNonFiniteState,
                     solveCallCount: Int(finalStage.diagnostics.x), tentativeSolveCallCount: Int(finalStage.diagnostics.y),
-                    contactCount: resultContacts.count, ccdGroupCount: report.eventGroupCount))
+                    contactCount: resultContacts.count, ccdGroupCount: report.eventGroupCount, profile: profile))
         }
     }
 

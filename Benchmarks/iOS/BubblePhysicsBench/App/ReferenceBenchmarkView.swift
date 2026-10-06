@@ -21,6 +21,11 @@ struct ReferenceBenchmarkView: View {
                 .disabled(model.isRunning)
 
                 if model.backend == .metal {
+                    Toggle("Szczegółowy profil GPU", isOn: $model.gpuDiagnosticsEnabled)
+                        .disabled(model.isRunning)
+                    Text("Diagnostyka dodaje narzut hosta. Nie porównuj jej czasów z pomiarem akceptacyjnym bez diagnostyki.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     Text("Smoke: 24 bańki, jeden limit 4. Macierze uruchom po smoke bez fallbacku i hang. Raport podaje ukończone czasy etapów GPU, liczniki solve/CCD i pierwszy fatalny błąd. Każdy fallback wyklucza kwalifikację GPU.")
                         .font(.caption)
                         .foregroundStyle(.secondary)

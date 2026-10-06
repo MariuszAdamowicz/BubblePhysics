@@ -66,6 +66,18 @@ public enum ReferenceBenchmarkRunner {
             .filter { $0.isFinite && $0 >= 0 }
         report.completedMetalTiming = .init(values: gpuTimes)
         report.completedMetalSampleCount = gpuTimes.count
+        let profiles = completed.compactMap { $0.gpuTelemetry?.profile }
+        report.gpuProfileSampleCount = profiles.count
+        report.gpuProfileCommandBuffers = .init(values: profiles.map { Double($0.commandBufferCount) })
+        report.gpuProfileEncoders = .init(values: profiles.map { Double($0.encoderCount) })
+        report.gpuProfileHostEncoding = .init(values: profiles.map(\.hostEncodingMilliseconds))
+        report.gpuProfileHostWaiting = .init(values: profiles.map(\.hostWaitingMilliseconds))
+        report.gpuProfileHostReadback = .init(values: profiles.map(\.hostReadbackMilliseconds))
+        for stage in ReferenceBenchmarkGPUFrameProfile.stages {
+            let values = profiles.compactMap { $0.stageGPUMilliseconds[stage] }
+            if !values.isEmpty { report.gpuProfileStages[stage] = .init(values: values) }
+            report.gpuProfileStageSampleCounts[stage] = values.count
+        }
         let fallbackFrames = frames.filter { backend == .metal && ($0.backend == .cpu || $0.fallbackReason != nil) }
         report.cpuFallbackSampleCount = fallbackFrames.count
         report.cpuFallbackFullFrameTiming = .init(values: fallbackFrames.map(\.fullFrameMilliseconds))

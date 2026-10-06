@@ -3,6 +3,45 @@ import XCTest
 
 @MainActor
 final class ReferenceBenchmarkPresentationTests: XCTestCase {
+    #if os(macOS)
+    // Exercise the actual CLI parser/report boundary, including a valueless flag.
+    func testCLIEmitsProfileRowsOnlyWhenDiagnosticsIsRequested() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        for enabled in [false, true] {
+            let process = Process()
+            process.executableURL = root.appendingPathComponent(".build/debug/BubblePhysicsReferenceBench")
+            process.arguments = ["--scene", "interactive-24", "--backend", "metal", "--limits", "4",
+                                 "--warmup", "0", "--measured", "0"] + (enabled ? ["--diagnostics"] : [])
+            let output = Pipe()
+            process.standardOutput = output
+            process.standardError = output
+            try process.run()
+            let data = output.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            let text = String(decoding: data, as: UTF8.self)
+            XCTAssertEqual(process.terminationStatus, 0, text)
+            XCTAssertEqual(text.contains("gpu_profile "), enabled)
+            XCTAssertEqual(text.contains("gpu_stage "), enabled)
+            XCTAssertTrue(text.contains("gpu_completed limit=4 measured_frames=0"))
+        }
+    }
+    #endif
+
+    func testDiagnosticsSelectionReachesRunnerAndDefaultsOff() async {
+        for enabled in [false, true] {
+            let called = expectation(description: "runner \(enabled)")
+            let model = ReferenceBenchmarkPresentation { configuration, _ in
+                XCTAssertEqual(configuration.gpuDiagnosticsEnabled, enabled)
+                called.fulfill()
+                return .init(configuration: configuration, runs: [])
+            }
+            if enabled { model.gpuDiagnosticsEnabled = true }
+            model.start(deviceName: "test", systemVersion: "test", warmupSteps: 0, measuredSteps: 0)
+            await fulfillment(of: [called], timeout: 2)
+        }
+    }
+
     func testStoppingRunPreventsLateResultPublication() async {
         let model = ReferenceBenchmarkPresentation { configuration, _ in
             try? await Task.sleep(for: .milliseconds(30))

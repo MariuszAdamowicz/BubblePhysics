@@ -83,6 +83,7 @@ public struct ReferenceMetalFrameTelemetry: Equatable, Sendable {
     public let tentativeSolveCallCount: Int?
     public let contactCount: Int?
     public let ccdGroupCount: Int?
+    public let profile: ReferenceBenchmarkGPUFrameProfile?
 
     public init(
         backend: ReferenceSimulationBackend = .cpu,
@@ -98,7 +99,8 @@ public struct ReferenceMetalFrameTelemetry: Equatable, Sendable {
         solveCallCount: Int? = nil,
         tentativeSolveCallCount: Int? = nil,
         contactCount: Int? = nil,
-        ccdGroupCount: Int? = nil
+        ccdGroupCount: Int? = nil,
+        profile: ReferenceBenchmarkGPUFrameProfile? = nil
     ) {
         self.backend = backend
         self.frameMilliseconds = frameMilliseconds
@@ -114,5 +116,6 @@ public struct ReferenceMetalFrameTelemetry: Equatable, Sendable {
         self.tentativeSolveCallCount = tentativeSolveCallCount
         self.contactCount = contactCount
         self.ccdGroupCount = ccdGroupCount
+        self.profile = profile
     }
 }

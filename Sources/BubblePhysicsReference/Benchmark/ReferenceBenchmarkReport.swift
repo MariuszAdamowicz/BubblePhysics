@@ -72,17 +72,20 @@ public struct ReferenceBenchmarkGPUFrameTelemetry: Sendable, Equatable {
     public var tentativeSolveCallCount: Int?
     public var contactCount: Int?
     public var ccdGroupCount: Int?
+    public var profile: ReferenceBenchmarkGPUFrameProfile?
 
     public init(completedCommandBuffersMilliseconds: Double? = nil,
                 failure: ReferenceBenchmarkGPUFailureSummary? = nil,
                 solveCallCount: Int? = nil, tentativeSolveCallCount: Int? = nil,
-                contactCount: Int? = nil, ccdGroupCount: Int? = nil) {
+                contactCount: Int? = nil, ccdGroupCount: Int? = nil,
+                profile: ReferenceBenchmarkGPUFrameProfile? = nil) {
         self.completedCommandBuffersMilliseconds = completedCommandBuffersMilliseconds
         self.failure = failure
         self.solveCallCount = solveCallCount
         self.tentativeSolveCallCount = tentativeSolveCallCount
         self.contactCount = contactCount
         self.ccdGroupCount = ccdGroupCount
+        self.profile = profile
     }
 }
 
@@ -135,6 +138,14 @@ public struct ReferenceBenchmarkReport: Sendable, Equatable {
     // These summaries contain measured frames only; absent telemetry is not zero.
     public var completedMetalTiming: ReferenceTimingSummary = .init(values: [])
     public var completedMetalSampleCount: Int = 0
+    public var gpuProfileSampleCount: Int = 0
+    public var gpuProfileCommandBuffers: ReferenceTimingSummary = .init(values: [])
+    public var gpuProfileEncoders: ReferenceTimingSummary = .init(values: [])
+    public var gpuProfileStages: [String: ReferenceTimingSummary] = [:]
+    public var gpuProfileStageSampleCounts: [String: Int] = [:]
+    public var gpuProfileHostEncoding: ReferenceTimingSummary = .init(values: [])
+    public var gpuProfileHostWaiting: ReferenceTimingSummary = .init(values: [])
+    public var gpuProfileHostReadback: ReferenceTimingSummary = .init(values: [])
     public var cpuFallbackFullFrameTiming: ReferenceTimingSummary = .init(values: [])
     public var cpuFallbackSampleCount: Int = 0
     public var maximumGPUSolveCalls: Int? = nil

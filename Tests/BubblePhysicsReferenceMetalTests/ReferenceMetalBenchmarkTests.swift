@@ -5,6 +5,84 @@ import Metal
 
 @MainActor
 final class ReferenceMetalBenchmarkTests: XCTestCase {
+    // Warmup and failed attempts must never inflate completed diagnostic samples.
+    func testProfilesAggregateOnlyMeasuredCompletedMetalFrames() async throws {
+        let scenario = ReferenceConvergenceScenario(scene: .interactive24, newtonIterationLimit: 4)
+        let run = try await ReferenceBenchmarkRunner.measureAsync(
+            scenario: scenario, warmupSteps: 1, measuredSteps: 3, backend: .metal,
+            frameExecutor: { world, scenario, step in
+                var frame = ReferenceBenchmarkFrame.run(world: &world, scenario: scenario, step: step)
+                frame.backend = step == 2 ? .cpu : .metal
+                frame.fallbackReason = step == 2 ? "injected" : nil
+                let value = step == 1 ? 2.0 : (step == 3 ? 6.0 : 999.0)
+                frame.gpuTelemetry = .init(completedCommandBuffersMilliseconds: value,
+                    profile: .init(commandBufferCount: Int(value), encoderCount: Int(value * 2),
+                        stageGPUMilliseconds: ["geometry": value], hostEncodingMilliseconds: value,
+                        hostWaitingMilliseconds: value * 2, hostReadbackMilliseconds: value * 3))
+                return frame
+            })
+        XCTAssertEqual(run.gpuProfileSampleCount, 2)
+        XCTAssertEqual(run.gpuProfileCommandBuffers, .init(p50Milliseconds: 2, p95Milliseconds: 6, maximumMilliseconds: 6))
+        XCTAssertEqual(run.gpuProfileEncoders, .init(p50Milliseconds: 4, p95Milliseconds: 12, maximumMilliseconds: 12))
+        XCTAssertEqual(run.gpuProfileStages["geometry"], .init(p50Milliseconds: 2, p95Milliseconds: 6, maximumMilliseconds: 6))
+        XCTAssertEqual(run.gpuProfileHostEncoding, .init(p50Milliseconds: 2, p95Milliseconds: 6, maximumMilliseconds: 6))
+        XCTAssertEqual(run.gpuProfileHostWaiting, .init(p50Milliseconds: 4, p95Milliseconds: 12, maximumMilliseconds: 12))
+        XCTAssertEqual(run.gpuProfileHostReadback, .init(p50Milliseconds: 6, p95Milliseconds: 18, maximumMilliseconds: 18))
+        let configuration = ReferenceBenchmarkMatrixConfiguration(scene: .interactive24,
+            warmupSteps: 1, measuredSteps: 3, iterationLimits: [4], backend: .metal, gpuDiagnosticsEnabled: true)
+        let text = ReferenceBenchmarkMatrixReport(configuration: configuration, runs: [run])
+            .plainText(deviceName: "test", systemVersion: "test")
+        XCTAssertTrue(text.contains("gpu_profile limit=4 measured_frames=2 command_buffers_p50=2.0000 command_buffers_p95=6.0000 command_buffers_max=6.0000"))
+        XCTAssertTrue(text.contains("gpu_stage limit=4 stage=geometry measured_frames=2 p50_ms=2.0000 p95_ms=6.0000 max_ms=6.0000"))
+    }
+
+    func testWarmupOnlyProfileIsUnavailableAndNormalReportOmitsProfile() async throws {
+        let run = try await ReferenceBenchmarkRunner.measureAsync(
+            scenario: .init(scene: .interactive24, newtonIterationLimit: 4),
+            warmupSteps: 1, measuredSteps: 1, backend: .metal,
+            frameExecutor: { world, scenario, step in
+                var frame = ReferenceBenchmarkFrame.run(world: &world, scenario: scenario, step: step)
+                frame.backend = .metal
+                frame.gpuTelemetry = .init(completedCommandBuffersMilliseconds: 2,
+                    profile: step == 0 ? .init(commandBufferCount: 1, encoderCount: 2,
+                        stageGPUMilliseconds: ["geometry": 2], hostEncodingMilliseconds: 1,
+                        hostWaitingMilliseconds: 2, hostReadbackMilliseconds: 3) : nil)
+                return frame
+            })
+        XCTAssertEqual(run.gpuProfileSampleCount, 0)
+        var configuration = ReferenceBenchmarkMatrixConfiguration(scene: .interactive24,
+            warmupSteps: 1, measuredSteps: 1, backend: .metal, gpuDiagnosticsEnabled: true)
+        let diagnostic = ReferenceBenchmarkMatrixReport(configuration: configuration, runs: [run])
+            .plainText(deviceName: "test", systemVersion: "test")
+        XCTAssertTrue(diagnostic.contains("gpu_profile limit=4 measured_frames=0 command_buffers_p50=unavailable"))
+        XCTAssertTrue(diagnostic.contains("gpu_stage limit=4 stage=geometry measured_frames=0 p50_ms=unavailable"))
+        configuration.gpuDiagnosticsEnabled = false
+        let normal = ReferenceBenchmarkMatrixReport(configuration: configuration, runs: [run])
+            .plainText(deviceName: "test", systemVersion: "test")
+        XCTAssertFalse(normal.contains("gpu_profile "))
+        XCTAssertFalse(normal.contains("gpu_stage "))
+        XCTAssertTrue(normal.contains("gpu_completed limit=4 measured_frames=1"))
+    }
+
+    func testPublicDiagnosticsProfilesRealCompletedCommandBuffers() async throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("No Metal device") }
+        let report = try await ReferenceMetalBenchmarkRunner.measure(configuration: .init(
+            scene: .interactive24, warmupSteps: 0, measuredSteps: 1, iterationLimits: [4],
+            backend: .metal, gpuDiagnosticsEnabled: true))
+        let run = try XCTUnwrap(report.runs.first)
+        XCTAssertEqual(run.gpuProfileSampleCount, 1)
+        // 242 staged commands + the first capacity-discovery geometry retry.
+        // Each retry geometry has two encoders; the regular frame has 14897.
+        XCTAssertEqual(run.gpuProfileCommandBuffers.p50Milliseconds, 243)
+        XCTAssertEqual(run.gpuProfileEncoders.p50Milliseconds, 14899)
+        XCTAssertEqual(Set(run.gpuProfileStages.keys), Set(["geometry", "newton", "pcg", "lineSearch", "ccd", "guards", "contours", "render"]))
+        XCTAssertEqual(run.gpuProfileStages.values.reduce(0) { $0 + $1.p50Milliseconds },
+                       run.completedMetalTiming.p50Milliseconds, accuracy: 0.000001)
+        XCTAssertGreaterThan(run.gpuProfileHostEncoding.p50Milliseconds, 0)
+        XCTAssertGreaterThan(run.gpuProfileHostWaiting.p50Milliseconds, 0)
+        XCTAssertGreaterThan(run.gpuProfileHostReadback.p50Milliseconds, 0)
+    }
+
     func testGPUReportPreservesQualityColumnsAndRecordsActualFrames() async throws {
         let report = try await measure(warmup: 1, measured: 2)
         let run = try XCTUnwrap(report.runs.first)
@@ -108,6 +186,7 @@ final class ReferenceMetalBenchmarkTests: XCTestCase {
         XCTAssertEqual(run.cpuFrameCount, 0)
         XCTAssertEqual(run.metalFrameCount, 1)
         XCTAssertEqual(run.completedMetalSampleCount, 1)
+        XCTAssertEqual(run.gpuProfileSampleCount, 0)
         XCTAssertEqual(run.fallbackCount, 0)
         XCTAssertTrue(run.isGPUAcceptanceMeasurementEligible)
     }

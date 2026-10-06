@@ -17,6 +17,7 @@ public final class ReferenceBenchmarkPresentation: ObservableObject {
     @Published public var mode: ReferenceBenchmarkMode = .matrix
     @Published public var selectedLimit = 4
     @Published public var backend: ReferenceSimulationBackend = .cpu
+    @Published public var gpuDiagnosticsEnabled = false
     @Published public private(set) var progress = 0.0
     @Published public private(set) var reportText: String?
     @Published public private(set) var errorMessage: String?
@@ -49,7 +50,8 @@ public final class ReferenceBenchmarkPresentation: ObservableObject {
             warmupSteps: warmupSteps,
             measuredSteps: measuredSteps,
             iterationLimits: limits,
-            backend: backend
+            backend: backend,
+            gpuDiagnosticsEnabled: gpuDiagnosticsEnabled
         )
         progress = 0
         reportText = nil

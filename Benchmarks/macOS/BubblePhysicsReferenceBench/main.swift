@@ -4,7 +4,7 @@ import Metal
 import BubblePhysicsReference
 import BubblePhysicsReferenceMetal
 
-private let usage = "Użycie: BubblePhysicsReferenceBench [--scene interactive-24|stress-300] [--backend cpu|metal] [--limits 4,8,12,16] [--warmup 30] [--measured 300]"
+private let usage = "Użycie: BubblePhysicsReferenceBench [--scene interactive-24|stress-300] [--backend cpu|metal] [--limits 4,8,12,16] [--warmup 30] [--measured 300] [--diagnostics]\n--diagnostics: szczegółowy profil GPU dodaje narzut hosta; nie mieszaj z pomiarem akceptacyjnym."
 
 private enum CLIError: Error, CustomStringConvertible {
     case invalidArgument(String)
@@ -18,6 +18,11 @@ private func configuration(arguments: [String]) throws -> ReferenceBenchmarkMatr
     var index = 0
     while index < arguments.count {
         let option = arguments[index]
+        if option == "--diagnostics" {
+            result.gpuDiagnosticsEnabled = true
+            index += 1
+            continue
+        }
         guard index + 1 < arguments.count else { throw CLIError.invalidArgument(option) }
         let value = arguments[index + 1]
         switch option {

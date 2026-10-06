@@ -36,8 +36,8 @@ public final class ReferenceMetalWorldRunner {
     private let availabilityError: ReferenceMetalWorldError?
     private var inFlight = false
 
-    public convenience init(backend: ReferenceSimulationBackend = .cpu) {
-        self.init(backend: backend, makeExecutor: { ReferenceMetalSolver() })
+    public convenience init(backend: ReferenceSimulationBackend = .cpu, gpuDiagnosticsEnabled: Bool = false) {
+        self.init(backend: backend, makeExecutor: { ReferenceMetalSolver(gpuDiagnosticsEnabled: gpuDiagnosticsEnabled) })
     }
 
     // A missing device or failed pipeline creation follows the same fallback.

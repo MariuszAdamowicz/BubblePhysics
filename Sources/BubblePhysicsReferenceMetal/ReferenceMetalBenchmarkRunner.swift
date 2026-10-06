@@ -8,7 +8,8 @@ public enum ReferenceMetalBenchmarkRunner {
         progress: @escaping @Sendable (ReferenceBenchmarkProgress) async -> Void = { _ in }
     ) async throws -> ReferenceBenchmarkMatrixReport {
         try await measure(configuration: configuration, progress: progress,
-                          makeRunner: { ReferenceMetalWorldRunner(backend: configuration.backend) })
+                          makeRunner: { ReferenceMetalWorldRunner(backend: configuration.backend,
+                                                                 gpuDiagnosticsEnabled: configuration.gpuDiagnosticsEnabled) })
     }
 
     // Internal injection exercises unavailable pipelines and frame failures.
@@ -67,7 +68,8 @@ extension ReferenceMetalWorldRunner {
                           classification: $0.classification.rawValue, isFatal: $0.isFatal)
                 },
                 solveCallCount: telemetry.solveCallCount, tentativeSolveCallCount: telemetry.tentativeSolveCallCount,
-                contactCount: telemetry.contactCount, ccdGroupCount: telemetry.ccdGroupCount))
+                contactCount: telemetry.contactCount, ccdGroupCount: telemetry.ccdGroupCount,
+                profile: telemetry.profile))
     }
 
     private static func benchmarkMilliseconds(_ duration: Duration) -> Double {

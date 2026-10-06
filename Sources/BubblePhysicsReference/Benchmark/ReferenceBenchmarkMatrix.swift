@@ -8,6 +8,7 @@ public struct ReferenceBenchmarkMatrixConfiguration: Sendable, Equatable {
     public var measuredSteps: Int
     public var iterationLimits: [Int]
     public var backend: ReferenceSimulationBackend
+    public var gpuDiagnosticsEnabled: Bool
 
     public init(
         scene: ReferenceConvergenceScene,
@@ -16,7 +17,8 @@ public struct ReferenceBenchmarkMatrixConfiguration: Sendable, Equatable {
         warmupSteps: Int,
         measuredSteps: Int,
         iterationLimits: [Int] = [4, 8, 12, 16],
-        backend: ReferenceSimulationBackend = .cpu
+        backend: ReferenceSimulationBackend = .cpu,
+        gpuDiagnosticsEnabled: Bool = false
     ) {
         self.scene = scene
         self.seed = seed
@@ -25,6 +27,7 @@ public struct ReferenceBenchmarkMatrixConfiguration: Sendable, Equatable {
         self.measuredSteps = max(0, measuredSteps)
         self.iterationLimits = iterationLimits.map { max(1, $0) }
         self.backend = backend
+        self.gpuDiagnosticsEnabled = gpuDiagnosticsEnabled
     }
 }
 
@@ -50,6 +53,7 @@ public struct ReferenceBenchmarkMatrixReport: Sendable, Equatable {
             "limit full_p50_ms full_p95_ms full_max_ms solver_p95_ms contour_p95_ms render_p95_ms penetration_p95 penetration_max residual_p95 residual_max unconverged_components containment non_finite backend cpu_frames metal_frames fallbacks warmup_fallbacks gpu_measurement",
         ]
         if configuration.backend == .metal {
+            lines.insert("gpu_diagnostics=\(configuration.gpuDiagnosticsEnabled ? "enabled" : "disabled"); diagnostyka dodaje narzut hosta — nie mieszaj jej z pomiarem akceptacyjnym. Etapy obejmują całe command buffery; newton zawiera inicjalizację PCG, geometry inicjalizację klatki, ccd rozpoczęcie solve i finalizację świata.", at: 6)
             lines.insert("Uwaga GPU: solver_p95_ms obejmuje cały command buffer GPU (sumę etapów) albo solver CPU przy fallbacku; contour_p95_ms mierzy pobranie/pakowanie konturów na hoście. Osobny gpu_completed zawiera wyłącznie ukończone klatki Metal; czasy tabeli przy fallbackach są mieszane i nie kwalifikują GPU.", at: 6)
         }
         for run in runs {
@@ -88,6 +92,26 @@ public struct ReferenceBenchmarkMatrixReport: Sendable, Equatable {
             func gpuTime(_ value: Double) -> String { run.completedMetalSampleCount > 0 ? format(value) : "unavailable" }
             func cpuTime(_ value: Double) -> String { run.cpuFallbackSampleCount > 0 ? format(value) : "unavailable" }
             lines.append("gpu_completed limit=\(limit) measured_frames=\(run.completedMetalSampleCount) command_buffers_p50_ms=\(gpuTime(gpu.p50Milliseconds)) command_buffers_p95_ms=\(gpuTime(gpu.p95Milliseconds)) command_buffers_max_ms=\(gpuTime(gpu.maximumMilliseconds))")
+            if configuration.gpuDiagnosticsEnabled {
+                func fields(_ label: String, _ summary: ReferenceTimingSummary, count: Int, unit: String = "") -> String {
+                    func value(_ value: Double) -> String { count > 0 ? format(value) : "unavailable" }
+                    let prefix = label.isEmpty ? "" : label + "_"
+                    return "\(prefix)p50\(unit)=\(value(summary.p50Milliseconds)) \(prefix)p95\(unit)=\(value(summary.p95Milliseconds)) \(prefix)max\(unit)=\(value(summary.maximumMilliseconds))"
+                }
+                let count = run.gpuProfileSampleCount
+                lines.append("gpu_profile limit=\(limit) measured_frames=\(count) " + [
+                    fields("command_buffers", run.gpuProfileCommandBuffers, count: count),
+                    fields("encoders", run.gpuProfileEncoders, count: count),
+                    fields("host_encoding", run.gpuProfileHostEncoding, count: count, unit: "_ms"),
+                    fields("host_waiting", run.gpuProfileHostWaiting, count: count, unit: "_ms"),
+                    fields("host_readback", run.gpuProfileHostReadback, count: count, unit: "_ms")
+                ].joined(separator: " "))
+                for stage in ReferenceBenchmarkGPUFrameProfile.stages {
+                    let samples = run.gpuProfileStageSampleCounts[stage] ?? 0
+                    lines.append("gpu_stage limit=\(limit) stage=\(stage) measured_frames=\(samples) " +
+                        fields("", run.gpuProfileStages[stage] ?? .init(values: []), count: samples, unit: "_ms"))
+                }
+            }
             lines.append("cpu_fallback limit=\(limit) measured_frames=\(run.cpuFallbackSampleCount) full_p50_ms=\(cpuTime(cpu.p50Milliseconds)) full_p95_ms=\(cpuTime(cpu.p95Milliseconds)) full_max_ms=\(cpuTime(cpu.maximumMilliseconds))")
             lines.append("gpu_work limit=\(limit) scope=completed_measured_frames solve_calls_max=\(optionalCount(run.maximumGPUSolveCalls)) tentative_solve_calls_max=\(optionalCount(run.maximumGPUTentativeSolveCalls)) contacts_max=\(optionalCount(run.maximumGPUContacts)) ccd_groups_max=\(optionalCount(run.maximumGPUCCDGroups))")
             for (label, failure) in [("gpu_first_failure", run.firstGPUFailure), ("gpu_fatal_failure", run.firstFatalGPUFailure)] {
