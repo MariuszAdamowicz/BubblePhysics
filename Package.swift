@@ -12,9 +12,13 @@ let package = Package(
         .library(name: "BubblePhysicsCore", targets: ["BubblePhysicsCore"]),
         .library(name: "BubblePhysicsMetal", targets: ["BubblePhysicsMetal"]),
         .library(name: "BubblePhysicsReference", targets: ["BubblePhysicsReference"]),
-        .library(name: "BubblePhysicsReferenceMetal", targets: ["BubblePhysicsReferenceMetal"])
+        .library(name: "BubblePhysicsReferenceMetal", targets: ["BubblePhysicsReferenceMetal"]),
+        .executable(name: "BubblePhysicsReferenceBench", targets: ["BubblePhysicsReferenceBench"])
     ],
     targets: [
+        .executableTarget(name: "BubblePhysicsReferenceBench",
+                          dependencies: ["BubblePhysicsReference", "BubblePhysicsReferenceMetal"],
+                          path: "Benchmarks/macOS/BubblePhysicsReferenceBench"),
         .target(name: "BubblePhysics"),
         .target(name: "BubblePhysicsCore"),
         .target(name: "BubblePhysicsReference"),

@@ -100,16 +100,29 @@ final class ReferenceMetalBenchmarkTests: XCTestCase {
         }
     }
 
-    func testPublicGPUSelectionOnHostReportsUnsupportedFallback() async throws {
-        #if !os(iOS)
+    func testPublicGPUSelectionCompletesMeasuredMetalFrame() async throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("No Metal device on test host") }
         let report = try await ReferenceMetalBenchmarkRunner.measure(configuration: .init(
-            scene: .interactive24, warmupSteps: 1, measuredSteps: 1, iterationLimits: [4], backend: .metal))
+            scene: .interactive24, warmupSteps: 0, measuredSteps: 1, iterationLimits: [4], backend: .metal))
         let run = try XCTUnwrap(report.runs.first)
-        XCTAssertEqual(run.cpuFrameCount, 2)
+        XCTAssertEqual(run.cpuFrameCount, 0)
+        XCTAssertEqual(run.metalFrameCount, 1)
+        XCTAssertEqual(run.completedMetalSampleCount, 1)
+        XCTAssertEqual(run.fallbackCount, 0)
+        XCTAssertTrue(run.isGPUAcceptanceMeasurementEligible)
+    }
+
+    func testMissingPipelineCannotBecomeGPUMeasurement() async throws {
+        let report = try await ReferenceMetalBenchmarkRunner.measure(configuration: .init(
+            scene: .interactive24, warmupSteps: 0, measuredSteps: 1, iterationLimits: [4], backend: .metal),
+            makeRunner: { ReferenceMetalWorldRunner(backend: .metal, makeExecutor: { nil }) })
+        let run = try XCTUnwrap(report.runs.first)
+        XCTAssertEqual(run.cpuFrameCount, 1)
         XCTAssertEqual(run.metalFrameCount, 0)
-        XCTAssertEqual(run.fallbackReasons["unsupportedRuntime"], 2)
+        XCTAssertEqual(run.fallbackReasons["unavailable"], 1)
         XCTAssertFalse(run.isGPUAcceptanceMeasurementEligible)
-        #endif
+        XCTAssertTrue(report.plainText(deviceName: "test", systemVersion: "test").contains("gpu_completed limit=4 measured_frames=0"))
+        XCTAssertTrue(report.plainText(deviceName: "test", systemVersion: "test").contains("metal 1 0 1 0 ineligible"))
     }
 
     func testEmptyGPURunCannotBecomeAcceptanceMeasurement() async throws {

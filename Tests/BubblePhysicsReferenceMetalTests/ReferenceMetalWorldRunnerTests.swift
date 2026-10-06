@@ -79,14 +79,27 @@ final class ReferenceMetalWorldRunnerTests: XCTestCase {
         XCTAssertTrue(world.contacts.contacts.isEmpty)
     }
 
-    func testPublicRuntimeSelectionDefaultsToCPUOnHost() async throws {
-        #if !os(iOS)
+    func testPublicRuntimeSelectionUsesMetalWhenDeviceIsAvailable() async throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("No Metal device on test host") }
         let runner = ReferenceMetalWorldRunner(backend: .metal)
-        var world = ReferenceWorld(configuration: .default, broadPhase: BruteForceBroadPhase())
+        let scenario = ReferenceConvergenceScenario(scene: .interactive24, newtonIterationLimit: 4)
+        var world = try scenario.makeWorld()
+        scenario.updatePolygon(in: &world, fromStep: 0, toStep: 1)
+        _ = await runner.step(world: &world, scenarioStep: 0)
+        XCTAssertEqual(runner.telemetry.backend, .metal)
+        XCTAssertNil(runner.telemetry.fallbackReason)
+    }
+
+    func testMissingExecutorFallsBackToWholeCPUFrame() async throws {
+        let runner = ReferenceMetalWorldRunner(backend: .metal, makeExecutor: { nil })
+        var world = try ReferenceConvergenceScenario(scene: .interactive24, newtonIterationLimit: 4).makeWorld()
+        var oracle = world
+        _ = oracle.step()
         _ = await runner.step(world: &world, scenarioStep: 0)
         XCTAssertEqual(runner.telemetry.backend, .cpu)
-        XCTAssertNotNil(runner.telemetry.fallbackReason)
-        #endif
+        XCTAssertEqual(runner.telemetry.fallbackReason, "unavailable")
+        XCTAssertEqual(world.bubbles, oracle.bubbles)
+        XCTAssertEqual(world.contacts.contacts, oracle.contacts.contacts)
     }
 
     func testFiniteButContainedGPUCandidateTriggersAtomicCPUFallback() async throws {

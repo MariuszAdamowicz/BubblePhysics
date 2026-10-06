@@ -1,7 +1,6 @@
 import BubblePhysicsReference
 
-/// iOS runtime selection uses ReferenceMetalWorldRunner's iOS-only initializer.
-/// On other platforms a requested Metal frame is explicitly a CPU fallback.
+/// Shared CPU/Metal runtime selection on iOS and macOS.
 @MainActor
 public enum ReferenceMetalBenchmarkRunner {
     public static func measure(
@@ -12,7 +11,7 @@ public enum ReferenceMetalBenchmarkRunner {
                           makeRunner: { ReferenceMetalWorldRunner(backend: configuration.backend) })
     }
 
-    // Real host pipeline injection is internal; it does not enable macOS runtime.
+    // Internal injection exercises unavailable pipelines and frame failures.
     static func measure(
         configuration: ReferenceBenchmarkMatrixConfiguration,
         progress: @escaping @Sendable (ReferenceBenchmarkProgress) async -> Void = { _ in },

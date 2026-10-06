@@ -21,7 +21,7 @@ enum ReferenceMetalWorldError: Error {
     case unsupportedRuntime, unavailable, invalidFrame, guardFailed, frameInFlight
 }
 
-/// Explicit iOS runtime selection. Main-actor ownership serializes the runner's
+/// Explicit Apple runtime selection. Main-actor ownership serializes the runner's
 /// resource lifetime across suspension; a concurrent call uses a whole CPU frame.
 @MainActor
 public final class ReferenceMetalWorldRunner {
@@ -36,10 +36,15 @@ public final class ReferenceMetalWorldRunner {
     private let availabilityError: ReferenceMetalWorldError?
     private var inFlight = false
 
-    public init(backend: ReferenceSimulationBackend = .cpu) {
+    public convenience init(backend: ReferenceSimulationBackend = .cpu) {
+        self.init(backend: backend, makeExecutor: { ReferenceMetalSolver() })
+    }
+
+    // A missing device or failed pipeline creation follows the same fallback.
+    init(backend: ReferenceSimulationBackend, makeExecutor: () -> (any ReferenceMetalFrameExecuting)?) {
         self.backend = backend
-        #if os(iOS)
-        executor = backend == .metal ? ReferenceMetalSolver() : nil
+        #if os(iOS) || os(macOS)
+        executor = backend == .metal ? makeExecutor() : nil
         availabilityError = backend == .metal && executor == nil ? .unavailable : nil
         #else
         executor = nil
@@ -47,8 +52,7 @@ public final class ReferenceMetalWorldRunner {
         #endif
     }
 
-    // Package tests may exercise the actual pipelines on a host with Metal.
-    // This entry point is deliberately not part of public runtime selection.
+    // Package tests may inject faults while exercising the same frame lifecycle.
     init(executor: any ReferenceMetalFrameExecuting) {
         backend = .metal
         self.executor = executor
