@@ -73,6 +73,7 @@ final class ReferenceMetalContactPipelineTests: XCTestCase {
         XCTAssertTrue(result.didOverflow)
         XCTAssertGreaterThan(result.attemptCount, 1)
         XCTAssertEqual(result.candidatePairs.count, 153)
+        XCTAssertEqual(result.overflowRequiredPairCapacities, [153])
         XCTAssertEqual(result.contacts.count, 153)
         XCTAssertEqual(result.components.count, 1)
         XCTAssertEqual(result.components[0].bubbleIDs.count, 18)
@@ -86,6 +87,15 @@ final class ReferenceMetalContactPipelineTests: XCTestCase {
         let first = try await gpu.prepareFrameForTesting(snapshot: .init(world: world), step: 0)
         let second = try await gpu.prepareFrameForTesting(snapshot: .init(world: world), step: 0)
         XCTAssertEqual(first.contacts.map(\.id), oracleContacts(world).map(\.id))
+        let cpu = cpuCCDOracle(world)
+        XCTAssertEqual(first.candidatePairs, cpu.pairs)
+        XCTAssertEqual(first.allEvents.map(\.contactID), cpu.events.map(\.contactID))
+        XCTAssertEqual(first.allEvents.count, cpu.events.count)
+        for (gpuEvent, cpuEvent) in zip(first.allEvents, cpu.events) {
+            XCTAssertEqual(gpuEvent.time, cpuEvent.time, accuracy: 1e-4)
+        }
+        XCTAssertEqual(first.eventGroups.map { $0.events.map(\.contactID) }, cpu.groups.map { $0.events.map(\.contactID) })
+        XCTAssertEqual(first.didReachEventGroupLimit, cpu.didReachLimit)
         XCTAssertEqual(first.candidatePairs, second.candidatePairs)
         XCTAssertEqual(first.allEvents, second.allEvents)
         XCTAssertEqual(first.eventGroups, second.eventGroups)
@@ -373,6 +383,56 @@ final class ReferenceMetalContactPipelineTests: XCTestCase {
 
     private func makeWorld() -> ReferenceWorld {
         ReferenceWorld(configuration: .init(timeStep: 1, linearDamping: 0), broadPhase: BruteForceBroadPhase())
+    }
+
+    private func cpuCCDOracle(_ world: ReferenceWorld) ->
+        (pairs: [ReferencePair], events: [ReferenceContactEvent], groups: [ReferenceContactEventGroup], didReachLimit: Bool) {
+        let bubbles = world.bubbles.sorted { $0.id < $1.id }
+        let dt = world.configuration.timeStep
+        let paths = bubbles.map { bubble -> ReferenceBubble in
+            var path = bubble
+            path.previousCenter = bubble.center
+            path.center = bubble.center + bubble.velocity * dt
+            return path
+        }
+        var pairs: [ReferencePair] = []
+        var events: [ReferenceContactEvent] = []
+        for a in bubbles.indices {
+            for b in bubbles.indices where b > a {
+                let first = paths[a], second = paths[b]
+                let minA = ReferenceVector2(x: min(first.previousCenter.x, first.center.x) - first.targetRadius,
+                                             y: min(first.previousCenter.y, first.center.y) - first.targetRadius)
+                let maxA = ReferenceVector2(x: max(first.previousCenter.x, first.center.x) + first.targetRadius,
+                                             y: max(first.previousCenter.y, first.center.y) + first.targetRadius)
+                let minB = ReferenceVector2(x: min(second.previousCenter.x, second.center.x) - second.targetRadius,
+                                             y: min(second.previousCenter.y, second.center.y) - second.targetRadius)
+                let maxB = ReferenceVector2(x: max(second.previousCenter.x, second.center.x) + second.targetRadius,
+                                             y: max(second.previousCenter.y, second.center.y) + second.targetRadius)
+                guard minA.x <= maxB.x, minB.x <= maxA.x, minA.y <= maxB.y, minB.y <= maxA.y else { continue }
+                pairs.append(.init(.init(rawValue: first.id.rawValue), .init(rawValue: second.id.rawValue)))
+                let id = ReferenceDiscreteContactGenerator.bubbleBubbleCandidate(bubbles[a], bubbles[b]).id
+                switch ReferenceCCD.bubbleBubble(first, second) {
+                case let .impact(fraction, _, _): events.append(.init(time: dt * fraction, contactID: id))
+                case .initialOverlap: events.append(.init(time: 0, contactID: id))
+                case .none: break
+                }
+            }
+        }
+        for segment in world.segments.sorted(by: { $0.id < $1.id }) {
+            for (index, path) in paths.enumerated() {
+                let id = ReferenceDiscreteContactGenerator.bubbleSegmentCandidate(bubbles[index], segment).id
+                switch ReferenceCCD.bubbleSegment(path, segment, configuration: world.configuration).timeOfImpact {
+                case let .impact(fraction, _, _): events.append(.init(time: dt * fraction, contactID: id))
+                case .initialOverlap: events.append(.init(time: 0, contactID: id))
+                case .none: break
+                }
+            }
+        }
+        let sorted = events.sorted()
+        let queue = ReferenceContactEventQueue.groups(events: sorted, frameDuration: dt,
+            simultaneousTolerance: world.configuration.simultaneousEventTolerance,
+            limit: world.configuration.maximumEventGroups)
+        return (pairs, sorted, queue.groups, queue.didReachLimit)
     }
 
     private func bubble(_ id: Int, _ x: Float, _ y: Float, velocity: ReferenceVector2 = .zero) throws -> ReferenceBubble {

@@ -39,6 +39,8 @@ struct ReferenceMetalPreparedFrame {
     let components: [ReferenceMetalPreparedComponent]
     let didOverflow: Bool
     let attemptCount: Int
+    /// Exact pair capacities requested by failed GPU attempts before retry.
+    let overflowRequiredPairCapacities: [Int]
 }
 
 struct ReferenceMetalGeometryParameters {
@@ -365,6 +367,7 @@ public final class ReferenceMetalSolver {
             (operatorBuffers["geometryContacts"]?.length ?? 0) / MemoryLayout<ReferenceMetalContact>.stride)
         var componentCapacity = max(1, (operatorBuffers["geometryComponents"]?.length ?? 0) / MemoryLayout<SIMD4<UInt32>>.stride)
         var attempts = 0, didOverflow = false
+        var overflowRequiredPairCapacities: [Int] = []
         while true {
             try Task.checkCancellation()
             attempts += 1
@@ -421,6 +424,7 @@ public final class ReferenceMetalSolver {
                 guard required[0] > pairCapacity || required[1] > contactCapacity || required[2] > componentCapacity
                 else { throw ReferenceMetalGeometryError.invalidOverflowReport }
                 pairCapacity = max(pairCapacity, required[0])
+                if required[0] > Int(parameters.counts.w) { overflowRequiredPairCapacities.append(required[0]) }
                 contactCapacity = max(contactCapacity, required[1])
                 componentCapacity = max(componentCapacity, required[2])
                 didOverflow = true
@@ -465,7 +469,8 @@ public final class ReferenceMetalSolver {
                 impactContacts: resultEvents.map { Self.unpackContact($0.contact) }, didReachEventGroupLimit: state.grouping.y != 0,
                 ccdBudgetExhaustionCount: Int(state.flags.z), sideCorrectionCount: Int(state.flags.w),
                 componentLabels: (0..<n).map { membership[$0] == 0 ? nil : rootToLabel[roots[$0]] },
-                components: resultComponents, didOverflow: didOverflow, attemptCount: attempts)
+                components: resultComponents, didOverflow: didOverflow, attemptCount: attempts,
+                overflowRequiredPairCapacities: overflowRequiredPairCapacities)
         }
     }
 
