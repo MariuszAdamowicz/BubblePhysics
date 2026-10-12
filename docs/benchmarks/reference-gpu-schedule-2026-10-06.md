@@ -23,4 +23,12 @@ Surowe wyniki:
 - `reference-gpu-schedule-profile-mac-mini-2026-10-06.txt` — Task 4, diagnostyka.
 - `reference-gpu-schedule-normal-mac-mini-2026-10-06.txt` — Task 4, zwykły.
 
-Pełne `swift test`: 487 testów, zero błędów, jeden warunkowy skip. Unsigned iOS Release build udany. Fizyczny iPhone X niewidoczny w `devicectl`; smoke urządzenia niewykonany. Status **DONE_WITH_CONCERNS**. Wynik Maca nie zalicza bramki iPhone ani 10 ms; dalsze zadania pozostają poza tym raportem.
+Pełne `swift test`: 487 testów, zero błędów, jeden warunkowy skip. Unsigned iOS Release build udany.
+
+## Smoke na fizycznym iPhonie X — 12.10.2026
+
+Xcode 26.6, konfiguracja Run: Release. Scena `interactive-24`, Newton 4, ten sam seed, 30 warmup + 300 measured, diagnostyka GPU włączona. Surowy raport: `reference-gpu-schedule-iphone-2026-10-12.txt`. Wszystkie 330 klatek ukończono na Metal; brak fallbacków, hangów i non-finite. Jakość jest identyczna z wcześniejszym smoke iPhone’a: penetracja p95/max 38,3238/46,4683; reszta p95/max 884,5847/5811,5098; niezbieżne komponenty maks. 9; containment 0. Maksima pracy także bez zmian.
+
+Pełna klatka p95 wyniosła 704,2258 ms wobec 1284,8055 ms w poprzednim, **niediagnostycznym** smoke; ukończone GPU p95 295,3576 wobec 399,5981 ms. Różnica wskazuje poprawę kierunkową, ale tych percentyli nie wolno traktować jako kontrolowanego pomiaru narzutu ani procentowej poprawy ze względu na różne tryby i warunki. W bieżącym profilu p95 to 82 command buffery, 4607 encoderów, 291,9491 ms kodowania hosta i 403,9678 ms oczekiwania. Najdroższy etap GPU p95 to PCG 153,8443 ms, następnie line search 55,3991 ms i kontury 43,5156 ms; percentyli etapów nie należy sumować.
+
+Smoke bezpieczeństwa Task 4 zaliczony: brak hang/fallback i regresji jakości. **Bramka wydajności 10 ms nie jest zaliczona**; ten przebieg diagnostyczny nie jest pomiarem akceptacyjnym. Następne zadanie może badać seryjne budowanie kandydatów i CCD, ale profil urządzenia dodatkowo wskazuje na wysoki koszt sterowania hosta i PCG. Mac pozostaje pętlą rozwojową, iPhone X — urządzeniową bramką.
