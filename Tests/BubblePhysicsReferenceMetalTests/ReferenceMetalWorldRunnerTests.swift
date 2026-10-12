@@ -5,6 +5,36 @@ import BubblePhysicsReference
 
 @MainActor
 final class ReferenceMetalWorldRunnerTests: XCTestCase {
+    func testInteractive24PreservesReactivatedBubbleContactAtStep15() async throws {
+        let runner = ReferenceMetalWorldRunner(executor: try executor())
+        let scenario = ReferenceConvergenceScenario(scene: .interactive24, newtonIterationLimit: 4)
+        var world = try scenario.makeWorld()
+        for step in 1...15 {
+            scenario.updatePolygon(in: &world, fromStep: step - 1, toStep: step)
+            _ = await runner.step(world: &world, scenarioStep: step)
+            XCTAssertEqual(runner.telemetry.backend, .metal)
+            XCTAssertNil(runner.telemetry.fallbackReason)
+        }
+        // Task 5 baseline: the renewed bubble–bubble contact survives the
+        // solve.2 refresh alongside two segment contacts.
+        XCTAssertEqual(world.contacts.contacts.map { $0.id.rawValue },
+            [60_129_542_159, 9_223_372_066_919_546_886, 9_223_372_066_919_546_887])
+    }
+
+    func testWorldRefreshUsesParallelContactStageWithoutChangingContactIDs() async throws {
+        let solver = try XCTUnwrap(ReferenceMetalSolver(device: MTLCreateSystemDefaultDevice()))
+        XCTAssertTrue(solver.loadedFunctionNames.contains("referenceWorldRefreshFlags"))
+        let runner = ReferenceMetalWorldRunner(executor: solver)
+        let scenario = ReferenceConvergenceScenario(scene: .interactive24, newtonIterationLimit: 4)
+        var cpu = try scenario.makeWorld()
+        var gpu = cpu
+        scenario.updatePolygon(in: &cpu, fromStep: 0, toStep: 1)
+        scenario.updatePolygon(in: &gpu, fromStep: 0, toStep: 1)
+        _ = cpu.step()
+        _ = await runner.step(world: &gpu, scenarioStep: 1)
+        XCTAssertEqual(runner.telemetry.backend, .metal)
+        XCTAssertEqual(gpu.contacts.contacts.map(\.id), cpu.contacts.contacts.map(\.id))
+    }
     func testInteractive24PublishesFiniteGPUFramesWithinCPUQualityTolerance() async throws {
         let runner = ReferenceMetalWorldRunner(executor: try executor())
         let scenario = ReferenceConvergenceScenario(scene: .interactive24, newtonIterationLimit: 4)

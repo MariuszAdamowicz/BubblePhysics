@@ -111,7 +111,9 @@ final class ReferenceMetalBenchmarkTests: XCTestCase {
         XCTAssertFalse(second.telemetry.didOverflow)
         XCTAssertEqual(stages.filter { $0 == "referenceWorld.geometry" }.count, 1)
         XCTAssertEqual(firstProfile.commandBufferCount - secondProfile.commandBufferCount, 1)
-        XCTAssertEqual(firstProfile.encoderCount - secondProfile.encoderCount, 2)
+        // The failed geometry attempt now contains initialize, begin-solve,
+        // parallel refresh, stable compaction and adjacency construction.
+        XCTAssertEqual(firstProfile.encoderCount - secondProfile.encoderCount, 5)
     }
 
     func testGPUReportPreservesQualityColumnsAndRecordsActualFrames() async throws {

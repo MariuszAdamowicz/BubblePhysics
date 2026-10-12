@@ -74,6 +74,7 @@ public final class ReferenceMetalSolver {
     private let residualPipeline: MTLComputePipelineState
     private let jacobianPipeline: MTLComputePipelineState
     private let diagonalPipeline: MTLComputePipelineState
+    private let adjacencyPipeline: MTLComputePipelineState
     private let dotPipeline: MTLComputePipelineState
     private let pcgInitializePipeline: MTLComputePipelineState
     private let pcgAdvancePipeline: MTLComputePipelineState
@@ -105,6 +106,7 @@ public final class ReferenceMetalSolver {
               let function = library.makeFunction(name: "referenceBuildResidual"),
               let jacobian = library.makeFunction(name: "referenceApplyJacobian"),
               let diagonal = library.makeFunction(name: "referenceBuildInverseDiagonal"),
+              let adjacency = library.makeFunction(name: "referenceBuildContactAdjacency"),
               let dot = library.makeFunction(name: "referenceReduceDot"),
               let pcgInitialize = library.makeFunction(name: "referencePCGInitialize"),
               let pcgAdvance = library.makeFunction(name: "referencePCGAdvance"),
@@ -113,6 +115,7 @@ public final class ReferenceMetalSolver {
               let pipeline = try? device.makeComputePipelineState(function: function),
               let jacobianPipeline = try? device.makeComputePipelineState(function: jacobian),
               let diagonalPipeline = try? device.makeComputePipelineState(function: diagonal),
+              let adjacencyPipeline = try? device.makeComputePipelineState(function: adjacency),
               let dotPipeline = try? device.makeComputePipelineState(function: dot),
               let pcgInitializePipeline = try? device.makeComputePipelineState(function: pcgInitialize),
               let pcgAdvancePipeline = try? device.makeComputePipelineState(function: pcgAdvance),
@@ -143,6 +146,8 @@ public final class ReferenceMetalSolver {
                      "referenceWorldMixTrial", "referenceWorldRefreshMixed", "referenceWorldAcceptMixed",
                      "referenceWorldEndNewton", "referenceWorldPrepareFinalResidual", "referenceWorldCommitSolve",
                      "referenceWorldFinish", "referenceWorldPairFlags", "referenceWorldStableCompact",
+                     "referenceWorldBuildContactAdjacency",
+                     "referenceWorldRefreshFlags", "referenceWorldCompactRefresh",
                      "referenceApplyCenterGuards", "referenceGenerateContours", "referencePrepareRenderData",
                      "referencePCGInitializeVectors", "referencePCGInitializeScalars", "referencePCGStepScalars",
                      "referencePCGStepVectors", "referencePCGCheckResidual", "referencePCGPreconditionVectors",
@@ -158,6 +163,7 @@ public final class ReferenceMetalSolver {
         residualPipeline = pipeline
         self.jacobianPipeline = jacobianPipeline
         self.diagonalPipeline = diagonalPipeline
+        self.adjacencyPipeline = adjacencyPipeline
         self.dotPipeline = dotPipeline
         self.pcgInitializePipeline = pcgInitializePipeline
         self.pcgAdvancePipeline = pcgAdvancePipeline
@@ -166,7 +172,7 @@ public final class ReferenceMetalSolver {
         self.commandQueue = commandQueue
         self.geometryPipelines = geometryPipelines
         self.worldPipelines = worldPipelines
-        loadedFunctionNames = Set([function.name, jacobian.name, diagonal.name, dot.name,
+        loadedFunctionNames = Set([function.name, jacobian.name, diagonal.name, adjacency.name, dot.name,
                               pcgInitialize.name, pcgAdvance.name, pcgDirection.name, pcgFinalize.name]).union(geometryPipelines.keys).union(worldPipelines.keys)
     }
 
@@ -192,6 +198,8 @@ public final class ReferenceMetalSolver {
         let residual = try buffer(name: "residual", count: count, stride: MemoryLayout<SIMD2<Float>>.stride)
         let jacobian = try buffer(name: "jacobian", count: count, stride: MemoryLayout<SIMD2<Float>>.stride)
         let diagonal = try buffer(name: "diagonal", count: count, stride: MemoryLayout<SIMD2<Float>>.stride)
+        let offsets = try buffer(name: "operatorAdjacencyOffsets", count: 2 * count + 1, stride: MemoryLayout<UInt32>.stride)
+        let indices = try buffer(name: "operatorAdjacencyIndices", count: 2 * snapshot.contacts.count, stride: MemoryLayout<UInt32>.stride)
         let blockCount = count / 256 + (count % 256 == 0 ? 0 : 1)
         let blocks = try buffer(name: "dotBlocks", count: blockCount, stride: MemoryLayout<Float>.stride)
         let dot = try buffer(name: "dot", count: 1, stride: MemoryLayout<Float>.stride)
@@ -200,6 +208,8 @@ public final class ReferenceMetalSolver {
         var parameters = ReferenceMetalOperatorParameters(counts: SIMD4(bubbleCount, contactCount, 0, 0),
             physics: SIMD4(config.timeStep, config.contactStiffness, config.nonlinearStiffening, config.contactDamping),
             drag: SIMD4(config.linearDamping, 0, 0, 0))
+        try encodeAdjacency(command: command, bubbles: inputs[0], contacts: inputs[3],
+            offsets: offsets, indices: indices, parameters: parameters)
         if count > 0 {
             for (name, pipeline, output) in [("referenceBuildResidual", residualPipeline, residual), ("referenceApplyJacobian", jacobianPipeline, jacobian), ("referenceBuildInverseDiagonal", diagonalPipeline, diagonal)] {
                 guard let encoder = command.makeComputeCommandEncoder() else { throw ReferenceMetalOperatorError.commandSetupFailed }
@@ -208,6 +218,8 @@ public final class ReferenceMetalSolver {
                 for (index, input) in inputs.enumerated() { encoder.setBuffer(input, offset: 0, index: index) }
                 encoder.setBuffer(output, offset: 0, index: 6)
                 encoder.setBytes(&parameters, length: MemoryLayout<ReferenceMetalOperatorParameters>.stride, index: 7)
+                encoder.setBuffer(offsets, offset: 0, index: 8)
+                encoder.setBuffer(indices, offset: 0, index: 9)
                 encoder.dispatchThreads(MTLSize(width: count, height: 1, depth: 1),
                     threadsPerThreadgroup: MTLSize(width: min(256, pipeline.maxTotalThreadsPerThreadgroup), height: 1, depth: 1))
                 encoder.endEncoding()
@@ -265,6 +277,8 @@ public final class ReferenceMetalSolver {
         let preconditioned = try buffer(name: "pcgPreconditioned", count: count, stride: stride)
         let diagonal = try buffer(name: "diagonal", count: count, stride: stride)
         let applied = try buffer(name: "jacobian", count: count, stride: stride)
+        let offsets = try buffer(name: "pcgAdjacencyOffsets", count: 2 * count + 1, stride: MemoryLayout<UInt32>.stride)
+        let indices = try buffer(name: "pcgAdjacencyIndices", count: 2 * snapshot.contacts.count, stride: MemoryLayout<UInt32>.stride)
         let blockCount = count / 256 + (count % 256 == 0 ? 0 : 1)
         let blocks = try buffer(name: "dotBlocks", count: blockCount, stride: MemoryLayout<Float>.stride)
         let denominator = try buffer(name: "dot", count: 1, stride: MemoryLayout<Float>.stride)
@@ -276,6 +290,8 @@ public final class ReferenceMetalSolver {
             drag: SIMD4(config.linearDamping, 0, 0, 0))
         var pcgCounts = SIMD4<UInt32>(bubbleCount, iterationLimit, 0, 0)
         var tolerance = config.pcgTolerance
+        try encodeAdjacency(command: command, bubbles: inputs[0], contacts: inputs[3],
+            offsets: offsets, indices: indices, parameters: parameters)
 
         func encodeOperator(_ pipeline: MTLComputePipelineState, output: MTLBuffer) throws {
             guard count > 0 else { return }
@@ -286,6 +302,8 @@ public final class ReferenceMetalSolver {
             encoder.setBuffer(direction, offset: 0, index: 5)
             encoder.setBuffer(output, offset: 0, index: 6)
             encoder.setBytes(&parameters, length: MemoryLayout<ReferenceMetalOperatorParameters>.stride, index: 7)
+            encoder.setBuffer(offsets, offset: 0, index: 8)
+            encoder.setBuffer(indices, offset: 0, index: 9)
             encoder.dispatchThreads(MTLSize(width: count, height: 1, depth: 1),
                 threadsPerThreadgroup: MTLSize(width: min(256, pipeline.maxTotalThreadsPerThreadgroup), height: 1, depth: 1))
             encoder.endEncoding()
@@ -540,6 +558,10 @@ public final class ReferenceMetalSolver {
             let events = try buffer(name: "worldEvents", count: contactCapacity, stride: MemoryLayout<ReferenceMetalGeometryEvent>.stride)
             let candidateStatus = try buffer(name: "worldCandidateStatus", count: max(1, contactCapacity), stride: MemoryLayout<UInt32>.stride)
             let candidateEvents = try buffer(name: "worldCandidateEvents", count: max(1, contactCapacity), stride: MemoryLayout<ReferenceMetalGeometryEvent>.stride)
+            let adjacencyOffsets = try buffer(name: "worldAdjacencyOffsets", count: 2 * n + 1, stride: MemoryLayout<UInt32>.stride)
+            let adjacencyIndices = try buffer(name: "worldAdjacencyIndices", count: 2 * contactCapacity, stride: MemoryLayout<UInt32>.stride)
+            let refreshCandidates = try buffer(name: "worldRefreshCandidates", count: contactCapacity, stride: MemoryLayout<ReferenceMetalContact>.stride)
+            let refreshFlags = try buffer(name: "worldRefreshFlags", count: contactCapacity, stride: MemoryLayout<UInt32>.stride)
             let labels = try buffer(name: "worldLabels", count: n, stride: 3 * MemoryLayout<UInt32>.stride)
             let control = try buffer(name: "worldControl", count: 1, stride: MemoryLayout<ReferenceMetalWorldControl>.stride)
             let staged = try buffer(name: "worldStage", count: 1, stride: MemoryLayout<ReferenceMetalWorldStage>.stride)
@@ -583,7 +605,12 @@ public final class ReferenceMetalSolver {
                 encoder.setBuffer(pcgControl, offset: 0, index: 16)
                 encoder.setBuffer(candidateStatus, offset: 0, index: 17)
                 encoder.setBuffer(candidateEvents, offset: 0, index: 18)
-                let width = name == "referenceWorldPairFlags" ? max(1, upper) : parallel ? max(1, n) : 1
+                encoder.setBuffer(adjacencyOffsets, offset: 0, index: 19)
+                encoder.setBuffer(adjacencyIndices, offset: 0, index: 20)
+                encoder.setBuffer(refreshCandidates, offset: 0, index: 21)
+                encoder.setBuffer(refreshFlags, offset: 0, index: 22)
+                let width = name == "referenceWorldPairFlags" ? max(1, upper) :
+                    name == "referenceWorldRefreshFlags" ? max(1, contactCapacity) : parallel ? max(1, n) : 1
                 encoder.dispatchThreads(.init(width: width, height: 1, depth: 1),
                     threadsPerThreadgroup: .init(width: min(256, width, pipeline.maxTotalThreadsPerThreadgroup), height: 1, depth: 1))
                 encoder.endEncoding()
@@ -603,6 +630,8 @@ public final class ReferenceMetalSolver {
                 encoder.setBuffer(vectors, offset: 12 * n * vectorStride, index: 5)
                 encoder.setBuffer(vectors, offset: outputSlice * n * vectorStride, index: 6)
                 encoder.setBuffer(staged, offset: operatorOffset, index: 7)
+                encoder.setBuffer(adjacencyOffsets, offset: 0, index: 8)
+                encoder.setBuffer(adjacencyIndices, offset: 0, index: 9)
                 encoder.dispatchThreads(.init(width: max(1, n), height: 1, depth: 1),
                     threadsPerThreadgroup: .init(width: min(256, pipeline.maxTotalThreadsPerThreadgroup), height: 1, depth: 1))
                 encoder.endEncoding()
@@ -672,6 +701,9 @@ public final class ReferenceMetalSolver {
             let geometry = try makeStage("referenceWorld.geometry")
             try encodeWorld("referenceWorldInitialize", command: geometry)
             try encodeWorld("referenceWorldBeginSolve", command: geometry)
+            try encodeWorld("referenceWorldRefreshFlags", command: geometry, search: 0)
+            try encodeWorld("referenceWorldCompactRefresh", command: geometry, search: 0)
+            try encodeWorld("referenceWorldBuildContactAdjacency", command: geometry)
             try await completeStage(geometry, "referenceWorld.geometry")
             // Shared control is read only after command completion; numerical
             // scratch remains GPU owned until atomic final publication.
@@ -693,6 +725,9 @@ public final class ReferenceMetalSolver {
                     let beginStage = "referenceWorld.solve.\(slot)"
                     let begin = try makeStage(beginStage)
                     try encodeWorld("referenceWorldBeginSolve", command: begin)
+                    try encodeWorld("referenceWorldRefreshFlags", command: begin, search: 0)
+                    try encodeWorld("referenceWorldCompactRefresh", command: begin, search: 0)
+                    try encodeWorld("referenceWorldBuildContactAdjacency", command: begin)
                     try await completeStage(begin, beginStage)
                 }
                 for iteration in 0..<config.solverIterations {
@@ -733,13 +768,20 @@ public final class ReferenceMetalSolver {
                     for search in 0..<6 {
                         try encodeWorld("referenceWorldTrialVectors", command: line, parallel: true, search: search)
                         try encodeWorld("referenceWorldRefreshTrial", command: line)
+                        try encodeWorld("referenceWorldRefreshFlags", command: line, search: 1)
+                        try encodeWorld("referenceWorldCompactRefresh", command: line, search: 1)
+                        try encodeWorld("referenceWorldBuildContactAdjacency", command: line)
                         try encodeOperator(residualPipeline, command: line, contactSlice: 3, endSlice: 6, outputSlice: 8)
                         try encodeWorld("referenceWorldJoinTrial", command: line)
                         try encodeWorld("referenceWorldMixTrial", command: line, parallel: true)
                         try encodeWorld("referenceWorldRefreshMixed", command: line)
+                        try encodeWorld("referenceWorldRefreshFlags", command: line, search: 2)
+                        try encodeWorld("referenceWorldCompactRefresh", command: line, search: 2)
+                        try encodeWorld("referenceWorldBuildContactAdjacency", command: line)
                         try encodeOperator(residualPipeline, command: line, contactSlice: 4, endSlice: 15, outputSlice: 8)
                         try encodeWorld("referenceWorldAcceptMixed", command: line)
                     }
+                    try encodeWorld("referenceWorldBuildContactAdjacency", command: line, search: Int(UInt32.max))
                     try encodeWorld("referenceWorldEndNewton", command: line)
                     try await completeStage(line, lineStage)
                 }
@@ -825,6 +867,23 @@ public final class ReferenceMetalSolver {
                     solveCallCount: Int(finalStage.diagnostics.x), tentativeSolveCallCount: Int(finalStage.diagnostics.y),
                     contactCount: resultContacts.count, ccdGroupCount: report.eventGroupCount, profile: profile))
         }
+    }
+
+    private func encodeAdjacency(command: MTLCommandBuffer, bubbles: MTLBuffer, contacts: MTLBuffer,
+                                 offsets: MTLBuffer, indices: MTLBuffer,
+                                 parameters: ReferenceMetalOperatorParameters) throws {
+        guard let encoder = command.makeComputeCommandEncoder() else { throw ReferenceMetalOperatorError.commandSetupFailed }
+        encoder.label = "referenceBuildContactAdjacency"
+        encoder.setComputePipelineState(adjacencyPipeline)
+        encoder.setBuffer(bubbles, offset: 0, index: 0)
+        encoder.setBuffer(contacts, offset: 0, index: 1)
+        encoder.setBuffer(offsets, offset: 0, index: 2)
+        encoder.setBuffer(indices, offset: 0, index: 3)
+        var packed = parameters
+        encoder.setBytes(&packed, length: MemoryLayout<ReferenceMetalOperatorParameters>.stride, index: 4)
+        encoder.dispatchThreads(.init(width: 1, height: 1, depth: 1),
+            threadsPerThreadgroup: .init(width: 1, height: 1, depth: 1))
+        encoder.endEncoding()
     }
 
     private func makeCommand(stage: String, scenarioStep: Int) throws -> MTLCommandBuffer {

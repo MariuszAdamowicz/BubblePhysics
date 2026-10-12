@@ -42,7 +42,18 @@ struct WStage {
     device float2 *points [[buffer(12)]], device float4 *render [[buffer(13)]], \
     constant WParameters &p [[buffer(14)]], device WStage &stage [[buffer(15)]], \
     device ReferencePCGControl &pcg [[buffer(16)]], device uint *candidateStatus [[buffer(17)]], \
-    device GEvent *candidateEvents [[buffer(18)]], uint tid [[thread_position_in_grid]]
+    device GEvent *candidateEvents [[buffer(18)]], device uint *adjacencyOffsets [[buffer(19)]], \
+    device uint *adjacencyIndices [[buffer(20)]], device GContact *refreshCandidates [[buffer(21)]], \
+    device uint *refreshFlags [[buffer(22)]], uint tid [[thread_position_in_grid]]
+
+kernel void referenceWorldBuildContactAdjacency(WARGS) {
+    ReferenceOperatorParameters op=stage.op;
+    if(p.limits.z==UINT_MAX){op.counts.x=p.counts.x;op.counts.y=stage.flow.z;op.counts.z=2;}
+    if(tid||op.counts.x==0||control.failure.x||control.failure.y)return;
+    referenceFillContactAdjacency(reinterpret_cast<device const ReferenceMetalBubble *>(b),
+        reinterpret_cast<device const ReferenceMetalContact *>(c+op.counts.z*p.counts.w),
+        adjacencyOffsets,adjacencyIndices,op);
+}
 
 float wNorm(device const float2 *a,uint n) {float sum=0;for(uint i=0;i<n;++i)sum+=gDot(a[i],a[i]);return sqrt(sum);}
 void wInsert(GContact value,device GContact *out,thread uint &count) {
@@ -50,27 +61,74 @@ void wInsert(GContact value,device GContact *out,thread uint &count) {
     if(at<count&&out[at].identity.x==value.identity.x){out[at]=value;return;}
     for(uint i=count;i>at;--i)out[i]=out[i-1];out[at]=value;++count;
 }
-uint wRefresh(device const GBubble *b,device const GSegment *s,device const float2 *end,
-    device const float2 *velocity,device const GContact *old,uint count,device GContact *out,WParameters p,
-    thread bool &valid) {
-    uint result=0;
-    for(uint i=0;i<count;++i){GContact previous=old[i];uint a=gBubbleIndex(previous.bubbles.x,b,p.counts.x);
-        if(a==p.counts.x)continue;GContact next;float speed;
-        if(previous.identity.y&1){uint k=gSegmentIndex(previous.segmentAndAge.x,s,p.counts.y);if(k==p.counts.y)continue;
+uint wRefreshOne(device const GBubble *b,device const GSegment *s,device const float2 *end,
+    device const float2 *velocity,GContact previous,thread GContact &next,WParameters p) {
+        uint a=gBubbleIndex(previous.bubbles.x,b,p.counts.x);
+        if(a==p.counts.x)return 0;float speed;
+        if(previous.identity.y&1){uint k=gSegmentIndex(previous.segmentAndAge.x,s,p.counts.y);if(k==p.counts.y)return 0;
             next=gBS(b[a],s[k],end[a]);speed=gDot(velocity[a]-s[k].velocity.xy,next.geometry.xy);}
-        else {uint other=gBubbleIndex(previous.bubbles.y,b,p.counts.x);if(other==p.counts.x)continue;
+        else {uint other=gBubbleIndex(previous.bubbles.y,b,p.counts.x);if(other==p.counts.x)return 0;
             next=gBB(b[a],b[other],end[a],end[other]);speed=gDot(velocity[other]-velocity[a],next.geometry.xy);}
         // Check before lifecycle comparisons: -Inf penetration must not silently
         // discard an active contact and turn an invalid solve into success.
-        if(!all(isfinite(next.geometry))||!all(isfinite(next.timing))||!isfinite(speed)){valid=false;return 0;}
+        if(!all(isfinite(next.geometry))||!all(isfinite(next.timing))||!isfinite(speed))return 2;
         if(next.timing.x>p.tolerances.x||(next.timing.x>=-p.tolerances.y&&speed<=0)){
             next.segmentAndAge.y=previous.segmentAndAge.y+1;
             next.identity.y=(next.identity.y&~16ul)|(previous.identity.y&16ul);next.timing.z=previous.timing.z;
-            wInsert(next,out,result);}}
-    return result;
+            return 1;}
+    return 0;
+}
+ReferenceOperatorParameters wOperator(WParameters p,uint count,float dt);
+kernel void referenceWorldRefreshFlags(WARGS) {
+    if(!stage.op.counts.w||control.failure.x||control.failure.y)return;
+    uint mode=p.limits.z,n=p.counts.x,capacity=p.counts.w;
+    uint count=mode==0?control.failure.z:stage.flow.z;
+    if(tid>=count)return;
+    device const GContact *old=c+(mode==0?0:2*capacity);
+    device const float2 *end=v+(mode==0?4:mode==1?6:15)*n;
+    device const float2 *velocity=v+(mode==0?3:mode==1?7:16)*n;
+    GContact next={};
+    uint flag=wRefreshOne(b,intervalSegments,end,velocity,old[tid],next,p);
+    refreshFlags[tid]=flag;
+    if(flag==1)refreshCandidates[tid]=next;
+}
+kernel void referenceWorldCompactRefresh(WARGS) {
+    if(tid||!stage.op.counts.w||control.failure.x||control.failure.y)return;
+    uint mode=p.limits.z,capacity=p.counts.w;
+    uint count=mode==0?control.failure.z:stage.flow.z;
+    device GContact *out=c+(mode+2)*capacity;
+    uint result=0;
+    for(uint i=0;i<count;++i){
+        if(refreshFlags[i]==2){control.failure.x=1;stage.op.counts.w=0;return;}
+        if(refreshFlags[i]==1){
+            // Preserve stable 64-bit ID ordering without a direct ulong
+            // comparison here. On the M2 Pro, direct comparison in wInsert
+            // collapsed distinct bubble/segment IDs during refresh.
+            GContact candidate=refreshCandidates[i];
+            ulong key=candidate.identity.x;
+            uint hi=uint(key>>32),lo=uint(key);
+            uint at=0;
+            for(;at<result;++at){
+                ulong existing=out[at].identity.x;
+                uint existingHi=uint(existing>>32),existingLo=uint(existing);
+                if(existingHi>hi||(existingHi==hi&&existingLo>=lo))break;
+            }
+            bool duplicate=false;
+            if(at<result){
+                ulong existing=out[at].identity.x;
+                duplicate=uint(existing>>32)==hi&&uint(existing)==lo;
+            }
+            if(duplicate)out[at]=candidate;
+            else {for(uint j=result;j>at;--j)out[j]=out[j-1];out[at]=candidate;++result;}
+        }
+    }
+    if(mode==0){stage.flow.z=result;stage.current={};stage.newton=uint4(0);stage.flow.y=1;}
+    else if(mode==1)stage.newton.z=result;
+    else stage.newton.w=result;
+    stage.op=wOperator(p,result,stage.time.z);stage.op.counts.z=mode+2;
 }
 ReferenceOperatorParameters wOperator(WParameters p,uint count,float dt) {
-    ReferenceOperatorParameters result;result.counts=uint4(p.counts.x,count,0,0);
+    ReferenceOperatorParameters result;result.counts=uint4(p.counts.x,count,2,0);
     result.physics=float4(dt,p.physics.yzw);result.drag=float4(p.damping.x,0,0,0);return result;
 }
 void wJoin(device uint *labels,device const GBubble *b,uint n,device const GContact *contacts,uint count) {
@@ -204,10 +262,7 @@ kernel void referenceWorldBeginSolve(WARGS) {
     stage.time.z=stage.flow.x==2?stage.time.w:stage.time.y;
     wSegments(segments,intervalSegments,p,stage.time.x,stage.time.z);
     for(uint i=0;i<n;++i){v[2*n+i]=v[i];v[3*n+i]=v[n+i];v[4*n+i]=v[i]+v[n+i]*stage.time.z;}
-    bool valid=true;
-    stage.flow.z=wRefresh(b,intervalSegments,v+4*n,v+3*n,c,count,c+2*capacity,p,valid);
-    if(!valid){control.failure.x=1;return;}
-    stage.current={};stage.newton=uint4(0);stage.flow.y=1;
+    stage.op=wOperator(p,0,stage.time.z);stage.op.counts.w=1;
 }
 kernel void referenceWorldBeginNewton(WARGS) {
     if(tid)return;
@@ -253,10 +308,7 @@ kernel void referenceWorldRefreshTrial(WARGS) {
     if(!stage.flow.x||!stage.flow.y||stage.newton.y||wFailed(control))return;
     uint n=p.counts.x;
     for(uint i=0;i<n;++i)if(!all(isfinite(v[6*n+i])))return;
-    bool valid=true;
-    stage.newton.z=wRefresh(b,intervalSegments,v+6*n,v+7*n,c+2*p.counts.w,stage.flow.z,c+3*p.counts.w,p,valid);
-    if(!valid){control.failure.x=1;return;}
-    stage.op=wOperator(p,stage.newton.z,stage.time.z);
+    stage.op.counts.w=1;
 }
 kernel void referenceWorldJoinTrial(WARGS) {
     if(tid||!stage.op.counts.x)return;
@@ -279,10 +331,7 @@ kernel void referenceWorldRefreshMixed(WARGS) {
     bool improving=false;
     if(stage.op.counts.x)for(uint i=0;i<p.counts.x;++i)if(labels[2*p.counts.x+i])improving=true;
     stage.op.counts.x=0;if(!improving)return;
-    bool valid=true;uint n=p.counts.x;
-    stage.newton.w=wRefresh(b,intervalSegments,v+15*n,v+16*n,c+2*p.counts.w,stage.flow.z,c+4*p.counts.w,p,valid);
-    if(!valid){control.failure.x=1;return;}
-    stage.op=wOperator(p,stage.newton.w,stage.time.z);
+    stage.op.counts.w=1;
 }
 kernel void referenceWorldAcceptMixed(WARGS) {
     if(tid||!stage.op.counts.x)return;

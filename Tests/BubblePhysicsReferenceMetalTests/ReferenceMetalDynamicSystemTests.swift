@@ -4,6 +4,52 @@ import BubblePhysicsReference
 @testable import BubblePhysicsReferenceMetal
 
 final class ReferenceMetalDynamicSystemTests: XCTestCase {
+    // Removing the adjacency kernel would restore a global contact scan in
+    // every residual/Jacobian/diagonal row of the production solver.
+    func testOperatorsUseProductionContactAdjacency() async throws {
+        let solver = try makeSolver()
+        XCTAssertTrue(solver.loadedFunctionNames.contains("referenceBuildContactAdjacency"))
+        let fixture = try makeFixture(segment: false)
+        let result = try await solver.evaluateOperatorsForTesting(snapshot: fixture.snapshot,
+            endCenters: fixture.end, vector: fixture.vector)
+        assertVectors(result.residual, fixture.system.residual(endCenters: fixture.end))
+        assertVectors(result.jacobianVector, fixture.system.applyJacobian(at: fixture.end, to: fixture.vector))
+        assertVectors(result.inverseDiagonal, fixture.system.inverseDiagonalPreconditioner(at: fixture.end))
+    }
+
+    func testSparseThreeHundredBubbleChainPreservesDuplicateContactContribution() async throws {
+        let config = ReferenceConfiguration(timeStep: 0.1, linearDamping: 0.1,
+            contactStiffness: 13, contactDamping: 2)
+        var world = ReferenceWorld(configuration: config, broadPhase: BruteForceBroadPhase())
+        for index in 0..<300 {
+            world.addBubble(try .init(id: .init(rawValue: index),
+                center: .init(x: Float(index) * 1.5, y: 0), mass: 2, targetRadius: 1))
+        }
+        let contacts = (0..<299).map { index in
+            ReferenceContact(id: .init(rawValue: UInt64(index + 1)), kind: .bubbleBubble,
+                bubbleA: .init(rawValue: index), bubbleB: .init(rawValue: index + 1),
+                normal: .init(x: 1, y: 0), pointQ: .zero, penetration: 0.5)
+        }
+        let duplicate = contacts[0]
+        let snapshot = ReferenceMetalSnapshot(world: world, contacts: contacts + [duplicate])
+        let centers = snapshot.centers.map { ReferenceVector2(x: $0.x, y: $0.y) }
+        let velocities = Array(repeating: ReferenceVector2.zero, count: 300)
+        let dynamicContacts = (0..<299).map { index in
+            ReferenceDynamicContact(indexA: index, indexB: index + 1, pointQ: nil,
+                contactDistance: 2, normalFallback: .init(x: -1, y: 0))
+        }
+        let system = ReferenceDynamicSystem(startCenters: centers, startVelocities: velocities,
+            masses: Array(repeating: 2, count: 300), radii: Array(repeating: 1, count: 300),
+            contacts: [dynamicContacts[0], dynamicContacts[0]] + Array(dynamicContacts.dropFirst()),
+            timeStep: 0.1, stiffness: 13, nonlinearStiffening: config.nonlinearStiffening,
+            contactDamping: 2, globalDrag: 0.1)
+        let vector = (0..<300).map { ReferenceVector2(x: Float($0 % 3) * 0.01, y: 0) }
+        let result = try await makeSolver().evaluateOperatorsForTesting(snapshot: snapshot,
+            endCenters: centers, vector: vector)
+        assertVectors(result.residual, system.residual(endCenters: centers))
+        assertVectors(result.jacobianVector, system.applyJacobian(at: centers, to: vector))
+        assertVectors(result.inverseDiagonal, system.inverseDiagonalPreconditioner(at: centers))
+    }
     // Missing midpoint/contact forces, the FD stencil, or contact coefficients
     // each break an independent comparison with the existing CPU oracle.
     func testBubbleBubbleResidualMatchesCPU() async throws {

@@ -60,14 +60,48 @@ inline float2 referenceMidVelocity(uint i, device const float2 *start, device co
                                   float shift, float dt) {
     return (velocity[i] + referenceEndVelocity(i, start, velocity, end, vector, shift, dt)) * 0.5f;
 }
+// One ordered pass creates CSR rows. The second pass appends contact indices in
+// global order, including duplicate IDs. The extra half of offsets is scratch.
+inline void referenceFillContactAdjacency(device const ReferenceMetalBubble *bubbles,
+    device const ReferenceMetalContact *contacts, device uint *offsets,
+    device uint *indices, ReferenceOperatorParameters p) {
+    uint n = p.counts.x;
+    for (uint i = 0; i <= n; ++i) offsets[i] = 0;
+    for (uint c = 0; c < p.counts.y; ++c) {
+        ReferenceMetalContact contact = contacts[c];
+        int a = referenceBubbleIndex(contact.bubbles.x, bubbles, n);
+        if (a < 0) continue;
+        ++offsets[uint(a) + 1];
+        int b = (contact.identity.y & 2) ? referenceBubbleIndex(contact.bubbles.y, bubbles, n) : -1;
+        if (b >= 0 && b != a) ++offsets[uint(b) + 1];
+    }
+    for (uint i = 1; i <= n; ++i) offsets[i] += offsets[i - 1];
+    for (uint i = 0; i < n; ++i) offsets[n + 1 + i] = offsets[i];
+    for (uint c = 0; c < p.counts.y; ++c) {
+        ReferenceMetalContact contact = contacts[c];
+        int a = referenceBubbleIndex(contact.bubbles.x, bubbles, n);
+        if (a < 0) continue;
+        indices[offsets[n + 1 + uint(a)]++] = c;
+        int b = (contact.identity.y & 2) ? referenceBubbleIndex(contact.bubbles.y, bubbles, n) : -1;
+        if (b >= 0 && b != a) indices[offsets[n + 1 + uint(b)]++] = c;
+    }
+}
+kernel void referenceBuildContactAdjacency(device const ReferenceMetalBubble *bubbles [[buffer(0)]],
+    device const ReferenceMetalContact *contacts [[buffer(1)]], device uint *offsets [[buffer(2)]],
+    device uint *indices [[buffer(3)]], constant ReferenceOperatorParameters &p [[buffer(4)]],
+    uint tid [[thread_position_in_grid]]) {
+    if (!tid) referenceFillContactAdjacency(bubbles, contacts, offsets, indices, p);
+}
 inline float2 referenceResidual(uint i, device const ReferenceMetalBubble *bubbles,
     device const float2 *start, device const float2 *velocity, device const ReferenceMetalContact *contacts,
+    device const uint *offsets, device const uint *indices,
     device const float2 *end, device const float2 *vector, ReferenceOperatorParameters p, float shift) {
     float dt = p.physics.x;
     float mass = max(bubbles[i].physical.x, referenceMinimumMass);
     float2 force = -referenceMidVelocity(i, start, velocity, end, vector, shift, dt) * (max(0.0f, p.drag.x) * mass);
     // Each row gathers contacts in stable contact-ID order, avoiding atomic sums.
-    for (uint c = 0; c < p.counts.y; ++c) {
+    for (uint adjacent = offsets[i]; adjacent < offsets[i + 1]; ++adjacent) {
+        uint c = indices[adjacent];
         ReferenceMetalContact contact = contacts[c];
         int a = referenceBubbleIndex(contact.bubbles.x, bubbles, p.counts.x);
         if (a < 0) continue;
@@ -100,15 +134,17 @@ kernel void referenceBuildResidual(device const ReferenceMetalBubble *bubbles [[
     device const float2 *start [[buffer(1)]], device const float2 *velocity [[buffer(2)]],
     device const ReferenceMetalContact *contacts [[buffer(3)]], device const float2 *end [[buffer(4)]],
     device const float2 *vector [[buffer(5)]], device float2 *output [[buffer(6)]],
-    constant ReferenceOperatorParameters &p [[buffer(7)]], uint i [[thread_position_in_grid]]) {
-    if (i < p.counts.x) output[i] = referenceResidual(i, bubbles, start, velocity, contacts, end, vector, p, 0);
+    constant ReferenceOperatorParameters &p [[buffer(7)]], device const uint *offsets [[buffer(8)]],
+    device const uint *indices [[buffer(9)]], uint i [[thread_position_in_grid]]) {
+    if (i < p.counts.x) output[i] = referenceResidual(i, bubbles, start, velocity, contacts, offsets, indices, end, vector, p, 0);
 }
 
 kernel void referenceApplyJacobian(device const ReferenceMetalBubble *bubbles [[buffer(0)]],
     device const float2 *start [[buffer(1)]], device const float2 *velocity [[buffer(2)]],
     device const ReferenceMetalContact *contacts [[buffer(3)]], device const float2 *end [[buffer(4)]],
     device const float2 *vector [[buffer(5)]], device float2 *output [[buffer(6)]],
-    constant ReferenceOperatorParameters &p [[buffer(7)]], uint i [[thread_position_in_grid]]) {
+    constant ReferenceOperatorParameters &p [[buffer(7)]], device const uint *offsets [[buffer(8)]],
+    device const uint *indices [[buffer(9)]], uint i [[thread_position_in_grid]]) {
     if (i >= p.counts.x) return;
     // Match the CPU's global zero-vector guard, including lengthSquared underflow.
     bool nonzero = false;
@@ -116,8 +152,8 @@ kernel void referenceApplyJacobian(device const ReferenceMetalBubble *bubbles [[
         if (referenceDot(vector[j], vector[j]) > 0) { nonzero = true; break; }
     }
     if (!nonzero) { output[i] = float2(0); return; }
-    float2 plus = referenceResidual(i, bubbles, start, velocity, contacts, end, vector, p, referenceEpsilon);
-    float2 minus = referenceResidual(i, bubbles, start, velocity, contacts, end, vector, p, -referenceEpsilon);
+    float2 plus = referenceResidual(i, bubbles, start, velocity, contacts, offsets, indices, end, vector, p, referenceEpsilon);
+    float2 minus = referenceResidual(i, bubbles, start, velocity, contacts, offsets, indices, end, vector, p, -referenceEpsilon);
     output[i] = (plus - minus) / (2 * referenceEpsilon);
 }
 
@@ -125,11 +161,13 @@ kernel void referenceBuildInverseDiagonal(device const ReferenceMetalBubble *bub
     device const float2 *start [[buffer(1)]], device const float2 *velocity [[buffer(2)]],
     device const ReferenceMetalContact *contacts [[buffer(3)]], device const float2 *end [[buffer(4)]],
     device const float2 *vector [[buffer(5)]], device float2 *output [[buffer(6)]],
-    constant ReferenceOperatorParameters &p [[buffer(7)]], uint i [[thread_position_in_grid]]) {
+    constant ReferenceOperatorParameters &p [[buffer(7)]], device const uint *offsets [[buffer(8)]],
+    device const uint *indices [[buffer(9)]], uint i [[thread_position_in_grid]]) {
     if (i >= p.counts.x) return;
     float diagonal = max(bubbles[i].physical.x, referenceMinimumMass) * (2 / p.physics.x + max(0.0f, p.drag.x));
     bool finite = isfinite(diagonal);
-    for (uint c = 0; c < p.counts.y; ++c) {
+    for (uint adjacent = offsets[i]; adjacent < offsets[i + 1]; ++adjacent) {
+        uint c = indices[adjacent];
         ReferenceMetalContact contact = contacts[c];
         int a = referenceBubbleIndex(contact.bubbles.x, bubbles, p.counts.x);
         if (a < 0) continue;
