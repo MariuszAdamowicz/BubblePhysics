@@ -114,7 +114,75 @@ void gInsert(GContact c,device GContact *out,device GControl &control,uint capac
  device GContact *contacts [[buffer(8)]], device GEvent *events [[buffer(9)]], \
  device uint *labels [[buffer(10)]], device uint *touched [[buffer(11)]], \
  device uint4 *components [[buffer(12)]], device GControl &control [[buffer(13)]], \
- constant GParameters &p [[buffer(14)]], uint tid [[thread_position_in_grid]]
+ constant GParameters &p [[buffer(14)]], device uint *candidateFlags [[buffer(15)]], \
+ device GEvent *candidateEvents [[buffer(16)]], uint tid [[thread_position_in_grid]]
+
+ulong gPairUniverse(uint n) {return ulong(n)*ulong(n ? n-1 : 0)/2;}
+uint2 gCanonicalPair(ulong index,uint n) {
+    uint low=0,high=n;
+    while(low+1<high){uint mid=low+(high-low)/2;
+        ulong begin=ulong(mid)*(ulong(2)*n-mid-1)/2;
+        if(begin<=index)low=mid;else high=mid;}
+    ulong begin=ulong(low)*(ulong(2)*n-low-1)/2;
+    return uint2(low,low+1+uint(index-begin));
+}
+
+kernel void referencePairFlags(GARGS) {
+    ulong total=gPairUniverse(p.counts.x)+ulong(p.counts.x)*p.counts.y;
+    if(ulong(tid)>=total)return;
+    ulong bubblePairs=gPairUniverse(p.counts.x);
+    if(ulong(tid)>=bubblePairs){candidateFlags[tid]=1;return;}
+    uint2 pair=gCanonicalPair(tid,p.counts.x);
+    uint a=pair.x,other=pair.y;
+    float2 amin=min(start[a],predicted[a])-b[a].physical.z,amax=max(start[a],predicted[a])+b[a].physical.z;
+    float2 bmin=min(start[other],predicted[other])-b[other].physical.z,bmax=max(start[other],predicted[other])+b[other].physical.z;
+    candidateFlags[tid]=all(amin<=bmax)&&all(bmin<=amax) ? 1 : 0;
+}
+
+kernel void referenceStableCompact(GARGS) {
+    if(tid)return;
+    if(p.capacities.w==0){
+        for(uint i=0;i<p.counts.x;++i)if(!all(isfinite(start[i]))||!all(isfinite(velocity[i]))||
+            !all(isfinite(predicted[i]))||!all(isfinite(b[i].physical))||!all(isfinite(b[i].angular))){control.flags.y=1;return;}
+        for(uint i=0;i<p.counts.y;++i)if(!all(isfinite(s[i].previous))||!all(isfinite(s[i].current))||
+            !all(isfinite(s[i].velocity))||!all(isfinite(s[i].collision))){control.flags.y=1;return;}
+        ulong bubblePairs=gPairUniverse(p.counts.x);
+        ulong total=bubblePairs+ulong(p.counts.x)*p.counts.y;
+        uint count=0;
+        for(ulong i=0;i<total;++i)if(candidateFlags[i]&1){
+            if(count<p.counts.w){
+                if(i<bubblePairs){uint2 pair=gCanonicalPair(i,p.counts.x);pairs[count]=uint4(0,pair.x,pair.y,0);}
+                else{ulong offset=i-bubblePairs;pairs[count]=uint4(1,uint(offset%p.counts.x),uint(offset/p.counts.x),0);}
+            }
+            ++count;
+        }
+        control.counts.x=count;control.required.x=count;if(count>p.counts.w)control.flags.x=1;
+        return;
+    }
+    if(control.flags.x||control.flags.y)return;
+    uint count=0;
+    for(uint i=0;i<control.counts.x;++i){
+        uint flags=candidateFlags[i];
+        if(flags&4){control.flags.y=1;return;}
+        if(flags&2)++control.flags.z;
+        if(!(flags&1))continue;
+        GEvent event=candidateEvents[i];uint at=count++;
+        while(at>0&&(events[at-1].timing.x>event.timing.x||
+            (events[at-1].timing.x==event.timing.x&&events[at-1].contact.identity.x>event.contact.identity.x))){events[at]=events[at-1];--at;}
+        events[at]=event;
+    }
+    control.counts.z=count;
+    float groupTime=0;uint groups=0;
+    for(uint i=0;i<count;++i){float time=events[i].timing.x;
+        if(i==0||time-groupTime>p.events.x){groupTime=time;++groups;}
+        events[i].grouping.x=groups-1;events[i].timing.z=groupTime;
+    }
+    for(uint i=1;i<count;++i){GEvent event=events[i];uint at=i;
+        while(at>0&&events[at-1].grouping.x==event.grouping.x&&events[at-1].contact.identity.x>event.contact.identity.x){events[at]=events[at-1];--at;}
+        events[at]=event;
+    }
+    control.grouping=uint4(groups,groups>p.limits.y,0,0);
+}
 
 // Exact center-line crossing polynomial from ReferenceCenterSegmentTOI.
 bool gCenterCrossing(float2 p0,float2 end,GSegment s,float tolerance,thread bool &valid) {
@@ -175,31 +243,6 @@ kernel void referencePredict(GARGS) {
     // Each thread owns one scratch word. Serial labeling folds the failure bit
     // into control, avoiding concurrent non-atomic writes to the control record.
     guarded[tid]=end;touched[tid]=valid ? corrections:0x80000000u;
-}
-
-kernel void referenceEmitCandidatePairs(GARGS) {
-    if(tid)return;uint count=0;
-    // NaN comparisons can otherwise make invalid geometry look like an empty
-    // broad phase. Validate on GPU before filtering any candidate away.
-    for(uint i=0;i<p.counts.x;++i) {
-        if(!all(isfinite(start[i])) || !all(isfinite(velocity[i])) || !all(isfinite(predicted[i])) ||
-           !all(isfinite(b[i].physical)) || !all(isfinite(b[i].angular))) {control.flags.y=1;return;}
-    }
-    for(uint i=0;i<p.counts.y;++i) {
-        if(!all(isfinite(s[i].previous)) || !all(isfinite(s[i].current)) ||
-           !all(isfinite(s[i].velocity)) || !all(isfinite(s[i].collision))) {control.flags.y=1;return;}
-    }
-    for(uint a=0;a<p.counts.x;++a)for(uint other=a+1;other<p.counts.x;++other) {
-        float2 amin=min(start[a],predicted[a])-b[a].physical.z,amax=max(start[a],predicted[a])+b[a].physical.z;
-        float2 bmin=min(start[other],predicted[other])-b[other].physical.z,bmax=max(start[other],predicted[other])+b[other].physical.z;
-        if(all(amin<=bmax)&&all(bmin<=amax)) {if(count<p.counts.w)pairs[count]=uint4(0,a,other,0);++count;}
-    }
-    // CPU tests all bubble/segment pairs, in segment then bubble ID order.
-    for(uint seg=0;seg<p.counts.y;++seg)for(uint a=0;a<p.counts.x;++a) {
-        if(count<p.counts.w)pairs[count]=uint4(1,a,seg,0);++count;
-    }
-    control.counts.x=count;control.required.x=count;
-    if(count>p.counts.w)control.flags.x=1;
 }
 
 kernel void referenceRefreshContacts(GARGS) {
@@ -274,16 +317,16 @@ float gSegmentTOI(GBubble bubble,float2 begin,float2 end,GSegment seg,GParameter
 }
 
 kernel void referenceFindTOI(GARGS) {
-    if(tid || control.flags.x || control.flags.y)return;
-    for(uint i=0;i<control.counts.x;++i) {
-        uint4 pair=pairs[i];uint a=pair.y,other=pair.z;
+    if(tid>=control.counts.x || control.flags.x || control.flags.y)return;
+    {
+        uint i=tid;uint4 pair=pairs[i];uint a=pair.y,other=pair.z;
         GContact c=pair.x==0 ? gBB(b[a],b[other],start[a],start[other]):gBS(b[a],s[other],start[a]);
         bool active=false;for(uint k=0;k<p.counts.z;++k)if(old[k].identity.x==c.identity.x){active=true;break;}
-        if(active)continue;
+        if(active){candidateFlags[i]=0;return;}
         float t=-1;float2 normal,point;bool exhausted=false,valid=true;
         if(pair.x==0) {float2 initial=gCCDVector(start[other]-start[a],valid);float radius=gCCDScalar(b[a].physical.z+b[other].physical.z,valid);
             float initialSquare=gCCDDot(initial,initial,valid),radiusSquare=gCCDScalar(radius*radius,valid);
-            if(!valid){control.flags.y=1;return;}
+            if(!valid){candidateFlags[i]=4;return;}
             float2 movement=gCCDVector(gCCDVector(predicted[other]-start[other],valid)-gCCDVector(predicted[a]-start[a],valid),valid);
             t=initialSquare<=radiusSquare ? 0:gCircleFraction(initial,movement,float2(0),radius,valid);
             if(t>=0)c=gBB(b[a],b[other],start[a]+(predicted[a]-start[a])*t,start[other]+(predicted[other]-start[other])*t);
@@ -291,28 +334,12 @@ kernel void referenceFindTOI(GARGS) {
             // CPU's initial-overlap candidate uses current segment endpoints;
             // only a nonzero impact overrides point/normal and penetration.
             if(t>0){c.geometry=float4(normal,point);c.timing.x=0;}}
-        if(!valid){control.flags.y=1;return;}
-        if(exhausted)++control.flags.z;
-        if(t<0 || !isfinite(t))continue;
+        if(!valid){candidateFlags[i]=4;return;}
+        uint status=exhausted?2:0;
+        if(t<0 || !isfinite(t)){candidateFlags[i]=status;return;}
         GEvent event={};event.contact=c;event.timing=float4(p.physics.x*t,t,0,0);
-        uint at=control.counts.z++;
-        while(at>0 && (events[at-1].timing.x>event.timing.x ||
-            (events[at-1].timing.x==event.timing.x && events[at-1].contact.identity.x>c.identity.x))) {
-            events[at]=events[at-1];--at;}
-        events[at]=event;
+        candidateEvents[i]=event;candidateFlags[i]=status|1;
     }
-    float groupTime=0;uint groups=0;
-    for(uint i=0;i<control.counts.z;++i) {float time=events[i].timing.x;
-        if(i==0 || time-groupTime>p.events.x) {groupTime=time;++groups;}
-        events[i].grouping.x=groups-1;events[i].timing.z=groupTime;
-    }
-    // Sort IDs within each group without changing that group's anchor time.
-    for(uint i=1;i<control.counts.z;++i) {GEvent event=events[i];uint at=i;
-        while(at>0 && events[at-1].grouping.x==event.grouping.x && events[at-1].contact.identity.x>event.contact.identity.x) {
-            events[at]=events[at-1];--at;}
-        events[at]=event;
-    }
-    control.grouping=uint4(groups,groups>p.limits.y,0,0);
 }
 
 uint gRoot(uint i,device uint *labels) {while(labels[i]!=i)i=labels[i];return i;}

@@ -41,7 +41,8 @@ struct WStage {
     device WControl &control [[buffer(10)]], device const uint2 *ranges [[buffer(11)]], \
     device float2 *points [[buffer(12)]], device float4 *render [[buffer(13)]], \
     constant WParameters &p [[buffer(14)]], device WStage &stage [[buffer(15)]], \
-    device ReferencePCGControl &pcg [[buffer(16)]], uint tid [[thread_position_in_grid]]
+    device ReferencePCGControl &pcg [[buffer(16)]], device uint *candidateStatus [[buffer(17)]], \
+    device GEvent *candidateEvents [[buffer(18)]], uint tid [[thread_position_in_grid]]
 
 float wNorm(device const float2 *a,uint n) {float sum=0;for(uint i=0;i<n;++i)sum+=gDot(a[i],a[i]);return sqrt(sum);}
 void wInsert(GContact value,device GContact *out,thread uint &count) {
@@ -116,35 +117,61 @@ void wSegments(device const GSegment *source,device GSegment *out,WParameters p,
         if(x.flags.x)x.velocity.xy=((end.xy-begin.xy)+(end.zw-begin.zw))*.5f/max(duration,FLT_EPSILON);
         else x.velocity=float4(0);out[i]=x;}
 }
-uint wScan(device const GBubble *b,device const GSegment *s,device const float2 *start,device const float2 *end,
-    device const GContact *active,uint activeCount,device GEvent *out,device WControl &control,WParameters p,float duration) {
-    uint count=0;bool valid=true;GParameters gp={};gp.physics=float4(duration,p.tolerances.xyz);gp.limits=uint4(p.limits.z,p.limits.w,0,0);
-    for(uint type=0;type<2;++type)for(uint first=0;first<(type?p.counts.y:p.counts.x);++first)
-        for(uint second=type?0:first+1;second<p.counts.x;++second){uint a=type?second:first,other=type?first:second;
-            if(!type){float2 amin=min(start[a],end[a])-b[a].physical.z,amax=max(start[a],end[a])+b[a].physical.z;
-                float2 bmin=min(start[other],end[other])-b[other].physical.z,bmax=max(start[other],end[other])+b[other].physical.z;
-                if(!(all(amin<=bmax)&&all(bmin<=amax)))continue;++control.work.x;}
-            GContact candidate=type?gBS(b[a],s[other],start[a]):gBB(b[a],b[other],start[a],start[other]);
-            bool exists=false;for(uint k=0;k<activeCount;++k)if(active[k].identity.x==candidate.identity.x)exists=true;
-            if(exists)continue;++control.work.z;
-            float fraction=-1;float2 normal,point;bool exhausted=false;
-            if(type){fraction=gSegmentTOI(b[a],start[a],end[a],s[other],gp,normal,point,exhausted,valid);
-                if(fraction>0){candidate.geometry=float4(normal,point);candidate.timing.x=0;}}
-            else {float2 initial=gCCDVector(start[other]-start[a],valid),movement=gCCDVector((end[other]-start[other])-(end[a]-start[a]),valid);
-                float radius=gCCDScalar(b[a].physical.z+b[other].physical.z,valid);
-                float square=gCCDDot(initial,initial,valid),radiusSquare=gCCDScalar(radius*radius,valid);
-                fraction=square<=radiusSquare?0:gCircleFraction(initial,movement,float2(0),radius,valid);
-                if(fraction>=0)candidate=gBB(b[a],b[other],start[a]+(end[a]-start[a])*fraction,start[other]+(end[other]-start[other])*fraction);}
-            if(exhausted)++control.work.w;
-            if(!valid){control.failure.x=1;return 0;}if(fraction<0)continue;
-            if(!all(isfinite(candidate.geometry))||!all(isfinite(candidate.timing))){control.failure.x=1;return 0;}
-            // CPU stores every event time but candidates[stableKey] is updated
-            // in scan order. Even a later event outside the activation window
-            // supplies the candidate for earlier events with the same key.
-            for(uint k=0;k<count;++k)if(out[k].contact.identity.x==candidate.identity.x)out[k].contact=candidate;
-            GEvent event={};event.contact=candidate;event.timing=float4(duration*fraction,0,0,0);
-            uint at=count++;while(at>0&&(out[at-1].timing.x>event.timing.x||(out[at-1].timing.x==event.timing.x&&out[at-1].contact.identity.x>candidate.identity.x))){out[at]=out[at-1];--at;}out[at]=event;}
-    return count;
+bool wFailed(device const WControl &control);
+
+kernel void referenceWorldPairFlags(WARGS) {
+    if(stage.flow.x!=1||wFailed(control))return;
+    ulong bubblePairs=gPairUniverse(p.counts.x);
+    ulong total=bubblePairs+ulong(p.counts.x)*p.counts.y;
+    if(ulong(tid)>=total)return;
+    uint n=p.counts.x,a,other,type;
+    if(ulong(tid)<bubblePairs){uint2 pair=gCanonicalPair(tid,n);a=pair.x;other=pair.y;type=0;}
+    else{ulong offset=ulong(tid)-bubblePairs;a=uint(offset%n);other=uint(offset/n);type=1;}
+    device const float2 *start=v+17*n;device const float2 *end=v+4*n;
+    uint status=0;
+    if(!type){float2 amin=min(start[a],end[a])-b[a].physical.z,amax=max(start[a],end[a])+b[a].physical.z;
+        float2 bmin=min(start[other],end[other])-b[other].physical.z,bmax=max(start[other],end[other])+b[other].physical.z;
+        if(!(all(amin<=bmax)&&all(bmin<=amax))){candidateStatus[tid]=0;return;}status|=8;}
+    GContact candidate=type?gBS(b[a],intervalSegments[other],start[a]):gBB(b[a],b[other],start[a],start[other]);
+    for(uint k=0;k<stage.event.x;++k)if(c[p.counts.w+k].identity.x==candidate.identity.x){candidateStatus[tid]=status;return;}
+    status|=16;
+    GParameters gp={};gp.physics=float4(stage.time.y,p.tolerances.xyz);gp.limits=uint4(p.limits.z,p.limits.w,0,0);
+    float fraction=-1;float2 normal,point;bool exhausted=false,valid=true;
+    if(type){fraction=gSegmentTOI(b[a],start[a],end[a],intervalSegments[other],gp,normal,point,exhausted,valid);
+        if(fraction>0){candidate.geometry=float4(normal,point);candidate.timing.x=0;}}
+    else {float2 initial=gCCDVector(start[other]-start[a],valid),movement=gCCDVector((end[other]-start[other])-(end[a]-start[a]),valid);
+        float radius=gCCDScalar(b[a].physical.z+b[other].physical.z,valid);
+        float square=gCCDDot(initial,initial,valid),radiusSquare=gCCDScalar(radius*radius,valid);
+        fraction=square<=radiusSquare?0:gCircleFraction(initial,movement,float2(0),radius,valid);
+        if(fraction>=0)candidate=gBB(b[a],b[other],start[a]+(end[a]-start[a])*fraction,start[other]+(end[other]-start[other])*fraction);}
+    if(exhausted)status|=2;
+    if(!valid){candidateStatus[tid]=status|4;return;}
+    if(fraction<0){candidateStatus[tid]=status;return;}
+    if(!all(isfinite(candidate.geometry))||!all(isfinite(candidate.timing))){candidateStatus[tid]=status|4;return;}
+    GEvent event={};event.contact=candidate;event.timing=float4(stage.time.y*fraction,0,0,0);
+    candidateEvents[tid]=event;candidateStatus[tid]=status|1;
+}
+
+kernel void referenceWorldStableCompact(WARGS) {
+    if(tid||stage.flow.x!=1||wFailed(control))return;
+    ulong total=gPairUniverse(p.counts.x)+ulong(p.counts.x)*p.counts.y;
+    uint count=0;
+    for(ulong i=0;i<total;++i){uint flags=candidateStatus[i];
+        if(flags&8)++control.work.x;
+        if(flags&16)++control.work.z;
+        if(flags&2)++control.work.w;
+        if(flags&4){control.failure.x=1;return;}
+        if(!(flags&1))continue;
+        GEvent event=candidateEvents[i];
+        // Dictionary last-write happens in canonical scan order, even when a
+        // later collision lies outside the activated CCD group prefix.
+        for(uint k=0;k<count;++k)if(events[k].contact.identity.x==event.contact.identity.x)events[k].contact=event.contact;
+        uint at=count++;
+        while(at>0&&(events[at-1].timing.x>event.timing.x||
+            (events[at-1].timing.x==event.timing.x&&events[at-1].contact.identity.x>event.contact.identity.x))){events[at]=events[at-1];--at;}
+        events[at]=event;
+    }
+    stage.event.y=count;
 }
 bool wFailed(device const WControl &control) {
     return control.failure.x||control.failure.y||control.failure.w;
@@ -321,7 +348,8 @@ kernel void referenceWorldCommitSolve(WARGS) {
         wAggregate(control,stage);stage.time.x+=stage.time.w;stage.time.y=max(0.0f,stage.time.y-stage.time.w);
         wActivateEvents(c,events,control,stage,p);return;
     }
-    stage.event.y=wScan(b,intervalSegments,v+17*n,v,c+p.counts.w,stage.event.x,events,control,p,stage.time.y);
+    // The parallel pair/TOI pass and stable compaction completed earlier in
+    // this command buffer; do not repeat the serial pair scan here.
     if(control.failure.x)return;
     if(!stage.event.y){wAggregate(control,stage);stage.time.x+=stage.time.y;stage.time.y=0;stage.flow.x=0;return;}
     for(uint i=0;i<n;++i){v[i]=v[17*n+i];v[n+i]=v[18*n+i];}

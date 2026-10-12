@@ -124,7 +124,7 @@ public final class ReferenceMetalSolver {
         else { return nil }
 
         var geometryPipelines: [String: MTLComputePipelineState] = [:]
-        for name in ["referencePredict", "referenceEmitCandidatePairs", "referenceRefreshContacts", "referenceFindTOI", "referenceLabelComponents"] {
+        for name in ["referencePredict", "referencePairFlags", "referenceStableCompact", "referenceRefreshContacts", "referenceFindTOI", "referenceLabelComponents"] {
             guard let function = geometryLibrary.makeFunction(name: name),
                   let state = try? device.makeComputePipelineState(function: function) else { return nil }
             geometryPipelines[name] = state
@@ -140,7 +140,8 @@ public final class ReferenceMetalSolver {
                      "referenceWorldTrialVectors", "referenceWorldRefreshTrial", "referenceWorldJoinTrial",
                      "referenceWorldMixTrial", "referenceWorldRefreshMixed", "referenceWorldAcceptMixed",
                      "referenceWorldEndNewton", "referenceWorldPrepareFinalResidual", "referenceWorldCommitSolve",
-                     "referenceWorldFinish", "referenceApplyCenterGuards", "referenceGenerateContours", "referencePrepareRenderData",
+                     "referenceWorldFinish", "referenceWorldPairFlags", "referenceWorldStableCompact",
+                     "referenceApplyCenterGuards", "referenceGenerateContours", "referencePrepareRenderData",
                      "referencePCGInitializeVectors", "referencePCGInitializeScalars", "referencePCGStepScalars",
                      "referencePCGStepVectors", "referencePCGCheckResidual", "referencePCGPreconditionVectors",
                      "referencePCGDirectionScalars"] {
@@ -380,32 +381,37 @@ public final class ReferenceMetalSolver {
             let touched = try buffer(name: "geometryTouched", count: n, stride: MemoryLayout<UInt32>.stride)
             let components = try buffer(name: "geometryComponents", count: componentCapacity, stride: MemoryLayout<SIMD4<UInt32>>.stride)
             let control = try buffer(name: "geometryControl", count: 1, stride: MemoryLayout<ReferenceMetalGeometryControl>.stride)
+            let candidateFlags = try buffer(name: "geometryCandidateFlags", count: max(1, Int(upper)), stride: MemoryLayout<UInt32>.stride)
+            let candidateEvents = try buffer(name: "geometryCandidateEvents", count: max(1, Int(upper)), stride: MemoryLayout<ReferenceMetalGeometryEvent>.stride)
             memset(control.contents(), 0, control.length)
-            let buffers = inputs + [predicted, guarded, pairs, contacts, events, labels, touched, components, control]
+            let buffers = inputs + [predicted, guarded, pairs, contacts, events, labels, touched, components, control, candidateFlags, candidateEvents]
             let command = try makeCommand(stage: "referenceGeometry", scenarioStep: Int(step))
             let config = snapshot.configuration
             var parameters = ReferenceMetalGeometryParameters(counts: SIMD4(bubbles, segments, previous, UInt32(pairCapacity)),
                 capacities: SIMD4(UInt32(contactCapacity), UInt32(componentCapacity), 0, 0),
                 physics: SIMD4(config.timeStep, config.contactTolerance, config.separationTolerance, config.positionTolerance),
                 events: SIMD4(config.simultaneousEventTolerance, 0, 0, 0), limits: SIMD4(budget, groupLimit, upper, step))
-            func encode(_ name: String, parallel: Bool = false) throws {
-                guard !parallel || n > 0 else { return }
+            func encode(_ name: String, width: Int = 1) throws {
+                guard width > 0 else { return }
                 guard let pipeline = geometryPipelines[name], let encoder = command.makeComputeCommandEncoder()
                 else { throw ReferenceMetalOperatorError.commandSetupFailed }
                 encoder.label = name
                 encoder.setComputePipelineState(pipeline)
                 for (i, buffer) in buffers.enumerated() { encoder.setBuffer(buffer, offset: 0, index: i) }
                 encoder.setBytes(&parameters, length: MemoryLayout<ReferenceMetalGeometryParameters>.stride, index: 14)
-                encoder.dispatchThreads(MTLSize(width: parallel ? n : 1, height: 1, depth: 1),
-                    threadsPerThreadgroup: MTLSize(width: parallel ? min(256, pipeline.maxTotalThreadsPerThreadgroup) : 1, height: 1, depth: 1))
+                encoder.dispatchThreads(MTLSize(width: width, height: 1, depth: 1),
+                    threadsPerThreadgroup: MTLSize(width: min(256, width, pipeline.maxTotalThreadsPerThreadgroup), height: 1, depth: 1))
                 encoder.endEncoding()
             }
-            try encode("referencePredict", parallel: true)
-            try encode("referenceEmitCandidatePairs")
+            try encode("referencePredict", width: n)
+            try encode("referencePairFlags", width: Int(pairUpper))
+            try encode("referenceStableCompact")
             try encode("referenceRefreshContacts")
-            try encode("referenceFindTOI")
+            try encode("referenceFindTOI", width: pairCapacity)
+            parameters.capacities.w = 1
+            try encode("referenceStableCompact")
             parameters.capacities.z = 1
-            try encode("referencePredict", parallel: true)
+            try encode("referencePredict", width: n)
             try encode("referenceLabelComponents")
             try await Self.complete(command, stage: "referenceGeometry", scenarioStep: Int(step))
             try Task.checkCancellation()
@@ -527,6 +533,8 @@ public final class ReferenceMetalSolver {
             let contacts = try buffer(name: "worldContacts", count: contactCapacity, stride: 5 * MemoryLayout<ReferenceMetalContact>.stride)
             let intervalSegments = try buffer(name: "worldIntervalSegments", count: segmentCount, stride: MemoryLayout<ReferenceMetalSegment>.stride)
             let events = try buffer(name: "worldEvents", count: contactCapacity, stride: MemoryLayout<ReferenceMetalGeometryEvent>.stride)
+            let candidateStatus = try buffer(name: "worldCandidateStatus", count: max(1, contactCapacity), stride: MemoryLayout<UInt32>.stride)
+            let candidateEvents = try buffer(name: "worldCandidateEvents", count: max(1, contactCapacity), stride: MemoryLayout<ReferenceMetalGeometryEvent>.stride)
             let labels = try buffer(name: "worldLabels", count: n, stride: 3 * MemoryLayout<UInt32>.stride)
             let control = try buffer(name: "worldControl", count: 1, stride: MemoryLayout<ReferenceMetalWorldControl>.stride)
             let staged = try buffer(name: "worldStage", count: 1, stride: MemoryLayout<ReferenceMetalWorldStage>.stride)
@@ -559,7 +567,8 @@ public final class ReferenceMetalSolver {
                 guard let pipeline = worldPipelines[name], let encoder = command.makeComputeCommandEncoder()
                 else { throw ReferenceMetalOperatorError.commandSetupFailed }
                 profile?.encoderCount += 1
-                encoder.label = name
+                encoder.label = name == "referenceWorldPairFlags" ? "referenceWorld.pairFlags" :
+                    name == "referenceWorldStableCompact" ? "referenceWorld.stableCompact" : name
                 encoder.setComputePipelineState(pipeline)
                 for (index, buffer) in buffers.enumerated() { encoder.setBuffer(buffer, offset: 0, index: index) }
                 var packed = parameters
@@ -567,7 +576,9 @@ public final class ReferenceMetalSolver {
                 encoder.setBytes(&packed, length: MemoryLayout<ReferenceMetalWorldParameters>.stride, index: 14)
                 encoder.setBuffer(staged, offset: 0, index: 15)
                 encoder.setBuffer(pcgControl, offset: 0, index: 16)
-                let width = parallel ? max(1, n) : 1
+                encoder.setBuffer(candidateStatus, offset: 0, index: 17)
+                encoder.setBuffer(candidateEvents, offset: 0, index: 18)
+                let width = name == "referenceWorldPairFlags" ? max(1, upper) : parallel ? max(1, n) : 1
                 encoder.dispatchThreads(.init(width: width, height: 1, depth: 1),
                     threadsPerThreadgroup: .init(width: min(256, width, pipeline.maxTotalThreadsPerThreadgroup), height: 1, depth: 1))
                 encoder.endEncoding()
@@ -731,6 +742,8 @@ public final class ReferenceMetalSolver {
                 let finish = try makeStage(finishStage)
                 try encodeWorld("referenceWorldPrepareFinalResidual", command: finish)
                 try encodeOperator(residualPipeline, command: finish)
+                try encodeWorld("referenceWorldPairFlags", command: finish)
+                try encodeWorld("referenceWorldStableCompact", command: finish)
                 try encodeWorld("referenceWorldCommitSolve", command: finish)
                 try await completeStage(finish, finishStage)
             }

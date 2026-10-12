@@ -149,6 +149,9 @@ final class ReferenceMetalStagedWorldTests: XCTestCase {
     // A candidate outside the activated group prefix still replaces an earlier
     // event with the same historical 32-bit stable key.
     func testStableKeyLastWriterOutsideEventPrefixMatchesCPU() async throws {
+        let loaded = try makeSolver { command, _, _ in try await Self.complete(command) }.loadedFunctionNames
+        XCTAssertTrue(loaded.contains("referenceWorldPairFlags"))
+        XCTAssertTrue(loaded.contains("referenceWorldStableCompact"))
         var world = ReferenceWorld(configuration: .init(timeStep: 1, linearDamping: 0, maximumEventGroups: 1),
             broadPhase: BruteForceBroadPhase())
         let ids = [1, 2, 4_294_967_297, 4_294_967_298]
@@ -171,6 +174,20 @@ final class ReferenceMetalStagedWorldTests: XCTestCase {
         for (bubble, oracle) in zip(world.bubbles, cpu.bubbles) {
             XCTAssertEqual(bubble.center.x, oracle.center.x, accuracy: 0.001)
         }
+    }
+
+    func testStress300FirstFrameKeepsCPUContactSequenceAndFiniteQuality() async throws {
+        let scenario = ReferenceConvergenceScenario(scene: .stress300, newtonIterationLimit: 4)
+        var world = try scenario.makeWorld()
+        var cpu = try scenario.makeWorld()
+        let expected = cpu.step()
+        let runner = ReferenceMetalWorldRunner(executor: try makeSolver { command, _, _ in try await Self.complete(command) })
+        let actual = await runner.step(world: &world, scenarioStep: 0)
+        XCTAssertEqual(runner.telemetry.backend, .metal, runner.telemetry.fallbackReason ?? "")
+        XCTAssertEqual(world.contacts.contacts.map(\.id), cpu.contacts.contacts.map(\.id))
+        XCTAssertEqual(actual.eventGroupCount, expected.eventGroupCount)
+        XCTAssertTrue(actual.solver.finalResidualNorm.isFinite)
+        XCTAssertEqual(actual.solver.maximumPenetration, expected.solver.maximumPenetration, accuracy: 0.05)
     }
 
     private func makeSolver(completion: @escaping @MainActor (MTLCommandBuffer, String, Int) async throws -> Void) throws -> ReferenceMetalSolver {

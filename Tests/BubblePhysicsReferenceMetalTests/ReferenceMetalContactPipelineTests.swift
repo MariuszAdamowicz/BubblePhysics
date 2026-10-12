@@ -80,6 +80,18 @@ final class ReferenceMetalContactPipelineTests: XCTestCase {
         XCTAssertEqual(result.contacts.map(\.id), oracleContacts(world).map(\.id))
     }
 
+    func testStress300PreparationKeepsCPUContactIDsAndDeterministicEventOrder() async throws {
+        let world = try ReferenceConvergenceScenario(scene: .stress300, newtonIterationLimit: 4).makeWorld()
+        let gpu = try solver()
+        let first = try await gpu.prepareFrameForTesting(snapshot: .init(world: world), step: 0)
+        let second = try await gpu.prepareFrameForTesting(snapshot: .init(world: world), step: 0)
+        XCTAssertEqual(first.contacts.map(\.id), oracleContacts(world).map(\.id))
+        XCTAssertEqual(first.candidatePairs, second.candidatePairs)
+        XCTAssertEqual(first.allEvents, second.allEvents)
+        XCTAssertEqual(first.eventGroups, second.eventGroups)
+        XCTAssertEqual(first.ccdBudgetExhaustionCount, second.ccdBudgetExhaustionCount)
+    }
+
     func testGrowingGeometryBuffersAreReusedAcrossFramesAndActiveCountsShrink() async throws {
         let gpu = try solver()
         var world = makeWorld()
@@ -251,9 +263,12 @@ final class ReferenceMetalContactPipelineTests: XCTestCase {
         XCTAssertEqual(MemoryLayout<ReferenceMetalGeometryEvent>.stride, 144)
         XCTAssertEqual(MemoryLayout<ReferenceMetalGeometryEvent>.offset(of: \.timing), 112)
         XCTAssertEqual(MemoryLayout<ReferenceMetalGeometryEvent>.offset(of: \.grouping), 128)
-        for name in ["referencePredict", "referenceEmitCandidatePairs", "referenceRefreshContacts", "referenceFindTOI", "referenceLabelComponents"] {
+        for name in ["referencePredict", "referenceRefreshContacts", "referenceFindTOI", "referenceLabelComponents"] {
             XCTAssertTrue(try solver().loadedFunctionNames.contains(name))
         }
+        let production = try solver().loadedFunctionNames
+        XCTAssertTrue(production.contains("referencePairFlags"))
+        XCTAssertTrue(production.contains("referenceStableCompact"))
     }
 
     func testTinyDistanceUsesCPUSquaredLengthFallbackThreshold() async throws {
