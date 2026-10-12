@@ -205,6 +205,82 @@ final class ReferenceMetalWorldRunnerTests: XCTestCase {
         XCTAssertEqual(world.contacts.contacts.map(\.id), cpu.contacts.contacts.map(\.id))
     }
 
+    func testSimultaneousCCDActivationOrdersBubbleAndSegmentIDsAcrossHighBit() async throws {
+        var world = ReferenceWorld(configuration: .init(timeStep: 1, linearDamping: 0,
+            contactStiffness: 1, contactDamping: 0, maximumEventGroups: 1),
+            broadPhase: BruteForceBroadPhase())
+        world.addBubble(try .init(id: .init(rawValue: 1), center: .zero,
+            velocity: .init(x: 0.75, y: 0), mass: 1, targetRadius: 1))
+        world.addBubble(try .init(id: .init(rawValue: 2), center: .init(x: 3, y: 0),
+            velocity: .init(x: -0.75, y: 0), mass: 1, targetRadius: 1))
+        world.addBubble(try .init(id: .init(rawValue: 3), center: .init(x: 10, y: 0),
+            velocity: .init(x: 1.5, y: 0), mass: 1, targetRadius: 1))
+        world.addSegment(.staticSegment(id: .init(rawValue: 1),
+            a: .init(x: 12, y: -3), b: .init(x: 12, y: 3)))
+        var cpu = world
+        let expected = cpu.step()
+        XCTAssertGreaterThanOrEqual(expected.generatedContactCount, 2)
+        let low = UInt64(0x0000_0001_0000_0002)
+        let high = UInt64(0x8000_0003_0000_0001)
+        XCTAssertEqual(cpu.contacts.contacts.map { $0.id.rawValue }, [low, high])
+        let runner = ReferenceMetalWorldRunner(executor: try executor())
+        let actual = await runner.step(world: &world, scenarioStep: 0)
+        XCTAssertEqual(runner.telemetry.backend, .metal)
+        XCTAssertNil(runner.telemetry.fallbackReason)
+        XCTAssertEqual(actual.generatedContactCount, expected.generatedContactCount)
+        XCTAssertEqual(world.contacts.contacts.map { $0.id.rawValue }, [low, high])
+    }
+
+    func testCCDInsertsLowBubbleIDBeforeExistingHighSegmentID() async throws {
+        var world = ReferenceWorld(configuration: .init(timeStep: 1, linearDamping: 0,
+            contactStiffness: 1, contactDamping: 0, maximumEventGroups: 1),
+            broadPhase: BruteForceBroadPhase())
+        world.addBubble(try .init(id: .init(rawValue: 1), center: .zero,
+            velocity: .init(x: 0.75, y: 0), mass: 1, targetRadius: 1))
+        world.addBubble(try .init(id: .init(rawValue: 2), center: .init(x: 3, y: 0),
+            velocity: .init(x: -0.75, y: 0), mass: 1, targetRadius: 1))
+        world.addBubble(try .init(id: .init(rawValue: 3), center: .init(x: 11.5, y: 0),
+            mass: 1_000_000, targetRadius: 1))
+        world.addSegment(.staticSegment(id: .init(rawValue: 1),
+            a: .init(x: 12, y: -3), b: .init(x: 12, y: 3)))
+        let runner = ReferenceMetalWorldRunner(executor: try executor())
+        for id in [1, 2] {
+            var bubble = try XCTUnwrap(world.bubbles.first { $0.id.rawValue == id })
+            bubble.velocity = .zero
+            world.updateBubble(bubble)
+        }
+        var cpu = world
+        _ = cpu.step()
+        _ = await runner.step(world: &world, scenarioStep: 0)
+        let high = UInt64(0x8000_0003_0000_0001)
+        XCTAssertEqual(world.contacts.contacts.map { $0.id.rawValue }, [high])
+        for id in [1, 2] {
+            var bubble = try XCTUnwrap(world.bubbles.first { $0.id.rawValue == id })
+            bubble.velocity = .init(x: id == 1 ? 0.75 : -0.75, y: 0)
+            world.updateBubble(bubble)
+            var oracleBubble = try XCTUnwrap(cpu.bubbles.first { $0.id.rawValue == id })
+            oracleBubble.velocity = bubble.velocity
+            cpu.updateBubble(oracleBubble)
+        }
+        var segmentBubble = try XCTUnwrap(world.bubbles.first { $0.id.rawValue == 3 })
+        segmentBubble.center = .init(x: 11.5, y: 0)
+        segmentBubble.velocity = .zero
+        world.updateBubble(segmentBubble)
+        var oracleSegmentBubble = try XCTUnwrap(cpu.bubbles.first { $0.id.rawValue == 3 })
+        oracleSegmentBubble.center = segmentBubble.center
+        oracleSegmentBubble.velocity = .zero
+        cpu.updateBubble(oracleSegmentBubble)
+        let expected = cpu.step()
+        XCTAssertGreaterThan(expected.generatedContactCount, 0)
+        let low = UInt64(0x0000_0001_0000_0002)
+        XCTAssertEqual(cpu.contacts.contacts.map { $0.id.rawValue }, [low, high])
+        let actual = await runner.step(world: &world, scenarioStep: 1)
+        XCTAssertEqual(runner.telemetry.backend, .metal)
+        XCTAssertNil(runner.telemetry.fallbackReason)
+        XCTAssertEqual(actual.generatedContactCount, expected.generatedContactCount)
+        XCTAssertEqual(world.contacts.contacts.map { $0.id.rawValue }, [low, high])
+    }
+
     func testOverflowingInverseDiagonalTriggersWholeFrameCPUFallback() async throws {
         var world = ReferenceWorld(configuration: .init(timeStep: 1, linearDamping: 1),
             broadPhase: BruteForceBroadPhase())

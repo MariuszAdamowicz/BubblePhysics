@@ -23,29 +23,51 @@ final class ReferenceMetalDynamicSystemTests: XCTestCase {
         var world = ReferenceWorld(configuration: config, broadPhase: BruteForceBroadPhase())
         for index in 0..<300 {
             world.addBubble(try .init(id: .init(rawValue: index),
-                center: .init(x: Float(index) * 1.5, y: 0), mass: 2, targetRadius: 1))
+                center: .init(x: index == 2 ? -1.6 : index == 4 ? -1.25 : Float(index) * 1.5, y: 0), mass: 2, targetRadius: 1))
         }
         let contacts = (0..<299).map { index in
-            ReferenceContact(id: .init(rawValue: UInt64(index + 1)), kind: .bubbleBubble,
+            ReferenceContact(id: .init(rawValue: UInt64(index * 10 + 1)), kind: .bubbleBubble,
                 bubbleA: .init(rawValue: index), bubbleB: .init(rawValue: index + 1),
                 normal: .init(x: 1, y: 0), pointQ: .zero, penetration: 0.5)
         }
         let duplicate = contacts[0]
-        let snapshot = ReferenceMetalSnapshot(world: world, contacts: contacts + [duplicate])
+        let opposite = ReferenceContact(id: .init(rawValue: 2), kind: .bubbleBubble,
+            bubbleA: .init(rawValue: 0), bubbleB: .init(rawValue: 2),
+            normal: .init(x: -1, y: 0), pointQ: .zero, penetration: 0.4)
+        let secondOpposite = ReferenceContact(id: .init(rawValue: 3), kind: .bubbleBubble,
+            bubbleA: .init(rawValue: 0), bubbleB: .init(rawValue: 4),
+            normal: .init(x: -1, y: 0), pointQ: .zero, penetration: 0.75)
+        // Keep the GPU and CPU contact arrays in the same input order; the
+        // duplicate must contribute twice at its original position.
+        let snapshot = ReferenceMetalSnapshot(world: world,
+            contacts: [contacts[0], duplicate, opposite, secondOpposite] + Array(contacts.dropFirst()))
         let centers = snapshot.centers.map { ReferenceVector2(x: $0.x, y: $0.y) }
         let velocities = Array(repeating: ReferenceVector2.zero, count: 300)
         let dynamicContacts = (0..<299).map { index in
             ReferenceDynamicContact(indexA: index, indexB: index + 1, pointQ: nil,
                 contactDistance: 2, normalFallback: .init(x: -1, y: 0))
         }
+        let orderedContacts = [dynamicContacts[0], dynamicContacts[0],
+            ReferenceDynamicContact(indexA: 0, indexB: 2, pointQ: nil,
+                contactDistance: 2, normalFallback: .init(x: 1, y: 0)),
+            ReferenceDynamicContact(indexA: 0, indexB: 4, pointQ: nil,
+                contactDistance: 2, normalFallback: .init(x: 1, y: 0))] + Array(dynamicContacts.dropFirst())
         let system = ReferenceDynamicSystem(startCenters: centers, startVelocities: velocities,
             masses: Array(repeating: 2, count: 300), radii: Array(repeating: 1, count: 300),
-            contacts: [dynamicContacts[0], dynamicContacts[0]] + Array(dynamicContacts.dropFirst()),
+            contacts: orderedContacts,
             timeStep: 0.1, stiffness: 13, nonlinearStiffening: config.nonlinearStiffening,
             contactDamping: 2, globalDrag: 0.1)
+        let reordered = ReferenceDynamicSystem(startCenters: centers, startVelocities: velocities,
+            masses: Array(repeating: 2, count: 300), radii: Array(repeating: 1, count: 300),
+            contacts: [orderedContacts[0], orderedContacts[2], orderedContacts[3], orderedContacts[1]] + Array(orderedContacts.dropFirst(4)),
+            timeStep: 0.1, stiffness: 13, nonlinearStiffening: config.nonlinearStiffening,
+            contactDamping: 2, globalDrag: 0.1)
+        XCTAssertNotEqual(system.residual(endCenters: centers)[0].x.bitPattern,
+            reordered.residual(endCenters: centers)[0].x.bitPattern)
         let vector = (0..<300).map { ReferenceVector2(x: Float($0 % 3) * 0.01, y: 0) }
         let result = try await makeSolver().evaluateOperatorsForTesting(snapshot: snapshot,
             endCenters: centers, vector: vector)
+        XCTAssertEqual(result.residual[0].x.bitPattern, system.residual(endCenters: centers)[0].x.bitPattern)
         assertVectors(result.residual, system.residual(endCenters: centers))
         assertVectors(result.jacobianVector, system.applyJacobian(at: centers, to: vector))
         assertVectors(result.inverseDiagonal, system.inverseDiagonalPreconditioner(at: centers))
