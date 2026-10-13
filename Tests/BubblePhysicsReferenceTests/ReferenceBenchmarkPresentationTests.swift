@@ -54,6 +54,43 @@ final class ReferenceBenchmarkPresentationTests: XCTestCase {
         XCTAssertFalse(model.isRunning)
     }
 
+    func testRunActivityStaysActiveUntilCompletedBenchmarkPublishesReport() async {
+        let activity = RunActivityRecorder()
+        let model = ReferenceBenchmarkPresentation(
+            runner: { configuration, _ in
+                try? await Task.sleep(for: .milliseconds(20))
+                return .init(configuration: configuration, runs: [])
+            },
+            setRunActivity: { active in activity.record(active) }
+        )
+
+        model.start(deviceName: "iPhone", systemVersion: "iOS", warmupSteps: 0, measuredSteps: 0)
+        XCTAssertEqual(activity.values, [true])
+        try? await Task.sleep(for: .milliseconds(50))
+
+        XCTAssertEqual(activity.values, [true, false])
+        XCTAssertFalse(model.isRunning)
+        XCTAssertNotNil(model.reportText)
+    }
+
+    func testStoppingBenchmarkEndsRunActivity() async {
+        let activity = RunActivityRecorder()
+        let model = ReferenceBenchmarkPresentation(
+            runner: { configuration, _ in
+                try? await Task.sleep(for: .seconds(1))
+                return .init(configuration: configuration, runs: [])
+            },
+            setRunActivity: { active in activity.record(active) }
+        )
+
+        model.start(deviceName: "iPhone", systemVersion: "iOS", warmupSteps: 0, measuredSteps: 0)
+        model.stop()
+        try? await Task.sleep(for: .milliseconds(20))
+
+        XCTAssertEqual(activity.values, [true, false])
+        XCTAssertFalse(model.isRunning)
+    }
+
     func testStartingAgainIgnoresProgressFromPreviousGeneration() async {
         let counter = InvocationCounter()
         let model = ReferenceBenchmarkPresentation { configuration, progress in
@@ -93,4 +130,10 @@ final class ReferenceBenchmarkPresentationTests: XCTestCase {
 private actor InvocationCounter {
     private var count = 0
     func next() -> Int { count += 1; return count }
+}
+
+@MainActor
+private final class RunActivityRecorder {
+    private(set) var values: [Bool] = []
+    func record(_ active: Bool) { values.append(active) }
 }

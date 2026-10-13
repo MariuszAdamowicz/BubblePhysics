@@ -4,8 +4,17 @@ import SwiftUI
 import UIKit
 
 struct ReferenceBenchmarkView: View {
-    @StateObject private var model = ReferenceBenchmarkPresentation { configuration, progress in
-        try await ReferenceMetalBenchmarkRunner.measure(configuration: configuration, progress: progress)
+    @StateObject private var model: ReferenceBenchmarkPresentation
+
+    init() {
+        _model = StateObject(wrappedValue: ReferenceBenchmarkPresentation(
+            runner: { configuration, progress in
+                try await ReferenceMetalBenchmarkRunner.measure(configuration: configuration, progress: progress)
+            },
+            setRunActivity: { active in
+                UIApplication.shared.isIdleTimerDisabled = active
+            }
+        ))
     }
 
     var body: some View {
@@ -27,6 +36,9 @@ struct ReferenceBenchmarkView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Text("Smoke: 24 bańki, jeden limit 4. Macierze uruchom po smoke bez fallbacku i hang. Raport podaje ukończone czasy etapów GPU, liczniki solve/CCD i pierwszy fatalny błąd. Każdy fallback wyklucza kwalifikację GPU.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("Podczas benchmarku ekran nie wygasza się automatycznie. Pozostaw aplikację na pierwszym planie; przejście do tła nadal unieważnia pomiar GPU.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
