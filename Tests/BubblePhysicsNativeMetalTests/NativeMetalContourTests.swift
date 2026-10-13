@@ -5,6 +5,50 @@ import BubblePhysicsReference
 
 @MainActor
 final class NativeMetalContourTests: XCTestCase {
+    // Usunięcie walidacji rzeczywistych punktów dopuści krawędzie dłuższe od
+    // limitu, gdy rozdzielczość float32 w dużych współrzędnych przekracza limit.
+    func testUnrepresentableContourEdgeRejectsFrameAndPreservesPublishedState() async throws {
+        let solver = try makeSolver()
+        var world = try makeWorld()
+        let approved = try await solver.executeFrame(world: world, scenarioStep: 1)
+        var bubble = world.bubbles[0]
+        bubble.center = .init(x: 10_000_000, y: 10_000_000)
+        world.updateBubble(bubble)
+        do {
+            _ = try await solver.executeFrame(world: world, scenarioStep: 2)
+            XCTFail("Contour edges exceeding the configured limit must reject the GPU frame")
+        } catch let failure as NativeMetalSafetyFailure {
+            guard case .invalidFrame = failure.reason else {
+                return XCTFail("Unexpected safety failure: \(failure.reason)")
+            }
+            XCTAssertFalse(failure.telemetry.didEncounterNonFinite)
+            XCTAssertEqual(failure.telemetry.commandBufferCount, 1)
+        }
+        XCTAssertEqual(solver.publishedFrame?.bubbles, approved.bubbles)
+        XCTAssertEqual(solver.publishedFrame?.contours, approved.contours)
+    }
+
+    func testDeepNarrowContactHonorsEveryEdgeLengthWithAndWithoutSurfaceTension() async throws {
+        for tension: Float in [20, 0] {
+            let solver = try makeSolver()
+            var world = ReferenceWorld(configuration: .init(timeStep: 1 / 60, linearDamping: 0,
+                angularDamping: 0, maxContourSegmentLength: 0.1, contourSurfaceTension: tension),
+                broadPhase: BruteForceBroadPhase())
+            world.addBubble(try .init(id: .init(rawValue: 1), center: .init(x: -0.001, y: 0), mass: 1, targetRadius: 1))
+            world.addSegment(.staticSegment(id: .init(rawValue: 1), a: .init(x: 0, y: -0.001), b: .init(x: 0, y: 0.001)))
+            let frame = try await solver.executeFrame(world: world, scenarioStep: 1)
+            let bubble = frame.bubbles[0]
+            let points = try XCTUnwrap(frame.contours[bubble.id])
+            XCTAssertTrue(frame.isComplete)
+            XCTAssertLessThan((points[0] - bubble.center).length, 0.1)
+            XCTAssertTrue(points.contains { abs($0.y) > 0.5 && ($0 - bubble.center).length > 0.9 })
+            for index in points.indices {
+                XCTAssertLessThanOrEqual((points[(index + 1) % points.count] - points[index]).length,
+                    0.1, "tension=\(tension), edge=\(index)")
+            }
+        }
+    }
+
     func testDefaultHardContactPreservesDirectionalPressureAfterCenterSeparation() async throws {
         let solver = try NativeMetalSolver(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         var world = try makeWorld()
@@ -33,7 +77,7 @@ final class NativeMetalContourTests: XCTestCase {
         XCTAssertTrue(points.allSatisfy { $0.isFinite && $0.x <= 0.0001 })
         XCTAssertLessThan(points[0].x - center.x, 0.9)
         XCTAssertEqual((points[points.count / 2] - center).length, 1, accuracy: 0.001)
-        XCTAssertLessThanOrEqual(maximumEdge(points), world.configuration.maxContourSegmentLength * 1.05)
+        XCTAssertLessThanOrEqual(maximumEdge(points), world.configuration.maxContourSegmentLength)
     }
 
     // Zgubienie pamięci deformacji przy zmianie wejścia CPU dałoby natychmiastowy skok do koła.
@@ -107,7 +151,7 @@ final class NativeMetalContourTests: XCTestCase {
         XCTAssertTrue(points.allSatisfy(\.isFinite))
         XCTAssertLessThanOrEqual(points[0].x, 0.0001)
         XCTAssertTrue(points.contains { $0.x > 0 && abs($0.y) > 0.5 })
-        XCTAssertLessThanOrEqual(maximumEdge(points), 0.105)
+        XCTAssertLessThanOrEqual(maximumEdge(points), world.configuration.maxContourSegmentLength)
     }
 
     func testDeformationFollowsIDThroughInsertionRemovalAndContourCapacityGrowth() async throws {
@@ -147,7 +191,7 @@ final class NativeMetalContourTests: XCTestCase {
         let corner = try await makeSolver().executeFrame(world: cornerWorld, scenarioStep: 1)
         let cornerPoints = try XCTUnwrap(corner.contours[first.id])
         XCTAssertTrue(cornerPoints.allSatisfy { $0.isFinite && $0.x <= 0.0001 && $0.y <= 0.6001 })
-        XCTAssertLessThanOrEqual(maximumEdge(cornerPoints), 0.105)
+        XCTAssertLessThanOrEqual(maximumEdge(cornerPoints), cornerWorld.configuration.maxContourSegmentLength)
     }
 
     private func makeSolver() throws -> NativeMetalSolver {

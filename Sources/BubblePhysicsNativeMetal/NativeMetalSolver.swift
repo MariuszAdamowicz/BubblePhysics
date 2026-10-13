@@ -551,6 +551,7 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
         guard contactResult.counts.w == 0 else { throw NativeMetalSolverError.capacityOverflow }
         guard safetyResult.counts.w & 1 == 0 else { throw rejectSafety(.nonFinite) }
         guard safetyResult.counts.w & 2 == 0 else { throw rejectSafety(.guardFailure) }
+        guard safetyResult.counts.w & 4 == 0 else { throw rejectSafety(.invalidFrame) }
         let cacheRecords = state.workingCache.contents().bindMemory(to: NativeContactCacheRecord.self, capacity: state.contactCapacity)
         let completedCache = Array(UnsafeBufferPointer(start: cacheRecords, count: Int(contactResult.counts.z)))
         guard completedCache.allSatisfy({ $0.geometry.x.isFinite && $0.geometry.y.isFinite
@@ -599,6 +600,9 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
                 return .init(x: value.x, y: value.y)
             }
             guard points.allSatisfy(\.isFinite) else { throw rejectSafety(.nonFinite) }
+            guard points.indices.allSatisfy({ point in
+                (points[(point + 1) % points.count] - points[point]).length <= contourConfiguration.maxContourSegmentLength
+            }) else { throw rejectSafety(.invalidFrame) }
             let deformation = packets[index].deformation.x
             guard deformation.isFinite, deformation >= 0, deformation <= 1 else { throw rejectSafety(.nonFinite) }
             if deformation * bubbles[index].targetRadius > contourConfiguration.positionTolerance { deformationCount += 1 }

@@ -346,6 +346,33 @@ kernel void nativePrepareRenderData(device NativeBubble *bubbles [[buffer(0)]],
     if (index >= control.counts.x || atomic_load_explicit(safety + 3, memory_order_relaxed)) return;
     NativeBubble bubble = bubbles[index];
     float maximum = 0;
+    uint count = counts[index], base = index * contour.counts.x, anchor = 0;
+    for (uint sample = 0; sample < count; ++sample) {
+        float deficit = deformation[base + sample].x;
+        if (deficit > maximum) { maximum = deficit; anchor = sample; }
+    }
+    // Domknięcie radialnego pola: najmniejsza majoranta o ograniczonym
+    // nachyleniu, więc nigdy nie cofa nacisku ani twardego envelope.
+    // Próbkowanie n >= 4*pi*r/maxEdge ogranicza składową kątową do
+    // maxEdge/2. Różnica promieni <= maxEdge/2 ogranicza całą krawędź:
+    // |p-q|^2 = (rp-rq)^2 + 4*rp*rq*sin(pi/n)^2 <= maxEdge^2/2.
+    // Dwa przejścia od globalnego maksimum domykają także szew koła
+    // w O(n), niezależnie od szerokości kontaktu i napięcia powierzchniowego.
+    float slope = contour.shape.x / (2 * bubble.physical.z);
+    float previous = maximum;
+    for (uint step = 1; step < count; ++step) {
+        uint sample = (anchor + step) % count;
+        float value = max(deformation[base + sample].x, previous - slope);
+        deformation[base + sample].x = value;
+        previous = value;
+    }
+    previous = maximum;
+    for (uint step = 1; step < count; ++step) {
+        uint sample = (anchor + count - step) % count;
+        float value = max(deformation[base + sample].x, previous - slope);
+        deformation[base + sample].x = value;
+        previous = value;
+    }
     for (uint sample = 0; sample < counts[index]; ++sample) {
         uint address = index * contour.counts.x + sample;
         float angle = 2 * M_PI_F * float(sample) / float(counts[index]);
@@ -354,6 +381,14 @@ kernel void nativePrepareRenderData(device NativeBubble *bubbles [[buffer(0)]],
         if (!all(isfinite(point))) nativeSafetyFailure(safety, 1);
         points[address] = point;
         maximum = max(maximum, deformation[address].x);
+    }
+    // Walidacja rzeczywistych współrzędnych, po zaokrągleniu float32.
+    // Bardzo duży środek może nie pozwalać na reprezentację krótkiej
+    // krawędzi. Takiej klatki nie wolno publikować jako ukończonej.
+    for (uint sample = 0; sample < count; ++sample) {
+        float edge = length(points[base + (sample + 1) % count] - points[base + sample]);
+        if (!isfinite(edge)) nativeSafetyFailure(safety, 1);
+        else if (edge > contour.shape.x) nativeSafetyFailure(safety, 4);
     }
     bubble.deformation = float4(maximum, 0, 0, 0);
     bubbles[index] = bubble;
