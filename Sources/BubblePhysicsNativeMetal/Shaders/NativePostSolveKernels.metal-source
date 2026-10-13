@@ -1,0 +1,203 @@
+// ABI: cztery atomiki uint, wyłącznie liczniki i bity statusu.
+// Każdy wątek bańki zapisuje tylko własną pozycję oraz rząd kandydatów.
+void nativeSafetyEvent(device atomic_uint *safety, uint slot) {
+    atomic_fetch_add_explicit(safety + slot, 1, memory_order_relaxed);
+}
+void nativeSafetyFailure(device atomic_uint *safety, uint bit) {
+    atomic_fetch_or_explicit(safety + 3, bit, memory_order_relaxed);
+}
+
+kernel void nativeFindFastCandidates(device NativeBubble *bubbles [[buffer(0)]],
+    device NativeSegment *segments [[buffer(1)]], constant NativeControl &control [[buffer(2)]],
+    device NativeContactControl &contacts [[buffer(3)]], device uint *candidates [[buffer(4)]],
+    device uint *changed [[buffer(5)]], device atomic_uint *safety [[buffer(6)]],
+    uint i [[thread_position_in_grid]]) {
+    if (i >= control.counts.x) return;
+    changed[i] = 0;
+    NativeBubble b = bubbles[i];
+    float2 movement = b.motion.xy * control.physics.x;
+    float2 lower = min(b.position.zw, b.position.xy) - b.physical.z;
+    float2 upper = max(b.position.zw, b.position.xy) + b.physical.z;
+    for (uint j = 0; j < control.counts.y; ++j) {
+        NativeSegment s = segments[j];
+        float relative = max(length(movement - (s.current.xy - s.previous.xy)),
+                             length(movement - (s.current.zw - s.previous.zw)));
+        float2 segmentLower = min(min(s.previous.xy, s.previous.zw), min(s.current.xy, s.current.zw));
+        float2 segmentUpper = max(max(s.previous.xy, s.previous.zw), max(s.current.xy, s.current.zw));
+        bool fast = relative > contacts.thresholds.y * b.physical.z
+            && all(lower <= segmentUpper) && all(upper >= segmentLower);
+        candidates[i * control.counts.y + j] = fast ? 1 : 0;
+        if (fast) nativeSafetyEvent(safety, 0);
+    }
+}
+
+float2 nativeReturnToOriginalSide(float2 start, float2 end, NativeSegment s, float margin) {
+    float2 normal = nativeSegmentNormal(s.current);
+    float side = dot(start - s.previous.xy, nativeSegmentNormal(s.previous));
+    float sign = s.flags.z ? s.collision.x : (side < 0 ? -1.0f : 1.0f);
+    float distance = dot(end - s.current.xy, normal);
+    if (distance * sign < margin) end += normal * (sign * margin - distance);
+    return end;
+}
+
+bool nativeInsideOwner(float2 p, device NativeSegment *segments, uint count, long owner, bool previous);
+
+bool nativeForbiddenCenterCrossing(float2 start, float2 end, NativeSegment s,
+    device NativeSegment *segments, uint count) {
+    // Guard ma zezwalać na naprawę stanu początkowego w przeszkodzie.
+    if (s.flags.z && dot(start - s.previous.xy, nativeSegmentNormal(s.previous)) * s.collision.x < 0) return false;
+    if (s.flags.y && nativeInsideOwner(start, segments, count, s.identity.y, true)) return false;
+    return nativeCenterCrossing(start, end, s);
+}
+
+bool nativeCenterPathFinite(float2 start, float2 end, NativeSegment s) {
+    float2 e0 = s.previous.zw - s.previous.xy, e1 = s.current.zw - s.current.xy;
+    float2 de = e1 - e0, r0 = start - s.previous.xy;
+    float2 dr = (end - start) - (s.current.xy - s.previous.xy);
+    float a = nativeCross(de, dr), b = nativeCross(e0, dr) + nativeCross(de, r0);
+    float c = nativeCross(e0, r0);
+    if (a == 0 && b == 0 && c == 0) {
+        float q0 = dot(r0, r0 - e0), qa = dot(dr, dr - de);
+        float qb = dot(dr, r0 - e0) + dot(r0, dr - de);
+        if (!all(isfinite(float4(q0, qa, qb, qa + qb + q0)))) return false;
+    }
+    return all(isfinite(e0)) && all(isfinite(e1)) && all(isfinite(r0)) && all(isfinite(dr))
+        && isfinite(dot(e0, e0)) && isfinite(dot(e1, e1))
+        && isfinite(dot(r0, r0)) && isfinite(dot(dr, dr))
+        && all(isfinite(float3(a, b, c))) && isfinite(b * b - 4 * a * c);
+}
+
+kernel void nativeResolveCCD(device NativeBubble *bubbles [[buffer(0)]],
+    device NativeSegment *segments [[buffer(1)]], device float4 *positions [[buffer(2)]],
+    constant NativeControl &control [[buffer(3)]], device uint *candidates [[buffer(4)]],
+    device uint *changed [[buffer(5)]], device atomic_uint *safety [[buffer(6)]],
+    uint i [[thread_position_in_grid]]) {
+    if (i >= control.counts.x) return;
+    float2 start = bubbles[i].position.zw, end = positions[i].xy;
+    for (uint j = 0; j < control.counts.y; ++j) {
+        if (!candidates[i * control.counts.y + j]) continue;
+        NativeSegment s = segments[j];
+        if (!nativeForbiddenCenterCrossing(start, end, s, segments, control.counts.y)) continue;
+        float2 corrected = nativeReturnToOriginalSide(start, end, s, bubbles[i].physical.z);
+        if (any(corrected != end)) { end = corrected; changed[i] = 1; nativeSafetyEvent(safety, 1); }
+    }
+    positions[i].xy = end;
+}
+
+bool nativeInsideOwner(float2 p, device NativeSegment *segments, uint count, long owner, bool previous) {
+    bool inside = false;
+    uint edges = 0;
+    for (uint j = 0; j < count; ++j) {
+        NativeSegment s = segments[j];
+        if (!s.flags.y || s.identity.y != owner) continue;
+        ++edges;
+        float4 endpoints = previous ? s.previous : s.current;
+        float2 a = endpoints.xy, b = endpoints.zw;
+        if ((a.y > p.y) != (b.y > p.y)) {
+            float x = a.x + (b.x - a.x) * (p.y - a.y) / (b.y - a.y);
+            if (p.x < x) inside = !inside;
+        }
+    }
+    return edges >= 3 && inside;
+}
+
+kernel void nativeApplyCenterGuards(device NativeBubble *bubbles [[buffer(0)]],
+    device NativeSegment *segments [[buffer(1)]], device float4 *positions [[buffer(2)]],
+    constant NativeControl &control [[buffer(3)]], device NativeContactControl &contacts [[buffer(4)]],
+    device uint *changed [[buffer(5)]], device atomic_uint *safety [[buffer(6)]],
+    uint i [[thread_position_in_grid]]) {
+    if (i >= control.counts.x) return;
+    float2 start = bubbles[i].position.zw, end = positions[i].xy;
+    float margin = max(contacts.thresholds.z * 2, 1e-5f);
+    for (uint j = 0; j < control.counts.y; ++j) {
+        NativeSegment s = segments[j];
+        if (!nativeCenterPathFinite(start, end, s)) { nativeSafetyFailure(safety, 1); continue; }
+        float2 corrected = end;
+        if (nativeForbiddenCenterCrossing(start, end, s, segments, control.counts.y))
+            corrected = nativeReturnToOriginalSide(start, end, s, margin);
+        if (s.flags.z) {
+            float2 normal = nativeSegmentNormal(s.current) * s.collision.x;
+            float side = dot(corrected - s.current.xy, normal);
+            if (side < 0) corrected += normal * (margin - side);
+        }
+        if (any(corrected != end)) { end = corrected; changed[i] = 1; nativeSafetyEvent(safety, 1); }
+    }
+    for (uint j = 0; j < control.counts.y; ++j) {
+        NativeSegment s = segments[j];
+        if (!s.flags.y) continue;
+        bool first = true;
+        for (uint k = 0; k < j; ++k)
+            if (segments[k].flags.y && segments[k].identity.y == s.identity.y) first = false;
+        if (!first || !nativeInsideOwner(end, segments, control.counts.y, s.identity.y, false)) continue;
+        float best = INFINITY;
+        float2 point = end, outward = float2(1, 0);
+        for (uint k = 0; k < control.counts.y; ++k) {
+            NativeSegment edge = segments[k];
+            if (!edge.flags.y || edge.identity.y != s.identity.y) continue;
+            float2 q = nativeClosestPoint(end, edge.current);
+            float distance = length(q - end);
+            if (distance < best) {
+                best = distance; point = q;
+                outward = distance > FLT_MIN ? (q - end) / distance : nativeSegmentNormal(edge.current);
+            }
+        }
+        end = point + outward * margin;
+        changed[i] = 1; nativeSafetyEvent(safety, 1);
+    }
+    positions[i].xy = end;
+    // Walidacja po WSZYSTKICH korekcjach: ostatnia przeszkoda może zepsuć
+    // wcześniejszą. Niespójne ściany/rotacje odrzucają klatkę, bez pętli hosta.
+    if (!all(isfinite(end))) nativeSafetyFailure(safety, 1);
+    for (uint j = 0; j < control.counts.y; ++j) {
+        NativeSegment s = segments[j];
+        if (nativeForbiddenCenterCrossing(start, end, s, segments, control.counts.y)) nativeSafetyFailure(safety, 2);
+        if (s.flags.z && dot(end - s.current.xy, nativeSegmentNormal(s.current)) * s.collision.x < 0)
+            nativeSafetyFailure(safety, 2);
+        if (s.flags.y && nativeInsideOwner(end, segments, control.counts.y, s.identity.y, false))
+            nativeSafetyFailure(safety, 2);
+    }
+}
+
+uint nativeSafetyBubbleIndex(long id, device NativeBubble *bubbles, uint count) {
+    uint lo = 0, hi = count;
+    while (lo < hi) { uint mid = lo + (hi - lo) / 2;
+        if (bubbles[mid].identity.x < id) lo = mid + 1; else hi = mid; }
+    return lo < count && bubbles[lo].identity.x == id ? lo : count;
+}
+
+kernel void nativeInvalidateSafetyCache(device NativeBubble *bubbles [[buffer(0)]],
+    device NativeContactCache *cache [[buffer(1)]], constant NativeControl &control [[buffer(2)]],
+    device NativeContactControl &contacts [[buffer(3)]], device uint *changed [[buffer(4)]],
+    device atomic_uint *safety [[buffer(5)]], uint i [[thread_position_in_grid]]) {
+    if (contacts.counts.w || i >= contacts.counts.z) return;
+    NativeContactCache c = cache[i];
+    uint a = nativeSafetyBubbleIndex(c.participants.x, bubbles, control.counts.x);
+    uint b = c.metadata.x == 0 ? nativeSafetyBubbleIndex(c.participants.y, bubbles, control.counts.x) : control.counts.x;
+    if ((a < control.counts.x && changed[a]) || (b < control.counts.x && changed[b])) {
+        c.response.x = 0; c.metadata.y = 1; c.metadata.w |= 8;
+        cache[i] = c; nativeSafetyEvent(safety, 2);
+    }
+}
+
+kernel void nativeCheckFinite(device NativeBubble *bubbles [[buffer(0)]],
+    device NativeSegment *segments [[buffer(1)]], device NativeContactCache *cache [[buffer(2)]],
+    constant NativeControl &control [[buffer(3)]], device NativeContactControl &contacts [[buffer(4)]],
+    device NativeSolverControl &solver [[buffer(5)]], device atomic_uint *safety [[buffer(6)]],
+    uint i [[thread_position_in_grid]]) {
+    if (i == 0 && !all(isfinite(solver.physics))) nativeSafetyFailure(safety, 1);
+    if (i < control.counts.x) {
+        NativeBubble b = bubbles[i];
+        if (!all(isfinite(b.position)) || !all(isfinite(b.motion)) || !all(isfinite(b.physical))
+            || !all(isfinite(b.deformation))) nativeSafetyFailure(safety, 1);
+    }
+    if (i < control.counts.y) {
+        NativeSegment s = segments[i];
+        if (!all(isfinite(s.previous)) || !all(isfinite(s.current)) || !all(isfinite(s.velocity))
+            || !all(isfinite(s.collision))) nativeSafetyFailure(safety, 1);
+    }
+    if (!contacts.counts.w && i < contacts.counts.z) {
+        NativeContactCache c = cache[i];
+        if (!all(isfinite(c.geometry)) || !all(isfinite(c.response)) || c.response.x < 0)
+            nativeSafetyFailure(safety, 1);
+    }
+}

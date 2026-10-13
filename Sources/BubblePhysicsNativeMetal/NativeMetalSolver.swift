@@ -69,6 +69,9 @@ final class NativeMetalPersistentState {
     let contactEndpoints: MTLBuffer
     let contactCorrections: MTLBuffer
     let solverControl: MTLBuffer
+    let fastCandidates: MTLBuffer
+    let guardedBubbles: MTLBuffer
+    let safetyControl: MTLBuffer
     let segmentsPing: MTLBuffer
     let segmentsPong: MTLBuffer
     let bubbleUpdates: MTLBuffer
@@ -147,6 +150,9 @@ final class NativeMetalPersistentState {
         contactEndpoints = try buffer("solver.endpoints", contactCapacity, MemoryLayout<SIMD4<UInt32>>.stride)
         contactCorrections = try buffer("solver.corrections", contactCapacity, MemoryLayout<SIMD4<Float>>.stride)
         solverControl = try buffer("solver.control", 1, MemoryLayout<NativeMetalSolverControl>.stride)
+        fastCandidates = try buffer("safety.fastCandidates", rowCapacity, MemoryLayout<UInt32>.stride)
+        guardedBubbles = try buffer("safety.guardedBubbles", bubbleCapacity, MemoryLayout<UInt32>.stride)
+        safetyControl = try buffer("safety.control", 1, MemoryLayout<NativeMetalSafetyControl>.stride)
         renderPackets = try buffer("renderPackets", bubbleCapacity, MemoryLayout<NativeMetalRenderPacket>.stride)
         control = try buffer("control", 1, MemoryLayout<NativeMetalControl>.stride)
     }
@@ -185,10 +191,15 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
               let url = Bundle.module.url(forResource: "NativeGeometryKernels", withExtension: "metal-source")
         else { throw NativeMetalSolverError.resourceUnavailable }
         self.queue = queue
-        guard let cacheURL = Bundle.module.url(forResource: "NativeXPBDKernels", withExtension: "metal-source")
+        guard let cacheURL = Bundle.module.url(forResource: "NativeXPBDKernels", withExtension: "metal-source"),
+              let safetyURL = Bundle.module.url(forResource: "NativePostSolveKernels", withExtension: "metal-source")
         else { throw NativeMetalSolverError.resourceUnavailable }
         let source = try String(contentsOf: url, encoding: .utf8) + "\n" + String(contentsOf: cacheURL, encoding: .utf8)
-        let library = try device.makeLibrary(source: source, options: nil)
+            + "\n" + String(contentsOf: safetyURL, encoding: .utf8)
+        let options = MTLCompileOptions()
+        // Finite jest kontraktem bezpieczeństwa: fast-math zakłada jego spełnienie.
+        options.fastMathEnabled = false
+        let library = try device.makeLibrary(source: source, options: options)
         guard let function = library.makeFunction(name: "nativePredict")
         else { throw NativeMetalSolverError.resourceUnavailable }
         predict = try device.makeComputePipelineState(function: function)
@@ -200,7 +211,8 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
                      "nativeAddScanBlockOffsets", "nativeFinishScan", "nativeBuildAdjacency",
                      "nativePrepareSolverContacts", "nativeApplyWarmStart", "nativeUpdateContactMultipliers",
                      "nativeSolveJacobi", "nativeMeasureResidual", "nativeReduceSolverResidual",
-                     "nativeUpdateVelocities", "nativeFinalizeSolverContacts"] {
+                     "nativeUpdateVelocities", "nativeFinalizeSolverContacts", "nativeFindFastCandidates",
+                     "nativeResolveCCD", "nativeApplyCenterGuards", "nativeInvalidateSafetyCache", "nativeCheckFinite"] {
             guard let function = library.makeFunction(name: name) else { throw NativeMetalSolverError.resourceUnavailable }
             stages[name] = try device.makeComputePipelineState(function: function)
         }
@@ -260,6 +272,7 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
             physics: SIMD4(configuration.contactCompliance / (snapshot.configuration.timeStep * snapshot.configuration.timeStep),
                           snapshot.configuration.positionTolerance, 0, 0))
         state.solverControl.contents().storeBytes(of: solverParameters, as: NativeMetalSolverControl.self)
+        state.safetyControl.contents().storeBytes(of: NativeMetalSafetyControl(counts: .zero), as: NativeMetalSafetyControl.self)
         memset(state.scratch.contents(), 0, state.scratch.length)
         // Wyłącznie zmiany wejścia gry mogą oznaczać teleport; normalna predykcja nie resetuje cache.
         let previousBubbles = Dictionary(uniqueKeysWithValues: (lastSnapshot?.sourceBubbles ?? []).map { ($0.id, $0) })
@@ -438,9 +451,20 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
             swap(&inputPositions, &outputPositions)
             measureResidual()
         }
+        dispatch("nativeFindFastCandidates", buffers: [state.workingBubbles, state.workingSegments,
+            state.control, state.contactControl, state.fastCandidates, state.guardedBubbles, state.safetyControl], threads: count)
+        dispatch("nativeResolveCCD", buffers: [state.workingBubbles, state.workingSegments, inputPositions,
+            state.control, state.fastCandidates, state.guardedBubbles, state.safetyControl], threads: count)
+        dispatch("nativeApplyCenterGuards", buffers: [state.workingBubbles, state.workingSegments, inputPositions,
+            state.control, state.contactControl, state.guardedBubbles, state.safetyControl], threads: count)
         dispatch("nativeFinalizeSolverContacts", buffers: [state.workingBubbles, state.workingSegments,
             state.workingCache, inputPositions, state.contactControl, state.contactEndpoints], threads: state.contactCapacity)
         dispatch("nativeUpdateVelocities", buffers: [state.workingBubbles, inputPositions, state.control], threads: count)
+        dispatch("nativeInvalidateSafetyCache", buffers: [state.workingBubbles, state.workingCache,
+            state.control, state.contactControl, state.guardedBubbles, state.safetyControl], threads: state.contactCapacity)
+        dispatch("nativeCheckFinite", buffers: [state.workingBubbles, state.workingSegments, state.workingCache,
+            state.control, state.contactControl, state.solverControl, state.safetyControl],
+            threads: max(1, max(state.contactCapacity, max(count, segmentCount))))
         encoder.endEncoding()
         let encodingEnd = DispatchTime.now().uptimeNanoseconds
         // Jedyny await/commit: wszystkie etapy zostały już zakodowane.
@@ -448,13 +472,31 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
         let waitingEnd = DispatchTime.now().uptimeNanoseconds
         let contactResult = state.contactControl.contents().load(as: NativeMetalContactControl.self)
         let solverResult = state.solverControl.contents().load(as: NativeMetalSolverControl.self)
+        let safetyResult = state.safetyControl.contents().load(as: NativeMetalSafetyControl.self)
+        var profile = NativeMetalFrameProfile()
+        profile.commandBufferCount = 1
+        profile.encoderCount = 2
+        profile.hostEncodingMilliseconds = milliseconds(encodingEnd - encodingStart)
+        profile.hostWaitingMilliseconds = milliseconds(waitingEnd - encodingEnd)
+        profile.stageGPUMilliseconds = ["frame": timing.gpuMilliseconds]
+        let diagnostics = NativeMetalFrameTelemetry(backend: .nativeMetal, commandBufferCount: 1, encoderCount: 2,
+            cacheHitCount: Int(contactResult.cache.x), cacheResetCount: Int(contactResult.cache.y),
+            contactCount: Int(contactResult.counts.y), didEncounterNonFinite: safetyResult.counts.w & 1 != 0,
+            gpuMilliseconds: timing.gpuMilliseconds, solverIterationCount: configuration.solverIterationCount,
+            ccdCandidateCount: Int(safetyResult.counts.x), guardCorrectionCount: Int(safetyResult.counts.y),
+            cacheInvalidationCount: Int(safetyResult.counts.z))
+        func rejectSafety(_ reason: NativeMetalWorldError) -> NativeMetalSafetyFailure {
+            .init(reason: reason, telemetry: diagnostics, profile: profile)
+        }
         guard contactResult.counts.w == 0 else { throw NativeMetalSolverError.capacityOverflow }
+        guard safetyResult.counts.w & 1 == 0 else { throw rejectSafety(.nonFinite) }
+        guard safetyResult.counts.w & 2 == 0 else { throw rejectSafety(.guardFailure) }
         let cacheRecords = state.workingCache.contents().bindMemory(to: NativeContactCacheRecord.self, capacity: state.contactCapacity)
         let completedCache = Array(UnsafeBufferPointer(start: cacheRecords, count: Int(contactResult.counts.z)))
         guard completedCache.allSatisfy({ $0.geometry.x.isFinite && $0.geometry.y.isFinite
             && $0.geometry.z.isFinite && $0.geometry.w.isFinite && $0.lambda.isFinite
             && $0.lambda >= 0 && $0.response.y.isFinite }), solverResult.physics.z.isFinite
-        else { throw NativeMetalWorldError.invalidFrame }
+        else { throw rejectSafety(.nonFinite) }
         let candidateRecords = state.candidates.contents().bindMemory(to: NativeMetalCandidate.self, capacity: state.contactCapacity)
         let completedCandidates = Array(UnsafeBufferPointer(start: candidateRecords, count: Int(contactResult.counts.x))).map(\.key)
         let contacts = completedCache.filter { $0.lastSeenFrame == nextFrame }.map { record in
@@ -478,13 +520,7 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
             records[index].unpack(into: &bubbles[index])
         }
         guard !bubbles.contains(where: { !$0.center.isFinite || !$0.previousCenter.isFinite || !$0.velocity.isFinite
-            || !$0.rotation.isFinite || !$0.angularVelocity.isFinite }) else { throw NativeMetalWorldError.invalidFrame }
-        var profile = NativeMetalFrameProfile()
-        profile.commandBufferCount = 1
-        profile.encoderCount = 2
-        profile.hostEncodingMilliseconds = milliseconds(encodingEnd - encodingStart)
-        profile.hostWaitingMilliseconds = milliseconds(waitingEnd - encodingEnd)
-        profile.stageGPUMilliseconds = ["frame": timing.gpuMilliseconds]
+            || !$0.rotation.isFinite || !$0.angularVelocity.isFinite }) else { throw rejectSafety(.nonFinite) }
         if collectDispatchStatistics {
             let counts = state.dispatchStatistics.contents().load(as: SIMD4<UInt32>.self)
             profile.stageGPUWorkItemCounts = ["cacheMatch": Int(counts.x), "cacheRetain": Int(counts.y),
@@ -497,15 +533,17 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
             positionCorrectionCount: Int(solverResult.counts.z), deformationCount: 0,
             initialResidualNorm: solverResult.physics.w, finalResidualNorm: solverResult.physics.z),
             candidatePairCount: Int(contactResult.counts.x), generatedContactCount: contacts.count,
-            persistentContactCount: Int(contactResult.cache.x), toiTestCount: 0,
-            sideCorrectionCount: 0, ccdBudgetExhaustionCount: 0, predictionMilliseconds: 0,
+            persistentContactCount: Int(contactResult.cache.x), toiTestCount: Int(safetyResult.counts.x),
+            sideCorrectionCount: Int(safetyResult.counts.y), ccdBudgetExhaustionCount: 0, predictionMilliseconds: 0,
             broadPhaseMilliseconds: 0, contactMilliseconds: 0, solverMilliseconds: 0,
             totalMilliseconds: milliseconds(waitingEnd - encodingStart), hasNonFiniteState: false)
         let frame = NativeMetalWorldFrame(bubbles: bubbles, contacts: contacts, report: report,
             telemetry: .init(backend: .nativeMetal, commandBufferCount: 1, encoderCount: 2,
                 cacheHitCount: Int(contactResult.cache.x), cacheResetCount: Int(contactResult.cache.y),
                 contactCount: contacts.count, gpuMilliseconds: timing.gpuMilliseconds,
-                solverIterationCount: configuration.solverIterationCount),
+                solverIterationCount: configuration.solverIterationCount,
+                ccdCandidateCount: Int(safetyResult.counts.x), guardCorrectionCount: Int(safetyResult.counts.y),
+                cacheInvalidationCount: Int(safetyResult.counts.z)),
             profile: profile, isComplete: false)
         // Synchroniczna publikacja dopiero po pomyślnym wykonaniu i readbacku.
         state.publish()

@@ -24,7 +24,7 @@ let package = Package(
         .target(name: "BubblePhysicsCore"),
         .target(name: "BubblePhysicsReference"),
         .target(name: "BubblePhysicsNativeMetal", dependencies: ["BubblePhysicsReference"],
-                resources: [.copy("Shaders/NativeGeometryKernels.metal-source"), .copy("Shaders/NativeXPBDKernels.metal-source")]),
+                resources: [.copy("Shaders/NativeGeometryKernels.metal-source"), .copy("Shaders/NativeXPBDKernels.metal-source"), .copy("Shaders/NativePostSolveKernels.metal-source")]),
         .target(name: "BubblePhysicsReferenceMetal", dependencies: ["BubblePhysicsReference"],
                 // Xcode processes .metal even with .copy; preserve text for runtime compilation.
                 resources: [.copy("Shaders/ReferenceNewtonPCGKernels.metal-source"), .copy("Shaders/ReferenceGeometryKernels.metal-source"), .copy("Shaders/ReferencePostSolveKernels.metal-source")]),

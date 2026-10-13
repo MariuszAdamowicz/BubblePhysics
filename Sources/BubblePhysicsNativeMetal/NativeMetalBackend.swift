@@ -41,6 +41,9 @@ public struct NativeMetalFrameTelemetry: Equatable, Sendable {
     public let cacheResetCount: Int
     public let contactCount: Int
     public let solverIterationCount: Int
+    public let ccdCandidateCount: Int
+    public let guardCorrectionCount: Int
+    public let cacheInvalidationCount: Int
     public let didEncounterNonFinite: Bool
     public let fallbackReason: String?
     public let gpuMilliseconds: Double
@@ -49,7 +52,8 @@ public struct NativeMetalFrameTelemetry: Equatable, Sendable {
                 encoderCount: Int = 0, cacheHitCount: Int = 0, cacheResetCount: Int = 0,
                 contactCount: Int = 0, didEncounterNonFinite: Bool = false,
                 fallbackReason: String? = nil, gpuMilliseconds: Double = 0,
-                solverIterationCount: Int = 0) {
+                solverIterationCount: Int = 0, ccdCandidateCount: Int = 0,
+                guardCorrectionCount: Int = 0, cacheInvalidationCount: Int = 0) {
         self.backend = backend
         self.commandBufferCount = commandBufferCount
         self.encoderCount = encoderCount
@@ -57,6 +61,9 @@ public struct NativeMetalFrameTelemetry: Equatable, Sendable {
         self.cacheResetCount = cacheResetCount
         self.contactCount = contactCount
         self.solverIterationCount = solverIterationCount
+        self.ccdCandidateCount = ccdCandidateCount
+        self.guardCorrectionCount = guardCorrectionCount
+        self.cacheInvalidationCount = cacheInvalidationCount
         self.didEncounterNonFinite = didEncounterNonFinite
         self.fallbackReason = fallbackReason
         self.gpuMilliseconds = gpuMilliseconds

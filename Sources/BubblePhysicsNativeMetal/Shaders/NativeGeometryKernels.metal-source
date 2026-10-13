@@ -56,7 +56,9 @@ kernel void nativeBuildGrid(device NativeBubble *bubbles [[buffer(0)]],
     NativeGridEntry entry;
     entry.cell = long2(0);
     entry.metadata = uint4(index, index < control.counts.x ? 1 : 0, 0, 0);
-    if (entry.metadata.y) entry.cell = long2(floor(bubbles[index].position.xy / contacts.thresholds.w));
+    if (entry.metadata.y && all(isfinite(bubbles[index].position.xy)))
+        entry.cell = long2(floor(bubbles[index].position.xy / contacts.thresholds.w));
+    else entry.metadata.y = 0;
     grid[index] = entry;
 }
 
@@ -98,6 +100,9 @@ kernel void nativeEmitCandidates(device NativeBubble *bubbles [[buffer(0)]],
     uint index [[thread_position_in_grid]]) {
     if (index >= control.counts.x) return;
     NativeBubble a = bubbles[index];
+    if (!all(isfinite(a.position))) {
+        rowCounts[index * 2] = 0; rowCounts[index * 2 + 1] = 0; return;
+    }
     long2 cell = long2(floor(a.position.xy / contacts.thresholds.w));
     device NativeCandidate *row = rows + index * contacts.cache.w;
     uint count = 0;
@@ -132,6 +137,64 @@ kernel void nativeEmitCandidates(device NativeBubble *bubbles [[buffer(0)]],
     }
     rowCounts[index * 2] = bubbleCount;
     rowCounts[index * 2 + 1] = count - bubbleCount;
+}
+
+float nativeCross(float2 a, float2 b) { return a.x * b.y - a.y * b.x; }
+
+float2 nativeSegmentNormal(float4 endpoints) {
+    float2 edge = endpoints.zw - endpoints.xy;
+    float size = length(edge);
+    return size > FLT_MIN ? float2(-edge.y, edge.x) / size : float2(0, 1);
+}
+
+float2 nativeClosestPoint(float2 p, float4 endpoints) {
+    float2 edge = endpoints.zw - endpoints.xy;
+    float square = dot(edge, edge);
+    return endpoints.xy + edge * (square > FLT_MIN ? clamp(dot(p - endpoints.xy, edge) / square, 0.0f, 1.0f) : 0);
+}
+
+// Przejście środka przez liniowo poruszający się odcinek: signed area jest
+// wielomianem kwadratowym. Sprawdzamy oba pierwiastki i skończone końce.
+bool nativeCenterCrossing(float2 start, float2 end, NativeSegment s) {
+    float2 e0 = s.previous.zw - s.previous.xy;
+    float2 de = (s.current.zw - s.current.xy) - e0;
+    float2 r0 = start - s.previous.xy;
+    float2 dr = (end - start) - (s.current.xy - s.previous.xy);
+    float a = nativeCross(de, dr), b = nativeCross(e0, dr) + nativeCross(de, r0);
+    float c = nativeCross(e0, r0);
+    if (a == 0 && b == 0 && c == 0) {
+        // Ruch współliniowy: minimum r(t)·(r(t)-edge(t)) wykrywa wejście
+        // pomiędzy końce odcinka, mimo braku zmiany signed area.
+        float q0 = dot(r0, r0 - e0);
+        if (q0 <= 0) return false; // początkowy kontakt może się oddalić
+        float qa = dot(dr, dr - de);
+        float qb = dot(dr, r0 - e0) + dot(r0, dr - de);
+        float minimum = min(q0, qa + qb + q0);
+        if (qa > 0) {
+            float t = clamp(-qb / (2 * qa), 0.0f, 1.0f);
+            minimum = min(minimum, (qa * t + qb) * t + q0);
+        }
+        return minimum <= 0;
+    }
+    float2 roots = float2(-1);
+    if (abs(a) <= FLT_EPSILON * max(abs(b), abs(c))) {
+        if (abs(b) > FLT_MIN) roots.x = -c / b;
+    } else {
+        float d = b * b - 4 * a * c;
+        if (d > 0) {
+            float q = -0.5f * (b + copysign(sqrt(d), b));
+            roots = float2(q / a, abs(q) > FLT_MIN ? c / q : -1);
+        }
+    }
+    for (uint k = 0; k < 2; ++k) {
+        float t = roots[k];
+        // t=0 to początkowy kontakt, nie przejście z jednej strony na drugą.
+        if (!(t > 0 && t < 1)) continue;
+        float2 edge = e0 + de * t, relative = r0 + dr * t;
+        float square = dot(edge, edge), along = dot(relative, edge);
+        if (square > FLT_MIN && along >= 0 && along <= square) return true;
+    }
+    return false;
 }
 
 kernel void nativePrepareCandidateCounts(constant NativeControl &control [[buffer(0)]],
