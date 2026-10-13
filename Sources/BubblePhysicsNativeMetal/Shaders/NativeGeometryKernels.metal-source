@@ -1,0 +1,33 @@
+#include <metal_stdlib>
+using namespace metal;
+
+struct NativeBubble {
+    long2 identity;
+    float4 position;
+    float4 motion;
+    float4 physical;
+    float4 deformation;
+};
+struct NativeSegment {
+    long2 identity; uint4 flags; float4 previous; float4 current;
+    float4 velocity; float4 collision;
+};
+struct NativeContactCache {
+    ulong2 identity; long2 participants; float4 geometry; float4 response;
+};
+struct NativeControl { uint4 counts; float4 physics; };
+struct NativeRenderPacket { long2 identity; float4 geometry; float4 deformation; };
+
+kernel void nativePredict(device NativeBubble *bubbles [[buffer(0)]],
+                          constant NativeControl &control [[buffer(1)]],
+                          uint index [[thread_position_in_grid]]) {
+    if (index >= control.counts.x) return;
+    NativeBubble b = bubbles[index];
+    float dt = control.physics.x;
+    b.position.zw = b.position.xy;
+    b.motion.xy *= exp(-control.physics.y * dt);
+    b.position.xy += b.motion.xy * dt;
+    b.motion.z += b.motion.w * dt;
+    b.motion.w *= exp(-control.physics.z * dt);
+    bubbles[index] = b;
+}

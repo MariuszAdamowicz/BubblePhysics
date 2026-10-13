@@ -11,25 +11,28 @@ struct NativeMetalWorldFrame {
     var contacts: [ReferenceContact]
     var report: ReferenceWorldStepReport
     var telemetry: NativeMetalFrameTelemetry
+    var profile = NativeMetalFrameProfile()
+    var isComplete = false
 }
 
 enum NativeMetalWorldError: Error {
     case unavailable, invalidFrame, frameInFlight
 }
 
-/// Izolowany kontrakt backendu. Do czasu wdrożenia runtime każda próba
-/// kończy się pełną klatką CPU; żaden stan roboczy GPU nie jest publikowany.
+/// Do czasu ukończenia solvera kontaktów predykcja GPU jest diagnostyczna;
+/// świat otrzymuje atomowo pełną klatkę CPU.
 @MainActor
 public final class NativeMetalWorldRunner {
     public let configuration: NativeMetalConfiguration
     public private(set) var telemetry = NativeMetalFrameTelemetry()
+    public private(set) var profile = NativeMetalFrameProfile()
     private let executor: (any NativeMetalFrameExecuting)?
     private var inFlight = false
 
     public convenience init?(device: MTLDevice? = MTLCreateSystemDefaultDevice(),
                              configuration: NativeMetalConfiguration = .default) {
-        guard device != nil else { return nil }
-        self.init(executor: nil, configuration: configuration)
+        guard let device, let solver = try? NativeMetalSolver(device: device) else { return nil }
+        self.init(executor: solver, configuration: configuration)
     }
 
     init(executor: (any NativeMetalFrameExecuting)?, configuration: NativeMetalConfiguration = .default) {
@@ -38,6 +41,7 @@ public final class NativeMetalWorldRunner {
     }
 
     public func step(world: inout ReferenceWorld, scenarioStep: Int) async -> ReferenceWorldStepReport {
+        profile = NativeMetalFrameProfile()
         guard !inFlight else {
             return cpuFrame(world: &world, reason: .frameInFlight)
         }
@@ -48,8 +52,9 @@ public final class NativeMetalWorldRunner {
         defer { inFlight = false }
         do {
             // Executor otrzymuje wartość świata, nigdy referencję do publikacji.
-            _ = try await executor.executeFrame(world: world, scenarioStep: scenarioStep)
-            // Task 1 nie ma jeszcze runtime ani walidatora pełnej klatki GPU.
+            let frame = try await executor.executeFrame(world: world, scenarioStep: scenarioStep)
+            profile = frame.profile
+            // Task 2 dostarcza predykcję, nie pełne rozwiązanie klatki.
             return cpuFrame(world: &world, reason: .invalidFrame)
         } catch {
             return cpuFrame(world: &world, reason: String(describing: error))
