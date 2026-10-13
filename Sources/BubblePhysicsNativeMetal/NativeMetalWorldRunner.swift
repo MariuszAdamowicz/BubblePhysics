@@ -72,7 +72,7 @@ public final class NativeMetalWorldRunner {
             }
             // Task 6 dostarczy kontury i kompletną publikację świata.
             world = original
-            return cpuFrame(world: &world, reason: .invalidFrame)
+            return cpuFrame(world: &world, reason: "invalidFrame", diagnostics: frame.telemetry)
         } catch let failure as NativeMetalSafetyFailure {
             world = original
             profile = failure.profile

@@ -5,14 +5,58 @@ import BubblePhysicsReference
 
 @MainActor
 final class NativeMetalSafetyTests: XCTestCase {
-    func testFastBubbleDoesNotCrossSegmentCenter() async throws {
+    func testDiagnosticRunnerPreservesSuccessfulGPUFrameTelemetry() async throws {
         let solver = try makeSolver()
+        var world = try makeWorld(x: -0.75)
+        world.addSegment(wall())
+        _ = try await solver.executeFrame(world: world, scenarioStep: 1)
+        var bubble = world.bubbles[0]; bubble.velocity.x = 1.5; world.updateBubble(bubble)
+        var cpu = world; let expected = cpu.step()
+        let runner = NativeMetalWorldRunner(executor: solver)
+        let actual = await runner.step(world: &world, scenarioStep: 2)
+        let gpu = try XCTUnwrap(solver.publishedFrame)
+        XCTAssertEqual(world.bubbles, cpu.bubbles)
+        XCTAssertEqual(world.contacts, cpu.contacts)
+        XCTAssertEqual(actual.solver, expected.solver)
+        XCTAssertEqual(runner.telemetry.backend, .cpu)
+        XCTAssertEqual(runner.telemetry.fallbackReason, "invalidFrame")
+        XCTAssertGreaterThan(gpu.telemetry.ccdCandidateCount, 0)
+        XCTAssertGreaterThan(gpu.telemetry.guardCorrectionCount, 0)
+        XCTAssertGreaterThan(gpu.telemetry.cacheInvalidationCount, 0)
+        XCTAssertEqual(runner.telemetry.ccdCandidateCount, gpu.telemetry.ccdCandidateCount)
+        XCTAssertEqual(runner.telemetry.guardCorrectionCount, gpu.telemetry.guardCorrectionCount)
+        XCTAssertEqual(runner.telemetry.cacheInvalidationCount, gpu.telemetry.cacheInvalidationCount)
+        XCTAssertEqual(runner.telemetry.cacheResetCount, gpu.telemetry.cacheResetCount)
+        XCTAssertEqual(runner.telemetry.commandBufferCount, 1)
+        XCTAssertEqual(runner.telemetry.encoderCount, 2)
+        XCTAssertEqual(runner.telemetry.gpuMilliseconds, gpu.telemetry.gpuMilliseconds)
+        XCTAssertEqual(runner.profile, gpu.profile)
+    }
+
+    func testDistantSlowPairsExecuteNoAnalyticCCDInAnyStage() async throws {
+        var world = try makeWorld(x: -4, vx: 0.25)
+        for i in 0..<32 {
+            world.addSegment(.staticSegment(id: .init(rawValue: i + 1), a: .init(x: Float(i + 10), y: -10),
+                b: .init(x: Float(i + 10), y: 10)))
+        }
+        let solver = try NativeMetalSolver(device: XCTUnwrap(MTLCreateSystemDefaultDevice()), collectDispatchStatistics: true)
+        let frame = try await solver.executeFrame(world: world, scenarioStep: 1)
+        XCTAssertEqual(frame.telemetry.ccdCandidateCount, 0)
+        XCTAssertEqual(frame.profile.stageGPUWorkItemCounts["ccdAnalyticTests"] ?? -1, 0)
+        XCTAssertEqual(frame.profile.stageGPUWorkItemCounts["guardAnalyticTests"] ?? -1, 0)
+        XCTAssertEqual(frame.profile.stageGPUWorkItemCounts["ccdFinitePathTests"] ?? -1, 0)
+        XCTAssertEqual(frame.bubbles[0].center.x, -3.75, accuracy: 0.00001)
+    }
+
+    func testFastBubbleDoesNotCrossSegmentCenter() async throws {
+        let solver = try NativeMetalSolver(device: XCTUnwrap(MTLCreateSystemDefaultDevice()), collectDispatchStatistics: true)
         var world = try makeWorld(x: -4, vx: 10)
         world.addSegment(wall())
         let frame = try await solver.executeFrame(world: world, scenarioStep: 1)
         XCTAssertLessThan(frame.bubbles[0].center.x, 0)
         XCTAssertGreaterThan(frame.report.toiTestCount, 0)
         XCTAssertEqual(frame.profile.commandBufferCount, 1)
+        XCTAssertEqual(frame.profile.stageGPUWorkItemCounts["ccdAnalyticTests"], 1)
     }
 
     func testMovingPolygonCannotContainBubbleCenter() async throws {
@@ -207,13 +251,15 @@ final class NativeMetalSafetyTests: XCTestCase {
     }
 
     func testSlowCrossingStillReceivesCenterGuard() async throws {
-        let solver = try makeSolver()
+        let solver = try NativeMetalSolver(device: XCTUnwrap(MTLCreateSystemDefaultDevice()), collectDispatchStatistics: true)
         var world = try makeWorld(x: -0.05, vx: 0.1)
         world.addSegment(wall())
         let frame = try await solver.executeFrame(world: world, scenarioStep: 1)
         XCTAssertEqual(frame.report.toiTestCount, 0)
         XCTAssertLessThan(frame.bubbles[0].center.x, 0)
         XCTAssertGreaterThan(frame.report.sideCorrectionCount, 0)
+        XCTAssertEqual(frame.profile.stageGPUWorkItemCounts["ccdAnalyticTests"], 0)
+        XCTAssertEqual(frame.profile.stageGPUWorkItemCounts["guardAnalyticTests"], 1)
     }
 
     func testTrajectoryOutsideSegmentEndpointsIsNotClamped() async throws {

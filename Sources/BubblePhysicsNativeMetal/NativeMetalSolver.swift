@@ -454,9 +454,10 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
         dispatch("nativeFindFastCandidates", buffers: [state.workingBubbles, state.workingSegments,
             state.control, state.contactControl, state.fastCandidates, state.guardedBubbles, state.safetyControl], threads: count)
         dispatch("nativeResolveCCD", buffers: [state.workingBubbles, state.workingSegments, inputPositions,
-            state.control, state.fastCandidates, state.guardedBubbles, state.safetyControl], threads: count)
+            state.control, state.fastCandidates, state.guardedBubbles, state.safetyControl, state.dispatchStatistics], threads: count)
         dispatch("nativeApplyCenterGuards", buffers: [state.workingBubbles, state.workingSegments, inputPositions,
-            state.control, state.contactControl, state.guardedBubbles, state.safetyControl], threads: count)
+            state.control, state.contactControl, state.guardedBubbles, state.safetyControl, state.dispatchStatistics,
+            state.fastCandidates], threads: count)
         dispatch("nativeFinalizeSolverContacts", buffers: [state.workingBubbles, state.workingSegments,
             state.workingCache, inputPositions, state.contactControl, state.contactEndpoints], threads: state.contactCapacity)
         dispatch("nativeUpdateVelocities", buffers: [state.workingBubbles, inputPositions, state.control], threads: count)
@@ -523,8 +524,11 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
             || !$0.rotation.isFinite || !$0.angularVelocity.isFinite }) else { throw rejectSafety(.nonFinite) }
         if collectDispatchStatistics {
             let counts = state.dispatchStatistics.contents().load(as: SIMD4<UInt32>.self)
+            let safetyCounts = state.dispatchStatistics.contents().advanced(by: 16).load(as: SIMD4<UInt32>.self)
             profile.stageGPUWorkItemCounts = ["cacheMatch": Int(counts.x), "cacheRetain": Int(counts.y),
-                "cacheCompaction": Int(counts.z), "candidateCompaction": Int(counts.w)]
+                "cacheCompaction": Int(counts.z), "candidateCompaction": Int(counts.w),
+                "ccdAnalyticTests": Int(safetyCounts.y), "guardAnalyticTests": Int(safetyCounts.z),
+                "ccdFinitePathTests": Int(safetyCounts.w)]
         }
         let converged = solverResult.physics.z <= solverResult.physics.y
         let report = ReferenceWorldStepReport(solver: .init(iterations: Int(solverResult.counts.y),

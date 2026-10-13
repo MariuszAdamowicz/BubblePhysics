@@ -43,14 +43,16 @@ float2 nativeReturnToOriginalSide(float2 start, float2 end, NativeSegment s, flo
 bool nativeInsideOwner(float2 p, device NativeSegment *segments, uint count, long owner, bool previous);
 
 bool nativeForbiddenCenterCrossing(float2 start, float2 end, NativeSegment s,
-    device NativeSegment *segments, uint count) {
+    device NativeSegment *segments, uint count, device atomic_uint *statistics, bool guardStage) {
     // Guard ma zezwalać na naprawę stanu początkowego w przeszkodzie.
     if (s.flags.z && dot(start - s.previous.xy, nativeSegmentNormal(s.previous)) * s.collision.x < 0) return false;
     if (s.flags.y && nativeInsideOwner(start, segments, count, s.identity.y, true)) return false;
+    nativeCountWork(statistics, guardStage ? 6 : 5);
     return nativeCenterCrossing(start, end, s);
 }
 
-bool nativeCenterPathFinite(float2 start, float2 end, NativeSegment s) {
+bool nativeCenterPathFinite(float2 start, float2 end, NativeSegment s, device atomic_uint *statistics) {
+    nativeCountWork(statistics, 7);
     float2 e0 = s.previous.zw - s.previous.xy, e1 = s.current.zw - s.current.xy;
     float2 de = e1 - e0, r0 = start - s.previous.xy;
     float2 dr = (end - start) - (s.current.xy - s.previous.xy);
@@ -67,17 +69,36 @@ bool nativeCenterPathFinite(float2 start, float2 end, NativeSegment s) {
         && all(isfinite(float3(a, b, c))) && isfinite(b * b - 4 * a * c);
 }
 
+// Tani przesiew ochrony wolnego crossing lub korekcji Jacobi poza maską
+// prędkości: bez współczynników kwadratowych, discriminant ani pierwiastków.
+bool nativePossibleCenterCrossing(float2 start, float2 end, NativeSegment s) {
+    float2 lower = min(start, end), upper = max(start, end);
+    float2 segmentLower = min(min(s.previous.xy, s.previous.zw), min(s.current.xy, s.current.zw));
+    float2 segmentUpper = max(max(s.previous.xy, s.previous.zw), max(s.current.xy, s.current.zw));
+    if (any(lower > segmentUpper) || any(upper < segmentLower)) return false;
+    if (all(start == end) && all(s.previous == s.current)) return false;
+    float2 previousEdge = s.previous.zw - s.previous.xy, currentEdge = s.current.zw - s.current.xy;
+    if (all(previousEdge == currentEdge)) {
+        float previousSide = nativeCross(previousEdge, start - s.previous.xy);
+        float currentSide = nativeCross(currentEdge, end - s.current.xy);
+        if ((previousSide > 0 && currentSide > 0) || (previousSide < 0 && currentSide < 0)) return false;
+    }
+    return true;
+}
+
 kernel void nativeResolveCCD(device NativeBubble *bubbles [[buffer(0)]],
     device NativeSegment *segments [[buffer(1)]], device float4 *positions [[buffer(2)]],
     constant NativeControl &control [[buffer(3)]], device uint *candidates [[buffer(4)]],
     device uint *changed [[buffer(5)]], device atomic_uint *safety [[buffer(6)]],
+    device atomic_uint *statistics [[buffer(7)]],
     uint i [[thread_position_in_grid]]) {
     if (i >= control.counts.x) return;
     float2 start = bubbles[i].position.zw, end = positions[i].xy;
     for (uint j = 0; j < control.counts.y; ++j) {
         if (!candidates[i * control.counts.y + j]) continue;
         NativeSegment s = segments[j];
-        if (!nativeForbiddenCenterCrossing(start, end, s, segments, control.counts.y)) continue;
+        if (!nativeCenterPathFinite(start, end, s, statistics)) { nativeSafetyFailure(safety, 1); continue; }
+        if (!nativeForbiddenCenterCrossing(start, end, s, segments, control.counts.y, statistics, false)) continue;
         float2 corrected = nativeReturnToOriginalSide(start, end, s, bubbles[i].physical.z);
         if (any(corrected != end)) { end = corrected; changed[i] = 1; nativeSafetyEvent(safety, 1); }
     }
@@ -105,16 +126,20 @@ kernel void nativeApplyCenterGuards(device NativeBubble *bubbles [[buffer(0)]],
     device NativeSegment *segments [[buffer(1)]], device float4 *positions [[buffer(2)]],
     constant NativeControl &control [[buffer(3)]], device NativeContactControl &contacts [[buffer(4)]],
     device uint *changed [[buffer(5)]], device atomic_uint *safety [[buffer(6)]],
+    device atomic_uint *statistics [[buffer(7)]],
+    device uint *candidates [[buffer(8)]],
     uint i [[thread_position_in_grid]]) {
     if (i >= control.counts.x) return;
     float2 start = bubbles[i].position.zw, end = positions[i].xy;
     float margin = max(contacts.thresholds.z * 2, 1e-5f);
     for (uint j = 0; j < control.counts.y; ++j) {
         NativeSegment s = segments[j];
-        if (!nativeCenterPathFinite(start, end, s)) { nativeSafetyFailure(safety, 1); continue; }
         float2 corrected = end;
-        if (nativeForbiddenCenterCrossing(start, end, s, segments, control.counts.y))
-            corrected = nativeReturnToOriginalSide(start, end, s, margin);
+        if (candidates[i * control.counts.y + j] || nativePossibleCenterCrossing(start, end, s)) {
+            if (!nativeCenterPathFinite(start, end, s, statistics)) { nativeSafetyFailure(safety, 1); continue; }
+            if (nativeForbiddenCenterCrossing(start, end, s, segments, control.counts.y, statistics, true))
+                corrected = nativeReturnToOriginalSide(start, end, s, margin);
+        }
         if (s.flags.z) {
             float2 normal = nativeSegmentNormal(s.current) * s.collision.x;
             float side = dot(corrected - s.current.xy, normal);
@@ -150,7 +175,11 @@ kernel void nativeApplyCenterGuards(device NativeBubble *bubbles [[buffer(0)]],
     if (!all(isfinite(end))) nativeSafetyFailure(safety, 1);
     for (uint j = 0; j < control.counts.y; ++j) {
         NativeSegment s = segments[j];
-        if (nativeForbiddenCenterCrossing(start, end, s, segments, control.counts.y)) nativeSafetyFailure(safety, 2);
+        if (candidates[i * control.counts.y + j] || nativePossibleCenterCrossing(start, end, s)) {
+            if (!nativeCenterPathFinite(start, end, s, statistics)) nativeSafetyFailure(safety, 1);
+            else if (nativeForbiddenCenterCrossing(start, end, s, segments, control.counts.y, statistics, true))
+                nativeSafetyFailure(safety, 2);
+        }
         if (s.flags.z && dot(end - s.current.xy, nativeSegmentNormal(s.current)) * s.collision.x < 0)
             nativeSafetyFailure(safety, 2);
         if (s.flags.y && nativeInsideOwner(end, segments, control.counts.y, s.identity.y, false))
@@ -192,8 +221,11 @@ kernel void nativeCheckFinite(device NativeBubble *bubbles [[buffer(0)]],
     }
     if (i < control.counts.y) {
         NativeSegment s = segments[i];
+        float2 previousEdge = s.previous.zw - s.previous.xy, currentEdge = s.current.zw - s.current.xy;
         if (!all(isfinite(s.previous)) || !all(isfinite(s.current)) || !all(isfinite(s.velocity))
-            || !all(isfinite(s.collision))) nativeSafetyFailure(safety, 1);
+            || !all(isfinite(s.collision)) || !all(isfinite(previousEdge)) || !all(isfinite(currentEdge))
+            || !isfinite(dot(previousEdge, previousEdge)) || !isfinite(dot(currentEdge, currentEdge)))
+            nativeSafetyFailure(safety, 1);
     }
     if (!contacts.counts.w && i < contacts.counts.z) {
         NativeContactCache c = cache[i];
