@@ -127,6 +127,41 @@ final class NativeMetalContactCacheTests: XCTestCase {
         XCTAssertEqual(frame.telemetry.cacheResetCount, 0)
     }
 
+    func testDenseThreeHundredBubbleCacheUsesOneWorkItemPerContact() async throws {
+        let solver = try NativeMetalSolver(device: XCTUnwrap(MTLCreateSystemDefaultDevice()), collectDispatchStatistics: true)
+        var world = ReferenceWorld(configuration: .init(linearDamping: 0), broadPhase: BruteForceBroadPhase())
+        for id in 0..<300 {
+            world.addBubble(try .init(id: .init(rawValue: id), center: .zero, mass: 1, targetRadius: 1))
+        }
+        _ = try await solver.executeFrame(world: world, scenarioStep: 1)
+        let frame = try await solver.executeFrame(world: world, scenarioStep: 2)
+        XCTAssertEqual(solver.cachedContacts.count, 44_850)
+        XCTAssertEqual(frame.telemetry.cacheHitCount, 44_850)
+        XCTAssertEqual(frame.profile.stageGPUWorkItemCounts["cacheMatch"], 44_850)
+        XCTAssertEqual(frame.profile.stageGPUWorkItemCounts["cacheRetain"], 44_850)
+        XCTAssertEqual(frame.profile.stageGPUWorkItemCounts["cacheCompaction"], 44_850)
+        XCTAssertEqual(frame.profile.stageGPUWorkItemCounts["candidateCompaction"], 44_850)
+        XCTAssertEqual(solver.cachedContacts.map(\.key), solver.cachedContacts.map(\.key).sorted())
+        XCTAssertTrue(solver.cachedContacts.allSatisfy { $0.age == 2 })
+    }
+
+    func testParallelMergeKeepsMissesHitsAndNewContactsInKeyOrder() async throws {
+        let solver = try makeSolver()
+        var world = try cacheWorld()
+        _ = try await solver.executeFrame(world: world, scenarioStep: 1)
+        let state = try XCTUnwrap(solver.persistentState)
+        let cache = state.contactCache.contents().bindMemory(to: NativeContactCacheRecord.self, capacity: state.contactCapacity)
+        cache[0].lambda = 0.75; cache[1].lambda = 1.25
+        var b = world.bubbles[1]; b.center.x = 8; world.updateBubble(b)
+        world.addBubble(try .init(id: .init(rawValue: 5), center: .init(x: 21.6, y: 0), mass: 1, targetRadius: 1))
+        let frame = try await solver.executeFrame(world: world, scenarioStep: 2)
+        XCTAssertEqual(solver.cachedContacts.map(\.key), [.bubblePair(1, 2), .bubblePair(3, 4), .bubblePair(3, 5), .bubblePair(4, 5)])
+        XCTAssertEqual(solver.cachedContacts.map(\.lambda), [0.75, 1.25, 0, 0])
+        XCTAssertEqual(solver.cachedContacts.map(\.age), [1, 2, 1, 1])
+        XCTAssertEqual(frame.contacts.count, 3)
+        XCTAssertEqual(frame.telemetry.cacheHitCount, 1)
+    }
+
     private func makeSolver(expiry: Int = 30) throws -> NativeMetalSolver {
         try NativeMetalSolver(device: XCTUnwrap(MTLCreateSystemDefaultDevice()),
             configuration: .init(cacheExpiryFrames: expiry, teleportDistanceMultiplier: 10))

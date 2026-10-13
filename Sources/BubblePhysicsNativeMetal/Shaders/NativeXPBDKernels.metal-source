@@ -34,48 +34,137 @@ uint nativeInvalidation(NativeContactCache record, device long2 *invalidations, 
     return flags | (!foundA || !foundB ? 4 : 0);
 }
 
+uint nativeScanLength(constant NativeControl &control, device NativeContactControl &contacts, uint2 parameters) {
+    uint length = parameters.x == 0 ? control.counts.x * 2
+        : (contacts.counts.w ? 0 : (parameters.x == 1 ? contacts.counts.x : contacts.limits.w + contacts.counts.y));
+    for (uint level = 0; level < parameters.y; ++level) length = (length + 255) / 256;
+    return length;
+}
+
+// Osiem kroków skanu lokalnego; kolejne poziomy przetwarzają sumy bloków równolegle.
+kernel void nativeScanBlocks(device uint4 *input [[buffer(0)]], device uint4 *output [[buffer(1)]],
+    device uint4 *blockSums [[buffer(2)]], constant NativeControl &control [[buffer(3)]],
+    device NativeContactControl &contacts [[buffer(4)]], constant uint2 &parameters [[buffer(5)]],
+    uint index [[thread_position_in_grid]], uint local [[thread_position_in_threadgroup]],
+    uint group [[threadgroup_position_in_grid]]) {
+    uint length = nativeScanLength(control, contacts, parameters);
+    if (group * 256 >= length) return;
+    threadgroup uint4 values[256];
+    values[local] = index < length ? input[index] : uint4(0);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint distance = 1; distance < 256; distance *= 2) {
+        uint4 value = values[local];
+        if (local >= distance) value += values[local - distance];
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        values[local] = value;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if (index < length) output[index] = values[local];
+    if (local == 255) blockSums[group] = values[local];
+}
+
+kernel void nativeAddScanBlockOffsets(device uint4 *output [[buffer(0)]], device uint4 *parent [[buffer(1)]],
+    constant NativeControl &control [[buffer(2)]], device NativeContactControl &contacts [[buffer(3)]],
+    constant uint2 &parameters [[buffer(4)]], uint index [[thread_position_in_grid]]) {
+    if (index >= nativeScanLength(control, contacts, parameters)) return;
+    uint block = index / 256;
+    if (block > 0) output[index] += parent[block - 1];
+}
+
+// Tylko odczyt ostatniej sumy i zapis nagłówka; nie przetwarza listy rekordów.
+kernel void nativeFinishScan(device uint4 *offsets [[buffer(0)]], constant NativeControl &control [[buffer(1)]],
+    device NativeContactControl &contacts [[buffer(2)]], constant uint2 &parameters [[buffer(3)]],
+    uint index [[thread_position_in_grid]]) {
+    if (index != 0 || contacts.counts.w) return;
+    uint length = nativeScanLength(control, contacts, parameters);
+    uint4 total = length > 0 ? offsets[length - 1] : uint4(0);
+    if (parameters.x == 0) {
+        contacts.counts.x = total.x;
+        if (total.x > contacts.limits.z) contacts.counts.w = 1;
+    } else if (parameters.x == 1) contacts.counts.y = total.x;
+    else {
+        contacts.counts.z = total.x; contacts.cache.xy = total.yz;
+        if (total.x > contacts.limits.z) contacts.counts.w = 1;
+    }
+}
+
+kernel void nativePrepareContactFlags(device NativeContactCache *contacts [[buffer(0)]],
+    device NativeContactControl &control [[buffer(1)]], device uint4 *flags [[buffer(2)]],
+    uint index [[thread_position_in_grid]]) {
+    if (control.counts.w || index >= control.counts.x) return;
+    flags[index] = uint4(contacts[index].response.y > 0 ? 1 : 0, 0, 0, 0);
+}
+
+kernel void nativeCompactActiveContacts(device NativeContactCache *contacts [[buffer(0)]],
+    device NativeContactCache *active [[buffer(1)]], device NativeContactControl &control [[buffer(2)]],
+    device uint4 *offsets [[buffer(3)]], uint index [[thread_position_in_grid]]) {
+    if (control.counts.w || index >= control.counts.x || contacts[index].response.y <= 0) return;
+    active[offsets[index].x - 1] = contacts[index];
+}
+
+uint nativeCacheLowerBound(device NativeContactCache *records, uint count, NativeContactCache key) {
+    uint low = 0, high = count;
+    while (low < high) {
+        uint mid = low + (high - low) / 2;
+        if (nativeCacheLess(records[mid], key)) low = mid + 1; else high = mid;
+    }
+    return low;
+}
+
+bool nativeCacheSame(NativeContactCache a, NativeContactCache b) {
+    return a.metadata.x == b.metadata.x && all(a.participants == b.participants);
+}
+
+// Jeden work-item odpowiada jednemu bieżącemu kontaktowi; binary search używa pełnego klucza.
 kernel void nativeMatchContactCache(device NativeContactCache *previous [[buffer(0)]],
-    device NativeContactCache *current [[buffer(1)]], device NativeContactCache *output [[buffer(2)]],
+    device NativeContactCache *current [[buffer(1)]], device NativeContactCache *merged [[buffer(2)]],
     device NativeContactControl &contacts [[buffer(3)]], device long2 *invalidations [[buffer(4)]],
     device NativeBubble *bubbles [[buffer(5)]], device NativeSegment *segments [[buffer(6)]],
-    constant NativeControl &control [[buffer(7)]], uint index [[thread_position_in_grid]]) {
-    if (index != 0 || contacts.counts.w) return;
-    uint oldIndex = 0, newIndex = 0, count = 0, activeCount = 0;
-    while (oldIndex < contacts.limits.w || newIndex < contacts.counts.x) {
-        while (newIndex < contacts.counts.x && current[newIndex].response.y <= 0) ++newIndex;
-        bool hasOld = oldIndex < contacts.limits.w, hasNew = newIndex < contacts.counts.x;
-        if (!hasOld && !hasNew) break;
-        NativeContactCache oldRecord, newRecord, result;
-        if (hasOld) oldRecord = previous[oldIndex];
-        if (hasNew) newRecord = current[newIndex];
-        bool same = hasOld && hasNew && all(oldRecord.participants == newRecord.participants)
-            && oldRecord.metadata.x == newRecord.metadata.x;
-        bool chooseNew = hasNew && (!hasOld || same || nativeCacheLess(newRecord, oldRecord));
-        bool keep = true;
-        if (chooseNew) {
-            result = newRecord; ++newIndex; ++activeCount;
-            if (same) {
-                uint invalid = nativeInvalidation(oldRecord, invalidations, contacts.cache.z,
-                    bubbles, control.counts.x, segments, control.counts.y);
-                uint elapsed = contacts.limits.x - oldRecord.metadata.z;
-                // Jedna klatka jest bieżącym trafieniem; odejmowanie nie przepełnia maksymalnego expiry.
-                if (elapsed > 0 && elapsed - 1 > contacts.limits.y) invalid |= 8;
-                if (invalid) { result.metadata.w = invalid; ++contacts.cache.y; }
-                else { result.response.x = oldRecord.response.x; result.metadata.y = oldRecord.metadata.y + 1; ++contacts.cache.x; }
-                ++oldIndex;
-            }
-        } else {
-            result = oldRecord; ++oldIndex;
-            uint invalid = nativeInvalidation(oldRecord, invalidations, contacts.cache.z,
-                bubbles, control.counts.x, segments, control.counts.y);
-            if (invalid) { ++contacts.cache.y; keep = false; }
-            if (contacts.limits.x - oldRecord.metadata.z > contacts.limits.y) keep = false;
-        }
-        if (keep) {
-            if (count >= contacts.limits.z) { contacts.counts.w = 1; return; }
-            output[count++] = result;
-        }
+    constant NativeControl &control [[buffer(7)]], device uint4 *flags [[buffer(8)]],
+    device atomic_uint *statistics [[buffer(9)]], uint index [[thread_position_in_grid]]) {
+    if (contacts.counts.w || index >= contacts.counts.y) return;
+    NativeContactCache result = current[index];
+    uint old = nativeCacheLowerBound(previous, contacts.limits.w, result);
+    uint hit = 0, reset = 0;
+    if (old < contacts.limits.w && nativeCacheSame(previous[old], result)) {
+        uint invalid = nativeInvalidation(previous[old], invalidations, contacts.cache.z,
+            bubbles, control.counts.x, segments, control.counts.y);
+        uint elapsed = contacts.limits.x - previous[old].metadata.z;
+        if (elapsed > 0 && elapsed - 1 > contacts.limits.y) invalid |= 8;
+        if (invalid) { result.metadata.w = invalid; reset = 1; }
+        else { result.response.x = previous[old].response.x; result.metadata.y = previous[old].metadata.y + 1; hit = 1; }
     }
-    contacts.counts.y = activeCount;
-    contacts.counts.z = count;
+    // Merge rank: nowy rekord zajmuje miejsce przed starym przy równym kluczu.
+    uint position = index + old;
+    merged[position] = result;
+    flags[position] = uint4(1, hit, reset, 1);
+    nativeCountWork(statistics, 0);
+}
+
+kernel void nativeRetainContactCache(device NativeContactCache *previous [[buffer(0)]],
+    device NativeContactCache *current [[buffer(1)]], device NativeContactCache *merged [[buffer(2)]],
+    device NativeContactControl &contacts [[buffer(3)]], device long2 *invalidations [[buffer(4)]],
+    device NativeBubble *bubbles [[buffer(5)]], device NativeSegment *segments [[buffer(6)]],
+    constant NativeControl &control [[buffer(7)]], device uint4 *flags [[buffer(8)]],
+    device atomic_uint *statistics [[buffer(9)]], uint index [[thread_position_in_grid]]) {
+    if (contacts.counts.w || index >= contacts.limits.w) return;
+    NativeContactCache record = previous[index];
+    uint location = nativeCacheLowerBound(current, contacts.counts.y, record);
+    bool same = location < contacts.counts.y && nativeCacheSame(current[location], record);
+    uint position = index + location + (same ? 1 : 0);
+    uint invalid = same ? 0 : nativeInvalidation(record, invalidations, contacts.cache.z,
+        bubbles, control.counts.x, segments, control.counts.y);
+    bool keep = !same && !invalid && contacts.limits.x - record.metadata.z <= contacts.limits.y;
+    merged[position] = record;
+    flags[position] = uint4(keep ? 1 : 0, 0, invalid ? 1 : 0, 0);
+    nativeCountWork(statistics, 1);
+}
+
+kernel void nativeCompactContactCache(device NativeContactCache *merged [[buffer(0)]],
+    device NativeContactCache *output [[buffer(1)]], device NativeContactControl &contacts [[buffer(2)]],
+    device uint4 *flags [[buffer(3)]], device uint4 *offsets [[buffer(4)]],
+    device atomic_uint *statistics [[buffer(5)]], uint index [[thread_position_in_grid]]) {
+    if (contacts.counts.w || index >= contacts.limits.w + contacts.counts.y || !flags[index].x) return;
+    output[offsets[index].x - 1] = merged[index];
+    nativeCountWork(statistics, 2);
 }

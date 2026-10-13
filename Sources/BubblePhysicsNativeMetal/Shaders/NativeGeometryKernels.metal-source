@@ -21,6 +21,11 @@ struct NativeContactControl { uint4 limits; uint4 counts; uint4 cache; float4 th
 struct NativeControl { uint4 counts; float4 physics; };
 struct NativeRenderPacket { long2 identity; float4 geometry; float4 deformation; };
 
+void nativeCountWork(device atomic_uint *statistics, uint slot) {
+    if (atomic_load_explicit(statistics + 4, memory_order_relaxed))
+        atomic_fetch_add_explicit(statistics + slot, 1, memory_order_relaxed);
+}
+
 kernel void nativePredict(device NativeBubble *bubbles [[buffer(0)]],
                           constant NativeControl &control [[buffer(1)]],
                           uint index [[thread_position_in_grid]]) {
@@ -129,22 +134,28 @@ kernel void nativeEmitCandidates(device NativeBubble *bubbles [[buffer(0)]],
     rowCounts[index * 2 + 1] = count - bubbleCount;
 }
 
+kernel void nativePrepareCandidateCounts(constant NativeControl &control [[buffer(0)]],
+    device uint *rowCounts [[buffer(1)]], device uint4 *values [[buffer(2)]],
+    uint index [[thread_position_in_grid]]) {
+    if (index >= control.counts.x * 2) return;
+    uint kind = index / control.counts.x, bubble = index % control.counts.x;
+    values[index] = uint4(rowCounts[bubble * 2 + kind], 0, 0, 0);
+}
+
 kernel void nativeCompactCandidates(constant NativeControl &control [[buffer(0)]],
     device NativeContactControl &contacts [[buffer(1)]], device NativeCandidate *rows [[buffer(2)]],
     device uint *rowCounts [[buffer(3)]], device NativeCandidate *candidates [[buffer(4)]],
+    device uint4 *offsets [[buffer(5)]], device atomic_uint *statistics [[buffer(6)]],
     uint index [[thread_position_in_grid]]) {
-    if (index != 0) return;
-    uint count = 0;
-    for (uint kind = 0; kind < 2; ++kind) for (uint i = 0; i < control.counts.x; ++i) {
-        uint start = kind == 0 ? 0 : rowCounts[i * 2];
-        uint end = start + rowCounts[i * 2 + kind];
-        for (uint j = start; j < end; ++j) {
-            if (count < contacts.limits.z) candidates[count] = rows[i * contacts.cache.w + j];
-            ++count;
-        }
-    }
-    contacts.counts.x = count;
-    if (count > contacts.limits.z) contacts.counts.w = 1;
+    if (contacts.counts.w || contacts.cache.w == 0) return;
+    uint bubble = index / contacts.cache.w, slot = index % contacts.cache.w;
+    if (bubble >= control.counts.x || slot >= rowCounts[bubble * 2] + rowCounts[bubble * 2 + 1]) return;
+    uint kind = slot < rowCounts[bubble * 2] ? 0 : 1;
+    uint row = kind * control.counts.x + bubble;
+    uint offset = row == 0 ? 0 : offsets[row - 1].x;
+    uint local = kind == 0 ? slot : slot - rowCounts[bubble * 2];
+    candidates[offset + local] = rows[index];
+    nativeCountWork(statistics, 3);
 }
 
 kernel void nativeBuildContacts(device NativeBubble *bubbles [[buffer(0)]],

@@ -168,6 +168,8 @@ public struct NativeMetalFrameProfile: Equatable, Sendable {
     public var hostWaitingMilliseconds: Double = 0
     /// Łączny czas ukończonego command buffera; bez pozornych czasów osobnych dispatchy.
     public var stageGPUMilliseconds: [String: Double] = [:]
+    /// Opcjonalne liczniki rzeczywiście wykonanych work-itemów, używane w profilu przepustowości.
+    public var stageGPUWorkItemCounts: [String: Int] = [:]
 
     public init() {}
 }
