@@ -31,7 +31,7 @@ public final class NativeMetalWorldRunner {
 
     public convenience init?(device: MTLDevice? = MTLCreateSystemDefaultDevice(),
                              configuration: NativeMetalConfiguration = .default) {
-        guard let device, let solver = try? NativeMetalSolver(device: device) else { return nil }
+        guard let device, let solver = try? NativeMetalSolver(device: device, configuration: configuration) else { return nil }
         self.init(executor: solver, configuration: configuration)
     }
 

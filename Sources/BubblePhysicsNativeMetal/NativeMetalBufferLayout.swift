@@ -44,11 +44,57 @@ struct NativeMetalSegment: Equatable, Sendable {
     }
 }
 
-struct NativeMetalContactCache: Equatable, Sendable {
-    var identity: SIMD2<UInt64> // klucz, flagi
-    var participants: SIMD2<Int64>
+/// Klucz bez hashowania/truncacji ID; rodzaj rozdziela przestrzenie identyfikatorów.
+struct NativeContactKey: Equatable, Hashable, Comparable, Sendable {
+    let kind: UInt32
+    let first: Int64
+    let second: Int64
+
+    static func bubblePair(_ first: Int64, _ second: Int64) -> Self {
+        .init(kind: 0, first: min(first, second), second: max(first, second))
+    }
+
+    static func bubbleSegment(_ bubble: Int64, _ segment: Int64) -> Self {
+        .init(kind: 1, first: bubble, second: segment)
+    }
+
+    static func < (lhs: Self, rhs: Self) -> Bool {
+        if lhs.kind != rhs.kind { return lhs.kind < rhs.kind }
+        if lhs.first != rhs.first { return lhs.first < rhs.first }
+        return lhs.second < rhs.second
+    }
+}
+
+struct NativeContactCacheRecord: Equatable, Sendable {
+    var participants: SIMD2<Int64> // pełne ID
+    var metadata: SIMD4<UInt32> // kind, age, lastSeenFrame, flags
     var geometry: SIMD4<Float> // normal.xy, point.xy
-    var response: SIMD4<Float> // lambda, wiek, pozostałe
+    var response: SIMD4<Float> // lambda, penetration, allowedSide (0 = nil), reserved
+    var key: NativeContactKey { .init(kind: metadata.x, first: participants.x, second: participants.y) }
+    var lambda: Float { get { response.x } set { response.x = newValue } }
+    var age: UInt32 { metadata.y }
+    var lastSeenFrame: UInt32 { metadata.z }
+    var flags: UInt32 { metadata.w }
+}
+
+typealias NativeMetalContactCache = NativeContactCacheRecord
+
+struct NativeMetalCandidate: Sendable {
+    var participants: SIMD2<Int64>
+    var metadata: SIMD4<UInt32> // kind, bubbleIndex, otherIndex, valid
+    var key: NativeContactKey { .init(kind: metadata.x, first: participants.x, second: participants.y) }
+}
+
+struct NativeMetalGridEntry: Sendable {
+    var cell: SIMD2<Int64>
+    var metadata: SIMD4<UInt32> // bubbleIndex, valid, reserved
+}
+
+struct NativeMetalContactControl: Sendable {
+    var limits: SIMD4<UInt32> // frame, expiry, capacity, previousCacheCount
+    var counts: SIMD4<UInt32> // candidates, contacts, cache, failure
+    var cache: SIMD4<UInt32> // hits, resets, invalidationCount, rowStride
+    var thresholds: SIMD4<Float> // teleportMultiplier, ccdMultiplier, tolerance, cellWidth
 }
 
 struct NativeMetalControl: Sendable {
@@ -120,7 +166,7 @@ public struct NativeMetalFrameProfile: Equatable, Sendable {
     public var encoderCount = 0
     public var hostEncodingMilliseconds: Double = 0
     public var hostWaitingMilliseconds: Double = 0
-    /// Czasy ukończonego command buffera. Task 2 ma tylko etap prediction.
+    /// Łączny czas ukończonego command buffera; bez pozornych czasów osobnych dispatchy.
     public var stageGPUMilliseconds: [String: Double] = [:]
 
     public init() {}

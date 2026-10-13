@@ -1,0 +1,81 @@
+// Wspólne typy i geometria są kompilowane z NativeGeometryKernels.
+// Task 3 przygotowuje cache; iteracje XPBD są zakresem Task 4.
+bool nativeCacheLess(NativeContactCache a, NativeContactCache b) {
+    if (a.metadata.x != b.metadata.x) return a.metadata.x < b.metadata.x;
+    if (a.participants.x != b.participants.x) return a.participants.x < b.participants.x;
+    return a.participants.y < b.participants.y;
+}
+
+uint nativeInvalidation(NativeContactCache record, device long2 *invalidations, uint count,
+    device NativeBubble *bubbles, uint bubbleCount, device NativeSegment *segments, uint segmentCount) {
+    uint flags = 0;
+    for (uint i = 0; i < count; ++i) {
+        long2 change = invalidations[i];
+        if (change.y == 0 && (record.participants.x == change.x ||
+            (record.metadata.x == 0 && record.participants.y == change.x))) flags |= 1;
+        if (change.y == 1 && record.metadata.x == 1 && record.participants.y == change.x) flags |= 2;
+    }
+    // Świat wejściowy utrzymuje porządek ID; wyszukiwanie nie skanuje całego świata dla każdego kontaktu.
+    uint low = 0, high = bubbleCount;
+    while (low < high) {
+        uint mid = low + (high - low) / 2;
+        if (bubbles[mid].identity.x < record.participants.x) low = mid + 1; else high = mid;
+    }
+    bool foundA = low < bubbleCount && bubbles[low].identity.x == record.participants.x;
+    low = 0; high = record.metadata.x == 0 ? bubbleCount : segmentCount;
+    while (low < high) {
+        uint mid = low + (high - low) / 2;
+        long id = record.metadata.x == 0 ? bubbles[mid].identity.x : segments[mid].identity.x;
+        if (id < record.participants.y) low = mid + 1; else high = mid;
+    }
+    bool foundB = record.metadata.x == 0
+        ? (low < bubbleCount && bubbles[low].identity.x == record.participants.y)
+        : (low < segmentCount && segments[low].identity.x == record.participants.y);
+    return flags | (!foundA || !foundB ? 4 : 0);
+}
+
+kernel void nativeMatchContactCache(device NativeContactCache *previous [[buffer(0)]],
+    device NativeContactCache *current [[buffer(1)]], device NativeContactCache *output [[buffer(2)]],
+    device NativeContactControl &contacts [[buffer(3)]], device long2 *invalidations [[buffer(4)]],
+    device NativeBubble *bubbles [[buffer(5)]], device NativeSegment *segments [[buffer(6)]],
+    constant NativeControl &control [[buffer(7)]], uint index [[thread_position_in_grid]]) {
+    if (index != 0 || contacts.counts.w) return;
+    uint oldIndex = 0, newIndex = 0, count = 0, activeCount = 0;
+    while (oldIndex < contacts.limits.w || newIndex < contacts.counts.x) {
+        while (newIndex < contacts.counts.x && current[newIndex].response.y <= 0) ++newIndex;
+        bool hasOld = oldIndex < contacts.limits.w, hasNew = newIndex < contacts.counts.x;
+        if (!hasOld && !hasNew) break;
+        NativeContactCache oldRecord, newRecord, result;
+        if (hasOld) oldRecord = previous[oldIndex];
+        if (hasNew) newRecord = current[newIndex];
+        bool same = hasOld && hasNew && all(oldRecord.participants == newRecord.participants)
+            && oldRecord.metadata.x == newRecord.metadata.x;
+        bool chooseNew = hasNew && (!hasOld || same || nativeCacheLess(newRecord, oldRecord));
+        bool keep = true;
+        if (chooseNew) {
+            result = newRecord; ++newIndex; ++activeCount;
+            if (same) {
+                uint invalid = nativeInvalidation(oldRecord, invalidations, contacts.cache.z,
+                    bubbles, control.counts.x, segments, control.counts.y);
+                uint elapsed = contacts.limits.x - oldRecord.metadata.z;
+                // Jedna klatka jest bieżącym trafieniem; odejmowanie nie przepełnia maksymalnego expiry.
+                if (elapsed > 0 && elapsed - 1 > contacts.limits.y) invalid |= 8;
+                if (invalid) { result.metadata.w = invalid; ++contacts.cache.y; }
+                else { result.response.x = oldRecord.response.x; result.metadata.y = oldRecord.metadata.y + 1; ++contacts.cache.x; }
+                ++oldIndex;
+            }
+        } else {
+            result = oldRecord; ++oldIndex;
+            uint invalid = nativeInvalidation(oldRecord, invalidations, contacts.cache.z,
+                bubbles, control.counts.x, segments, control.counts.y);
+            if (invalid) { ++contacts.cache.y; keep = false; }
+            if (contacts.limits.x - oldRecord.metadata.z > contacts.limits.y) keep = false;
+        }
+        if (keep) {
+            if (count >= contacts.limits.z) { contacts.counts.w = 1; return; }
+            output[count++] = result;
+        }
+    }
+    contacts.counts.y = activeCount;
+    contacts.counts.z = count;
+}

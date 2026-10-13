@@ -13,8 +13,11 @@ struct NativeSegment {
     float4 velocity; float4 collision;
 };
 struct NativeContactCache {
-    ulong2 identity; long2 participants; float4 geometry; float4 response;
+    long2 participants; uint4 metadata; float4 geometry; float4 response;
 };
+struct NativeCandidate { long2 participants; uint4 metadata; };
+struct NativeGridEntry { long2 cell; uint4 metadata; };
+struct NativeContactControl { uint4 limits; uint4 counts; uint4 cache; float4 thresholds; };
 struct NativeControl { uint4 counts; float4 physics; };
 struct NativeRenderPacket { long2 identity; float4 geometry; float4 deformation; };
 
@@ -30,4 +33,146 @@ kernel void nativePredict(device NativeBubble *bubbles [[buffer(0)]],
     b.motion.z += b.motion.w * dt;
     b.motion.w *= exp(-control.physics.z * dt);
     bubbles[index] = b;
+}
+
+// Rozmiar komórki obejmuje największą średnicę: wystarcza dziewięć sąsiadów.
+kernel void nativePrepareGrid(device NativeBubble *bubbles [[buffer(0)]],
+    constant NativeControl &control [[buffer(1)]], device NativeContactControl &contacts [[buffer(2)]],
+    uint index [[thread_position_in_grid]]) {
+    if (index != 0) return;
+    float width = contacts.thresholds.z;
+    for (uint i = 0; i < control.counts.x; ++i) width = max(width, 2 * bubbles[i].physical.z + contacts.thresholds.z);
+    contacts.thresholds.w = max(width, FLT_MIN);
+}
+
+kernel void nativeBuildGrid(device NativeBubble *bubbles [[buffer(0)]],
+    constant NativeControl &control [[buffer(1)]], device NativeContactControl &contacts [[buffer(2)]],
+    device NativeGridEntry *grid [[buffer(3)]], uint index [[thread_position_in_grid]]) {
+    NativeGridEntry entry;
+    entry.cell = long2(0);
+    entry.metadata = uint4(index, index < control.counts.x ? 1 : 0, 0, 0);
+    if (entry.metadata.y) entry.cell = long2(floor(bubbles[index].position.xy / contacts.thresholds.w));
+    grid[index] = entry;
+}
+
+bool nativeGridLess(NativeGridEntry a, NativeGridEntry b) {
+    if (a.metadata.y != b.metadata.y) return a.metadata.y > b.metadata.y;
+    if (a.cell.x != b.cell.x) return a.cell.x < b.cell.x;
+    if (a.cell.y != b.cell.y) return a.cell.y < b.cell.y;
+    return a.metadata.x < b.metadata.x;
+}
+
+kernel void nativeSortGrid(device NativeGridEntry *grid [[buffer(0)]],
+    constant uint2 &pass [[buffer(1)]], uint index [[thread_position_in_grid]]) {
+    uint other = index ^ pass.y;
+    if (other <= index) return;
+    NativeGridEntry a = grid[index], b = grid[other];
+    bool ascending = (index & pass.x) == 0;
+    if (ascending ? nativeGridLess(b, a) : nativeGridLess(a, b)) { grid[index] = b; grid[other] = a; }
+}
+
+bool nativeKeyLess(NativeCandidate a, NativeCandidate b) {
+    if (a.metadata.x != b.metadata.x) return a.metadata.x < b.metadata.x;
+    if (a.participants.x != b.participants.x) return a.participants.x < b.participants.x;
+    return a.participants.y < b.participants.y;
+}
+
+// Każdy wątek zapisuje własny wiersz; porządek nie zależy od kolejności wykonania.
+void nativeInsertCandidate(device NativeCandidate *row, thread uint &count, NativeCandidate value) {
+    uint location = count++;
+    while (location > 0 && nativeKeyLess(value, row[location - 1])) {
+        row[location] = row[location - 1]; --location;
+    }
+    row[location] = value;
+}
+
+kernel void nativeEmitCandidates(device NativeBubble *bubbles [[buffer(0)]],
+    constant NativeControl &control [[buffer(1)]], device NativeContactControl &contacts [[buffer(2)]],
+    device NativeGridEntry *grid [[buffer(3)]], device NativeSegment *segments [[buffer(4)]],
+    device NativeCandidate *rows [[buffer(5)]], device uint *rowCounts [[buffer(6)]],
+    uint index [[thread_position_in_grid]]) {
+    if (index >= control.counts.x) return;
+    NativeBubble a = bubbles[index];
+    long2 cell = long2(floor(a.position.xy / contacts.thresholds.w));
+    device NativeCandidate *row = rows + index * contacts.cache.w;
+    uint count = 0;
+    for (int dx = -1; dx <= 1; ++dx) for (int dy = -1; dy <= 1; ++dy) {
+        long2 target = cell + long2(dx, dy);
+        uint low = 0, high = control.counts.x;
+        while (low < high) {
+            uint mid = low + (high - low) / 2;
+            long2 c = grid[mid].cell;
+            if (c.x < target.x || (c.x == target.x && c.y < target.y)) low = mid + 1;
+            else high = mid;
+        }
+        for (uint k = low; k < control.counts.x && all(grid[k].cell == target); ++k) {
+            uint j = grid[k].metadata.x;
+            if (j <= index) continue;
+            NativeBubble b = bubbles[j];
+            if (all(abs(a.position.xy - b.position.xy) <= a.physical.z + b.physical.z)) {
+                NativeCandidate candidate = { long2(a.identity.x, b.identity.x), uint4(0, index, j, 1) };
+                nativeInsertCandidate(row, count, candidate);
+            }
+        }
+    }
+    uint bubbleCount = count;
+    for (uint j = 0; j < control.counts.y; ++j) {
+        NativeSegment s = segments[j];
+        float2 lower = min(s.current.xy, s.current.zw) - a.physical.z;
+        float2 upper = max(s.current.xy, s.current.zw) + a.physical.z;
+        if (all(a.position.xy >= lower) && all(a.position.xy <= upper)) {
+            NativeCandidate candidate = { long2(a.identity.x, s.identity.x), uint4(1, index, j, 1) };
+            nativeInsertCandidate(row, count, candidate);
+        }
+    }
+    rowCounts[index * 2] = bubbleCount;
+    rowCounts[index * 2 + 1] = count - bubbleCount;
+}
+
+kernel void nativeCompactCandidates(constant NativeControl &control [[buffer(0)]],
+    device NativeContactControl &contacts [[buffer(1)]], device NativeCandidate *rows [[buffer(2)]],
+    device uint *rowCounts [[buffer(3)]], device NativeCandidate *candidates [[buffer(4)]],
+    uint index [[thread_position_in_grid]]) {
+    if (index != 0) return;
+    uint count = 0;
+    for (uint kind = 0; kind < 2; ++kind) for (uint i = 0; i < control.counts.x; ++i) {
+        uint start = kind == 0 ? 0 : rowCounts[i * 2];
+        uint end = start + rowCounts[i * 2 + kind];
+        for (uint j = start; j < end; ++j) {
+            if (count < contacts.limits.z) candidates[count] = rows[i * contacts.cache.w + j];
+            ++count;
+        }
+    }
+    contacts.counts.x = count;
+    if (count > contacts.limits.z) contacts.counts.w = 1;
+}
+
+kernel void nativeBuildContacts(device NativeBubble *bubbles [[buffer(0)]],
+    device NativeSegment *segments [[buffer(1)]], device NativeContactControl &control [[buffer(2)]],
+    device NativeCandidate *candidates [[buffer(3)]], device NativeContactCache *contacts [[buffer(4)]],
+    uint index [[thread_position_in_grid]]) {
+    if (control.counts.w || index >= control.counts.x) return;
+    NativeCandidate c = candidates[index]; NativeBubble a = bubbles[c.metadata.y];
+    float2 normal, point; float penetration; float allowedSide = 0;
+    if (c.metadata.x == 0) {
+        NativeBubble b = bubbles[c.metadata.z]; float2 delta = b.position.xy - a.position.xy;
+        float distance = length(delta);
+        normal = distance > 0 ? delta / distance : float2(1, 0);
+        point = a.position.xy + normal * a.physical.z;
+        penetration = a.physical.z + b.physical.z - distance;
+    } else {
+        NativeSegment s = segments[c.metadata.z]; float2 edge = s.current.zw - s.current.xy;
+        float lengthSquared = dot(edge, edge);
+        float t = lengthSquared > 0 ? clamp(dot(a.position.xy - s.current.xy, edge) / lengthSquared, 0.0f, 1.0f) : 0;
+        point = s.current.xy + t * edge; float2 delta = a.position.xy - point;
+        float distance = length(delta); float edgeLength = length(edge);
+        float2 base = edgeLength > 0 ? float2(-edge.y, edge.x) / edgeLength : float2(0, 1);
+        float sign = ((a.identity.x ^ s.identity.x) & 1) == 0 ? 1 : -1;
+        normal = s.flags.z ? base * s.collision.x : (distance > 0 ? delta / distance : base * sign);
+        allowedSide = s.flags.z ? s.collision.x : 0;
+        penetration = a.physical.z - distance;
+    }
+    NativeContactCache contact = { c.participants, uint4(c.metadata.x, 1, control.limits.x, 0),
+        float4(normal, point), float4(0, penetration, allowedSide, 0) };
+    contacts[index] = contact;
 }

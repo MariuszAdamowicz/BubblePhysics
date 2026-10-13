@@ -13,7 +13,7 @@ final class NativeMetalSolverLifecycleTests: XCTestCase {
         let state = try XCTUnwrap(solver.persistentState)
         let ping = state.bubblesPing
         let pong = state.bubblesPong
-        let cache = state.contactCache
+        let cache = state.cachePing
         let scratch = state.scratch
         let secondInput = NativeMetalSnapshot(world: try makeWorld(), previous: firstInput)
         XCTAssertTrue(secondInput.bubbleChanges.isEmpty)
@@ -21,7 +21,7 @@ final class NativeMetalSolverLifecycleTests: XCTestCase {
         XCTAssertTrue(solver.persistentState === state)
         XCTAssertTrue(state.bubblesPing === ping)
         XCTAssertTrue(state.bubblesPong === pong)
-        XCTAssertTrue(state.contactCache === cache)
+        XCTAssertTrue(state.cachePing === cache)
         XCTAssertTrue(state.scratch === scratch)
         XCTAssertEqual(first.bubbles[0].center.x, 0.5, accuracy: 1e-6)
         XCTAssertEqual(second.bubbles[0].center.x, 1, accuracy: 1e-6)
@@ -56,7 +56,7 @@ final class NativeMetalSolverLifecycleTests: XCTestCase {
         XCTAssertEqual(frame.profile.encoderCount, 2)
         XCTAssertGreaterThanOrEqual(frame.profile.hostEncodingMilliseconds, 0)
         XCTAssertGreaterThanOrEqual(frame.profile.hostWaitingMilliseconds, 0)
-        XCTAssertEqual(frame.profile.stageGPUMilliseconds.keys.sorted(), ["prediction"])
+        XCTAssertEqual(frame.profile.stageGPUMilliseconds.keys.sorted(), ["frame"])
         XCTAssertFalse(frame.isComplete)
     }
 
@@ -175,6 +175,9 @@ final class NativeMetalSolverLifecycleTests: XCTestCase {
         XCTAssertEqual(MemoryLayout<NativeMetalSegment>.stride, 96)
         XCTAssertEqual(MemoryLayout<NativeMetalContactCache>.alignment, 16)
         XCTAssertEqual(MemoryLayout<NativeMetalContactCache>.stride, 64)
+        XCTAssertEqual(MemoryLayout<NativeMetalCandidate>.stride, 32)
+        XCTAssertEqual(MemoryLayout<NativeMetalGridEntry>.stride, 32)
+        XCTAssertEqual(MemoryLayout<NativeMetalContactControl>.stride, 64)
         XCTAssertEqual(MemoryLayout<NativeMetalControl>.alignment, 16)
         XCTAssertEqual(MemoryLayout<NativeMetalControl>.stride, 32)
         XCTAssertEqual(MemoryLayout<NativeMetalRenderPacket>.alignment, 16)
