@@ -18,7 +18,7 @@ let package = Package(
     ],
     targets: [
         .executableTarget(name: "BubblePhysicsReferenceBench",
-                          dependencies: ["BubblePhysicsReference", "BubblePhysicsReferenceMetal"],
+                          dependencies: ["BubblePhysicsReference", "BubblePhysicsReferenceMetal", "BubblePhysicsNativeMetal"],
                           path: "Benchmarks/macOS/BubblePhysicsReferenceBench"),
         .target(name: "BubblePhysics"),
         .target(name: "BubblePhysicsCore"),

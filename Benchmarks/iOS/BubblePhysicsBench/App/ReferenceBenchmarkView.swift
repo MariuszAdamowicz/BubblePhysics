@@ -1,5 +1,6 @@
 import BubblePhysicsReference
 import BubblePhysicsReferenceMetal
+import BubblePhysicsNativeMetal
 import SwiftUI
 import UIKit
 
@@ -9,7 +10,10 @@ struct ReferenceBenchmarkView: View {
     init() {
         _model = StateObject(wrappedValue: ReferenceBenchmarkPresentation(
             runner: { configuration, progress in
-                try await ReferenceMetalBenchmarkRunner.measure(configuration: configuration, progress: progress)
+                if configuration.backend == .nativeMetal {
+                    return try await NativeMetalBenchmarkRunner.measure(configuration: configuration, progress: progress)
+                }
+                return try await ReferenceMetalBenchmarkRunner.measure(configuration: configuration, progress: progress)
             },
             setRunActivity: { active in
                 UIApplication.shared.isIdleTimerDisabled = active
@@ -25,6 +29,7 @@ struct ReferenceBenchmarkView: View {
                 Picker("Backend", selection: $model.backend) {
                     Text("CPU reference").tag(ReferenceSimulationBackend.cpu)
                     Text("GPU reference").tag(ReferenceSimulationBackend.metal)
+                    Text("GPU native").tag(ReferenceSimulationBackend.nativeMetal)
                 }
                 .pickerStyle(.segmented)
                 .disabled(model.isRunning)
@@ -39,6 +44,11 @@ struct ReferenceBenchmarkView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Text("Podczas benchmarku ekran nie wygasza się automatycznie. Pozostaw aplikację na pierwszym planie; przejście do tła nadal unieważnia pomiar GPU.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                if model.backend == .nativeMetal {
+                    Text("GPU native: stała liczba iteracji XPBD/PBD. Raport obejmuje pełną klatkę, cache kontaktów, CCD i liczbę command bufferów. Każdy fallback wyklucza pomiar GPU.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -58,7 +68,7 @@ struct ReferenceBenchmarkView: View {
                 .disabled(model.isRunning)
 
                 if model.mode == .single {
-                    Picker("Limit Newtona", selection: $model.selectedLimit) {
+                    Picker(model.backend == .nativeMetal ? "Iteracje XPBD/PBD" : "Limit Newtona", selection: $model.selectedLimit) {
                         ForEach([4, 8, 12, 16], id: \.self) { Text("\($0)").tag($0) }
                     }
                     .pickerStyle(.segmented)

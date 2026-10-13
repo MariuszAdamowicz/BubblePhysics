@@ -2,6 +2,23 @@ public enum ReferenceSimulationBackend: String, Equatable, Sendable, CaseIterabl
     case cpu
     case metal
     case nativeMetal = "native-metal"
+
+    public var isGPU: Bool { self != .cpu }
+}
+
+/// Neutral telemetry from a successfully published GPU-native frame.
+public struct ReferenceBenchmarkNativeFrameTelemetry: Sendable, Equatable {
+    public var cacheHits: Int
+    public var cacheResets: Int
+    public var solverIterations: Int
+    public var ccdCandidates: Int
+
+    public init(cacheHits: Int, cacheResets: Int, solverIterations: Int, ccdCandidates: Int) {
+        self.cacheHits = cacheHits
+        self.cacheResets = cacheResets
+        self.solverIterations = solverIterations
+        self.ccdCandidates = ccdCandidates
+    }
 }
 
 public struct ReferenceTimingSummary: Sendable, Equatable {
@@ -74,12 +91,14 @@ public struct ReferenceBenchmarkGPUFrameTelemetry: Sendable, Equatable {
     public var contactCount: Int?
     public var ccdGroupCount: Int?
     public var profile: ReferenceBenchmarkGPUFrameProfile?
+    public var native: ReferenceBenchmarkNativeFrameTelemetry?
 
     public init(completedCommandBuffersMilliseconds: Double? = nil,
                 failure: ReferenceBenchmarkGPUFailureSummary? = nil,
                 solveCallCount: Int? = nil, tentativeSolveCallCount: Int? = nil,
                 contactCount: Int? = nil, ccdGroupCount: Int? = nil,
-                profile: ReferenceBenchmarkGPUFrameProfile? = nil) {
+                profile: ReferenceBenchmarkGPUFrameProfile? = nil,
+                native: ReferenceBenchmarkNativeFrameTelemetry? = nil) {
         self.completedCommandBuffersMilliseconds = completedCommandBuffersMilliseconds
         self.failure = failure
         self.solveCallCount = solveCallCount
@@ -87,6 +106,7 @@ public struct ReferenceBenchmarkGPUFrameTelemetry: Sendable, Equatable {
         self.contactCount = contactCount
         self.ccdGroupCount = ccdGroupCount
         self.profile = profile
+        self.native = native
     }
 }
 
@@ -156,11 +176,17 @@ public struct ReferenceBenchmarkReport: Sendable, Equatable {
     // Failure retention includes warmup and survives latched CPU frames.
     public var firstGPUFailure: ReferenceBenchmarkGPUFailureSummary? = nil
     public var firstFatalGPUFailure: ReferenceBenchmarkGPUFailureSummary? = nil
+    // Native counters include completed measured GPU frames only.
+    public var nativeTelemetrySampleCount: Int = 0
+    public var nativeCacheHits: Int? = nil
+    public var nativeCacheResets: Int? = nil
+    public var maximumNativeSolverIterations: Int? = nil
+    public var nativeCCDCandidates: Int? = nil
 
     /// Eligibility for device comparison, never an acceptance verdict. Physical
     /// device, Release, timing budget and CPU quality still need verification.
     public var isGPUAcceptanceMeasurementEligible: Bool {
-        backend == .metal && measuredSteps > 0 && cpuFrameCount == 0
+        backend.isGPU && measuredSteps > 0 && cpuFrameCount == 0
             && metalFrameCount == warmupSteps + measuredSteps
             && completedMetalSampleCount == measuredSteps
             && fallbackCount == 0 && firstFatalGPUFailure == nil && !hasNonFiniteState

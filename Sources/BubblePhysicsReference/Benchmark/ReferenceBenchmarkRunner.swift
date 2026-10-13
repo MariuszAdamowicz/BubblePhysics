@@ -32,9 +32,9 @@ public enum ReferenceBenchmarkRunner {
         for step in 0..<total {
             try Task.checkCancellation()
             let result = await frameExecutor(&world, scenario, step)
-            if result.backend == .metal { metalFrames += 1 } else { cpuFrames += 1 }
+            if result.backend == backend && result.backend.isGPU { metalFrames += 1 } else { cpuFrames += 1 }
             let fallbackReason = result.fallbackReason
-                ?? (backend == .metal && result.backend == .cpu ? "missingGPUFallbackReason" : nil)
+                ?? (backend.isGPU && result.backend != backend ? "missingGPUFallbackReason" : nil)
             if let reason = fallbackReason {
                 fallbacks += 1
                 if step < warmup { warmupFallbacks += 1 }
@@ -61,7 +61,7 @@ public enum ReferenceBenchmarkRunner {
         report.fallbackReasons = reasons
         report.firstGPUFailure = firstFailure
         report.firstFatalGPUFailure = fatalFailure
-        let completed = frames.filter { $0.backend == .metal && $0.fallbackReason == nil }
+        let completed = frames.filter { backend.isGPU && $0.backend == backend && $0.fallbackReason == nil }
         let gpuTimes = completed.compactMap { $0.gpuTelemetry?.completedCommandBuffersMilliseconds }
             .filter { $0.isFinite && $0 >= 0 }
         report.completedMetalTiming = .init(values: gpuTimes)
@@ -73,18 +73,27 @@ public enum ReferenceBenchmarkRunner {
         report.gpuProfileHostEncoding = .init(values: profiles.map(\.hostEncodingMilliseconds))
         report.gpuProfileHostWaiting = .init(values: profiles.map(\.hostWaitingMilliseconds))
         report.gpuProfileHostReadback = .init(values: profiles.map(\.hostReadbackMilliseconds))
-        for stage in ReferenceBenchmarkGPUFrameProfile.stages {
+        let profileStages = backend == .nativeMetal ? ["frame"] : ReferenceBenchmarkGPUFrameProfile.stages
+        for stage in profileStages {
             let values = profiles.compactMap { $0.stageGPUMilliseconds[stage] }
             if !values.isEmpty { report.gpuProfileStages[stage] = .init(values: values) }
             report.gpuProfileStageSampleCounts[stage] = values.count
         }
-        let fallbackFrames = frames.filter { backend == .metal && ($0.backend == .cpu || $0.fallbackReason != nil) }
+        let fallbackFrames = frames.filter { backend.isGPU && ($0.backend != backend || $0.fallbackReason != nil) }
         report.cpuFallbackSampleCount = fallbackFrames.count
         report.cpuFallbackFullFrameTiming = .init(values: fallbackFrames.map(\.fullFrameMilliseconds))
         report.maximumGPUSolveCalls = completed.compactMap { $0.gpuTelemetry?.solveCallCount }.max()
         report.maximumGPUTentativeSolveCalls = completed.compactMap { $0.gpuTelemetry?.tentativeSolveCallCount }.max()
         report.maximumGPUContacts = completed.compactMap { $0.gpuTelemetry?.contactCount }.max()
         report.maximumGPUCCDGroups = completed.compactMap { $0.gpuTelemetry?.ccdGroupCount }.max()
+        let native = completed.compactMap { $0.gpuTelemetry?.native }
+        report.nativeTelemetrySampleCount = native.count
+        if !native.isEmpty {
+            report.nativeCacheHits = native.reduce(0) { $0 + $1.cacheHits }
+            report.nativeCacheResets = native.reduce(0) { $0 + $1.cacheResets }
+            report.maximumNativeSolverIterations = native.map(\.solverIterations).max()
+            report.nativeCCDCandidates = native.reduce(0) { $0 + $1.ccdCandidates }
+        }
         return report
     }
 

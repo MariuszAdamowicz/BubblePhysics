@@ -3,8 +3,9 @@ import Darwin
 import Metal
 import BubblePhysicsReference
 import BubblePhysicsReferenceMetal
+import BubblePhysicsNativeMetal
 
-private let usage = "Użycie: BubblePhysicsReferenceBench [--scene interactive-24|stress-300] [--backend cpu|metal] [--limits 4,8,12,16] [--warmup 30] [--measured 300] [--diagnostics]\n--diagnostics: szczegółowy profil GPU dodaje narzut hosta; nie mieszaj z pomiarem akceptacyjnym."
+private let usage = "Użycie: BubblePhysicsReferenceBench [--scene interactive-24|stress-300] [--backend cpu|metal|native-metal] [--limits 4,8,12,16] [--warmup 30] [--measured 300] [--diagnostics]\n--diagnostics: szczegółowy profil GPU dodaje narzut hosta; nie mieszaj z pomiarem akceptacyjnym. Limit native-metal oznacza stałą liczbę iteracji XPBD/PBD."
 
 private enum CLIError: Error, CustomStringConvertible {
     case invalidArgument(String)
@@ -63,7 +64,13 @@ if arguments == ["--help"] {
     print(usage)
 } else {
     do {
-        let report = try await ReferenceMetalBenchmarkRunner.measure(configuration: configuration(arguments: arguments))
+        let configuration = try configuration(arguments: arguments)
+        let report: ReferenceBenchmarkMatrixReport
+        if configuration.backend == .nativeMetal {
+            report = try await NativeMetalBenchmarkRunner.measure(configuration: configuration)
+        } else {
+            report = try await ReferenceMetalBenchmarkRunner.measure(configuration: configuration)
+        }
         print(report.plainText(deviceName: deviceName(), systemVersion: ProcessInfo.processInfo.operatingSystemVersionString))
     } catch {
         FileHandle.standardError.write(Data("\(error)\n\(usage)\n".utf8))

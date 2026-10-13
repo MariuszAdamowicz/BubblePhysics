@@ -56,6 +56,9 @@ public struct ReferenceBenchmarkMatrixReport: Sendable, Equatable {
             lines.insert("gpu_diagnostics=\(configuration.gpuDiagnosticsEnabled ? "enabled" : "disabled"); diagnostyka dodaje narzut hosta — nie mieszaj jej z pomiarem akceptacyjnym. Etapy obejmują całe command buffery; newton zawiera inicjalizację PCG, geometry inicjalizację klatki, ccd rozpoczęcie solve i finalizację świata.", at: 6)
             lines.insert("Uwaga GPU: solver_p95_ms obejmuje cały command buffer GPU (sumę etapów) albo solver CPU przy fallbacku; contour_p95_ms mierzy pobranie/pakowanie konturów na hoście. Osobny gpu_completed zawiera wyłącznie ukończone klatki Metal; czasy tabeli przy fallbackach są mieszane i nie kwalifikują GPU.", at: 6)
         }
+        if configuration.backend == .nativeMetal {
+            lines.insert("GPU-native: limit oznacza stałą liczbę iteracji XPBD/PBD. solver_p95_ms obejmuje cały command buffer GPU albo solver CPU przy fallbacku; contour_p95_ms obejmuje pobranie/pakowanie gotowych konturów na hoście. gpu_completed i native_work zawierają wyłącznie ukończone zmierzone klatki native GPU; profil liczby command bufferów jest zawsze raportowany. Czasy tabeli z fallbackami są mieszane i nie kwalifikują GPU.", at: 6)
+        }
         for run in runs {
             lines.append([
                 "\(run.newtonIterationLimit)",
@@ -85,14 +88,14 @@ public struct ReferenceBenchmarkMatrixReport: Sendable, Equatable {
                 lines.append("fallback_reason limit=\(run.newtonIterationLimit) count=\(run.fallbackReasons[reason]!) reason=\(singleLine(reason))")
             }
         }
-        for run in runs where configuration.backend == .metal {
+        for run in runs where configuration.backend.isGPU {
             let limit = run.newtonIterationLimit
             let gpu = run.completedMetalTiming
             let cpu = run.cpuFallbackFullFrameTiming
             func gpuTime(_ value: Double) -> String { run.completedMetalSampleCount > 0 ? format(value) : "unavailable" }
             func cpuTime(_ value: Double) -> String { run.cpuFallbackSampleCount > 0 ? format(value) : "unavailable" }
             lines.append("gpu_completed limit=\(limit) measured_frames=\(run.completedMetalSampleCount) command_buffers_p50_ms=\(gpuTime(gpu.p50Milliseconds)) command_buffers_p95_ms=\(gpuTime(gpu.p95Milliseconds)) command_buffers_max_ms=\(gpuTime(gpu.maximumMilliseconds))")
-            if configuration.gpuDiagnosticsEnabled {
+            if configuration.gpuDiagnosticsEnabled || configuration.backend == .nativeMetal {
                 func fields(_ label: String, _ summary: ReferenceTimingSummary, count: Int, unit: String = "") -> String {
                     func value(_ value: Double) -> String { count > 0 ? format(value) : "unavailable" }
                     let prefix = label.isEmpty ? "" : label + "_"
@@ -104,9 +107,11 @@ public struct ReferenceBenchmarkMatrixReport: Sendable, Equatable {
                     fields("encoders", run.gpuProfileEncoders, count: count),
                     fields("host_encoding", run.gpuProfileHostEncoding, count: count, unit: "_ms"),
                     fields("host_waiting", run.gpuProfileHostWaiting, count: count, unit: "_ms"),
-                    fields("host_readback", run.gpuProfileHostReadback, count: count, unit: "_ms")
+                    fields("host_readback", run.gpuProfileHostReadback,
+                           count: configuration.backend == .nativeMetal ? 0 : count, unit: "_ms")
                 ].joined(separator: " "))
-                for stage in ReferenceBenchmarkGPUFrameProfile.stages {
+                let stages = configuration.backend == .nativeMetal ? ["frame"] : ReferenceBenchmarkGPUFrameProfile.stages
+                for stage in stages {
                     let samples = run.gpuProfileStageSampleCounts[stage] ?? 0
                     lines.append("gpu_stage limit=\(limit) stage=\(stage) measured_frames=\(samples) " +
                         fields("", run.gpuProfileStages[stage] ?? .init(values: []), count: samples, unit: "_ms"))
@@ -114,6 +119,9 @@ public struct ReferenceBenchmarkMatrixReport: Sendable, Equatable {
             }
             lines.append("cpu_fallback limit=\(limit) measured_frames=\(run.cpuFallbackSampleCount) full_p50_ms=\(cpuTime(cpu.p50Milliseconds)) full_p95_ms=\(cpuTime(cpu.p95Milliseconds)) full_max_ms=\(cpuTime(cpu.maximumMilliseconds))")
             lines.append("gpu_work limit=\(limit) scope=completed_measured_frames solve_calls_max=\(optionalCount(run.maximumGPUSolveCalls)) tentative_solve_calls_max=\(optionalCount(run.maximumGPUTentativeSolveCalls)) contacts_max=\(optionalCount(run.maximumGPUContacts)) ccd_groups_max=\(optionalCount(run.maximumGPUCCDGroups))")
+            if configuration.backend == .nativeMetal {
+                lines.append("native_work limit=\(limit) scope=completed_measured_frames measured_frames=\(run.nativeTelemetrySampleCount) native_cache_hits=\(optionalCount(run.nativeCacheHits)) native_cache_resets=\(optionalCount(run.nativeCacheResets)) native_solver_iterations=\(optionalCount(run.maximumNativeSolverIterations)) native_ccd_candidates=\(optionalCount(run.nativeCCDCandidates))")
+            }
             for (label, failure) in [("gpu_first_failure", run.firstGPUFailure), ("gpu_fatal_failure", run.firstFatalGPUFailure)] {
                 if let failure {
                     lines.append("\(label) limit=\(limit) stage=\(singleLine(failure.stage)) step=\(failure.scenarioStep) classification=\(singleLine(failure.classification)) reason=\(singleLine(failure.reason))")
