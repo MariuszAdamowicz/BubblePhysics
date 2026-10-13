@@ -121,6 +121,17 @@ public struct ReferenceBenchmarkMatrixReport: Sendable, Equatable {
             lines.append("gpu_work limit=\(limit) scope=completed_measured_frames solve_calls_max=\(optionalCount(run.maximumGPUSolveCalls)) tentative_solve_calls_max=\(optionalCount(run.maximumGPUTentativeSolveCalls)) contacts_max=\(optionalCount(run.maximumGPUContacts)) ccd_groups_max=\(optionalCount(run.maximumGPUCCDGroups))")
             if configuration.backend == .nativeMetal {
                 lines.append("native_work limit=\(limit) scope=completed_measured_frames measured_frames=\(run.nativeTelemetrySampleCount) native_cache_hits=\(optionalCount(run.nativeCacheHits)) native_cache_resets=\(optionalCount(run.nativeCacheResets)) native_solver_iterations=\(optionalCount(run.maximumNativeSolverIterations)) native_ccd_candidates=\(optionalCount(run.nativeCCDCandidates))")
+                let evidence = run.nativeQuality ?? .init()
+                let violations = run.nativeQuality?.violations ?? ["missingEvidence"]
+                func metric(_ value: Double?) -> String {
+                    value.map { String(format: "%.9g", locale: Locale(identifier: "en_US_POSIX"), $0) } ?? "unavailable"
+                }
+                func hash(_ value: UInt64?) -> String { value.map { String($0, radix: 16) } ?? "unavailable" }
+                lines.append("native_quality limit=\(limit) native_quality_envelope=\(violations.isEmpty ? "pass" : "fail") scope=separate_untimed_acceptance_batches cpu_baseline_measured_frames=\(evidence.cpuBaselineMeasuredFrames) cpu_penetration_p95=\(metric(evidence.cpuPenetrationP95)) cpu_penetration_max=\(metric(evidence.cpuPenetrationMaximum))")
+                lines.append("native_quality_dynamic limit=\(limit) rest_settle_frames=\(evidence.restSettleFrames) rest_measured_frames=\(evidence.restMeasuredFrames) rest_displacement_radius_fraction=\(metric(evidence.maximumRestDisplacementRadiusFraction)) released_contour_frames=\(evidence.releasedContourFrames) loaded_contour_mean_radius_error_fraction=\(metric(evidence.loadedContourMeanRadiusErrorFraction)) released_contour_mean_radius_error_fraction=\(metric(evidence.releasedContourMeanRadiusErrorFraction)) contour_oscillation_grows=\(evidence.contourOscillationGrows.map { $0 ? "yes" : "no" } ?? "unavailable") repeat_measured_frames=\(evidence.repeatMeasuredFrames) published_hash=\(hash(evidence.publishedStateHash)) repeated_published_hash=\(hash(evidence.repeatedPublishedStateHash))")
+                for violation in violations {
+                    lines.append("native_quality_violation limit=\(limit) reason=\(singleLine(violation))")
+                }
             }
             for (label, failure) in [("gpu_first_failure", run.firstGPUFailure), ("gpu_fatal_failure", run.firstFatalGPUFailure)] {
                 if let failure {

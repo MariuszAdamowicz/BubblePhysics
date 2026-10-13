@@ -31,7 +31,12 @@ public struct NativeMetalQualitySample: Equatable, Sendable {
 
     public init(report: ReferenceBenchmarkReport) {
         self.init(penetrationP95: report.penetration.p95, penetrationMaximum: report.penetration.maximum,
-                  containment: report.maximumConsecutiveContainmentFrames, hasNonFiniteState: report.hasNonFiniteState)
+                  containment: report.maximumConsecutiveContainmentFrames, hasNonFiniteState: report.hasNonFiniteState,
+                  maximumRestDisplacementRadiusFraction: report.nativeQuality?.maximumRestDisplacementRadiusFraction,
+                  releasedContourMeanRadiusErrorFraction: report.nativeQuality?.releasedContourMeanRadiusErrorFraction,
+                  contourOscillationGrows: report.nativeQuality?.contourOscillationGrows,
+                  publishedStateHash: report.nativeQuality?.publishedStateHash,
+                  repeatedPublishedStateHash: report.nativeQuality?.repeatedPublishedStateHash)
     }
 }
 

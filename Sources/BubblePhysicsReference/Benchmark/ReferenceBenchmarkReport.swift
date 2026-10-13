@@ -21,6 +21,27 @@ public struct ReferenceBenchmarkNativeFrameTelemetry: Sendable, Equatable {
     }
 }
 
+/// Neutral evidence and verdict measured outside the timed native frame batch.
+/// Optional values remain absent when any contributing frame used CPU fallback.
+public struct ReferenceBenchmarkNativeQualityReport: Sendable, Equatable {
+    public var cpuBaselineMeasuredFrames = 0
+    public var cpuPenetrationP95: Double?
+    public var cpuPenetrationMaximum: Double?
+    public var restSettleFrames = 0
+    public var restMeasuredFrames = 0
+    public var maximumRestDisplacementRadiusFraction: Double?
+    public var releasedContourFrames = 0
+    public var loadedContourMeanRadiusErrorFraction: Double?
+    public var releasedContourMeanRadiusErrorFraction: Double?
+    public var contourOscillationGrows: Bool?
+    public var repeatMeasuredFrames = 0
+    public var publishedStateHash: UInt64?
+    public var repeatedPublishedStateHash: UInt64?
+    public var violations: [String] = []
+
+    public init() {}
+}
+
 public struct ReferenceTimingSummary: Sendable, Equatable {
     public var p50Milliseconds: Double
     public var p95Milliseconds: Double
@@ -182,6 +203,7 @@ public struct ReferenceBenchmarkReport: Sendable, Equatable {
     public var nativeCacheResets: Int? = nil
     public var maximumNativeSolverIterations: Int? = nil
     public var nativeCCDCandidates: Int? = nil
+    public var nativeQuality: ReferenceBenchmarkNativeQualityReport? = nil
 
     /// Eligibility for device comparison, never an acceptance verdict. Physical
     /// device, Release, timing budget and CPU quality still need verification.
