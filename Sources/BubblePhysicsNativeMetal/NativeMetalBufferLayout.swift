@@ -67,6 +67,11 @@ struct NativeMetalBubbleChange: Sendable {
     let value: NativeMetalBubble
 }
 
+struct NativeMetalBubbleRemap: Sendable {
+    let sourceIndex: Int
+    let destinationIndex: Int
+}
+
 struct NativeMetalSegmentChange: Sendable {
     let index: Int
     let value: NativeMetalSegment
@@ -79,6 +84,7 @@ struct NativeMetalSnapshot: Sendable {
     let sourceBubbles: [ReferenceBubble]
     let sourceSegments: [ReferenceSegment]
     let bubbleChanges: [NativeMetalBubbleChange]
+    let bubbleRemaps: [NativeMetalBubbleRemap]
     let segmentChanges: [NativeMetalSegmentChange]
     let previousBubbles: [ReferenceBubble]?
     let previousSegments: [ReferenceSegment]?
@@ -89,10 +95,17 @@ struct NativeMetalSnapshot: Sendable {
         sourceSegments = world.segments
         previousBubbles = previous?.sourceBubbles
         previousSegments = previous?.sourceSegments
+        let previousByID = Dictionary(uniqueKeysWithValues: (previous?.sourceBubbles ?? []).enumerated().map {
+            ($0.element.id, (index: $0.offset, bubble: $0.element))
+        })
         bubbleChanges = world.bubbles.enumerated().compactMap { index, bubble in
-            guard previous?.sourceBubbles.indices.contains(index) != true
-                    || previous?.sourceBubbles[index] != bubble else { return nil }
+            guard previousByID[bubble.id]?.bubble != bubble else { return nil }
             return .init(index: index, value: .init(bubble))
+        }
+        bubbleRemaps = world.bubbles.enumerated().compactMap { index, bubble in
+            guard let existing = previousByID[bubble.id], existing.bubble == bubble,
+                  existing.index != index else { return nil }
+            return .init(sourceIndex: existing.index, destinationIndex: index)
         }
         segmentChanges = world.segments.enumerated().compactMap { index, segment in
             guard previous?.sourceSegments.indices.contains(index) != true

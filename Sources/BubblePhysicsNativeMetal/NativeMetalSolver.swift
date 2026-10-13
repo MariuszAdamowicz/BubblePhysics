@@ -176,6 +176,12 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
         if segmentCount > 0 {
             blit.copy(from: state.segments, sourceOffset: 0, to: state.workingSegments, destinationOffset: 0, size: segmentCount * segmentStride)
         }
+        // Zmiana indeksu po sortowaniu ID nie jest zmianą wejścia CPU.
+        // Źródło pozostaje opublikowanym buforem, więc remapy nie kolidują.
+        for remap in snapshot.bubbleRemaps {
+            blit.copy(from: state.publishedBubbles, sourceOffset: remap.sourceIndex * bubbleStride,
+                      to: state.workingBubbles, destinationOffset: remap.destinationIndex * bubbleStride, size: bubbleStride)
+        }
         for change in snapshot.bubbleChanges {
             blit.copy(from: state.bubbleUpdates, sourceOffset: change.index * bubbleStride,
                       to: state.workingBubbles, destinationOffset: change.index * bubbleStride, size: bubbleStride)

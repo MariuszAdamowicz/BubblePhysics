@@ -28,6 +28,24 @@ final class NativeMetalSolverLifecycleTests: XCTestCase {
         XCTAssertEqual(second.bubbles[0].previousCenter.x, 0.5, accuracy: 1e-6)
     }
 
+    func testAddingLowerIDPreservesExistingBubbleGPUProgress() async throws {
+        let solver = try NativeMetalSolver(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
+        var world = ReferenceWorld(configuration: .init(timeStep: 0.25, linearDamping: 0, angularDamping: 0), broadPhase: BruteForceBroadPhase())
+        world.addBubble(try .init(id: .init(rawValue: 2), center: .init(x: 10, y: 0),
+            velocity: .init(x: 2, y: 0), mass: 1, targetRadius: 1))
+        let firstInput = NativeMetalSnapshot(world: world)
+        let first = try await solver.executeFrame(snapshot: firstInput, scenarioStep: 1)
+        XCTAssertEqual(first.bubbles[0].center.x, 10.5, accuracy: 1e-6)
+        world.addBubble(try .init(id: .init(rawValue: 1), center: .zero, mass: 1, targetRadius: 1))
+        let nextInput = NativeMetalSnapshot(world: world, previous: firstInput)
+        XCTAssertEqual(nextInput.bubbleChanges.map { $0.value.identity.x }, [1])
+        let second = try await solver.executeFrame(snapshot: nextInput, scenarioStep: 2)
+        let existing = try XCTUnwrap(second.bubbles.first { $0.id.rawValue == 2 })
+        XCTAssertEqual(existing.center.x, 11, accuracy: 1e-6)
+        XCTAssertEqual(existing.previousCenter.x, 10.5, accuracy: 1e-6)
+        XCTAssertEqual(second.profile.commandBufferCount, 1)
+    }
+
     func testNormalFrameUsesExactlyOneCommandBuffer() async throws {
         let executor = ControlledCommandExecutor()
         let solver = try NativeMetalSolver(device: XCTUnwrap(MTLCreateSystemDefaultDevice()), commandExecutor: executor)
