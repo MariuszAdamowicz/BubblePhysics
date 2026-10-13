@@ -115,7 +115,7 @@ final class NativeMetalXPBDTests: XCTestCase {
         XCTAssertTrue(frame.report.solver.didReachIterationLimit)
         XCTAssertEqual(frame.report.solver.maximumPenetration, 0.375, accuracy: 0.00001)
         XCTAssertEqual(frame.report.solver.positionCorrectionCount, 2)
-        XCTAssertFalse(frame.isComplete)
+        XCTAssertTrue(frame.isComplete)
         assertFinite(frame)
     }
 

@@ -233,3 +233,132 @@ kernel void nativeCheckFinite(device NativeBubble *bubbles [[buffer(0)]],
             nativeSafetyFailure(safety, 1);
     }
 }
+
+struct NativeContourControl { uint4 counts; float4 shape; };
+
+float nativeContourRayLimit(float2 center, float2 direction, float2 a, float2 b,
+    float radius, float clearance) {
+    float2 edge = b - a, offset = a - center;
+    float denominator = nativeCross(direction, edge);
+    if (abs(denominator) < 1e-6f) return radius;
+    float distance = nativeCross(offset, edge) / denominator;
+    float fraction = nativeCross(offset, direction) / denominator;
+    return distance >= 0 && fraction >= 0 && fraction <= 1
+        ? min(radius, max(0.0f, distance - clearance)) : radius;
+}
+
+// Nacisk jest polem radialnym w świecie, a nie sumą skalarnych zgniotów.
+// Geometria pochodzi wyłącznie z pozycji zakończonych przez CCD i guardy.
+kernel void nativeAccumulateContactPressure(device NativeBubble *bubbles [[buffer(0)]],
+    device NativeSegment *segments [[buffer(1)]], device NativeContactCache *cache [[buffer(2)]],
+    constant NativeControl &control [[buffer(3)]], device NativeContactControl &contacts [[buffer(4)]],
+    constant NativeContourControl &contour [[buffer(5)]], device NativeBubble *previousBubbles [[buffer(6)]],
+    device float4 *previousDeformation [[buffer(7)]], device uint *previousCounts [[buffer(8)]],
+    device float4 *pressure [[buffer(9)]], device uint *counts [[buffer(10)]],
+    device uint4 *adjacency [[buffer(11)]], device uint *degrees [[buffer(12)]],
+    device atomic_uint *safety [[buffer(13)]], uint index [[thread_position_in_grid]]) {
+    uint bubbleIndex = index / contour.counts.x, sample = index % contour.counts.x;
+    if (bubbleIndex >= control.counts.x || contacts.counts.w
+        || atomic_load_explicit(safety + 3, memory_order_relaxed)) return;
+    NativeBubble bubble = bubbles[bubbleIndex];
+    uint count = min(contour.counts.x, max(64u, uint(ceil((bubble.physical.z / contour.shape.x) * (4 * M_PI_F)))));
+    if (sample == 0) counts[bubbleIndex] = count;
+    if (sample >= count) return;
+    float angle = 2 * M_PI_F * float(sample) / float(count);
+    float2 direction = float2(cos(angle), sin(angle));
+    float limit = bubble.physical.z;
+    // Rzeczywiste skończone krawędzie: także te, które guard dopiero dosunął do bańki.
+    for (uint j = 0; j < control.counts.y; ++j)
+        limit = nativeContourRayLimit(bubble.position.xy, direction, segments[j].current.xy,
+            segments[j].current.zw, limit, contour.shape.w);
+    float directionalPressure = 0;
+    for (uint j = 0; j < degrees[bubbleIndex]; ++j) {
+        uint4 edge = adjacency[bubbleIndex * contacts.cache.w + j];
+        NativeContactCache contact = cache[edge.x];
+        if (contact.metadata.z != contacts.limits.x) continue;
+        float2 toward = edge.z == 0 ? bubbles[edge.y].position.xy - bubble.position.xy : -contact.geometry.xy;
+        float towardLength = length(toward);
+        if (towardLength > FLT_EPSILON) {
+            float alignment = max(0.0f, dot(direction, toward / towardLength));
+            // Zakończona lambda reprezentuje lokalną kompresję także po rozdzieleniu
+            // środków przez twardy PBD. Safety reset zeruje ją przed tym etapem.
+            float compression = clamp(contact.response.x * bubble.physical.y / bubble.physical.z,
+                0.0f, 0.5f);
+            directionalPressure = max(directionalPressure, compression * pow(alignment, 8.0f));
+        }
+        if (edge.z != 0) continue;
+        NativeBubble other = bubbles[edge.y];
+        float2 delta = other.position.xy - bubble.position.xy;
+        float distance = length(delta);
+        float radius = bubble.physical.z, otherRadius = other.physical.z;
+        if (distance <= FLT_EPSILON || distance >= radius + otherRadius + contacts.thresholds.z) continue;
+        float2 normal = delta / distance;
+        // Wspólna skończona cięciwa obu naturalnych kół.
+        float planeDistance = clamp((distance * distance + radius * radius - otherRadius * otherRadius)
+            / (2 * distance), 0.0f, radius);
+        float halfLength = sqrt(max(0.0f, radius * radius - planeDistance * planeDistance));
+        float2 tangent = float2(-normal.y, normal.x);
+        float2 point = bubble.position.xy + normal * planeDistance;
+        limit = nativeContourRayLimit(bubble.position.xy, direction, point - tangent * halfLength,
+            point + tangent * halfLength, limit, contour.shape.w);
+    }
+    float deficit = clamp(1 - limit / bubble.physical.z, 0.0f, 1.0f);
+    float recovered = 0;
+    uint old = nativeSafetyBubbleIndex(bubble.identity.x, previousBubbles, contour.counts.y);
+    if (old < contour.counts.y && previousCounts[old] > 0) {
+        // Resampling przy zmianie promienia/liczby punktów zachowuje lokalność nacisku.
+        uint oldCount = previousCounts[old];
+        float location = float(sample) * float(oldCount) / float(count);
+        uint first = uint(location) % oldCount, second = (first + 1) % oldCount;
+        recovered = mix(previousDeformation[old * contour.counts.x + first].x,
+            previousDeformation[old * contour.counts.x + second].x, fract(location))
+            * exp(-contour.shape.y * max(0.0f, bubble.physical.w) * control.physics.x);
+    }
+    float4 value = float4(max(max(deficit, directionalPressure), recovered), deficit, directionalPressure, 0);
+    if (!all(isfinite(value))) nativeSafetyFailure(safety, 1);
+    pressure[index] = value;
+}
+
+// Jacobi na lokalnych naciskach wygładza przejście, zachowując twardy envelope.
+// Kombinacja wypukła nie zwiększa maksimum deformacji i nie wzbudza oscylacji.
+kernel void nativeGenerateContours(device float4 *input [[buffer(0)]], device float4 *output [[buffer(1)]],
+    device uint *counts [[buffer(2)]], constant NativeControl &control [[buffer(3)]],
+    constant NativeContourControl &contour [[buffer(4)]], device atomic_uint *safety [[buffer(5)]],
+    uint index [[thread_position_in_grid]]) {
+    uint bubbleIndex = index / contour.counts.x, sample = index % contour.counts.x;
+    if (bubbleIndex >= control.counts.x || atomic_load_explicit(safety + 3, memory_order_relaxed)) return;
+    uint count = counts[bubbleIndex];
+    if (sample >= count) return;
+    uint base = bubbleIndex * contour.counts.x;
+    float4 value = input[index];
+    float neighbor = (input[base + (sample + count - 1) % count].x + input[base + (sample + 1) % count].x) * 0.5f;
+    float tension = min(0.8f, contour.shape.z / (contour.shape.z + 10));
+    value.x = clamp(max(value.y, mix(value.x, neighbor, tension)), 0.0f, 1.0f);
+    if (!all(isfinite(value))) nativeSafetyFailure(safety, 1);
+    output[index] = value;
+}
+
+kernel void nativePrepareRenderData(device NativeBubble *bubbles [[buffer(0)]],
+    device float4 *deformation [[buffer(1)]], device uint *counts [[buffer(2)]],
+    device float2 *points [[buffer(3)]], device NativeRenderPacket *packets [[buffer(4)]],
+    constant NativeControl &control [[buffer(5)]], constant NativeContourControl &contour [[buffer(6)]],
+    device atomic_uint *safety [[buffer(7)]], uint index [[thread_position_in_grid]]) {
+    if (index >= control.counts.x || atomic_load_explicit(safety + 3, memory_order_relaxed)) return;
+    NativeBubble bubble = bubbles[index];
+    float maximum = 0;
+    for (uint sample = 0; sample < counts[index]; ++sample) {
+        uint address = index * contour.counts.x + sample;
+        float angle = 2 * M_PI_F * float(sample) / float(counts[index]);
+        float2 point = bubble.position.xy + float2(cos(angle), sin(angle))
+            * bubble.physical.z * (1 - deformation[address].x);
+        if (!all(isfinite(point))) nativeSafetyFailure(safety, 1);
+        points[address] = point;
+        maximum = max(maximum, deformation[address].x);
+    }
+    bubble.deformation = float4(maximum, 0, 0, 0);
+    bubbles[index] = bubble;
+    NativeRenderPacket packet = {bubble.identity,
+        float4(bubble.position.xy, bubble.physical.z, bubble.motion.z), bubble.deformation};
+    if (!all(isfinite(packet.geometry))) nativeSafetyFailure(safety, 1);
+    packets[index] = packet;
+}

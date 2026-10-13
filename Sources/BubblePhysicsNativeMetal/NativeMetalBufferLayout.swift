@@ -6,7 +6,7 @@ struct NativeMetalBubble: Equatable, Sendable {
     var position: SIMD4<Float> // center.xy, previousCenter.xy
     var motion: SIMD4<Float> // velocity.xy, rotation, angularVelocity
     var physical: SIMD4<Float> // mass, inverseMass, radius, stiffness
-    var deformation: SIMD4<Float> // zarezerwowane dla solvera kontaktów
+    var deformation: SIMD4<Float> // maksymalna względna deformacja konturu, reserved
 
     init(_ bubble: ReferenceBubble) {
         identity = SIMD2(Int64(bubble.id.rawValue), 0)
@@ -115,6 +115,11 @@ struct NativeMetalRenderPacket: Equatable, Sendable {
     var identity: SIMD2<Int64>
     var geometry: SIMD4<Float> // center.xy, radius, rotation
     var deformation: SIMD4<Float>
+}
+
+struct NativeMetalContourControl: Sendable {
+    var counts: SIMD4<UInt32> // stride punktów, poprzednia liczba baniek, reserved
+    var shape: SIMD4<Float> // maksymalna krawędź, recovery rate, napięcie, clearance
 }
 
 struct NativeMetalBubbleChange: Sendable {

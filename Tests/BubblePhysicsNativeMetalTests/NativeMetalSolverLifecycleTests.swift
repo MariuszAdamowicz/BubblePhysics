@@ -57,7 +57,7 @@ final class NativeMetalSolverLifecycleTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(frame.profile.hostEncodingMilliseconds, 0)
         XCTAssertGreaterThanOrEqual(frame.profile.hostWaitingMilliseconds, 0)
         XCTAssertEqual(frame.profile.stageGPUMilliseconds.keys.sorted(), ["frame"])
-        XCTAssertFalse(frame.isComplete)
+        XCTAssertTrue(frame.isComplete)
     }
 
     func testFailedCommandDoesNotReplacePublishedState() async throws {
@@ -186,19 +186,21 @@ final class NativeMetalSolverLifecycleTests: XCTestCase {
         XCTAssertEqual(MemoryLayout<NativeMetalRenderPacket>.stride, 48)
     }
 
-    func testPredictionOnlyRunnerPreservesCPUFrameAndExposesProfile() async throws {
+    func testCompleteRunnerPublishesGPUFrameAndExposesProfile() async throws {
         var world = try makeWorld()
         world.addBubble(try .init(id: .init(rawValue: 2), center: .init(x: 1.5, y: 0), mass: 1, targetRadius: 1))
-        var cpu = world
-        let runner = try XCTUnwrap(NativeMetalWorldRunner(device: MTLCreateSystemDefaultDevice()))
+        let solver = try NativeMetalSolver(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
+        let runner = NativeMetalWorldRunner(executor: solver)
         for step in 1...2 {
-            let expected = cpu.step()
             let actual = await runner.step(world: &world, scenarioStep: step)
-            XCTAssertEqual(world.bubbles, cpu.bubbles)
-            XCTAssertEqual(world.contacts, cpu.contacts)
-            XCTAssertEqual(actual.solver, expected.solver)
-            XCTAssertEqual(runner.telemetry.backend, .cpu)
-            XCTAssertEqual(runner.telemetry.fallbackReason, "invalidFrame")
+            let frame = try XCTUnwrap(solver.publishedFrame)
+            XCTAssertEqual(world.bubbles, frame.bubbles)
+            XCTAssertEqual(world.contacts.contacts, frame.contacts)
+            XCTAssertEqual(actual.solver, frame.report.solver)
+            XCTAssertEqual(runner.contours, frame.contours)
+            XCTAssertEqual(runner.renderData, frame.renderData)
+            XCTAssertEqual(runner.telemetry.backend, .nativeMetal)
+            XCTAssertNil(runner.telemetry.fallbackReason)
             XCTAssertEqual(runner.profile.commandBufferCount, 1)
             XCTAssertEqual(runner.profile.encoderCount, 2)
         }

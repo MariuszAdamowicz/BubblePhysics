@@ -1,5 +1,5 @@
 import Metal
-import BubblePhysicsReference
+@_spi(ReferenceMetal) import BubblePhysicsReference
 
 @MainActor
 protocol NativeMetalFrameExecuting {
@@ -12,6 +12,8 @@ struct NativeMetalWorldFrame {
     var report: ReferenceWorldStepReport
     var telemetry: NativeMetalFrameTelemetry
     var profile = NativeMetalFrameProfile()
+    var contours: [ReferenceBubbleID: [ReferenceVector2]] = [:]
+    var renderData: [SIMD4<Float>] = []
     var isComplete = false
 }
 
@@ -25,13 +27,14 @@ struct NativeMetalSafetyFailure: Error {
     let profile: NativeMetalFrameProfile
 }
 
-/// Do czasu ukończenia konturów wynik GPU jest diagnostyczny;
-/// świat otrzymuje atomowo pełną klatkę CPU.
+/// Publikuje atomowo pełną klatkę GPU albo wykonuje pełny krok CPU.
 @MainActor
 public final class NativeMetalWorldRunner {
     public let configuration: NativeMetalConfiguration
     public private(set) var telemetry = NativeMetalFrameTelemetry()
     public private(set) var profile = NativeMetalFrameProfile()
+    public private(set) var contours: [ReferenceBubbleID: [ReferenceVector2]] = [:]
+    public private(set) var renderData: [SIMD4<Float>] = []
     private let executor: (any NativeMetalFrameExecuting)?
     private var inFlight = false
 
@@ -70,9 +73,23 @@ public final class NativeMetalWorldRunner {
                 world = original
                 return cpuFrame(world: &world, reason: "nonFinite", diagnostics: frame.telemetry)
             }
-            // Task 6 dostarczy kontury i kompletną publikację świata.
-            world = original
-            return cpuFrame(world: &world, reason: "invalidFrame", diagnostics: frame.telemetry)
+            guard frame.isComplete, frame.bubbles.map(\.id) == original.bubbles.map(\.id),
+                  frame.telemetry.backend == .nativeMetal, frame.telemetry.fallbackReason == nil,
+                  frame.contours.count == frame.bubbles.count, frame.renderData.count == frame.bubbles.count,
+                  frame.bubbles.enumerated().allSatisfy({ index, bubble in
+                      guard let points = frame.contours[bubble.id], points.count >= 32,
+                            points.allSatisfy(\.isFinite) else { return false }
+                      return frame.renderData[index] == SIMD4(bubble.center.x, bubble.center.y, bubble.targetRadius, bubble.rotation)
+                  })
+            else {
+                world = original
+                return cpuFrame(world: &world, reason: "invalidFrame", diagnostics: frame.telemetry)
+            }
+            world.publishPreparedFrame(bubbles: frame.bubbles, contacts: frame.contacts, contours: frame.contours)
+            contours = frame.contours
+            renderData = frame.renderData
+            telemetry = frame.telemetry
+            return frame.report
         } catch let failure as NativeMetalSafetyFailure {
             world = original
             profile = failure.profile
@@ -92,6 +109,8 @@ public final class NativeMetalWorldRunner {
         // Region publikacji jest synchroniczny: dokładnie jeden pełny krok
         // na oryginalnym świecie oraz aktualizacja telemetrii bez await.
         let report = world.step()
+        contours = [:]
+        renderData = []
         telemetry = .init(backend: .cpu, commandBufferCount: diagnostics?.commandBufferCount ?? 0,
             encoderCount: diagnostics?.encoderCount ?? 0, cacheHitCount: diagnostics?.cacheHitCount ?? 0,
             cacheResetCount: diagnostics?.cacheResetCount ?? 0, contactCount: world.contacts.contacts.count,
