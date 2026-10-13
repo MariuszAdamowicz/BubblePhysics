@@ -64,6 +64,7 @@ final class NativeMetalBroadPhaseTests: XCTestCase {
         XCTAssertEqual(frame.contacts[0].normal.x, 0, accuracy: 1e-6)
         XCTAssertEqual(frame.contacts[0].normal.y, 1, accuracy: 1e-6)
         XCTAssertEqual(frame.contacts[0].allowedSide, 1)
-        XCTAssertEqual(frame.contacts[0].penetration, 0.5, accuracy: 1e-6)
+        XCTAssertEqual(frame.contacts[0].penetration, 0, accuracy: 1e-6)
+        XCTAssertGreaterThanOrEqual(frame.bubbles[0].center.y, 1.4999)
     }
 }

@@ -102,6 +102,11 @@ struct NativeMetalControl: Sendable {
     var physics: SIMD4<Float> // dt, linearDamping, angularDamping, reserved
 }
 
+struct NativeMetalSolverControl: Sendable {
+    var counts: SIMD4<UInt32> // active, iterations, corrections, iteration budget
+    var physics: SIMD4<Float> // compliance / dt², position tolerance, final residual, initial residual
+}
+
 struct NativeMetalRenderPacket: Equatable, Sendable {
     var identity: SIMD2<Int64>
     var geometry: SIMD4<Float> // center.xy, radius, rotation

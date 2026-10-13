@@ -180,6 +180,8 @@ final class NativeMetalSolverLifecycleTests: XCTestCase {
         XCTAssertEqual(MemoryLayout<NativeMetalContactControl>.stride, 64)
         XCTAssertEqual(MemoryLayout<NativeMetalControl>.alignment, 16)
         XCTAssertEqual(MemoryLayout<NativeMetalControl>.stride, 32)
+        XCTAssertEqual(MemoryLayout<NativeMetalSolverControl>.alignment, 16)
+        XCTAssertEqual(MemoryLayout<NativeMetalSolverControl>.stride, 32)
         XCTAssertEqual(MemoryLayout<NativeMetalRenderPacket>.alignment, 16)
         XCTAssertEqual(MemoryLayout<NativeMetalRenderPacket>.stride, 48)
     }

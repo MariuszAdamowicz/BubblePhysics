@@ -16,14 +16,14 @@ final class NativeMetalContactCacheTests: XCTestCase {
     func testContactExpiresAfterConfiguredMisses() async throws {
         let solver = try makeSolver(expiry: 2)
         var world = try cacheWorld()
-        _ = try await solver.executeFrame(world: world, scenarioStep: 1)
+        _ = try await solver.executeFrame(snapshot: .init(world: world), scenarioStep: 1)
         XCTAssertEqual(solver.cachedContacts.count, 2)
         var b = world.bubbles[1]; b.center.x = 8; world.updateBubble(b)
-        _ = try await solver.executeFrame(world: world, scenarioStep: 2)
+        _ = try await solver.executeFrame(snapshot: .init(world: world), scenarioStep: 2)
         XCTAssertEqual(solver.cachedContacts.first { $0.key == .bubblePair(1, 2) }?.lastSeenFrame, 1)
-        _ = try await solver.executeFrame(world: world, scenarioStep: 3)
+        _ = try await solver.executeFrame(snapshot: .init(world: world), scenarioStep: 3)
         XCTAssertNotNil(solver.cachedContacts.first { $0.key == .bubblePair(1, 2) })
-        _ = try await solver.executeFrame(world: world, scenarioStep: 4)
+        _ = try await solver.executeFrame(snapshot: .init(world: world), scenarioStep: 4)
         XCTAssertNil(solver.cachedContacts.first { $0.key == .bubblePair(1, 2) })
         XCTAssertEqual(solver.cachedContacts.first?.key, .bubblePair(3, 4))
     }
@@ -31,10 +31,10 @@ final class NativeMetalContactCacheTests: XCTestCase {
     func testTeleportInvalidatesOnlyIncidentContactCache() async throws {
         let solver = try makeSolver()
         var world = try cacheWorld()
-        _ = try await solver.executeFrame(world: world, scenarioStep: 1)
-        _ = try await solver.executeFrame(world: world, scenarioStep: 2)
+        _ = try await solver.executeFrame(snapshot: .init(world: world), scenarioStep: 1)
+        _ = try await solver.executeFrame(snapshot: .init(world: world), scenarioStep: 2)
         var b = world.bubbles[0]; b.center.x = -100; world.updateBubble(b)
-        let frame = try await solver.executeFrame(world: world, scenarioStep: 3)
+        let frame = try await solver.executeFrame(snapshot: .init(world: world), scenarioStep: 3)
         XCTAssertNil(solver.cachedContacts.first { $0.key == .bubblePair(1, 2) })
         XCTAssertEqual(solver.cachedContacts.first?.key, .bubblePair(3, 4))
         XCTAssertEqual(solver.cachedContacts.first?.age, 3)
@@ -45,13 +45,14 @@ final class NativeMetalContactCacheTests: XCTestCase {
         let solver = try makeSolver()
         var world = try cacheWorld()
         world.addSegment(.staticSegment(id: .init(rawValue: Int.max), a: .init(x: -2, y: 0.5), b: .init(x: 4, y: 0.5)))
-        _ = try await solver.executeFrame(world: world, scenarioStep: 1)
-        _ = try await solver.executeFrame(world: world, scenarioStep: 2)
+        _ = try await solver.executeFrame(snapshot: .init(world: world), scenarioStep: 1)
+        _ = try await solver.executeFrame(snapshot: .init(world: world), scenarioStep: 2)
         world.updateSegment(.staticSegment(id: .init(rawValue: Int.max), a: .init(x: -3, y: 0.6), b: .init(x: 4, y: 0.6)))
-        let frame = try await solver.executeFrame(world: world, scenarioStep: 3)
+        let frame = try await solver.executeFrame(snapshot: .init(world: world), scenarioStep: 3)
         let segments = solver.cachedContacts.filter { $0.key.kind == 1 }
         XCTAssertEqual(segments.count, 2)
-        XCTAssertTrue(segments.allSatisfy { $0.age == 1 && $0.lambda == 0 && $0.flags != 0 })
+        // Reset dotyczy wejścia warm-start; zatwierdzony solver wylicza już nową lambdę.
+        XCTAssertTrue(segments.allSatisfy { $0.age == 1 && $0.lambda > 0 && $0.flags != 0 })
         XCTAssertEqual(solver.cachedContacts.first { $0.key == .bubblePair(3, 4) }?.age, 3)
         XCTAssertEqual(frame.telemetry.cacheResetCount, 2)
     }
@@ -59,15 +60,17 @@ final class NativeMetalContactCacheTests: XCTestCase {
     func testWarmStartMatchesFullIDsAfterLowerIDInsertion() async throws {
         let solver = try makeSolver()
         var world = try cacheWorld()
-        _ = try await solver.executeFrame(world: world, scenarioStep: 1)
+        _ = try await solver.executeFrame(snapshot: .init(world: world), scenarioStep: 1)
         let state = try XCTUnwrap(solver.persistentState)
         let cache = state.contactCache.contents().bindMemory(to: NativeContactCacheRecord.self, capacity: state.contactCapacity)
         cache[0].lambda = 0.75
         cache[1].lambda = 1.25
         world.addBubble(try .init(id: .init(rawValue: Int.min), center: .init(x: 100, y: 0), mass: 1, targetRadius: 1))
-        let frame = try await solver.executeFrame(world: world, scenarioStep: 2)
+        let frame = try await solver.executeFrame(snapshot: .init(world: world), scenarioStep: 2)
         XCTAssertEqual(solver.cachedContacts.map(\.key), [.bubblePair(1, 2), .bubblePair(3, 4)])
-        XCTAssertEqual(solver.cachedContacts.map(\.lambda), [0.75, 1.25])
+        for record in solver.cachedContacts { XCTAssertEqual(record.lambda, 0.25, accuracy: 0.000001) }
+        XCTAssertEqual(frame.bubbles.first { $0.id.rawValue == 1 }?.center.x, -0.25)
+        XCTAssertEqual(frame.bubbles.first { $0.id.rawValue == 3 }?.center.x, 19.75)
         XCTAssertEqual(frame.telemetry.cacheHitCount, 2)
         XCTAssertEqual(frame.telemetry.cacheResetCount, 0)
     }
@@ -77,14 +80,14 @@ final class NativeMetalContactCacheTests: XCTestCase {
             configuration: .init(teleportDistanceMultiplier: 100), candidateCapacity: 1)
         var world = try cacheWorld()
         var fourth = world.bubbles[3]; fourth.center.x = 25; world.updateBubble(fourth)
-        _ = try await solver.executeFrame(world: world, scenarioStep: 1)
+        _ = try await solver.executeFrame(snapshot: .init(world: world), scenarioStep: 1)
         let state = try XCTUnwrap(solver.persistentState)
         let publishedCache = state.contactCache
         let originalRecords = solver.cachedContacts
         var second = world.bubbles[1]; second.center.x = 5; world.updateBubble(second)
         fourth.center.x = 21.5; world.updateBubble(fourth)
         do {
-            _ = try await solver.executeFrame(world: world, scenarioStep: 2)
+            _ = try await solver.executeFrame(snapshot: .init(world: world), scenarioStep: 2)
             XCTFail("Zachowany stary kontakt i nowy kontakt przekraczają cache")
         } catch NativeMetalSolverError.capacityOverflow {}
         XCTAssertTrue(state.contactCache === publishedCache)
@@ -92,7 +95,7 @@ final class NativeMetalContactCacheTests: XCTestCase {
         XCTAssertEqual(state.contactCache.contents().load(as: NativeContactCacheRecord.self), originalRecords[0])
         // Ponowienie identycznego wejścia po błędzie ma identyczny wynik i nie publikuje scratcha.
         do {
-            _ = try await solver.executeFrame(world: world, scenarioStep: 3)
+            _ = try await solver.executeFrame(snapshot: .init(world: world), scenarioStep: 3)
             XCTFail("Ponowienie overflow musi ponownie odrzucić klatkę")
         } catch NativeMetalSolverError.capacityOverflow {}
         XCTAssertEqual(solver.cachedContacts, originalRecords)
@@ -101,16 +104,17 @@ final class NativeMetalContactCacheTests: XCTestCase {
     func testReturningContactWithinExpiryRetainsLambda() async throws {
         let solver = try makeSolver(expiry: 2)
         var world = try cacheWorld()
-        _ = try await solver.executeFrame(world: world, scenarioStep: 1)
+        _ = try await solver.executeFrame(snapshot: .init(world: world), scenarioStep: 1)
         let state = try XCTUnwrap(solver.persistentState)
         state.contactCache.contents().bindMemory(to: NativeContactCacheRecord.self, capacity: state.contactCapacity)[0].lambda = 0.5
         var b = world.bubbles[1]; b.center.x = 8; world.updateBubble(b)
-        _ = try await solver.executeFrame(world: world, scenarioStep: 2)
-        _ = try await solver.executeFrame(world: world, scenarioStep: 3)
+        _ = try await solver.executeFrame(snapshot: .init(world: world), scenarioStep: 2)
+        _ = try await solver.executeFrame(snapshot: .init(world: world), scenarioStep: 3)
+        XCTAssertEqual(solver.cachedContacts.first { $0.key == .bubblePair(1, 2) }?.lambda, 0.5)
         b.center.x = 1.5; world.updateBubble(b)
-        _ = try await solver.executeFrame(world: world, scenarioStep: 4)
+        _ = try await solver.executeFrame(snapshot: .init(world: world), scenarioStep: 4)
         let record = try XCTUnwrap(solver.cachedContacts.first { $0.key == .bubblePair(1, 2) })
-        XCTAssertEqual(record.lambda, 0.5)
+        XCTAssertEqual(record.lambda, 0.25)
         XCTAssertEqual(record.age, 2)
         XCTAssertEqual(record.lastSeenFrame, 4)
     }
@@ -118,11 +122,11 @@ final class NativeMetalContactCacheTests: XCTestCase {
     func testMaximumExpiryDoesNotOverflowWarmStartValidity() async throws {
         let solver = try makeSolver(expiry: Int.max)
         let world = try cacheWorld()
-        _ = try await solver.executeFrame(world: world, scenarioStep: 1)
+        _ = try await solver.executeFrame(snapshot: .init(world: world), scenarioStep: 1)
         let state = try XCTUnwrap(solver.persistentState)
         state.contactCache.contents().bindMemory(to: NativeContactCacheRecord.self, capacity: state.contactCapacity)[0].lambda = 0.5
-        let frame = try await solver.executeFrame(world: world, scenarioStep: 2)
-        XCTAssertEqual(solver.cachedContacts[0].lambda, 0.5)
+        let frame = try await solver.executeFrame(snapshot: .init(world: world), scenarioStep: 2)
+        XCTAssertEqual(solver.cachedContacts[0].lambda, 0.25)
         XCTAssertEqual(frame.telemetry.cacheHitCount, 2)
         XCTAssertEqual(frame.telemetry.cacheResetCount, 0)
     }
@@ -133,8 +137,8 @@ final class NativeMetalContactCacheTests: XCTestCase {
         for id in 0..<300 {
             world.addBubble(try .init(id: .init(rawValue: id), center: .zero, mass: 1, targetRadius: 1))
         }
-        _ = try await solver.executeFrame(world: world, scenarioStep: 1)
-        let frame = try await solver.executeFrame(world: world, scenarioStep: 2)
+        _ = try await solver.executeFrame(snapshot: .init(world: world), scenarioStep: 1)
+        let frame = try await solver.executeFrame(snapshot: .init(world: world), scenarioStep: 2)
         XCTAssertEqual(solver.cachedContacts.count, 44_850)
         XCTAssertEqual(frame.telemetry.cacheHitCount, 44_850)
         XCTAssertEqual(frame.profile.stageGPUWorkItemCounts["cacheMatch"], 44_850)
@@ -148,15 +152,16 @@ final class NativeMetalContactCacheTests: XCTestCase {
     func testParallelMergeKeepsMissesHitsAndNewContactsInKeyOrder() async throws {
         let solver = try makeSolver()
         var world = try cacheWorld()
-        _ = try await solver.executeFrame(world: world, scenarioStep: 1)
+        _ = try await solver.executeFrame(snapshot: .init(world: world), scenarioStep: 1)
         let state = try XCTUnwrap(solver.persistentState)
         let cache = state.contactCache.contents().bindMemory(to: NativeContactCacheRecord.self, capacity: state.contactCapacity)
         cache[0].lambda = 0.75; cache[1].lambda = 1.25
         var b = world.bubbles[1]; b.center.x = 8; world.updateBubble(b)
         world.addBubble(try .init(id: .init(rawValue: 5), center: .init(x: 21.6, y: 0), mass: 1, targetRadius: 1))
-        let frame = try await solver.executeFrame(world: world, scenarioStep: 2)
+        let frame = try await solver.executeFrame(snapshot: .init(world: world), scenarioStep: 2)
         XCTAssertEqual(solver.cachedContacts.map(\.key), [.bubblePair(1, 2), .bubblePair(3, 4), .bubblePair(3, 5), .bubblePair(4, 5)])
-        XCTAssertEqual(solver.cachedContacts.map(\.lambda), [0.75, 1.25, 0, 0])
+        XCTAssertEqual(solver.cachedContacts[0].lambda, 0.75)
+        XCTAssertTrue(solver.cachedContacts.dropFirst().allSatisfy { $0.lambda >= 0 && $0.lambda.isFinite })
         XCTAssertEqual(solver.cachedContacts.map(\.age), [1, 2, 1, 1])
         XCTAssertEqual(frame.contacts.count, 3)
         XCTAssertEqual(frame.telemetry.cacheHitCount, 1)

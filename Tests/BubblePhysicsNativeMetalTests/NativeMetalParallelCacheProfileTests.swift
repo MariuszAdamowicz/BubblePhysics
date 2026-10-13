@@ -25,7 +25,8 @@ final class NativeMetalParallelCacheProfileTests: XCTestCase {
             let solver = try NativeMetalSolver(device: device)
             var fullTimes: [Double] = []
             for step in 0..<35 {
-                let frame = try await solver.executeFrame(world: world, scenarioStep: step)
+                // Profil cache utrzymuje geometrię źródłową; dynamiczny przebieg jest w XPBDTests.
+                let frame = try await solver.executeFrame(snapshot: .init(world: world), scenarioStep: step)
                 if step >= 5 { fullTimes.append(frame.telemetry.gpuMilliseconds) }
             }
             XCTAssertEqual(solver.candidateKeys.count, dense ? 45_450 : 233)
