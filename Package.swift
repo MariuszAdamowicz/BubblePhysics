@@ -13,6 +13,7 @@ let package = Package(
         .library(name: "BubblePhysicsMetal", targets: ["BubblePhysicsMetal"]),
         .library(name: "BubblePhysicsReference", targets: ["BubblePhysicsReference"]),
         .library(name: "BubblePhysicsReferenceMetal", targets: ["BubblePhysicsReferenceMetal"]),
+        .library(name: "BubblePhysicsNativeMetal", targets: ["BubblePhysicsNativeMetal"]),
         .executable(name: "BubblePhysicsReferenceBench", targets: ["BubblePhysicsReferenceBench"])
     ],
     targets: [
@@ -22,6 +23,7 @@ let package = Package(
         .target(name: "BubblePhysics"),
         .target(name: "BubblePhysicsCore"),
         .target(name: "BubblePhysicsReference"),
+        .target(name: "BubblePhysicsNativeMetal", dependencies: ["BubblePhysicsReference"]),
         .target(name: "BubblePhysicsReferenceMetal", dependencies: ["BubblePhysicsReference"],
                 // Xcode processes .metal even with .copy; preserve text for runtime compilation.
                 resources: [.copy("Shaders/ReferenceNewtonPCGKernels.metal-source"), .copy("Shaders/ReferenceGeometryKernels.metal-source"), .copy("Shaders/ReferencePostSolveKernels.metal-source")]),
@@ -34,6 +36,7 @@ let package = Package(
         .testTarget(name: "BubblePhysicsCoreTests", dependencies: ["BubblePhysicsCore"]),
         .testTarget(name: "BubblePhysicsReferenceTests", dependencies: ["BubblePhysicsReference"]),
         .testTarget(name: "BubblePhysicsReferenceMetalTests", dependencies: ["BubblePhysicsReferenceMetal"]),
+        .testTarget(name: "BubblePhysicsNativeMetalTests", dependencies: ["BubblePhysicsNativeMetal"]),
         .testTarget(name: "BubblePhysicsMetalTests", dependencies: ["BubblePhysics", "BubblePhysicsMetal"])
     ]
 )

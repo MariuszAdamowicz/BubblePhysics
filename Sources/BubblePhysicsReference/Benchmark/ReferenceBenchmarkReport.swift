@@ -1,6 +1,7 @@
 public enum ReferenceSimulationBackend: String, Equatable, Sendable, CaseIterable {
     case cpu
     case metal
+    case nativeMetal = "native-metal"
 }
 
 public struct ReferenceTimingSummary: Sendable, Equatable {
