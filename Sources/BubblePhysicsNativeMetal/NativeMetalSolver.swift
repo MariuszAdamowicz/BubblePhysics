@@ -72,6 +72,7 @@ final class NativeMetalPersistentState {
     let fastCandidates: MTLBuffer
     let guardedBubbles: MTLBuffer
     let safetyControl: MTLBuffer
+    let containmentRepairActive: MTLBuffer
     let segmentsPing: MTLBuffer
     let segmentsPong: MTLBuffer
     let bubbleUpdates: MTLBuffer
@@ -167,6 +168,7 @@ final class NativeMetalPersistentState {
         fastCandidates = try buffer("safety.fastCandidates", rowCapacity, MemoryLayout<UInt32>.stride)
         guardedBubbles = try buffer("safety.guardedBubbles", bubbleCapacity, MemoryLayout<UInt32>.stride)
         safetyControl = try buffer("safety.control", 1, MemoryLayout<NativeMetalSafetyControl>.stride)
+        containmentRepairActive = try buffer("safety.containmentRepairActive", 9, MemoryLayout<UInt32>.stride)
         renderPackets = try buffer("renderPackets", bubbleCapacity, MemoryLayout<NativeMetalRenderPacket>.stride)
         let (pointCapacity, pointOverflow) = bubbleCapacity.multipliedReportingOverflow(by: contourStride)
         guard !pointOverflow, pointCapacity <= Int(UInt32.max) else { throw NativeMetalSolverError.allocationFailed }
@@ -318,6 +320,8 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
                           snapshot.configuration.positionTolerance, 0, 0))
         state.solverControl.contents().storeBytes(of: solverParameters, as: NativeMetalSolverControl.self)
         state.safetyControl.contents().storeBytes(of: NativeMetalSafetyControl(counts: .zero), as: NativeMetalSafetyControl.self)
+        memset(state.containmentRepairActive.contents(), 0, state.containmentRepairActive.length)
+        state.containmentRepairActive.contents().storeBytes(of: UInt32(1), as: UInt32.self)
         memset(state.scratch.contents(), 0, state.scratch.length)
         // Wyłącznie zmiany wejścia gry mogą oznaczać teleport; normalna predykcja nie resetuje cache.
         let previousBubbles = Dictionary(uniqueKeysWithValues: (lastSnapshot?.sourceBubbles ?? []).map { ($0.id, $0) })
@@ -505,16 +509,27 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
             state.fastCandidates], threads: count)
         // Bounded GPU repair of pairs introduced by CCD/obstacle projection.
         // Every repair rechecks obstacle invariants, in the same command buffer.
-        for _ in 0..<8 {
-            dispatch("nativeSeparateContainedBubbles", buffers: [state.workingBubbles, inputPositions, outputPositions,
-                state.control, state.solverControl, state.guardedBubbles, state.safetyControl], threads: count)
+        for pass in 0..<8 {
+            encoder.memoryBarrier(scope: .buffers)
+            let pipeline = pipelines["nativeSeparateContainedBubbles"]!
+            encoder.setComputePipelineState(pipeline)
+            encoder.setThreadgroupMemoryLength(pipeline.threadExecutionWidth * MemoryLayout<SIMD2<Float>>.stride, index: 0)
+            for (index, buffer) in [state.workingBubbles, inputPositions, outputPositions,
+                state.control, state.solverControl, state.guardedBubbles, state.safetyControl,
+                state.containmentRepairActive].enumerated() { encoder.setBuffer(buffer, offset: 0, index: index) }
+            var repairPass = UInt32(pass)
+            encoder.setBytes(&repairPass, length: MemoryLayout<UInt32>.stride, index: 8)
+            if count > 0 {
+                encoder.dispatchThreadgroups(.init(width: count, height: 1, depth: 1),
+                    threadsPerThreadgroup: .init(width: pipeline.threadExecutionWidth, height: 1, depth: 1))
+            }
             swap(&inputPositions, &outputPositions)
             dispatch("nativeReapplyCenterGuards", buffers: [state.workingBubbles, state.workingSegments, inputPositions,
                 state.control, state.contactControl, state.guardedBubbles, state.safetyControl, state.dispatchStatistics,
                 state.fastCandidates], threads: count)
         }
         dispatch("nativeValidateBubbleContainment", buffers: [state.workingBubbles, inputPositions,
-            state.control, state.solverControl, state.safetyControl], threads: count)
+            state.control, state.solverControl, state.safetyControl], threads: count * count)
         dispatch("nativeFinalizeSolverContacts", buffers: [state.workingBubbles, state.workingSegments,
             state.workingCache, inputPositions, state.contactControl, state.contactEndpoints], threads: state.contactCapacity)
         dispatch("nativeUpdateVelocities", buffers: [state.workingBubbles, inputPositions, state.control], threads: count)

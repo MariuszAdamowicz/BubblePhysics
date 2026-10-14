@@ -194,17 +194,24 @@ kernel void nativeApplyCenterGuards(device NativeBubble *bubbles [[buffer(0)]],
 }
 
 // The contact graph was built before obstacle projection. Scan the current
-// positions, including pairs created by that projection. Each thread writes
-// only its own ping/pong position; there are no float atomics.
+// positions, including pairs created by that projection. One SIMDgroup owns a
+// bubble, with fixed-lane reduction; only lane zero writes its ping/pong slot.
 kernel void nativeSeparateContainedBubbles(device NativeBubble *bubbles [[buffer(0)]],
     device float4 *input [[buffer(1)]], device float4 *output [[buffer(2)]],
     constant NativeControl &control [[buffer(3)]], device NativeSolverControl &solver [[buffer(4)]],
     device uint *changed [[buffer(5)]], device atomic_uint *safety [[buffer(6)]],
-    uint i [[thread_position_in_grid]]) {
+    device atomic_uint *repairActive [[buffer(7)]], constant uint &pass [[buffer(8)]],
+    threadgroup float2 *laneCorrections [[threadgroup(0)]],
+    uint i [[threadgroup_position_in_grid]], uint lane [[thread_index_in_simdgroup]],
+    uint width [[threads_per_simdgroup]]) {
     if (i >= control.counts.x) return;
+    if (!atomic_load_explicit(repairActive + pass, memory_order_relaxed)) {
+        if (lane == 0) output[i] = float4(input[i].xy, 0, 0);
+        return;
+    }
     NativeBubble a = bubbles[i];
     float2 center = input[i].xy, correction = 0;
-    for (uint j = 0; j < control.counts.x; ++j) {
+    for (uint j = lane; j < control.counts.x; j += width) {
         if (i == j) continue;
         NativeBubble b = bubbles[j];
         float minimum = abs(a.physical.z - b.physical.z);
@@ -220,9 +227,23 @@ kernel void nativeSeparateContainedBubbles(device NativeBubble *bubbles [[buffer
         float weight = a.physical.y + b.physical.y;
         correction += normal * ((minimum + margin - distance) * a.physical.y / weight);
     }
-    bool moved = any(correction != 0);
-    output[i] = float4(center + correction, moved ? 1.0f : 0.0f, 0);
-    if (moved) { changed[i] = 1; nativeSafetyEvent(safety, 1); }
+    // Threadgroup memory works on Apple4 (iPhone X); simd_sum requires Apple7.
+    // Fixed lane order makes the reduction independent of scheduling, with no
+    // float atomics or cross-SIMD permute requirement.
+    laneCorrections[lane] = correction;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (lane != 0) return;
+    correction = 0;
+    for (uint k = 0; k < width; ++k) correction += laneCorrections[k];
+    float2 next = center + correction;
+    // A sub-ULP correction that rounds back to the same position cannot create
+    // a new pair or require obstacle projection in a subsequent pass.
+    bool moved = any(next != center);
+    output[i] = float4(next, moved ? 1.0f : 0.0f, 0);
+    if (moved) {
+        changed[i] = 1; nativeSafetyEvent(safety, 1);
+        atomic_fetch_or_explicit(repairActive + pass + 1, 1, memory_order_relaxed);
+    }
 }
 
 kernel void nativeReapplyCenterGuards(device NativeBubble *bubbles [[buffer(0)]],
@@ -240,15 +261,17 @@ kernel void nativeReapplyCenterGuards(device NativeBubble *bubbles [[buffer(0)]]
 kernel void nativeValidateBubbleContainment(device NativeBubble *bubbles [[buffer(0)]],
     device float4 *positions [[buffer(1)]], constant NativeControl &control [[buffer(2)]],
     device NativeSolverControl &solver [[buffer(3)]], device atomic_uint *safety [[buffer(4)]],
-    uint i [[thread_position_in_grid]]) {
-    if (i >= control.counts.x) return;
-    for (uint j = i + 1; j < control.counts.x; ++j) {
-        float distance = length(positions[j].xy - positions[i].xy);
-        float smaller = min(bubbles[i].physical.z, bubbles[j].physical.z);
-        float larger = max(bubbles[i].physical.z, bubbles[j].physical.z);
-        if (!isfinite(distance)) nativeSafetyFailure(safety, 1);
-        else if (distance + smaller < larger - solver.physics.y) nativeSafetyFailure(safety, 2);
-    }
+    uint pair [[thread_position_in_grid]]) {
+    uint count = control.counts.x;
+    // Host validates the capacity product before allocation/dispatch.
+    if (pair >= count * count) return;
+    uint i = pair / count, j = pair % count;
+    if (j <= i) return;
+    float distance = length(positions[j].xy - positions[i].xy);
+    float smaller = min(bubbles[i].physical.z, bubbles[j].physical.z);
+    float larger = max(bubbles[i].physical.z, bubbles[j].physical.z);
+    if (!isfinite(distance)) nativeSafetyFailure(safety, 1);
+    else if (distance + smaller < larger - solver.physics.y) nativeSafetyFailure(safety, 2);
 }
 
 uint nativeSafetyBubbleIndex(long id, device NativeBubble *bubbles, uint count) {
