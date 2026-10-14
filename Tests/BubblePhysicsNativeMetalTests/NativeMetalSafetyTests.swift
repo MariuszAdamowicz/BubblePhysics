@@ -5,6 +5,79 @@ import BubblePhysicsReference
 
 @MainActor
 final class NativeMetalSafetyTests: XCTestCase {
+    func testMovingPolygonGuardCannotPublishNewBubbleContainment() async throws {
+        // Removing the final all-pairs guard must expose both centers projected
+        // onto the same polygon edge, even though the incoming pair is distant.
+        var world = ReferenceWorld(configuration: .init(timeStep: 1, linearDamping: 0, angularDamping: 0),
+                                   broadPhase: BruteForceBroadPhase())
+        world.addBubble(try .init(id: .init(rawValue: 1), center: .init(x: 0, y: 0), mass: 3, targetRadius: 3))
+        world.addBubble(try .init(id: .init(rawValue: 2), center: .init(x: -8, y: 0), mass: 1, targetRadius: 1))
+        let vertices: [ReferenceVector2] = [.init(x: -20, y: -20), .init(x: 1, y: -20),
+                                           .init(x: 1, y: 20), .init(x: -20, y: 20)]
+        for i in vertices.indices {
+            world.addSegment(.kinematicSegment(id: .init(rawValue: i + 1),
+                previousA: vertices[i] + .init(x: -30, y: 0),
+                previousB: vertices[(i + 1) % 4] + .init(x: -30, y: 0),
+                currentA: vertices[i], currentB: vertices[(i + 1) % 4], timeStep: 1, ownerID: 7))
+        }
+        let solver = try NativeMetalSolver(device: XCTUnwrap(MTLCreateSystemDefaultDevice()),
+            configuration: .init(ccdVelocityMultiplier: 100))
+        let frame = try await solver.executeFrame(world: world, scenarioStep: 1)
+        var tracker = ReferenceContainmentTracker(positionTolerance: world.configuration.positionTolerance)
+        tracker.observe(frame.bubbles)
+        XCTAssertEqual(tracker.maximumConsecutiveFrames, 0, "Published centers: \(frame.bubbles.map(\.center))")
+        XCTAssertTrue(frame.bubbles.allSatisfy { $0.center.x >= 1 || $0.center.x <= -20 || abs($0.center.y) >= 20 })
+        XCTAssertEqual(frame.profile.commandBufferCount, 1)
+        XCTAssertFalse(solver.candidateKeys.contains(.bubblePair(1, 2)), "Pair must be created after initial broad phase")
+        let repeated = try await NativeMetalSolver(device: XCTUnwrap(MTLCreateSystemDefaultDevice()),
+            configuration: .init(ccdVelocityMultiplier: 100)).executeFrame(world: world, scenarioStep: 1)
+        XCTAssertEqual(frame.bubbles, repeated.bubbles)
+    }
+
+    func testCoincidentDifferentRadiiSeparateWithoutMakingElasticOverlapRigid() async throws {
+        var world = ReferenceWorld(configuration: .init(timeStep: 1, linearDamping: 0, angularDamping: 0),
+                                   broadPhase: BruteForceBroadPhase())
+        world.addBubble(try .init(id: .init(rawValue: 1), center: .zero, mass: 3, targetRadius: 3))
+        world.addBubble(try .init(id: .init(rawValue: 2), center: .zero, mass: 1, targetRadius: 1))
+        let solver = try NativeMetalSolver(device: XCTUnwrap(MTLCreateSystemDefaultDevice()),
+            configuration: .init(contactCompliance: 1e6))
+        let frame = try await solver.executeFrame(world: world, scenarioStep: 1)
+        var tracker = ReferenceContainmentTracker(positionTolerance: world.configuration.positionTolerance)
+        tracker.observe(frame.bubbles)
+        XCTAssertEqual(tracker.maximumConsecutiveFrames, 0)
+        let distance = (frame.bubbles[0].center - frame.bubbles[1].center).length
+        XCTAssertGreaterThanOrEqual(distance, 2 - world.configuration.positionTolerance)
+        XCTAssertLessThan(distance, 2.01, "Safety projection must preserve legal elastic overlap")
+        XCTAssertEqual(frame.profile.commandBufferCount, 1)
+        XCTAssertGreaterThan(frame.telemetry.cacheInvalidationCount, 0)
+        XCTAssertTrue(solver.cachedContacts.filter { $0.key == .bubblePair(1, 2) }.allSatisfy { $0.lambda == 0 })
+    }
+
+    func testImpossibleContainmentRepairRejectsFrameAfterFinalWallGuards() async throws {
+        var world = ReferenceWorld(configuration: .init(timeStep: 1, linearDamping: 0, angularDamping: 0),
+                                   broadPhase: BruteForceBroadPhase())
+        world.addBubble(try .init(id: .init(rawValue: 1), center: .init(x: 0.05, y: 0.05), mass: 3, targetRadius: 3))
+        world.addBubble(try .init(id: .init(rawValue: 2), center: .init(x: 0.05, y: 0.05), mass: 1, targetRadius: 1))
+        // Every center can satisfy the four planes, but the box cannot satisfy
+        // the pair's minimum distance 2. Final wall projection recreates containment.
+        let vertices: [ReferenceVector2] = [.init(x: 0, y: 0), .init(x: 0.1, y: 0),
+                                           .init(x: 0.1, y: 0.1), .init(x: 0, y: 0.1)]
+        for i in vertices.indices {
+            world.addSegment(.staticSegment(id: .init(rawValue: i + 1), a: vertices[i],
+                b: vertices[(i + 1) % 4], collisionMode: .oneSided(allowedSide: 1)))
+        }
+        let solver = try NativeMetalSolver(device: XCTUnwrap(MTLCreateSystemDefaultDevice()),
+            configuration: .init(contactCompliance: 1e6))
+        let runner = NativeMetalWorldRunner(executor: solver)
+        var cpu = world
+        _ = cpu.step()
+        _ = await runner.step(world: &world, scenarioStep: 1)
+        XCTAssertEqual(runner.telemetry.fallbackReason, "guardFailure")
+        XCTAssertEqual(world.bubbles, cpu.bubbles)
+        XCTAssertNil(solver.publishedFrame)
+        XCTAssertEqual(runner.telemetry.commandBufferCount, 1)
+    }
+
     func testDiagnosticRunnerPreservesSuccessfulGPUFrameTelemetry() async throws {
         let solver = try makeSolver()
         var world = try makeWorld(x: -0.75)

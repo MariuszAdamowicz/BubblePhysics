@@ -20,7 +20,15 @@ final class NativeMetalParallelCacheProfileTests: XCTestCase {
         for dense in [false, true] {
             var world = try ReferenceConvergenceScenario(scene: .stress300, newtonIterationLimit: 8).makeWorld()
             if dense {
-                for var bubble in world.bubbles { bubble.center = .zero; bubble.previousCenter = .zero; world.updateBubble(bubble) }
+                // Profil przepustowości cache wymaga gęstego grafu, ale nie
+                // wymusza pełnego zawarcia mniejszych kół w większych. Równe
+                // promienie zachowują wszystkie 44 850 par i 600 kontaktów ścian.
+                let radius = try XCTUnwrap(world.bubbles.map(\.targetRadius).max())
+                for var bubble in world.bubbles {
+                    bubble.center = .zero; bubble.previousCenter = .zero
+                    bubble.targetRadius = radius
+                    world.updateBubble(bubble)
+                }
             }
             let solver = try NativeMetalSolver(device: device)
             var fullTimes: [Double] = []
