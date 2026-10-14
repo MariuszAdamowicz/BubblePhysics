@@ -58,6 +58,7 @@ final class NativeMetalPersistentState {
     let scanBlockOffsets: [MTLBuffer]
     let scanCapacity: Int
     let dispatchStatistics: MTLBuffer
+    let indirectArguments: MTLBuffer
     var contactCache: MTLBuffer { publishedIsPing ? cachePing : cachePong }
     var workingCache: MTLBuffer { publishedIsPing ? cachePong : cachePing }
     var publishedCacheCount = 0
@@ -65,6 +66,7 @@ final class NativeMetalPersistentState {
     let solverPositionsPing: MTLBuffer
     let solverPositionsPong: MTLBuffer
     let adjacency: MTLBuffer
+    let adjacencySlots: MTLBuffer
     let adjacencyCounts: MTLBuffer
     let contactEndpoints: MTLBuffer
     let contactCorrections: MTLBuffer
@@ -156,11 +158,13 @@ final class NativeMetalPersistentState {
         } while scanCount > 1
         scanBlockSums = sums
         scanBlockOffsets = offsets
-        dispatchStatistics = try buffer("dispatchStatistics", 2, MemoryLayout<SIMD4<UInt32>>.stride)
+        indirectArguments = try buffer("indirectArguments", 5 + sums.count * 2, MemoryLayout<SIMD4<UInt32>>.stride)
+        dispatchStatistics = try buffer("dispatchStatistics", 3, MemoryLayout<SIMD4<UInt32>>.stride)
         scratch = try buffer("scratch", bubbleCapacity, MemoryLayout<SIMD4<Float>>.stride)
         solverPositionsPing = try buffer("solver.positions.ping", bubbleCapacity, MemoryLayout<SIMD4<Float>>.stride)
         solverPositionsPong = try buffer("solver.positions.pong", bubbleCapacity, MemoryLayout<SIMD4<Float>>.stride)
         adjacency = try buffer("solver.adjacency", rowCapacity, MemoryLayout<SIMD4<UInt32>>.stride)
+        adjacencySlots = try buffer("solver.adjacencySlots", rowCapacity, MemoryLayout<SIMD4<UInt32>>.stride)
         adjacencyCounts = try buffer("solver.adjacencyCounts", bubbleCapacity, MemoryLayout<UInt32>.stride)
         contactEndpoints = try buffer("solver.endpoints", contactCapacity, MemoryLayout<SIMD4<UInt32>>.stride)
         contactCorrections = try buffer("solver.corrections", contactCapacity, MemoryLayout<SIMD4<Float>>.stride)
@@ -232,8 +236,8 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
         for name in ["nativePrepareGrid", "nativeBuildGrid", "nativeSortGrid", "nativeEmitCandidates",
                      "nativePrepareCandidateCounts", "nativeCompactCandidates", "nativeBuildContacts",
                      "nativePrepareContactFlags", "nativeCompactActiveContacts", "nativeMatchContactCache",
-                     "nativeRetainContactCache", "nativeCompactContactCache", "nativeScanBlocks",
-                     "nativeAddScanBlockOffsets", "nativeFinishScan", "nativeBuildAdjacency",
+                     "nativeRetainContactCache", "nativeCompactContactCache", "nativeScanBlocks", "nativePrepareIndirectArguments",
+                     "nativeAddScanBlockOffsets", "nativeFinishScan", "nativeClearAdjacency", "nativeEmitAdjacency", "nativeBuildAdjacency",
                      "nativePrepareSolverContacts", "nativeApplyWarmStart", "nativeUpdateContactMultipliers",
                      "nativeSolveJacobi", "nativeMeasureResidual", "nativeReduceSolverResidual",
                      "nativeUpdateVelocities", "nativeFinalizeSolverContacts", "nativeFindFastCandidates",
@@ -248,6 +252,12 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
 
     func executeFrame(world: ReferenceWorld, scenarioStep: Int) async throws -> NativeMetalWorldFrame {
         try await executeFrame(snapshot: .init(world: world, previous: lastSnapshot), scenarioStep: scenarioStep)
+    }
+
+    // Runner potwierdza, że świat gry otrzymał wynik. Bez potwierdzenia zachowujemy
+    // kontrakt bezpośredniego solvera: niezmienione wejście kontynuuje trwały stan GPU.
+    func acknowledgePublication() {
+        if let publishedFrame { lastSnapshot?.sourceBubbles = publishedFrame.bubbles }
     }
 
     func executeFrame(snapshot: NativeMetalSnapshot, scenarioStep: Int) async throws -> NativeMetalWorldFrame {
@@ -397,6 +407,31 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
                     threadsPerThreadgroup: .init(width: min(pipeline.threadExecutionWidth, pipeline.maxTotalThreadsPerThreadgroup), height: 1, depth: 1))
             }
         }
+        func dispatchReduction(_ name: String, buffers: [MTLBuffer]) {
+            encoder.memoryBarrier(scope: .buffers)
+            encoder.setComputePipelineState(pipelines[name]!)
+            for (index, buffer) in buffers.enumerated() { encoder.setBuffer(buffer, offset: 0, index: index) }
+            encoder.dispatchThreadgroups(.init(width: 1, height: 1, depth: 1),
+                threadsPerThreadgroup: .init(width: 256, height: 1, depth: 1))
+        }
+        func prepareIndirectArguments() {
+            encoder.memoryBarrier(scope: .buffers)
+            encoder.setComputePipelineState(pipelines["nativePrepareIndirectArguments"]!)
+            for (index, buffer) in [state.control, state.contactControl, state.indirectArguments].enumerated() {
+                encoder.setBuffer(buffer, offset: 0, index: index)
+            }
+            var levels = UInt32(state.scanBlockSums.count)
+            encoder.setBytes(&levels, length: MemoryLayout<UInt32>.stride, index: 3)
+            encoder.dispatchThreads(.init(width: 1, height: 1, depth: 1),
+                threadsPerThreadgroup: .init(width: 1, height: 1, depth: 1))
+        }
+        func dispatchContacts(_ name: String, buffers: [MTLBuffer], argument: Int) {
+            encoder.memoryBarrier(scope: .buffers)
+            encoder.setComputePipelineState(pipelines[name]!)
+            for (index, buffer) in buffers.enumerated() { encoder.setBuffer(buffer, offset: 0, index: index) }
+            encoder.dispatchThreadgroups(indirectBuffer: state.indirectArguments, indirectBufferOffset: argument * 16,
+                threadsPerThreadgroup: .init(width: 32, height: 1, depth: 1))
+        }
         // Trzystopniowy skan blokowy (dla obecnej pojemności): każdy blok ma 256 work-itemów.
         // Rekurencja skanuje sumy bloków, a osobne dispatchy dodają offsety rodziców.
         func scan(mode: UInt32, maximum: Int) {
@@ -412,8 +447,14 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
                 }
                 var parameters = SIMD2(mode, UInt32(level))
                 encoder.setBytes(&parameters, length: MemoryLayout<SIMD2<UInt32>>.stride, index: 5)
-                encoder.dispatchThreadgroups(.init(width: (lengths[level] + 255) / 256, height: 1, depth: 1),
-                    threadsPerThreadgroup: .init(width: 256, height: 1, depth: 1))
+                if mode == 0 {
+                    encoder.dispatchThreadgroups(.init(width: (lengths[level] + 255) / 256, height: 1, depth: 1),
+                        threadsPerThreadgroup: .init(width: 256, height: 1, depth: 1))
+                } else {
+                    encoder.dispatchThreadgroups(indirectBuffer: state.indirectArguments,
+                        indirectBufferOffset: (5 + (Int(mode) - 1) * state.scanBlockSums.count + level) * 16,
+                        threadsPerThreadgroup: .init(width: 256, height: 1, depth: 1))
+                }
             }
             if lengths.count > 1 {
                 for level in (0..<(lengths.count - 1)).reversed() {
@@ -425,8 +466,14 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
                     }
                     var parameters = SIMD2(mode, UInt32(level))
                     encoder.setBytes(&parameters, length: MemoryLayout<SIMD2<UInt32>>.stride, index: 4)
-                    encoder.dispatchThreads(.init(width: lengths[level], height: 1, depth: 1),
-                        threadsPerThreadgroup: .init(width: 256, height: 1, depth: 1))
+                    if mode == 0 {
+                        encoder.dispatchThreads(.init(width: lengths[level], height: 1, depth: 1),
+                            threadsPerThreadgroup: .init(width: 256, height: 1, depth: 1))
+                    } else {
+                        encoder.dispatchThreadgroups(indirectBuffer: state.indirectArguments,
+                            indirectBufferOffset: (5 + (Int(mode) - 1) * state.scanBlockSums.count + level) * 16,
+                            threadsPerThreadgroup: .init(width: 256, height: 1, depth: 1))
+                    }
                 }
             }
             encoder.memoryBarrier(scope: .buffers)
@@ -436,7 +483,7 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
             encoder.setBytes(&parameters, length: MemoryLayout<SIMD2<UInt32>>.stride, index: 3)
             encoder.dispatchThreads(.init(width: 1, height: 1, depth: 1), threadsPerThreadgroup: .init(width: 1, height: 1, depth: 1))
         }
-        dispatch("nativePrepareGrid", buffers: [state.workingBubbles, state.control, state.contactControl], threads: 1)
+        dispatchReduction("nativePrepareGrid", buffers: [state.workingBubbles, state.control, state.contactControl])
         dispatch("nativeBuildGrid", buffers: [state.workingBubbles, state.control, state.contactControl, state.grid], threads: state.bubbleCapacity)
         var size = 2
         while size <= state.bubbleCapacity {
@@ -458,26 +505,32 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
             state.grid, state.workingSegments, state.candidateRows, state.candidateRowCounts], threads: count)
         dispatch("nativePrepareCandidateCounts", buffers: [state.control, state.candidateRowCounts, state.scanValues], threads: count * 2)
         scan(mode: 0, maximum: max(1, count * 2))
+        prepareIndirectArguments()
         dispatch("nativeCompactCandidates", buffers: [state.control, state.contactControl, state.candidateRows,
             state.candidateRowCounts, state.candidates, state.scanOffsets, state.dispatchStatistics], threads: count * (count + segmentCount))
-        dispatch("nativeBuildContacts", buffers: [state.workingBubbles, state.workingSegments, state.contactControl,
-            state.candidates, state.contacts], threads: state.contactCapacity)
-        dispatch("nativePrepareContactFlags", buffers: [state.contacts, state.contactControl, state.scanValues], threads: state.contactCapacity)
+        dispatchContacts("nativeBuildContacts", buffers: [state.workingBubbles, state.workingSegments, state.contactControl,
+            state.candidates, state.contacts], argument: 0)
+        dispatchContacts("nativePrepareContactFlags", buffers: [state.contacts, state.contactControl, state.scanValues], argument: 0)
         scan(mode: 1, maximum: state.contactCapacity)
-        dispatch("nativeCompactActiveContacts", buffers: [state.contacts, state.activeContacts, state.contactControl, state.scanOffsets], threads: state.contactCapacity)
-        dispatch("nativeMatchContactCache", buffers: [state.contactCache, state.activeContacts, state.mergedCache,
+        prepareIndirectArguments()
+        dispatchContacts("nativeCompactActiveContacts", buffers: [state.contacts, state.activeContacts, state.contactControl, state.scanOffsets], argument: 0)
+        dispatchContacts("nativeMatchContactCache", buffers: [state.contactCache, state.activeContacts, state.mergedCache,
             state.contactControl, state.invalidations, state.workingBubbles, state.workingSegments, state.control,
-            state.scanValues, state.dispatchStatistics], threads: state.contactCapacity)
+            state.scanValues, state.dispatchStatistics], argument: 1)
         dispatch("nativeRetainContactCache", buffers: [state.contactCache, state.activeContacts, state.mergedCache,
             state.contactControl, state.invalidations, state.workingBubbles, state.workingSegments, state.control,
             state.scanValues, state.dispatchStatistics], threads: state.publishedCacheCount)
         scan(mode: 2, maximum: state.contactCapacity + state.publishedCacheCount)
-        dispatch("nativeCompactContactCache", buffers: [state.mergedCache, state.workingCache, state.contactControl,
-            state.scanValues, state.scanOffsets, state.dispatchStatistics], threads: state.contactCapacity + state.publishedCacheCount)
-        dispatch("nativeBuildAdjacency", buffers: [state.workingBubbles, state.workingSegments, state.workingCache,
-            state.control, state.contactControl, state.adjacency, state.adjacencyCounts], threads: count)
-        dispatch("nativePrepareSolverContacts", buffers: [state.workingBubbles, state.workingSegments, state.workingCache,
-            state.control, state.contactControl, state.contactEndpoints, state.adjacencyCounts], threads: state.contactCapacity)
+        dispatchContacts("nativeCompactContactCache", buffers: [state.mergedCache, state.workingCache, state.contactControl,
+            state.scanValues, state.scanOffsets, state.dispatchStatistics], argument: 2)
+        prepareIndirectArguments()
+        dispatch("nativeClearAdjacency", buffers: [state.control, state.adjacencySlots], threads: count * (count + segmentCount))
+        dispatchContacts("nativeEmitAdjacency", buffers: [state.workingBubbles, state.workingSegments, state.workingCache,
+            state.control, state.contactControl, state.adjacencySlots, state.contactEndpoints, state.dispatchStatistics], argument: 3)
+        dispatch("nativeBuildAdjacency", buffers: [state.control, state.contactControl,
+            state.adjacencySlots, state.adjacency, state.adjacencyCounts], threads: count)
+        dispatchContacts("nativePrepareSolverContacts", buffers: [state.workingBubbles, state.workingSegments, state.workingCache,
+            state.control, state.contactControl, state.contactEndpoints, state.adjacencyCounts], argument: 3)
         dispatch("nativeApplyWarmStart", buffers: [state.workingBubbles, state.workingCache, state.control,
             state.contactControl, state.adjacency, state.adjacencyCounts, state.solverPositionsPing], threads: count)
         var inputPositions = state.solverPositionsPing
@@ -486,14 +539,15 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
             dispatch("nativeMeasureResidual", buffers: [state.workingBubbles, state.workingSegments, state.workingCache,
                 inputPositions, state.control, state.contactControl, state.adjacency, state.adjacencyCounts,
                 state.solverControl, state.scratch], threads: count)
-            dispatch("nativeReduceSolverResidual", buffers: [state.control, state.solverControl, state.scratch], threads: 1)
+            dispatchReduction("nativeReduceSolverResidual", buffers: [state.control, state.solverControl, state.scratch,
+                state.dispatchStatistics])
         }
         // Pomiar przed korekcją pozwala warm-startowi zakończyć się bez dodatkowej iteracji.
         measureResidual()
         for _ in 0..<configuration.solverIterationCount {
-            dispatch("nativeUpdateContactMultipliers", buffers: [state.workingBubbles, state.workingSegments,
+            dispatchContacts("nativeUpdateContactMultipliers", buffers: [state.workingBubbles, state.workingSegments,
                 state.workingCache, inputPositions, state.control, state.contactControl, state.solverControl,
-                state.contactEndpoints, state.adjacencyCounts, state.contactCorrections], threads: state.contactCapacity)
+                state.contactEndpoints, state.adjacencyCounts, state.contactCorrections], argument: 3)
             dispatch("nativeSolveJacobi", buffers: [state.workingBubbles, inputPositions, outputPositions, state.control,
                 state.contactControl, state.solverControl, state.adjacency, state.adjacencyCounts,
                 state.contactCorrections, state.scratch], threads: count)
@@ -530,14 +584,14 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
         }
         dispatch("nativeValidateBubbleContainment", buffers: [state.workingBubbles, inputPositions,
             state.control, state.solverControl, state.safetyControl], threads: count * count)
-        dispatch("nativeFinalizeSolverContacts", buffers: [state.workingBubbles, state.workingSegments,
-            state.workingCache, inputPositions, state.contactControl, state.contactEndpoints], threads: state.contactCapacity)
+        dispatchContacts("nativeFinalizeSolverContacts", buffers: [state.workingBubbles, state.workingSegments,
+            state.workingCache, inputPositions, state.contactControl, state.contactEndpoints], argument: 3)
         dispatch("nativeUpdateVelocities", buffers: [state.workingBubbles, inputPositions, state.control], threads: count)
-        dispatch("nativeInvalidateSafetyCache", buffers: [state.workingBubbles, state.workingCache,
-            state.control, state.contactControl, state.guardedBubbles, state.safetyControl], threads: state.contactCapacity)
-        dispatch("nativeCheckFinite", buffers: [state.workingBubbles, state.workingSegments, state.workingCache,
+        dispatchContacts("nativeInvalidateSafetyCache", buffers: [state.workingBubbles, state.workingCache,
+            state.control, state.contactControl, state.guardedBubbles, state.safetyControl], argument: 3)
+        dispatchContacts("nativeCheckFinite", buffers: [state.workingBubbles, state.workingSegments, state.workingCache,
             state.control, state.contactControl, state.solverControl, state.safetyControl],
-            threads: max(1, max(state.contactCapacity, max(count, segmentCount))))
+            argument: 4)
         dispatch("nativeAccumulateContactPressure", buffers: [state.workingBubbles, state.workingSegments,
             state.workingCache, state.control, state.contactControl, state.contourControl, state.publishedBubbles,
             state.publishedDeformation, state.publishedContourCounts, state.contourScratch, state.workingContourCounts,
@@ -564,6 +618,7 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
         var profile = NativeMetalFrameProfile()
         profile.commandBufferCount = 1
         profile.encoderCount = 2
+        profile.bubbleUploadCount = snapshot.bubbleChanges.count
         profile.hostEncodingMilliseconds = milliseconds(encodingEnd - encodingStart)
         profile.hostWaitingMilliseconds = milliseconds(waitingEnd - encodingEnd)
         profile.stageGPUMilliseconds = ["frame": timing.gpuMilliseconds]
@@ -641,10 +696,15 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
         if collectDispatchStatistics {
             let counts = state.dispatchStatistics.contents().load(as: SIMD4<UInt32>.self)
             let safetyCounts = state.dispatchStatistics.contents().advanced(by: 16).load(as: SIMD4<UInt32>.self)
+            let pipelineCounts = state.dispatchStatistics.contents().advanced(by: 32).load(as: SIMD4<UInt32>.self)
+            let dispatchArguments = state.indirectArguments.contents().bindMemory(to: SIMD4<UInt32>.self,
+                capacity: 5 + state.scanBlockSums.count * 2)
             profile.stageGPUWorkItemCounts = ["cacheMatch": Int(counts.x), "cacheRetain": Int(counts.y),
                 "cacheCompaction": Int(counts.z), "candidateCompaction": Int(counts.w),
                 "ccdAnalyticTests": Int(safetyCounts.y), "guardAnalyticTests": Int(safetyCounts.z),
-                "ccdFinitePathTests": Int(safetyCounts.w)]
+                "ccdFinitePathTests": Int(safetyCounts.w), "adjacencyRecords": Int(pipelineCounts.x),
+                "residualRecords": Int(pipelineCounts.y), "cacheDispatchThreads": Int(dispatchArguments[3].x) * 32,
+                "candidateDispatchThreads": Int(dispatchArguments[0].x) * 32]
         }
         let converged = solverResult.physics.z <= solverResult.physics.y
         let report = ReferenceWorldStepReport(solver: .init(iterations: Int(solverResult.counts.y),

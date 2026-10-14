@@ -41,6 +41,28 @@ uint nativeScanLength(constant NativeControl &control, device NativeContactContr
     return length;
 }
 
+// Metal 2.3 / Apple4: argumenty powstają i są konsumowane w tym samym encoderze.
+// Pojemności nadal ograniczają zapis, a zero pracy używa jednej bezpiecznej grupy
+// z early-outem (bez zerowych wymiarów indirect dispatchu).
+kernel void nativePrepareIndirectArguments(constant NativeControl &control [[buffer(0)]],
+    device NativeContactControl &contacts [[buffer(1)]], device uint4 *arguments [[buffer(2)]],
+    constant uint &levels [[buffer(3)]], uint index [[thread_position_in_grid]]) {
+    if (index) return;
+    uint candidates = contacts.counts.w ? 0 : contacts.counts.x;
+    uint active = contacts.counts.w ? 0 : contacts.counts.y;
+    uint merged = contacts.counts.w ? 0 : contacts.limits.w + contacts.counts.y;
+    uint cache = contacts.counts.w ? 0 : contacts.counts.z;
+    uint lengths[5] = { candidates, active, merged, cache, max(1u, max(cache, max(control.counts.x, control.counts.y))) };
+    for (uint i = 0; i < 5; ++i) arguments[i] = uint4(max(1u, (lengths[i] + 31) / 32), 1, 1, lengths[i]);
+    for (uint mode = 1; mode <= 2; ++mode) {
+        uint length = mode == 1 ? candidates : merged;
+        for (uint level = 0; level < levels; ++level) {
+            arguments[5 + (mode - 1) * levels + level] = uint4(max(1u, (length + 255) / 256), 1, 1, length);
+            length = (length + 255) / 256;
+        }
+    }
+}
+
 // Osiem kroków skanu lokalnego; kolejne poziomy przetwarzają sumy bloków równolegle.
 kernel void nativeScanBlocks(device uint4 *input [[buffer(0)]], device uint4 *output [[buffer(1)]],
     device uint4 *blockSums [[buffer(2)]], constant NativeControl &control [[buffer(3)]],
@@ -189,30 +211,47 @@ uint nativeFindSegment(device NativeSegment *segments, uint count, long id) {
     return low;
 }
 
-// Stały rząd per bańka: najwyżej B-1 par i S segmentów. Każdy rząd ma jednego pisarza.
-// Binary search pełnych kluczy daje deterministyczną kolejność bez append/float atomics.
-kernel void nativeBuildAdjacency(device NativeBubble *bubbles [[buffer(0)]],
+kernel void nativeClearAdjacency(constant NativeControl &control [[buffer(0)]],
+    device uint4 *slots [[buffer(1)]], uint index [[thread_position_in_grid]]) {
+    if (index < control.counts.x * (control.counts.x + control.counts.y)) slots[index] = 0;
+}
+
+// Każdy unikalny kontakt ma własny slot po indeksie sąsiada. Nie ma atomowego append
+// ani przeszukiwania cache dla wszystkich nieistniejących par świata.
+kernel void nativeEmitAdjacency(device NativeBubble *bubbles [[buffer(0)]],
     device NativeSegment *segments [[buffer(1)]], device NativeContactCache *cache [[buffer(2)]],
     constant NativeControl &control [[buffer(3)]], device NativeContactControl &contacts [[buffer(4)]],
-    device uint4 *adjacency [[buffer(5)]], device uint *degrees [[buffer(6)]],
+    device uint4 *slots [[buffer(5)]], device uint4 *endpoints [[buffer(6)]],
+    device atomic_uint *statistics [[buffer(7)]], uint index [[thread_position_in_grid]]) {
+    if (contacts.counts.w || index >= contacts.counts.z) return;
+    NativeContactCache record = cache[index];
+    uint a = nativeFindBubble(bubbles, control.counts.x, record.participants.x);
+    uint b = record.metadata.x == 0 ? nativeFindBubble(bubbles, control.counts.x, record.participants.y)
+        : nativeFindSegment(segments, control.counts.y, record.participants.y);
+    bool active = record.metadata.z == contacts.limits.x;
+    endpoints[index] = uint4(a, b, record.metadata.x, active ? 1 : 0);
+    nativeCountWork(statistics, 8);
+    if (!active) return;
+    if (record.metadata.x == 0) {
+        slots[a * contacts.cache.w + b] = uint4(index + 1, b, 0, 0);
+        slots[b * contacts.cache.w + a] = uint4(index + 1, a, 0, 1);
+    } else slots[a * contacts.cache.w + control.counts.x + b] = uint4(index + 1, b, 1, 1);
+}
+
+// Stabilna kompakcja liniowych rzędów zachowuje kolejność ID sprzed optymalizacji,
+// a więc również kolejność dodawania korekcji float w solverze Jacobi.
+kernel void nativeBuildAdjacency(constant NativeControl &control [[buffer(0)]],
+    device NativeContactControl &contacts [[buffer(1)]], device uint4 *slots [[buffer(2)]],
+    device uint4 *adjacency [[buffer(3)]], device uint *degrees [[buffer(4)]],
     uint index [[thread_position_in_grid]]) {
     if (index >= control.counts.x) return;
     uint degree = 0;
     if (!contacts.counts.w) {
-        for (uint other = 0; other < control.counts.x + control.counts.y; ++other) {
-            bool pair = other < control.counts.x;
-            if (pair && other == index) continue;
-            long a = bubbles[index].identity.x;
-            long b = pair ? bubbles[other].identity.x : segments[other - control.counts.x].identity.x;
-            NativeContactCache key;
-            key.metadata = uint4(pair ? 0 : 1, 0, 0, 0);
-            key.participants = pair ? long2(min(a, b), max(a, b)) : long2(a, b);
-            uint location = nativeCacheLowerBound(cache, contacts.counts.z, key);
-            if (location < contacts.counts.z && nativeCacheSame(cache[location], key)
-                && cache[location].metadata.z == contacts.limits.x) {
-                adjacency[index * contacts.cache.w + degree++] = uint4(location,
-                    pair ? other : other - control.counts.x, pair ? 0 : 1,
-                    pair && a == key.participants.x ? 0 : 1);
+        for (uint other = 0; other < contacts.cache.w; ++other) {
+            uint4 edge = slots[index * contacts.cache.w + other];
+            if (edge.x) {
+                edge.x -= 1;
+                adjacency[index * contacts.cache.w + degree++] = edge;
             }
         }
     }
@@ -226,10 +265,7 @@ kernel void nativePrepareSolverContacts(device NativeBubble *bubbles [[buffer(0)
     uint index [[thread_position_in_grid]]) {
     if (contacts.counts.w || index >= contacts.counts.z) return;
     NativeContactCache record = cache[index];
-    uint a = nativeFindBubble(bubbles, control.counts.x, record.participants.x);
-    uint b = record.metadata.x == 0 ? nativeFindBubble(bubbles, control.counts.x, record.participants.y)
-        : nativeFindSegment(segments, control.counts.y, record.participants.y);
-    endpoints[index] = uint4(a, b, record.metadata.x, record.metadata.z == contacts.limits.x ? 1 : 0);
+    uint a = endpoints[index].x, b = endpoints[index].y;
     if (record.metadata.z == contacts.limits.x) {
         // Jedna wspólna lambda obu końców: suma długości warm korekcji każdej bańki
         // nie może przekroczyć jej promienia, niezależnie od liczby kontaktów.
@@ -347,18 +383,33 @@ kernel void nativeMeasureResidual(device NativeBubble *bubbles [[buffer(0)]],
     residuals[index].x = maximum;
 }
 
-// Mała redukcja nagłówka per bańka, bez serializowania listy kontaktów.
+// Jeden threadgroup, równoległe odczyty i drzewo max/sum w pamięci lokalnej.
+// Brak simd intrinsics wymagających nowszej rodziny GPU.
 kernel void nativeReduceSolverResidual(constant NativeControl &control [[buffer(0)]],
     device NativeSolverControl &solver [[buffer(1)]], device float4 *residuals [[buffer(2)]],
-    uint index [[thread_position_in_grid]]) {
-    if (index != 0) return;
-    float maximum = 0; uint corrections = 0;
-    bool iterated = control.counts.x > 0 && residuals[0].z > 0;
-    for (uint i = 0; i < control.counts.x; ++i) {
+    device atomic_uint *statistics [[buffer(3)]], uint local [[thread_position_in_threadgroup]]) {
+    threadgroup float maxima[256];
+    threadgroup uint2 totals[256];
+    float maximum = 0; uint corrections = 0, iterated = 0;
+    for (uint i = local; i < control.counts.x; i += 256) {
         maximum = max(maximum, residuals[i].x);
         corrections += uint(residuals[i].y);
+        iterated |= residuals[i].z > 0 ? 1 : 0;
         residuals[i].yz = 0;
+        nativeCountWork(statistics, 9);
     }
+    maxima[local] = maximum; totals[local] = uint2(corrections, iterated);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint stride = 128; stride > 0; stride /= 2) {
+        if (local < stride) {
+            maxima[local] = max(maxima[local], maxima[local + stride]);
+            totals[local].x += totals[local + stride].x;
+            totals[local].y |= totals[local + stride].y;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if (local) return;
+    maximum = maxima[0]; corrections = totals[0].x; iterated = totals[0].y;
     if (iterated) { solver.counts.y += 1; solver.counts.z += corrections; }
     else if (solver.counts.y == 0) solver.physics.w = maximum;
     solver.physics.z = maximum;

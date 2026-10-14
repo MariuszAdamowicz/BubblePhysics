@@ -43,11 +43,18 @@ kernel void nativePredict(device NativeBubble *bubbles [[buffer(0)]],
 // Rozmiar komórki obejmuje największą średnicę: wystarcza dziewięć sąsiadów.
 kernel void nativePrepareGrid(device NativeBubble *bubbles [[buffer(0)]],
     constant NativeControl &control [[buffer(1)]], device NativeContactControl &contacts [[buffer(2)]],
-    uint index [[thread_position_in_grid]]) {
-    if (index != 0) return;
+    uint local [[thread_position_in_threadgroup]]) {
+    threadgroup float maxima[256];
     float width = contacts.thresholds.z;
-    for (uint i = 0; i < control.counts.x; ++i) width = max(width, 2 * bubbles[i].physical.z + contacts.thresholds.z);
-    contacts.thresholds.w = max(width, FLT_MIN);
+    for (uint i = local; i < control.counts.x; i += 256)
+        width = max(width, 2 * bubbles[i].physical.z + contacts.thresholds.z);
+    maxima[local] = width;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint stride = 128; stride > 0; stride /= 2) {
+        if (local < stride) maxima[local] = max(maxima[local], maxima[local + stride]);
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if (!local) contacts.thresholds.w = max(maxima[0], FLT_MIN);
 }
 
 kernel void nativeBuildGrid(device NativeBubble *bubbles [[buffer(0)]],

@@ -1,0 +1,44 @@
+BubblePhysics reference convergence benchmark
+device: macOS Mac14,12; GPU: Apple M2 Pro
+system: Version 26.6.2 (Build 25G83)
+scene: stress-300
+seed: 2842869
+warmup: 30 measured: 300
+GPU-native: limit oznacza stałą liczbę iteracji XPBD/PBD. solver_p95_ms obejmuje cały command buffer GPU albo solver CPU przy fallbacku; contour_p95_ms obejmuje pobranie/pakowanie gotowych konturów na hoście. gpu_completed i native_work zawierają wyłącznie ukończone zmierzone klatki native GPU; profil liczby command bufferów jest zawsze raportowany. Czasy tabeli z fallbackami są mieszane i nie kwalifikują GPU.
+limit full_p50_ms full_p95_ms full_max_ms solver_p95_ms contour_p95_ms render_p95_ms penetration_p95 penetration_max residual_p95 residual_max unconverged_components containment non_finite backend cpu_frames metal_frames fallbacks warmup_fallbacks gpu_measurement
+4 1.2508 3.4661 3.7383 2.2060 0.0174 0.0060 16.4846 18.7515 15.0240 18.4382 0 0 no native-metal 0 330 0 0 eligible
+8 1.2965 1.8756 3.5107 1.2063 0.0118 0.0044 15.9447 21.5552 12.3202 16.5964 0 0 no native-metal 0 330 0 0 eligible
+12 1.3854 3.7207 4.0514 2.5532 0.0190 0.0060 19.2102 25.1992 11.7431 15.5469 0 0 no native-metal 0 330 0 0 eligible
+16 1.4966 2.3469 3.4485 1.8483 0.0100 0.0031 20.9544 27.6493 12.0792 15.6397 0 0 no native-metal 0 330 0 0 eligible
+gpu_completed limit=4 measured_frames=300 command_buffers_p50_ms=0.7688 command_buffers_p95_ms=2.2060 command_buffers_max_ms=2.4476
+gpu_profile limit=4 measured_frames=300 command_buffers_p50=1.0000 command_buffers_p95=1.0000 command_buffers_max=1.0000 encoders_p50=2.0000 encoders_p95=2.0000 encoders_max=2.0000 host_encoding_p50_ms=0.0739 host_encoding_p95_ms=0.1725 host_encoding_max_ms=0.2150 host_waiting_p50_ms=0.9413 host_waiting_p95_ms=2.7865 host_waiting_max_ms=3.0644 host_readback_p50_ms=unavailable host_readback_p95_ms=unavailable host_readback_max_ms=unavailable
+gpu_stage limit=4 stage=frame measured_frames=300 p50_ms=0.7688 p95_ms=2.2060 max_ms=2.4476
+cpu_fallback limit=4 measured_frames=0 full_p50_ms=unavailable full_p95_ms=unavailable full_max_ms=unavailable
+gpu_work limit=4 scope=completed_measured_frames solve_calls_max=unavailable tentative_solve_calls_max=unavailable contacts_max=309 ccd_groups_max=unavailable
+native_work limit=4 scope=completed_measured_frames measured_frames=300 native_cache_hits=51759 native_cache_resets=1955 native_solver_iterations=4 native_ccd_candidates=1098
+native_quality limit=4 native_quality_envelope=pass scope=separate_untimed_acceptance_batches cpu_baseline_measured_frames=300 cpu_penetration_p95=23.3651791 cpu_penetration_max=26.5905972
+native_quality_dynamic limit=4 rest_settle_frames=120 rest_measured_frames=30 rest_displacement_radius_fraction=0 released_contour_frames=30 loaded_contour_mean_radius_error_fraction=0.0546875005 released_contour_mean_radius_error_fraction=0.000135552789 contour_oscillation_grows=no repeat_measured_frames=300 published_hash=9a370feca9a5bed8 repeated_published_hash=9a370feca9a5bed8
+gpu_completed limit=8 measured_frames=300 command_buffers_p50_ms=0.8246 command_buffers_p95_ms=1.2063 command_buffers_max_ms=2.3967
+gpu_profile limit=8 measured_frames=300 command_buffers_p50=1.0000 command_buffers_p95=1.0000 command_buffers_max=1.0000 encoders_p50=2.0000 encoders_p95=2.0000 encoders_max=2.0000 host_encoding_p50_ms=0.0757 host_encoding_p95_ms=0.1140 host_encoding_max_ms=0.1898 host_waiting_p50_ms=0.9970 host_waiting_p95_ms=1.5074 host_waiting_max_ms=3.0386 host_readback_p50_ms=unavailable host_readback_p95_ms=unavailable host_readback_max_ms=unavailable
+gpu_stage limit=8 stage=frame measured_frames=300 p50_ms=0.8246 p95_ms=1.2063 max_ms=2.3967
+cpu_fallback limit=8 measured_frames=0 full_p50_ms=unavailable full_p95_ms=unavailable full_max_ms=unavailable
+gpu_work limit=8 scope=completed_measured_frames solve_calls_max=unavailable tentative_solve_calls_max=unavailable contacts_max=282 ccd_groups_max=unavailable
+native_work limit=8 scope=completed_measured_frames measured_frames=300 native_cache_hits=48484 native_cache_resets=1723 native_solver_iterations=8 native_ccd_candidates=1359
+native_quality limit=8 native_quality_envelope=pass scope=separate_untimed_acceptance_batches cpu_baseline_measured_frames=300 cpu_penetration_p95=23.3981247 cpu_penetration_max=25.175766
+native_quality_dynamic limit=8 rest_settle_frames=120 rest_measured_frames=30 rest_displacement_radius_fraction=0 released_contour_frames=30 loaded_contour_mean_radius_error_fraction=0.0546875005 released_contour_mean_radius_error_fraction=0.000135552789 contour_oscillation_grows=no repeat_measured_frames=300 published_hash=11cd05a345278633 repeated_published_hash=11cd05a345278633
+gpu_completed limit=12 measured_frames=300 command_buffers_p50_ms=0.9188 command_buffers_p95_ms=2.5532 command_buffers_max_ms=2.7977
+gpu_profile limit=12 measured_frames=300 command_buffers_p50=1.0000 command_buffers_p95=1.0000 command_buffers_max=1.0000 encoders_p50=2.0000 encoders_p95=2.0000 encoders_max=2.0000 host_encoding_p50_ms=0.0814 host_encoding_p95_ms=0.1946 host_encoding_max_ms=0.2543 host_waiting_p50_ms=1.0939 host_waiting_p95_ms=3.1090 host_waiting_max_ms=3.3846 host_readback_p50_ms=unavailable host_readback_p95_ms=unavailable host_readback_max_ms=unavailable
+gpu_stage limit=12 stage=frame measured_frames=300 p50_ms=0.9188 p95_ms=2.5532 max_ms=2.7977
+cpu_fallback limit=12 measured_frames=0 full_p50_ms=unavailable full_p95_ms=unavailable full_max_ms=unavailable
+gpu_work limit=12 scope=completed_measured_frames solve_calls_max=unavailable tentative_solve_calls_max=unavailable contacts_max=269 ccd_groups_max=unavailable
+native_work limit=12 scope=completed_measured_frames measured_frames=300 native_cache_hits=46844 native_cache_resets=1671 native_solver_iterations=12 native_ccd_candidates=2435
+native_quality limit=12 native_quality_envelope=pass scope=separate_untimed_acceptance_batches cpu_baseline_measured_frames=300 cpu_penetration_p95=23.0359726 cpu_penetration_max=25.6253071
+native_quality_dynamic limit=12 rest_settle_frames=120 rest_measured_frames=30 rest_displacement_radius_fraction=0 released_contour_frames=30 loaded_contour_mean_radius_error_fraction=0.0546875005 released_contour_mean_radius_error_fraction=0.000135552789 contour_oscillation_grows=no repeat_measured_frames=300 published_hash=9348dea1337988ba repeated_published_hash=9348dea1337988ba
+gpu_completed limit=16 measured_frames=300 command_buffers_p50_ms=1.0065 command_buffers_p95_ms=1.8483 command_buffers_max_ms=2.7163
+gpu_profile limit=16 measured_frames=300 command_buffers_p50=1.0000 command_buffers_p95=1.0000 command_buffers_max=1.0000 encoders_p50=2.0000 encoders_p95=2.0000 encoders_max=2.0000 host_encoding_p50_ms=0.0923 host_encoding_p95_ms=0.1165 host_encoding_max_ms=0.1740 host_waiting_p50_ms=1.1822 host_waiting_p95_ms=2.0218 host_waiting_max_ms=2.9546 host_readback_p50_ms=unavailable host_readback_p95_ms=unavailable host_readback_max_ms=unavailable
+gpu_stage limit=16 stage=frame measured_frames=300 p50_ms=1.0065 p95_ms=1.8483 max_ms=2.7163
+cpu_fallback limit=16 measured_frames=0 full_p50_ms=unavailable full_p95_ms=unavailable full_max_ms=unavailable
+gpu_work limit=16 scope=completed_measured_frames solve_calls_max=unavailable tentative_solve_calls_max=unavailable contacts_max=340 ccd_groups_max=unavailable
+native_work limit=16 scope=completed_measured_frames measured_frames=300 native_cache_hits=50521 native_cache_resets=1888 native_solver_iterations=16 native_ccd_candidates=4468
+native_quality limit=16 native_quality_envelope=pass scope=separate_untimed_acceptance_batches cpu_baseline_measured_frames=300 cpu_penetration_p95=23.3974457 cpu_penetration_max=26.3413429
+native_quality_dynamic limit=16 rest_settle_frames=120 rest_measured_frames=30 rest_displacement_radius_fraction=0 released_contour_frames=30 loaded_contour_mean_radius_error_fraction=0.0546875005 released_contour_mean_radius_error_fraction=0.000135552789 contour_oscillation_grows=no repeat_measured_frames=300 published_hash=1ad7cb1970158a14 repeated_published_hash=1ad7cb1970158a14

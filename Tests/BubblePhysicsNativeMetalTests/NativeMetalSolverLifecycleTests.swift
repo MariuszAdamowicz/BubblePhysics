@@ -5,6 +5,72 @@ import BubblePhysicsReference
 
 @MainActor
 final class NativeMetalSolverLifecycleTests: XCTestCase {
+    func testStressRunnerKeepsThreeHundredPublishedBubblesOnGPU() async throws {
+        let solver = try NativeMetalSolver(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
+        let runner = NativeMetalWorldRunner(executor: solver)
+        let scenario = ReferenceConvergenceScenario(scene: .stress300, newtonIterationLimit: 4)
+        var world = try scenario.makeWorld()
+        for step in 0..<3 {
+            scenario.updatePolygon(in: &world, fromStep: step, toStep: step + 1)
+            _ = await runner.step(world: &world, scenarioStep: step)
+            XCTAssertNil(runner.telemetry.fallbackReason)
+            XCTAssertEqual(runner.profile.bubbleUploadCount, step == 0 ? 300 : 0)
+            XCTAssertEqual(world.bubbles.count, 300)
+            XCTAssertEqual(runner.profile.commandBufferCount, 1)
+        }
+    }
+
+    func testAcknowledgedPublicationKeepsInsertRemoveAndResetEditsDistinctFromGPUProgress() async throws {
+        let solver = try NativeMetalSolver(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
+        let runner = NativeMetalWorldRunner(executor: solver)
+        var world = try makeWorld()
+        _ = await runner.step(world: &world, scenarioStep: 1)
+        // Cofnięcie do oryginalnej pozycji jest rzeczywistą edycją, mimo że
+        // identyczne wejście bezpośredniego solvera oznacza kontynuację GPU.
+        world.updateBubble(try makeWorld().bubbles[0])
+        _ = await runner.step(world: &world, scenarioStep: 2)
+        XCTAssertEqual(runner.profile.bubbleUploadCount, 1)
+        XCTAssertEqual(world.bubbles[0].center.x, 0.5)
+        world.addBubble(try .init(id: .init(rawValue: 0), center: .init(x: -10, y: 0), mass: 1, targetRadius: 1))
+        _ = await runner.step(world: &world, scenarioStep: 3)
+        XCTAssertEqual(runner.profile.bubbleUploadCount, 1)
+        XCTAssertEqual(world.bubbles[1].center.x, 1)
+        var reduced = ReferenceWorld(configuration: world.configuration, broadPhase: BruteForceBroadPhase())
+        reduced.addBubble(world.bubbles[1])
+        _ = await runner.step(world: &reduced, scenarioStep: 4)
+        XCTAssertEqual(runner.profile.bubbleUploadCount, 0)
+        XCTAssertEqual(reduced.bubbles[0].center.x, 1.5)
+        XCTAssertNil(runner.telemetry.fallbackReason)
+    }
+
+    // Własna publikacja GPU nie może być ponownie traktowana jako edycja gry.
+    func testPublishedGPUStateNeedsNoBubbleUploadsButExternalEditDoes() async throws {
+        let solver = try NativeMetalSolver(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
+        let runner = NativeMetalWorldRunner(executor: solver)
+        var world = try makeWorld()
+        world.addBubble(try .init(id: .init(rawValue: 2), center: .init(x: 10, y: 0),
+            velocity: .init(x: 2, y: 0), mass: 1, targetRadius: 1))
+        _ = await runner.step(world: &world, scenarioStep: 1)
+        XCTAssertEqual(runner.profile.bubbleUploadCount, 2)
+        for step in 2...4 {
+            _ = await runner.step(world: &world, scenarioStep: step)
+            XCTAssertNil(runner.telemetry.fallbackReason)
+            XCTAssertEqual(runner.profile.bubbleUploadCount, 0)
+        }
+        XCTAssertEqual(world.bubbles[0].center.x, 2, accuracy: 1e-6)
+        var edited = world.bubbles[0]
+        edited.center.x = 100
+        edited.previousCenter.x = 100
+        world.updateBubble(edited)
+        _ = await runner.step(world: &world, scenarioStep: 5)
+        XCTAssertEqual(runner.profile.bubbleUploadCount, 1)
+        XCTAssertEqual(world.bubbles[0].center.x, 100.5, accuracy: 1e-6)
+        XCTAssertEqual(world.bubbles[1].center.x, 12.5, accuracy: 1e-6)
+        _ = await runner.step(world: &world, scenarioStep: 6)
+        XCTAssertEqual(runner.profile.bubbleUploadCount, 0)
+        XCTAssertEqual(world.bubbles[0].center.x, 101, accuracy: 1e-6)
+    }
+
     func testTwoFramesReusePersistentBuffers() async throws {
         let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
         let solver = try NativeMetalSolver(device: device)

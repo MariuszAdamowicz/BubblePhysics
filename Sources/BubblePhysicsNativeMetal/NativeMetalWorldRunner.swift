@@ -4,6 +4,11 @@ import Metal
 @MainActor
 protocol NativeMetalFrameExecuting {
     func executeFrame(world: ReferenceWorld, scenarioStep: Int) async throws -> NativeMetalWorldFrame
+    func acknowledgePublication()
+}
+
+extension NativeMetalFrameExecuting {
+    func acknowledgePublication() {}
 }
 
 struct NativeMetalWorldFrame {
@@ -86,6 +91,7 @@ public final class NativeMetalWorldRunner {
                 return cpuFrame(world: &world, reason: "invalidFrame", diagnostics: frame.telemetry)
             }
             world.publishPreparedFrame(bubbles: frame.bubbles, contacts: frame.contacts, contours: frame.contours)
+            executor.acknowledgePublication()
             contours = frame.contours
             renderData = frame.renderData
             telemetry = frame.telemetry

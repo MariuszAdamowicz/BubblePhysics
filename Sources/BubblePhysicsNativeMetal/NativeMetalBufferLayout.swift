@@ -141,7 +141,7 @@ struct NativeMetalSegmentChange: Sendable {
 /// Poprzedni snapshot musi należeć do ostatniej pomyślnie wykonanej klatki.
 struct NativeMetalSnapshot: Sendable {
     let configuration: ReferenceConfiguration
-    let sourceBubbles: [ReferenceBubble]
+    var sourceBubbles: [ReferenceBubble]
     let sourceSegments: [ReferenceSegment]
     let bubbleChanges: [NativeMetalBubbleChange]
     let bubbleRemaps: [NativeMetalBubbleRemap]
@@ -178,6 +178,8 @@ struct NativeMetalSnapshot: Sendable {
 public struct NativeMetalFrameProfile: Equatable, Sendable {
     public var commandBufferCount = 0
     public var encoderCount = 0
+    /// Rekordy wejściowe zmienione przez grę; własna publikacja GPU nie jest uploadem.
+    public var bubbleUploadCount = 0
     public var hostEncodingMilliseconds: Double = 0
     public var hostWaitingMilliseconds: Double = 0
     /// Łączny czas ukończonego command buffera; bez pozornych czasów osobnych dispatchy.
