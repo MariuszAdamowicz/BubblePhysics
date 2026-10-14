@@ -13,12 +13,20 @@ public struct ReferenceVisualScene {
 public enum ReferenceVisualDensity: Int, Sendable, CaseIterable {
     case six = 6
     case twentyFour = 24
+    case threeHundred = 300
 }
 
 public enum ReferenceVisualSceneFactory {
     public static let initialPolygonCenter = ReferenceVector2(x: 187.5, y: 350)
 
     public static func make(density: ReferenceVisualDensity = .six) throws -> ReferenceVisualScene {
+        if density == .threeHundred {
+            let world = try ReferenceConvergenceScenario(scene: .stress300, newtonIterationLimit: 4).makeWorld()
+            return .init(world: world, polygonOwnerID: ReferenceConvergenceScenario.polygonOwnerID,
+                         polygonSegmentIDs: [5, 6, 7].map(ReferenceSegmentID.init(rawValue:)),
+                         polygonLocalVertices: [.init(x: -46, y: 34), .init(x: 46, y: 34), .init(x: 0, y: -52)],
+                         valuesByBubbleID: Dictionary(uniqueKeysWithValues: world.bubbles.map { ($0.id, $0.id.rawValue) }))
+        }
         var configuration = ReferenceConfiguration.default
         configuration.timeStep = 1 / 60
         configuration.maxContourSegmentLength = 5

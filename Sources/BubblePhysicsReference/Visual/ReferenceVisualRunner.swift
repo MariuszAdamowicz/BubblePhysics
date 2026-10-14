@@ -7,6 +7,15 @@ public struct ReferenceVisualSnapshot: Sendable, Equatable {
     public var simulationTime: Double
     public var stepsExecuted: Int
     public var valuesByBubbleID: [ReferenceBubbleID: Int]
+
+    public init(bubbles: [ReferenceBubble], contours: [ReferenceBubbleID: [ReferenceVector2]],
+                triangleVertices: [ReferenceVector2], contacts: [ReferenceContact],
+                lastReport: ReferenceWorldStepReport, simulationTime: Double, stepsExecuted: Int,
+                valuesByBubbleID: [ReferenceBubbleID: Int]) {
+        self.bubbles = bubbles; self.contours = contours; self.triangleVertices = triangleVertices
+        self.contacts = contacts; self.lastReport = lastReport; self.simulationTime = simulationTime
+        self.stepsExecuted = stepsExecuted; self.valuesByBubbleID = valuesByBubbleID
+    }
 }
 
 public struct ReferenceVisualRunner {
@@ -30,7 +39,10 @@ public struct ReferenceVisualRunner {
         self.density = density
         reset()
     }
-    public mutating func movePolygon(to point: ReferenceVector2) { requestedPolygonCenter = .init(x: min(330, max(45, point.x)), y: min(650, max(50, point.y))) }
+    public mutating func movePolygon(to point: ReferenceVector2) {
+        guard point.isFinite else { return }
+        requestedPolygonCenter = .init(x: min(330, max(45, point.x)), y: min(650, max(50, point.y)))
+    }
 
     public mutating func advance(to presentationTime: Double) -> ReferenceVisualSnapshot {
         guard presentationTime.isFinite else { return snapshot(stepsExecuted: 0) }
