@@ -7,6 +7,15 @@ void nativeSafetyFailure(device atomic_uint *safety, uint bit) {
     atomic_fetch_or_explicit(safety + 3, bit, memory_order_relaxed);
 }
 
+// Tylko probe: kopia granicy potoku do bufora shared. Nie jest kodowany
+// w normalnej konfiguracji solvera.
+kernel void nativeCapturePositions(device float4 *source [[buffer(0)]],
+                                   device float2 *destination [[buffer(1)]],
+                                   constant NativeControl &control [[buffer(2)]],
+                                   uint index [[thread_position_in_grid]]) {
+    if (index < control.counts.x) destination[index] = source[index].xy;
+}
+
 kernel void nativeFindFastCandidates(device NativeBubble *bubbles [[buffer(0)]],
     device NativeSegment *segments [[buffer(1)]], constant NativeControl &control [[buffer(2)]],
     device NativeContactControl &contacts [[buffer(3)]], device uint *candidates [[buffer(4)]],
@@ -401,7 +410,10 @@ kernel void nativeAccumulateContactPressure(device NativeBubble *bubbles [[buffe
             previousDeformation[old * contour.counts.x + second].x, fract(location))
             * exp(-contour.shape.y * max(0.0f, bubble.physical.w) * control.physics.x);
     }
-    float4 value = float4(max(max(deficit, directionalPressure), recovered), deficit, directionalPressure, 0);
+    // Wartość lambda jest używana przez solver, ale nie jest dodatkową
+    // geometrią konturu. Jej lokalne maksima poruszały kontur mimo prawie
+    // niezmienionej geometrii zatwierdzonej klatki.
+    float4 value = float4(max(deficit, recovered), deficit, 0, 0);
     if (!all(isfinite(value))) nativeSafetyFailure(safety, 1);
     pressure[index] = value;
 }

@@ -94,12 +94,14 @@ struct NativeMetalContactControl: Sendable {
     var limits: SIMD4<UInt32> // frame, expiry, capacity, previousCacheCount
     var counts: SIMD4<UInt32> // candidates, contacts, cache, failure
     var cache: SIMD4<UInt32> // hits, resets, invalidationCount, rowStride
-    var thresholds: SIMD4<Float> // teleportMultiplier, ccdMultiplier, tolerance, cellWidth
+    var thresholds: SIMD4<Float> // teleportMultiplier, ccdMultiplier, contactTolerance, separationTolerance
+    var cellWidth: SIMD4<Float>
 }
 
 struct NativeMetalControl: Sendable {
     var counts: SIMD4<UInt32> // bubbles, segments, scenarioStep, failure
-    var physics: SIMD4<Float> // dt, linearDamping, angularDamping, reserved
+    var physics: SIMD4<Float> // dt, linearDamping, angularDamping, contactStiffness
+    var contactDamping: SIMD4<Float>
 }
 
 struct NativeMetalSolverControl: Sendable {

@@ -17,8 +17,8 @@ struct NativeContactCache {
 };
 struct NativeCandidate { long2 participants; uint4 metadata; };
 struct NativeGridEntry { long2 cell; uint4 metadata; };
-struct NativeContactControl { uint4 limits; uint4 counts; uint4 cache; float4 thresholds; };
-struct NativeControl { uint4 counts; float4 physics; };
+struct NativeContactControl { uint4 limits; uint4 counts; uint4 cache; float4 thresholds; float4 cellWidth; };
+struct NativeControl { uint4 counts; float4 physics; float4 contactDamping; };
 struct NativeRenderPacket { long2 identity; float4 geometry; float4 deformation; };
 
 void nativeCountWork(device atomic_uint *statistics, uint slot) {
@@ -45,16 +45,16 @@ kernel void nativePrepareGrid(device NativeBubble *bubbles [[buffer(0)]],
     constant NativeControl &control [[buffer(1)]], device NativeContactControl &contacts [[buffer(2)]],
     uint local [[thread_position_in_threadgroup]]) {
     threadgroup float maxima[256];
-    float width = contacts.thresholds.z;
+    float width = contacts.thresholds.w;
     for (uint i = local; i < control.counts.x; i += 256)
-        width = max(width, 2 * bubbles[i].physical.z + contacts.thresholds.z);
+        width = max(width, 2 * bubbles[i].physical.z + contacts.thresholds.w);
     maxima[local] = width;
     threadgroup_barrier(mem_flags::mem_threadgroup);
     for (uint stride = 128; stride > 0; stride /= 2) {
         if (local < stride) maxima[local] = max(maxima[local], maxima[local + stride]);
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
-    if (!local) contacts.thresholds.w = max(maxima[0], FLT_MIN);
+    if (!local) contacts.cellWidth.x = max(maxima[0], FLT_MIN);
 }
 
 kernel void nativeBuildGrid(device NativeBubble *bubbles [[buffer(0)]],
@@ -64,7 +64,7 @@ kernel void nativeBuildGrid(device NativeBubble *bubbles [[buffer(0)]],
     entry.cell = long2(0);
     entry.metadata = uint4(index, index < control.counts.x ? 1 : 0, 0, 0);
     if (entry.metadata.y && all(isfinite(bubbles[index].position.xy)))
-        entry.cell = long2(floor(bubbles[index].position.xy / contacts.thresholds.w));
+        entry.cell = long2(floor(bubbles[index].position.xy / contacts.cellWidth.x));
     else entry.metadata.y = 0;
     grid[index] = entry;
 }
@@ -110,7 +110,7 @@ kernel void nativeEmitCandidates(device NativeBubble *bubbles [[buffer(0)]],
     if (!all(isfinite(a.position))) {
         rowCounts[index * 2] = 0; rowCounts[index * 2 + 1] = 0; return;
     }
-    long2 cell = long2(floor(a.position.xy / contacts.thresholds.w));
+    long2 cell = long2(floor(a.position.xy / contacts.cellWidth.x));
     device NativeCandidate *row = rows + index * contacts.cache.w;
     uint count = 0;
     for (int dx = -1; dx <= 1; ++dx) for (int dy = -1; dy <= 1; ++dy) {
@@ -126,7 +126,8 @@ kernel void nativeEmitCandidates(device NativeBubble *bubbles [[buffer(0)]],
             uint j = grid[k].metadata.x;
             if (j <= index) continue;
             NativeBubble b = bubbles[j];
-            if (all(abs(a.position.xy - b.position.xy) <= a.physical.z + b.physical.z)) {
+            float reach = a.physical.z + b.physical.z + contacts.thresholds.w;
+            if (all(abs(a.position.xy - b.position.xy) <= reach)) {
                 NativeCandidate candidate = { long2(a.identity.x, b.identity.x), uint4(0, index, j, 1) };
                 nativeInsertCandidate(row, count, candidate);
             }
@@ -135,8 +136,9 @@ kernel void nativeEmitCandidates(device NativeBubble *bubbles [[buffer(0)]],
     uint bubbleCount = count;
     for (uint j = 0; j < control.counts.y; ++j) {
         NativeSegment s = segments[j];
-        float2 lower = min(s.current.xy, s.current.zw) - a.physical.z;
-        float2 upper = max(s.current.xy, s.current.zw) + a.physical.z;
+        float reach = a.physical.z + contacts.thresholds.w;
+        float2 lower = min(s.current.xy, s.current.zw) - reach;
+        float2 upper = max(s.current.xy, s.current.zw) + reach;
         if (all(a.position.xy >= lower) && all(a.position.xy <= upper)) {
             NativeCandidate candidate = { long2(a.identity.x, s.identity.x), uint4(1, index, j, 1) };
             nativeInsertCandidate(row, count, candidate);

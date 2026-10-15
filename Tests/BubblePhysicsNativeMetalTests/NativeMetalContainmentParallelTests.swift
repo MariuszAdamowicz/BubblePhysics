@@ -121,7 +121,7 @@ private final class ContainmentKernelFixture {
         let output = try buffer(Array(repeating: SIMD4<Float>(999, 999, 999, 999), count: count))
         let flags = try buffer([UInt32(active ? 1 : 0), 0])
         try await encode("nativeSeparateContainedBubbles", buffers: [try buffer(bubbles(count)), input, output,
-            try buffer([NativeMetalControl(counts: SIMD4(UInt32(count), 0, 0, 0), physics: .zero)]),
+            try buffer([NativeMetalControl(counts: SIMD4(UInt32(count), 0, 0, 0), physics: .zero, contactDamping: .zero)]),
             try buffer([NativeMetalSolverControl(counts: .zero, physics: SIMD4(0, 0.00001, 0, 0))]),
             try buffer([UInt32](repeating: 0, count: count)), try buffer([UInt32](repeating: 0, count: 4)),
             flags, try buffer([UInt32(0)])], groups: count)
@@ -139,7 +139,7 @@ private final class ContainmentKernelFixture {
         records[31].physical.z = 3
         let safety = try buffer([UInt32](repeating: 0, count: 4))
         try await encode("nativeValidateBubbleContainment", buffers: [try buffer(records), try buffer(positions),
-            try buffer([NativeMetalControl(counts: SIMD4(33, 0, 0, 0), physics: .zero)]),
+            try buffer([NativeMetalControl(counts: SIMD4(33, 0, 0, 0), physics: .zero, contactDamping: .zero)]),
             try buffer([NativeMetalSolverControl(counts: .zero, physics: SIMD4(0, 0.00001, 0, 0))]), safety], groups: 33)
         return safety.contents().load(fromByteOffset: 12, as: UInt32.self)
     }

@@ -114,13 +114,15 @@ kernel void nativePrepareContactFlags(device NativeContactCache *contacts [[buff
     device NativeContactControl &control [[buffer(1)]], device uint4 *flags [[buffer(2)]],
     uint index [[thread_position_in_grid]]) {
     if (control.counts.w || index >= control.counts.x) return;
-    flags[index] = uint4(contacts[index].response.y > 0 ? 1 : 0, 0, 0, 0);
+    // Ten etap musi zachować kandydatów w otoczce rozdzielenia, aby następny
+    // etap mógł połączyć ich z historią cache'u.
+    flags[index] = uint4(contacts[index].response.y > -control.thresholds.w ? 1 : 0, 0, 0, 0);
 }
 
 kernel void nativeCompactActiveContacts(device NativeContactCache *contacts [[buffer(0)]],
     device NativeContactCache *active [[buffer(1)]], device NativeContactControl &control [[buffer(2)]],
     device uint4 *offsets [[buffer(3)]], uint index [[thread_position_in_grid]]) {
-    if (control.counts.w || index >= control.counts.x || contacts[index].response.y <= 0) return;
+    if (control.counts.w || index >= control.counts.x || contacts[index].response.y <= -control.thresholds.w) return;
     active[offsets[index].x - 1] = contacts[index];
 }
 
@@ -154,7 +156,8 @@ kernel void nativeMatchContactCache(device NativeContactCache *previous [[buffer
         uint elapsed = contacts.limits.x - previous[old].metadata.z;
         if (elapsed > 0 && elapsed - 1 > contacts.limits.y) invalid |= 8;
         if (invalid) { result.metadata.w = invalid; reset = 1; }
-        else { result.response.x = previous[old].response.x; result.metadata.y = previous[old].metadata.y + 1; hit = 1; }
+        else { result.response.x = previous[old].response.x; result.metadata.y = previous[old].metadata.y + 1;
+            result.metadata.w |= 16; hit = 1; }
     }
     // Merge rank: nowy rekord zajmuje miejsce przed starym przy równym kluczu.
     uint position = index + old;
@@ -228,7 +231,12 @@ kernel void nativeEmitAdjacency(device NativeBubble *bubbles [[buffer(0)]],
     uint a = nativeFindBubble(bubbles, control.counts.x, record.participants.x);
     uint b = record.metadata.x == 0 ? nativeFindBubble(bubbles, control.counts.x, record.participants.y)
         : nativeFindSegment(segments, control.counts.y, record.participants.y);
-    bool active = record.metadata.z == contacts.limits.x;
+    // Nowe kontakty potrzebują dodatniej penetracji contactTolerance. Rekord
+    // dopasowany do cache'u może natomiast przetrwać niewielkie rozdzielenie
+    // separationTolerance. To zapobiega znikaniu/powrotowi tej samej pary.
+    bool matchedHistory = (record.metadata.w & 16) != 0;
+    float threshold = matchedHistory ? -contacts.thresholds.w : contacts.thresholds.z;
+    bool active = record.response.y > threshold;
     endpoints[index] = uint4(a, b, record.metadata.x, active ? 1 : 0);
     nativeCountWork(statistics, 8);
     if (!active) return;
@@ -440,7 +448,48 @@ kernel void nativeUpdateVelocities(device NativeBubble *bubbles [[buffer(0)]],
     uint index [[thread_position_in_grid]]) {
     if (index >= control.counts.x) return;
     NativeBubble bubble = bubbles[index];
+    // PBD/XPBD usuwa penetrację bezpośrednio w przestrzeni pozycji. Gdy całą
+    // tę poprawkę potraktujemy jak ruch fizyczny, powstaje sztuczna prędkość
+    // rzędu korekty/dt i bańki odbijają się nienaturalnie. Zachowujemy
+    // przewidzianą prędkość, a korektę przeliczamy na ograniczoną odpowiedź
+    // sprężyny k*dt² — tę samą skalę, w której siła kontaktowa CPU zmienia
+    // pozycję w jednej klatce.
+    float dt = control.physics.x;
+    float2 correction = positions[index].xy - bubble.position.xy;
+    float correctionScale = min(1.0f, max(0.0f, control.physics.w) * dt * dt);
     bubble.position.xy = positions[index].xy;
-    bubble.motion.xy = (bubble.position.xy - bubble.position.zw) / control.physics.x;
+    bubble.motion.xy += correction * (correctionScale / max(dt, 1e-6f));
+    bubbles[index] = bubble;
+}
+
+// Tłumienie wyłącznie składowej zamykającej aktywny kontakt. Każdy wątek
+// zapisuje własną bańkę, dlatego nie wymaga atomików ani drugiego bufora.
+kernel void nativeDampContactNormalMotion(device NativeBubble *bubbles [[buffer(0)]],
+    device NativeSegment *segments [[buffer(1)]], device NativeContactCache *cache [[buffer(2)]],
+    constant NativeControl &control [[buffer(3)]], device NativeContactControl &contacts [[buffer(4)]],
+    device uint4 *adjacency [[buffer(5)]], device uint *degrees [[buffer(6)]],
+    uint index [[thread_position_in_grid]]) {
+    if (index >= control.counts.x || contacts.counts.w) return;
+    NativeBubble bubble = bubbles[index];
+    float factor = clamp(1.0f - exp(-2.0f * control.contactDamping.x * control.physics.x), 0.0f, 1.0f);
+    for (uint j = 0; j < degrees[index]; ++j) {
+        uint4 edge = adjacency[index * contacts.cache.w + j];
+        NativeContactCache record = cache[edge.x];
+        if (record.metadata.z != contacts.limits.x) continue;
+        float2 outward = edge.w ? record.geometry.xy : -record.geometry.xy;
+        float2 otherVelocity = edge.z == 0 ? bubbles[edge.y].motion.xy : segments[edge.y].velocity.xy;
+        float otherInverseMass = edge.z == 0 ? bubbles[edge.y].physical.y : 0;
+        // Dashpot usuwa energię oscylacji zarówno podczas dojścia, jak i
+        // odbicia; sama korekcja XPBD nadal egzekwuje brak penetracji.
+        float normalVelocity = dot(bubble.motion.xy - otherVelocity, outward);
+        // Tłumienie spoczynkowe nie może ingerować w celowy, szybki ruch
+        // kinematycznej przeszkody. Granica jest skalowana promieniem, więc
+        // drobne bańki stabilizują się szybciej niż duże.
+        float restSpeed = max(40.0f, 2.0f * bubble.physical.z);
+        if (abs(normalVelocity) > restSpeed) continue;
+        float inverseMassSum = bubble.physical.y + otherInverseMass;
+        float share = inverseMassSum > 0 ? bubble.physical.y / inverseMassSum : 0;
+        bubble.motion.xy -= outward * (normalVelocity * factor * share);
+    }
     bubbles[index] = bubble;
 }

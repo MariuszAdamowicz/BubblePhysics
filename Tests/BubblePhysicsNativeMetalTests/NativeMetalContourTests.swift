@@ -49,7 +49,7 @@ final class NativeMetalContourTests: XCTestCase {
         }
     }
 
-    func testDefaultHardContactPreservesDirectionalPressureAfterCenterSeparation() async throws {
+    func testDefaultHardContactDoesNotLeaveCacheDrivenContourDeformation() async throws {
         let solver = try NativeMetalSolver(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         var world = try makeWorld()
         world.addSegment(wall())
@@ -59,10 +59,12 @@ final class NativeMetalContourTests: XCTestCase {
         XCTAssertEqual(bubble.center.x, -1, accuracy: 0.00001)
         XCTAssertLessThanOrEqual(frame.contacts[0].penetration, 0.0001)
         XCTAssertGreaterThan(frame.contacts[0].accumulatedCompression, 0.3)
-        XCTAssertLessThan((points[0] - bubble.center).length, 0.85)
+        XCTAssertEqual((points[0] - bubble.center).length, 1, accuracy: 0.001)
         XCTAssertEqual((points[points.count / 2] - bubble.center).length, 1, accuracy: 0.001)
-        XCTAssertEqual(frame.report.solver.deformationCount, 1)
-        XCTAssertGreaterThan(frame.report.solver.maximumRelativeDeformation, 0.15)
+        // Raport liczy również śladową, wygaszaną pamięć po poprzedniej
+        // geometrii. Kontrakt wizualny to brak widocznego odkształcenia, nie
+        // bezwzględne wyzerowanie tej pomocniczej wartości float32.
+        XCTAssertLessThanOrEqual(frame.report.solver.maximumRelativeDeformation, 0.001)
     }
 
     // Brak nacisku kierunkowego pozostawi naturalny promień po stronie ściany.

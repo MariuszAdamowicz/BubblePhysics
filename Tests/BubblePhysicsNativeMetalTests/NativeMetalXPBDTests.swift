@@ -16,9 +16,10 @@ final class NativeMetalXPBDTests: XCTestCase {
         XCTAssertTrue(frame.report.solver.converged)
         XCTAssertLessThanOrEqual(frame.report.solver.maximumPenetration, 0.0001)
         XCTAssertGreaterThan(frame.contacts[0].accumulatedCompression, 0)
-        XCTAssertEqual(frame.bubbles[0].velocity.x,
-                       (frame.bubbles[0].center.x - frame.bubbles[0].previousCenter.x) / world.configuration.timeStep,
-                       accuracy: 0.0001)
+        // Natychmiastowa korekta pozycji PBD nie jest fizycznym impulsem
+        // prędkości. Rekonstrukcja ogranicza ją do skali sprężyny kontaktu.
+        XCTAssertLessThan(abs(frame.bubbles[0].velocity.x), 1)
+        XCTAssertLessThan(frame.bubbles[0].velocity.x, 0)
         XCTAssertEqual(frame.profile.commandBufferCount, 1)
     }
 
