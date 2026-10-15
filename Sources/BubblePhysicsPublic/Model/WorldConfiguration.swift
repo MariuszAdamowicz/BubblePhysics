@@ -97,20 +97,20 @@ public struct WorldConfiguration: Equatable, Sendable {
     }
 }
 
-internal func requireFinite(_ value: Float, _ name: String) throws {
+package func requireFinite(_ value: Float, _ name: String) throws {
     guard value.isFinite else { throw ModelValidationError.nonFiniteValue(name) }
 }
 
-internal func requireFinite(_ value: WorldPoint, _ name: String) throws {
+package func requireFinite(_ value: WorldPoint, _ name: String) throws {
     guard value.x.isFinite, value.y.isFinite else { throw ModelValidationError.nonFiniteValue(name) }
 }
 
-internal func requirePositive(_ value: Float, _ name: String) throws {
+package func requirePositive(_ value: Float, _ name: String) throws {
     try requireFinite(value, name)
     guard value > 0 else { throw ModelValidationError.nonPositiveValue(name) }
 }
 
-internal func requireNonnegative(_ value: Float, _ name: String) throws {
+package func requireNonnegative(_ value: Float, _ name: String) throws {
     try requireFinite(value, name)
     guard value >= 0 else { throw ModelValidationError.valueOutOfRange(name) }
 }
