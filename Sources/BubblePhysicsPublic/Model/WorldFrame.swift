@@ -46,11 +46,17 @@ public enum WorldEvent: Equatable, Sendable {
     case didReplace(ObjectID)
 }
 
-/// Niezmienny wynik publikacji. Runtime dodaje kolejne dane klatki w następnych etapach.
+/// Ostatni kompletny stan. Wyniki transakcji i zdarzenia obejmują wszystkie kroki
+/// ukończone w wywołaniu advance, które opublikowało tę klatkę.
+/// Brak nowego kroku zwraca tę samą klatkę; stepIndex pozwala uniknąć powtórnej obsługi zdarzeń.
 public struct WorldFrame: Equatable, Sendable {
+    public let stepIndex: UInt64
+    public let simulationTime: Double
     public let transactionReceipts: [TransactionReceipt]
     public let events: [WorldEvent]
-    package init(transactionReceipts: [TransactionReceipt], events: [WorldEvent]) {
+    package init(stepIndex: UInt64 = 0, simulationTime: Double = 0,
+                 transactionReceipts: [TransactionReceipt], events: [WorldEvent]) {
+        self.stepIndex = stepIndex; self.simulationTime = simulationTime
         self.transactionReceipts = transactionReceipts; self.events = events
     }
 }
