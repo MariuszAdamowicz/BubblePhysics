@@ -1,5 +1,5 @@
 import Metal
-import BubblePhysics
+import BubblePhysicsLegacy
 
 public struct MetalRemeshResult: Equatable, Sendable {
     public let contour: AdaptiveContour

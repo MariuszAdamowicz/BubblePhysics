@@ -1,6 +1,6 @@
 import Metal
 import simd
-import BubblePhysics
+import BubblePhysicsLegacy
 
 public protocol MetalBufferAllocator: Sendable {
     func makeBuffer(device: MTLDevice, length: Int, options: MTLResourceOptions) -> MTLBuffer?

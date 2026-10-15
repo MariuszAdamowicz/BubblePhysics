@@ -1,5 +1,5 @@
 import XCTest
-@testable import BubblePhysics
+@testable import BubblePhysicsLegacy
 @testable import BubblePhysicsMetal
 
 final class FrameTelemetryTests: XCTestCase {

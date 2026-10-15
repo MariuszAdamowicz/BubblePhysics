@@ -1,5 +1,5 @@
 import XCTest
-@testable import BubblePhysics
+@testable import BubblePhysicsLegacy
 
 final class PrototypeSceneTests: XCTestCase {
     func testInspectionSceneContainsFortyBubblesAndOneKinematicTriangle() throws {

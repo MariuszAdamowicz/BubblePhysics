@@ -1,6 +1,6 @@
 import Foundation
 import Metal
-import BubblePhysics
+import BubblePhysicsLegacy
 
 public enum MetalShaderLibraryOrigin: Equatable, Sendable {
     case compiledBundle

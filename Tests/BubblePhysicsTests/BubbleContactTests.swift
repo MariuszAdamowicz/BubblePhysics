@@ -1,5 +1,5 @@
 import XCTest
-@testable import BubblePhysics
+@testable import BubblePhysicsLegacy
 
 final class BubbleContactTests: XCTestCase {
     func testSeparatedBubblesProduceNoContacts() {

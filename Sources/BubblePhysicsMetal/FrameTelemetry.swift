@@ -1,5 +1,5 @@
 import Foundation
-import BubblePhysics
+import BubblePhysicsLegacy
 
 public struct RadialFrameMetrics: Equatable, Sendable {
     public let gpuFrameMilliseconds: Double

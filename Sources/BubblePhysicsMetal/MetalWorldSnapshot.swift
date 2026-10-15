@@ -1,4 +1,4 @@
-import BubblePhysics
+import BubblePhysicsLegacy
 import simd
 
 public struct MetalWorldSnapshot: Equatable, Sendable {

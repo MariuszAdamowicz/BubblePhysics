@@ -1,4 +1,4 @@
-import BubblePhysics
+import BubblePhysicsLegacy
 import BubblePhysicsMetal
 import MetalKit
 import SwiftUI

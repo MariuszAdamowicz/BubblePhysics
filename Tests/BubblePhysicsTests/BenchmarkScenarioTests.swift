@@ -1,5 +1,5 @@
 import XCTest
-@testable import BubblePhysics
+@testable import BubblePhysicsLegacy
 
 final class BenchmarkScenarioTests: XCTestCase {
     func testIPhoneXScenarioCreatesDeterministicThreeHundredBubbleWorldWithoutNodeCap() {

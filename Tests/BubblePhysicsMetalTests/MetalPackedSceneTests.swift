@@ -1,7 +1,7 @@
 import XCTest
 import Metal
 import simd
-@testable import BubblePhysics
+@testable import BubblePhysicsLegacy
 @testable import BubblePhysicsMetal
 
 final class MetalPackedSceneTests: XCTestCase {

@@ -1,6 +1,6 @@
 import XCTest
 import Metal
-@testable import BubblePhysics
+@testable import BubblePhysicsLegacy
 @testable import BubblePhysicsMetal
 
 final class MetalGrabControllerTests: XCTestCase {

@@ -9,18 +9,21 @@ let package = Package(
     ],
     products: [
         .library(name: "BubblePhysics", targets: ["BubblePhysics"]),
-        .library(name: "BubblePhysicsCore", targets: ["BubblePhysicsCore"]),
-        .library(name: "BubblePhysicsMetal", targets: ["BubblePhysicsMetal"]),
-        .library(name: "BubblePhysicsReference", targets: ["BubblePhysicsReference"]),
-        .library(name: "BubblePhysicsReferenceMetal", targets: ["BubblePhysicsReferenceMetal"]),
-        .library(name: "BubblePhysicsNativeMetal", targets: ["BubblePhysicsNativeMetal"]),
+        // Wyłącznie narzędzia diagnostyczne; te moduły nie są API gry.
+        .library(name: "BubblePhysicsBenchmarkSupport", targets: [
+            "BubblePhysicsLegacy", "BubblePhysicsCore", "BubblePhysicsMetal",
+            "BubblePhysicsReference", "BubblePhysicsReferenceMetal", "BubblePhysicsNativeMetal"
+        ]),
         .executable(name: "BubblePhysicsReferenceBench", targets: ["BubblePhysicsReferenceBench"])
     ],
     targets: [
         .executableTarget(name: "BubblePhysicsReferenceBench",
                           dependencies: ["BubblePhysicsReference", "BubblePhysicsReferenceMetal", "BubblePhysicsNativeMetal"],
                           path: "Benchmarks/macOS/BubblePhysicsReferenceBench"),
-        .target(name: "BubblePhysics"),
+        .target(name: "BubblePhysics", dependencies: ["BubblePhysicsRuntime"],
+                path: "Sources/BubblePhysicsPublic"),
+        .target(name: "BubblePhysicsRuntime", dependencies: ["BubblePhysicsNativeMetal"]),
+        .target(name: "BubblePhysicsLegacy", path: "Sources/BubblePhysics"),
         .target(name: "BubblePhysicsCore"),
         .target(name: "BubblePhysicsReference"),
         .target(name: "BubblePhysicsNativeMetal", dependencies: ["BubblePhysicsReference"],
@@ -30,14 +33,15 @@ let package = Package(
                 resources: [.copy("Shaders/ReferenceNewtonPCGKernels.metal-source"), .copy("Shaders/ReferenceGeometryKernels.metal-source"), .copy("Shaders/ReferencePostSolveKernels.metal-source")]),
         .target(
             name: "BubblePhysicsMetal",
-            dependencies: ["BubblePhysics"],
+            dependencies: ["BubblePhysicsLegacy"],
             resources: [.copy("Shaders/BubblePhysicsKernels.metal"), .copy("Shaders/LBVHKernels.metal"), .copy("Shaders/ContactKernels.metal"), .copy("Shaders/ContourContactKernels.metal"), .copy("Shaders/RemeshKernels.metal"), .copy("Shaders/PolygonKernels.metal"), .copy("Shaders/InteractionKernels.metal"), .copy("Shaders/RenderKernels.metal"), .copy("Shaders/RadialBubbleKernels.metal"), .copy("Shaders/RadialContactKernels.metal"), .copy("Shaders/RadialWorldKernels.metal"), .copy("Shaders/RadialWorldPairKernels.metal")]
         ),
-        .testTarget(name: "BubblePhysicsTests", dependencies: ["BubblePhysics"]),
+        .testTarget(name: "BubblePhysicsPublicTests", dependencies: ["BubblePhysics"]),
+        .testTarget(name: "BubblePhysicsTests", dependencies: ["BubblePhysicsLegacy"]),
         .testTarget(name: "BubblePhysicsCoreTests", dependencies: ["BubblePhysicsCore"]),
         .testTarget(name: "BubblePhysicsReferenceTests", dependencies: ["BubblePhysicsReference"]),
         .testTarget(name: "BubblePhysicsReferenceMetalTests", dependencies: ["BubblePhysicsReferenceMetal"]),
         .testTarget(name: "BubblePhysicsNativeMetalTests", dependencies: ["BubblePhysicsNativeMetal"]),
-        .testTarget(name: "BubblePhysicsMetalTests", dependencies: ["BubblePhysics", "BubblePhysicsMetal"])
+        .testTarget(name: "BubblePhysicsMetalTests", dependencies: ["BubblePhysicsLegacy", "BubblePhysicsMetal"])
     ]
 )
