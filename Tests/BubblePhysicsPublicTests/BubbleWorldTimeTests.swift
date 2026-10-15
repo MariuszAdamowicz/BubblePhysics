@@ -26,6 +26,21 @@ final class BubbleWorldTimeTests: XCTestCase {
         XCTAssertEqual(splitFrame, frame)
     }
 
+    func testOneSecondBatchAndSixtyPresentationIntervalsCompleteSameSixtySteps() async throws {
+        let batched = try world(step: 1.0 / 60.0)
+        var batchedFrame = await batched.advance(by: 1)
+        for _ in 0..<8 { batchedFrame = await batched.advance(by: 0) }
+
+        let split = try world(step: 1.0 / 60.0)
+        var splitFrame = await split.advance(by: 0)
+        for _ in 0..<60 { splitFrame = await split.advance(by: 1.0 / 60.0) }
+
+        XCTAssertEqual(batchedFrame.stepIndex, 60)
+        XCTAssertEqual(splitFrame.stepIndex, 60)
+        XCTAssertEqual(batched.diagnostics.backlogSeconds, 0, accuracy: 1e-12)
+        XCTAssertEqual(split.diagnostics.backlogSeconds, 0, accuracy: 1e-12)
+    }
+
     func testTransactionsPublishOnlyAtFixedStepBoundary() async throws {
         let world = try world()
         let token = world.submit(WorldTransaction().setGlobalForce([0, -3]))

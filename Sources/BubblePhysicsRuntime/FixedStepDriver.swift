@@ -17,9 +17,9 @@ package struct FixedStepDriver {
     }
 
     package var canStep: Bool {
-        // Tolerancja wyłącznie błędu zaokrąglenia, np. 0.3 - 0.1 - 0.1 < 0.1.
-        // Przy bardzo małym kroku kilka ULP mogłoby stanowić znaczną część kroku.
-        let roundingTolerance = min(fixedTimeStep.ulp * 4, fixedTimeStep * 1e-12)
+        // Ułamek kroku pokrywa błąd wielu odejmowań, nie dopuszczając
+        // wcześniejszego kroku przy subnormalnym fixedTimeStep (iloczyn podpełnia się do zera).
+        let roundingTolerance = fixedTimeStep * 1e-12
         return backlogSeconds >= fixedTimeStep ||
             (backlogSeconds > 0 && fixedTimeStep - backlogSeconds <= roundingTolerance)
     }
