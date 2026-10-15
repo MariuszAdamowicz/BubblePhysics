@@ -17,9 +17,9 @@ package struct FixedStepDriver {
     }
 
     package var canStep: Bool {
-        // Ułamek kroku pokrywa błąd wielu odejmowań, nie dopuszczając
-        // wcześniejszego kroku przy subnormalnym fixedTimeStep (iloczyn podpełnia się do zera).
-        let roundingTolerance = fixedTimeStep * 1e-12
+        // Ułamek kroku pokrywa błąd wielu odejmowań. Dla kroku subnormalnego
+        // tolerancja względna mogłaby obejmować wiele ULP, więc jest zerowa.
+        let roundingTolerance = fixedTimeStep.isSubnormal ? 0 : fixedTimeStep * 1e-12
         return backlogSeconds >= fixedTimeStep ||
             (backlogSeconds > 0 && fixedTimeStep - backlogSeconds <= roundingTolerance)
     }

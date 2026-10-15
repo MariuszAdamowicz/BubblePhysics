@@ -59,4 +59,14 @@ final class FixedStepDriverTests: XCTestCase {
         XCTAssertTrue(driver.accumulate(Double.leastNonzeroMagnitude * 4))
         XCTAssertFalse(driver.canStep)
     }
+
+    func testSubnormalBacklogOneULPShortOfStepDoesNotAdvance() {
+        let step = 1e-309
+        XCTAssertTrue(step.isSubnormal)
+        var driver = FixedStepDriver(fixedTimeStep: step)
+        XCTAssertTrue(driver.accumulate(step.nextDown))
+        XCTAssertFalse(driver.canStep)
+        XCTAssertTrue(driver.accumulate(step - step.nextDown))
+        XCTAssertTrue(driver.canStep)
+    }
 }
