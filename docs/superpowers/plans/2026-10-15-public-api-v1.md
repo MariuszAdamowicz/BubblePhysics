@@ -258,6 +258,64 @@ git add Sources/BubblePhysicsRuntime Sources/BubblePhysicsNativeMetal Tests/Bubb
 git commit -m "feat: stage public objects in native runtime"
 ```
 
+### Task 5B: Add GPU-native rigid polygon bodies and bidirectional contacts
+
+**Why this gate was added:** Implementation of Task 5 exposed that the native solver represents polygons only as zero-mass segments. That is sufficient for static obstacles but cannot satisfy the approved contract for `dynamic`/`motorDriven` polygons. This gate closes that architectural gap before drives or fields can claim to affect such objects.
+
+**Files:**
+- Create: `Sources/BubblePhysicsNativeMetal/NativeRigidPolygonState.swift`
+- Modify: `Sources/BubblePhysicsNativeMetal/NativeMetalBufferLayout.swift`
+- Modify: `Sources/BubblePhysicsNativeMetal/NativeMetalSolver.swift`
+- Modify: `Sources/BubblePhysicsNativeMetal/Shaders/NativeGeometryKernels.metal-source`
+- Modify: `Sources/BubblePhysicsNativeMetal/Shaders/NativeXPBDKernels.metal-source`
+- Modify: `Sources/BubblePhysicsNativeMetal/Shaders/NativePostSolveKernels.metal-source`
+- Modify: `Sources/BubblePhysicsRuntime/NativeCompleteStepper.swift`
+- Test: `Tests/BubblePhysicsNativeMetalTests/NativeMetalRigidPolygonTests.swift`
+- Test: `Tests/BubblePhysicsRuntimeTests/RigidPolygonRuntimeTests.swift`
+
+**Interfaces:**
+- Consumes: the Task-5A public object mapping and `PolygonDescriptor` geometry.
+- Produces: opaque native rigid-body records with stable `ObjectID`, inverse mass, inverse moment, pose, linear/angular velocity and convex collision pieces; bidirectional bubble↔polygon contact response; runtime acceptance of `.dynamic` and `.motorDriven` polygon roles.
+
+- [ ] **Step 1: Write failing rigid-polygon tests**
+
+```swift
+func testDynamicPolygonReceivesTranslationAndRotationFromBubbleImpact()
+func testStaticPolygonDoesNotMoveUnderSameImpact()
+func testConcavePolygonUsesInternalConvexPiecesWithoutPublicDecomposition()
+func testPolygonContactPreservesFiniteStateAndDoesNotMoveThroughStaticWall()
+```
+
+- [ ] **Step 2: Run focused tests to verify failure**
+
+Run: `swift test --filter 'NativeMetalRigidPolygonTests|RigidPolygonRuntimeTests'`
+Expected: FAIL because dynamic/motor polygon roles are currently rejected.
+
+- [ ] **Step 3: Add private rigid-body and convex-piece GPU storage**
+
+Use `ObjectID` only for identity. Compute mass properties and decompose valid concave input internally before GPU upload. Keep body/vertex/manifold layout private; upload staged changes only and preserve existing static segment behavior.
+
+- [ ] **Step 4: Implement bidirectional narrow phase and Jacobi corrections**
+
+For bubble↔convex-polygon contacts, apply position and velocity/angular corrections weighted by inverse mass and inverse moment. Static bodies have zero inverse mass/moment. Produce no public manifold/cache type and retain the native solver's finite-state/containment guards.
+
+- [ ] **Step 5: Accept runtime roles only after native representation exists**
+
+Remove the Task-5A structured rejection for `.dynamic` and `.motorDriven` polygons only after their frame update and contacts are covered by the tests. Keep `pathDriven` and `playerDriven` for Task 6.
+
+- [ ] **Step 6: Verify and commit**
+
+Run: `swift test`
+Expected: PASS.
+
+Run on iPhone X: a Release stress/interaction smoke containing moving and rotating polygons, with zero fallback, containment and non-finite state.
+Expected: native quality envelope passes; record a device report before proceeding to Task 6.
+
+```bash
+git add Sources/BubblePhysicsNativeMetal Sources/BubblePhysicsRuntime Tests/BubblePhysicsNativeMetalTests Tests/BubblePhysicsRuntimeTests
+git commit -m "feat: add native rigid polygon bodies"
+```
+
 ### Task 6: Implement motion roles, drives, fields and physical transitions
 
 **Files:**
