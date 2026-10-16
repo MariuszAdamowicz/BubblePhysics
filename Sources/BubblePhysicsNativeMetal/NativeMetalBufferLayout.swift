@@ -207,6 +207,8 @@ public struct NativeMetalFrameProfile: Equatable, Sendable {
     /// Rekordy wejściowe zmienione przez grę; własna publikacja GPU nie jest uploadem.
     public var bubbleUploadCount = 0
     public var segmentUploadCount = 0
+    public var rigidBodyUploadCount = 0
+    public var rigidGeometryUploadCount = 0
     public var hostEncodingMilliseconds: Double = 0
     public var hostWaitingMilliseconds: Double = 0
     /// Łączny czas ukończonego command buffera; bez pozornych czasów osobnych dispatchy.

@@ -444,6 +444,145 @@ kernel void nativeFinalizeSolverContacts(device NativeBubble *bubbles [[buffer(0
     cache[index] = record;
 }
 
+// Wnętrze unii kawałków wypukłych. Krawędzie triangulacji nigdy nie stają się
+// powierzchnią kontaktową: punkt kontaktu pochodzi z zewnętrznego pierścienia.
+bool nativeRigidInside(float2 p, NativeRigidBody body, device float2 *vertices, device uint4 *triangles) {
+    float2 local = nativeRotate(p - body.pose.xy, -body.pose.z);
+    for (uint i = 0; i < body.ranges.w; ++i) {
+        uint4 t = triangles[body.ranges.z + i];
+        float2 a = vertices[body.ranges.x+t.x], b = vertices[body.ranges.x+t.y], c = vertices[body.ranges.x+t.z];
+        if (nativeCross(b-a,local-a)>=0 && nativeCross(c-b,local-b)>=0 && nativeCross(a-c,local-c)>=0) return true;
+    }
+    return false;
+}
+
+bool nativeTriangleContact(thread float2 *a, thread float2 *b, thread float2 &normal,
+                           thread float &depth, thread float2 &point) {
+    depth = INFINITY;
+    for (uint shape=0; shape<2; ++shape) for (uint edge=0; edge<3; ++edge) {
+        float2 delta = shape == 0 ? a[(edge+1)%3]-a[edge] : b[(edge+1)%3]-b[edge];
+        float magnitude = length(delta); if (magnitude <= FLT_MIN) return false;
+        float2 axis = float2(-delta.y,delta.x)/magnitude;
+        float amin=INFINITY,amax=-INFINITY,bmin=INFINITY,bmax=-INFINITY;
+        for(uint k=0;k<3;++k) { float pa=dot(a[k],axis),pb=dot(b[k],axis); amin=min(amin,pa);amax=max(amax,pa);bmin=min(bmin,pb);bmax=max(bmax,pb); }
+        if (amax<bmin || bmax<amin) return false;
+        float plus=amax-bmin,minus=bmax-amin;
+        float overlap=min(plus,minus);
+        if(overlap<depth) { depth=overlap;normal=plus<minus ? axis : -axis; }
+    }
+    // Dwa punkty podparcia; uśrednienie całej płaskiej ściany usuwa arbitralny moment.
+    float maxA=-INFINITY,minB=INFINITY;float2 pa=0,pb=0;uint na=0,nb=0;
+    for(uint k=0;k<3;++k) { maxA=max(maxA,dot(a[k],normal));minB=min(minB,dot(b[k],normal)); }
+    for(uint k=0;k<3;++k) {
+        if(dot(a[k],normal)>=maxA-1e-5f){pa+=a[k];++na;}
+        if(dot(b[k],normal)<=minB+1e-5f){pb+=b[k];++nb;}
+    }
+    point=(pa/float(na)+pb/float(nb))*0.5f;
+    return true;
+}
+
+kernel void nativeRigidContacts(device NativeRigidBody *bodies [[buffer(0)]],
+    device float2 *vertices [[buffer(1)]], device uint4 *triangles [[buffer(2)]],
+    device NativeBubble *bubbles [[buffer(3)]], device float4 *positions [[buffer(4)]],
+    constant uint4 &counts [[buffer(5)]], device NativeRigidCorrection *corrections [[buffer(6)]],
+    uint index [[thread_position_in_grid]]) {
+    if(index>=counts.z)return;
+    NativeRigidCorrection result={float4(0),float4(0),float4(0),float4(0)};
+    uint bubblePairs=counts.x*counts.y;
+    float2 n=0,point=0,va=0,vb=0,ra=0,rb=0;
+    float wa=0,wb=0,ia=0,ib=0,depth=0,spinA=0,spinB=0;
+    if(index<bubblePairs) {
+        uint ai=index/counts.x,bi=index%counts.x;
+        NativeBubble a=bubbles[ai];NativeRigidBody b=bodies[bi];
+        // Statyczne polygony pozostają w istniejącym solverze segmentów.
+        if(b.flags.x){corrections[index]=result;return;}
+        float2 center=positions[ai].xy;
+        float2 bubbleLow=min(center,a.position.zw)-a.physical.z,bubbleHigh=max(center,a.position.zw)+a.physical.z;
+        float2 bodyLow=min(b.pose.xy,b.previous.xy)-b.physical.z,bodyHigh=max(b.pose.xy,b.previous.xy)+b.physical.z;
+        if(any(bubbleHigh<bodyLow)||any(bodyHigh<bubbleLow)){corrections[index]=result;return;}
+        float best=INFINITY;float2 outward=0;
+        for(uint i=0;i<b.ranges.y;++i){
+            float2 p=nativeRigidVertex(b,vertices,i),q=nativeRigidVertex(b,vertices,(i+1)%b.ranges.y);
+            float2 candidate=nativeClosestPoint(center,float4(p,q));float d=distance(center,candidate);
+            if(d<best){best=d;point=candidate;float2 edge=q-p;outward=normalize(float2(edge.y,-edge.x));}
+        }
+        bool inside=nativeRigidInside(center,b,vertices,triangles);
+        n=inside ? -outward : (best>1e-7f ? (point-center)/best : -outward);
+        depth=a.physical.z+(inside ? best : -best);
+        NativeRigidBody old=b;old.pose.xy=b.previous.xy;old.pose.z=b.pose.w;
+        if(!nativeRigidInside(a.position.zw,old,vertices,triangles)) {
+            float sweepDistance=INFINITY;
+            for(uint i=0;i<b.ranges.y;++i){
+                NativeSegment edge;
+                edge.previous=float4(nativeRigidVertex(old,vertices,i),nativeRigidVertex(old,vertices,(i+1)%b.ranges.y));
+                edge.current=float4(nativeRigidVertex(b,vertices,i),nativeRigidVertex(b,vertices,(i+1)%b.ranges.y));
+                float2 previousEdge=edge.previous.zw-edge.previous.xy;
+                float2 oldOut=normalize(float2(previousEdge.y,-previousEdge.x));
+                if(dot(a.position.zw-edge.previous.xy,oldOut)<0)continue;
+                if(!nativeCenterCrossing(a.position.zw,center,edge))continue;
+                float d=distance(a.position.zw,nativeClosestPoint(a.position.zw,edge.previous));
+                if(d>=sweepDistance)continue;
+                sweepDistance=d;float2 direction=edge.current.zw-edge.current.xy;
+                float2 out=normalize(float2(direction.y,-direction.x));
+                point=nativeClosestPoint(center,edge.current);n=-out;
+                depth=a.physical.z-dot(center-point,out);
+            }
+        }
+        wa=a.physical.y;wb=b.physical.x;ib=b.physical.y;rb=point-b.pose.xy;
+        va=a.motion.xy;vb=b.motion.xy;spinB=b.motion.z;
+    } else {
+        uint slot=index-bubblePairs,ai=slot/counts.x,bi=slot%counts.x;
+        NativeRigidBody a=bodies[ai],b=bodies[bi];
+        if(ai>=bi || (a.flags.x&&b.flags.x) || distance(a.pose.xy,b.pose.xy)>a.physical.z+b.physical.z){corrections[index]=result;return;}
+        bool found=false;
+        for(uint i=0;i<a.ranges.w;++i)for(uint j=0;j<b.ranges.w;++j){
+            uint4 ta=triangles[a.ranges.z+i],tb=triangles[b.ranges.z+j];
+            float2 av[3]={nativeRigidVertex(a,vertices,ta.x),nativeRigidVertex(a,vertices,ta.y),nativeRigidVertex(a,vertices,ta.z)};
+            float2 bv[3]={nativeRigidVertex(b,vertices,tb.x),nativeRigidVertex(b,vertices,tb.y),nativeRigidVertex(b,vertices,tb.z)};
+            float2 normal,p;float d;
+            if(nativeTriangleContact(av,bv,normal,d,p) && (!found || d>depth)){found=true;depth=d;n=normal;point=p;}
+        }
+        if(!found){corrections[index]=result;return;}
+        wa=a.physical.x;wb=b.physical.x;ia=a.physical.y;ib=b.physical.y;
+        ra=point-a.pose.xy;rb=point-b.pose.xy;va=a.motion.xy;vb=b.motion.xy;spinA=a.motion.z;spinB=b.motion.z;
+    }
+    float ca=nativeCross(ra,n),cb=nativeCross(rb,n),denom=wa+wb+ia*ca*ca+ib*cb*cb;
+    if(depth < -0.001f || denom<=FLT_MIN){corrections[index]=result;return;}
+    float lambda=max(0.0f,depth)/denom*0.5f;
+    result.first=float4(-n*wa*lambda,-ca*ia*lambda,0);
+    result.second=float4(n*wb*lambda,cb*ib*lambda,0);
+    float closing=dot(vb-va,n)+spinB*cb-spinA*ca;
+    float impulse=max(0.0f,-closing)/denom*0.5f;
+    result.velocityFirst=float4(-n*wa*impulse,-ca*ia*impulse,0);
+    result.velocitySecond=float4(n*wb*impulse,cb*ib*impulse,0);
+    corrections[index]=result;
+}
+
+kernel void nativeRigidApplyBubbles(device NativeBubble *bubbles [[buffer(0)]],
+    device float4 *positions [[buffer(1)]], constant uint4 &counts [[buffer(2)]],
+    device NativeRigidCorrection *corrections [[buffer(3)]], device NativeSolverControl &solver [[buffer(4)]],
+    uint index [[thread_position_in_grid]]) {
+    if(index>=counts.y)return;
+    float2 delta=0,velocity=0;
+    for(uint j=0;j<counts.x;++j){NativeRigidCorrection c=corrections[index*counts.x+j];delta+=c.first.xy;velocity+=c.velocityFirst.xy;}
+    positions[index].xy+=delta;bubbles[index].position.xy+=delta;bubbles[index].motion.xy+=velocity;
+    if(index==0)solver.counts.x=1; // kontakty brył mogą reaktywować kontakty baniek
+}
+
+kernel void nativeRigidApplyBodies(device NativeRigidBody *bodies [[buffer(0)]],
+    constant uint4 &counts [[buffer(1)]], device NativeRigidCorrection *corrections [[buffer(2)]],
+    uint index [[thread_position_in_grid]]) {
+    if(index>=counts.x)return;
+    float3 delta=0,velocity=0;
+    for(uint j=0;j<counts.y;++j){NativeRigidCorrection c=corrections[j*counts.x+index];delta+=c.second.xyz;velocity+=c.velocitySecond.xyz;}
+    uint start=counts.x*counts.y;
+    for(uint j=0;j<counts.x;++j){
+        NativeRigidCorrection c=corrections[start+min(j,index)*counts.x+max(j,index)];
+        delta+=j<index?c.second.xyz:c.first.xyz;velocity+=j<index?c.velocitySecond.xyz:c.velocityFirst.xyz;
+    }
+    bodies[index].pose.xyz+=delta;bodies[index].motion.xyz+=velocity;
+}
+
 kernel void nativeUpdateVelocities(device NativeBubble *bubbles [[buffer(0)]],
     device float4 *positions [[buffer(1)]], constant NativeControl &control [[buffer(2)]],
     uint index [[thread_position_in_grid]]) {

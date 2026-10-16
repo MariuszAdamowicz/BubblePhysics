@@ -1,6 +1,7 @@
 import Foundation
 import Metal
 import BubblePhysicsReference
+import BubblePhysicsModel
 
 enum NativeMetalSolverError: Error {
     case resourceUnavailable, allocationFailed, commandSetupFailed, commandFailed(String), invalidSnapshot, capacityOverflow
@@ -219,6 +220,9 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
     private var inFlight = false
     private var lastSnapshot: NativeMetalSnapshot?
     private var frameNumber: UInt32 = 0
+    private let rigidState: NativeRigidPolygonState
+    private(set) var publishedPolygons: [ObjectID: NativePublicObject] = [:]
+    private(set) var removedPolygons: Set<ObjectID> = []
     private(set) var cachedContacts: [NativeContactCacheRecord] = []
     private(set) var candidateKeys: [NativeContactKey] = []
     private(set) var persistentState: NativeMetalPersistentState?
@@ -229,6 +233,7 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
          configuration: NativeMetalConfiguration = .default, candidateCapacity: Int? = nil,
          collectDispatchStatistics: Bool = false, collectStageDiagnostics: Bool = false) throws {
         self.device = device
+        self.rigidState = NativeRigidPolygonState(device: device)
         self.configuration = configuration.sanitized
         self.candidateCapacity = candidateCapacity
         self.collectDispatchStatistics = collectDispatchStatistics
@@ -263,7 +268,8 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
                      "nativeResolveCCD", "nativeApplyCenterGuards", "nativeSeparateContainedBubbles",
                      "nativeReapplyCenterGuards", "nativeValidateBubbleContainment", "nativeInvalidateSafetyCache", "nativeCheckFinite",
                      "nativeAccumulateContactPressure", "nativeGenerateContours", "nativePrepareRenderData",
-                     "nativeApplyPublicRegion", "nativeInvalidateRegionCache"] {
+                     "nativeApplyPublicRegion", "nativeInvalidateRegionCache",
+                     "nativeRigidPredict", "nativeRigidContacts", "nativeRigidApplyBubbles", "nativeRigidApplyBodies", "nativeRigidGuardWalls", "nativeRigidFinish"] {
             guard let function = library.makeFunction(name: name) else { throw NativeMetalSolverError.resourceUnavailable }
             stages[name] = try device.makeComputePipelineState(function: function)
         }
@@ -292,6 +298,8 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
         let encodingStart = DispatchTime.now().uptimeNanoseconds
         let count = snapshot.sourceBubbles.count
         let segmentCount = snapshot.sourceSegments.count
+        try rigidState.prepare(snapshot.publicSettings?.rigidPolygons ?? [], bubbleCount: count)
+        let hasRigidBodies = snapshot.publicSettings?.rigidPolygons.contains { $0.object.motionRole != .static } == true
         guard frameNumber < UInt32.max else { throw NativeMetalSolverError.invalidSnapshot }
         let nextFrame = frameNumber + 1
         let contourConfiguration = snapshot.configuration.sanitized
@@ -423,6 +431,7 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
             blit.copy(from: state.segmentUpdates, sourceOffset: change.index * segmentStride,
                       to: state.workingSegments, destinationOffset: change.index * segmentStride, size: segmentStride)
         }
+        rigidState.encodeInputs(blit)
         blit.endEncoding()
         guard let encoder = command.makeComputeCommandEncoder() else { throw NativeMetalSolverError.commandSetupFailed }
         encoder.label = "native.predict"
@@ -519,6 +528,10 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
             encoder.setBytes(&parameters, length: MemoryLayout<SIMD2<UInt32>>.stride, index: 3)
             encoder.dispatchThreads(.init(width: 1, height: 1, depth: 1), threadsPerThreadgroup: .init(width: 1, height: 1, depth: 1))
         }
+        if hasRigidBodies {
+            dispatch("nativeRigidPredict", buffers: [rigidState.bodies, rigidState.vertices, rigidState.control,
+                state.control, state.workingSegments, state.safetyControl], threads: rigidState.count)
+        }
         dispatchReduction("nativePrepareGrid", buffers: [state.workingBubbles, state.control, state.contactControl])
         dispatch("nativeBuildGrid", buffers: [state.workingBubbles, state.control, state.contactControl, state.grid], threads: state.bubbleCapacity)
         var size = 2
@@ -589,6 +602,14 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
                 state.contactCorrections, state.scratch], threads: count)
             swap(&inputPositions, &outputPositions)
             measureResidual()
+            if hasRigidBodies {
+                dispatch("nativeRigidContacts", buffers: [rigidState.bodies, rigidState.vertices, rigidState.triangles,
+                    state.workingBubbles, inputPositions, rigidState.control, rigidState.contacts], threads: rigidState.contactCount)
+                dispatch("nativeRigidApplyBodies", buffers: [rigidState.bodies, rigidState.control, rigidState.contacts], threads: rigidState.count)
+                dispatch("nativeRigidGuardWalls", buffers: [rigidState.bodies, rigidState.vertices, rigidState.triangles, rigidState.control], threads: rigidState.count)
+                dispatch("nativeRigidApplyBubbles", buffers: [state.workingBubbles, inputPositions, rigidState.control,
+                    rigidState.contacts, state.solverControl], threads: count)
+            }
         }
         if let diagnosticPostSolver = state.diagnosticPostSolverPositions {
             dispatch("nativeCapturePositions", buffers: [inputPositions, diagnosticPostSolver, state.control], threads: count)
@@ -657,6 +678,10 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
             dispatchContacts("nativeInvalidateRegionCache", buffers: [state.workingBubbles, state.workingCache,
                 state.control, state.contactControl], argument: 3)
         }
+        if hasRigidBodies {
+            dispatch("nativeRigidFinish", buffers: [rigidState.bodies, rigidState.vertices, rigidState.control,
+                state.control, state.safetyControl], threads: rigidState.count)
+        }
         encoder.endEncoding()
         let encodingEnd = DispatchTime.now().uptimeNanoseconds
         // Jedyny await/commit: wszystkie etapy zostały już zakodowane.
@@ -670,6 +695,8 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
         profile.encoderCount = 2
         profile.bubbleUploadCount = snapshot.bubbleChanges.count
         profile.segmentUploadCount = snapshot.segmentChanges.count
+        profile.rigidBodyUploadCount = rigidState.bodyUploadCount
+        profile.rigidGeometryUploadCount = rigidState.geometryUploadCount
         profile.hostEncodingMilliseconds = milliseconds(encodingEnd - encodingStart)
         profile.hostWaitingMilliseconds = milliseconds(waitingEnd - encodingEnd)
         profile.stageGPUMilliseconds = ["frame": timing.gpuMilliseconds]
@@ -789,7 +816,11 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
                 cacheInvalidationCount: Int(safetyResult.counts.z)),
             profile: profile, contours: contours, renderData: renderData, isComplete: true)
         frame.regionRemovals = Set(bubbles.indices.compactMap { records[$0].publicFlags.w == 1 ? bubbles[$0].id : nil })
+        let rigidResult = try rigidState.completed()
         // Synchroniczna publikacja dopiero po pomyślnym wykonaniu i readbacku.
+        rigidState.publish(rigidResult.objects)
+        publishedPolygons = rigidResult.objects
+        removedPolygons = rigidResult.removed
         state.publish()
         state.publishedCacheCount = completedCache.count
         cachedContacts = completedCache

@@ -9,7 +9,7 @@ package final class NativeCompleteStepper: CompleteStepper {
 
     package func validate(_ change: StagedWorldChange) throws {
         func role(_ id: ObjectID, _ role: MotionRole, polygon: Bool) throws {
-            guard role == .static || (!polygon && role == .dynamic) else {
+            guard role == .static || role == .dynamic || (polygon && role == .motorDriven) else {
                 throw TransactionRejectionReason.unsupportedMotionRole(id, role)
             }
         }

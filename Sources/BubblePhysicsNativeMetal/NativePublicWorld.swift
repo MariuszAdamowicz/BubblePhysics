@@ -4,7 +4,7 @@ import BubblePhysicsModel
 import BubblePhysicsReference
 
 /// Niepubliczna granica modelu i GPU. ID pozostaje identyfikatorem gry, nigdy indeksem bufora.
-package struct NativePublicObject: Sendable {
+package struct NativePublicObject: Equatable, Sendable {
     package let descriptor: WorldObject
     package var position: WorldPoint
     package var previousPosition: WorldPoint
@@ -45,6 +45,7 @@ struct NativePublicProperties: Equatable, Sendable {
 struct NativePublicSettings: Equatable, Sendable {
     var properties: [ReferenceBubbleID: NativePublicProperties]
     var region: WorldRectangle
+    var rigidPolygons: [NativeRigidPolygonInput] = []
 }
 
 /// Adapter używa trwałego solvera; pełna publikacja następuje dopiero po powodzeniu GPU.
@@ -67,6 +68,7 @@ package final class NativePublicWorld {
         var candidateNextSegmentID = nextSegmentID
         var result = Dictionary(uniqueKeysWithValues: objects.map { ($0.descriptor.id, $0) })
         var presentation: [ObjectID: [ParameterID: Float]] = [:]
+        var rigidPolygons: [NativeRigidPolygonInput] = []
         for object in objects.sorted(by: { $0.descriptor.id.rawValue < $1.descriptor.id.rawValue }) {
             let styleID: RenderStyleID
             let local: PresentationParameters
@@ -88,7 +90,13 @@ package final class NativePublicWorld {
                     resources: SIMD2(b.physicsMaterialID.rawValue, b.renderStyleID.rawValue))
                 styleID = b.renderStyleID; local = b.presentation
             case .polygon(let p):
-                guard object.motionRole == .static else { throw NativeMetalSolverError.invalidSnapshot }
+                guard [.static, .dynamic, .motorDriven].contains(object.motionRole),
+                      let material = materials[p.physicsMaterialID] else { throw NativeMetalSolverError.invalidSnapshot }
+                rigidPolygons.append(.init(object: object, damping: material.damping))
+                styleID = p.renderStyleID; local = p.presentation
+                // Statyczne krawędzie zachowują dotychczasowy cache i guardy baniek.
+                // Bryły dynamiczne trafiają wyłącznie do obustronnego solvera brył.
+                if object.motionRole != .static { break }
                 let entry: (geometry: PolygonGeometry, position: WorldPoint, rotation: Float, segments: [ReferenceSegment])
                 if let cached = polygons[p.id], cached.geometry == p.geometry,
                    cached.position == object.position, cached.rotation == object.rotation { entry = cached }
@@ -107,7 +115,6 @@ package final class NativePublicWorld {
                 }
                 candidatePolygons[p.id] = entry
                 for segment in entry.segments { world.addSegment(segment) }
-                styleID = p.renderStyleID; local = p.presentation
             case .sensor(let s): styleID = s.renderStyleID; local = s.presentation
             case .forceField(let f): styleID = f.renderStyleID; local = f.presentation
             }
@@ -115,7 +122,9 @@ package final class NativePublicWorld {
             presentation[object.descriptor.id] = style.resolvedChannels(overrides: local)
         }
         let frame = try await solver.executePublicFrame(world: world,
-            settings: NativePublicSettings(properties: properties, region: region))
+            settings: NativePublicSettings(properties: properties, region: region, rigidPolygons: rigidPolygons))
+        for (id, object) in solver.publishedPolygons { result[id] = object }
+        for id in solver.removedPolygons { result.removeValue(forKey: id); presentation.removeValue(forKey: id) }
         for bubble in frame.bubbles {
             let id = ObjectID(rawValue: UInt64(bitPattern: Int64(bubble.id.rawValue)))
             if frame.regionRemovals.contains(bubble.id) { result.removeValue(forKey: id); presentation.removeValue(forKey: id); continue }

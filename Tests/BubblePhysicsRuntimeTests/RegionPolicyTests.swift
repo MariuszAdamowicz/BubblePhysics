@@ -43,8 +43,8 @@ final class RegionPolicyTests: XCTestCase {
         XCTAssertEqual(next.velocity, .zero)
     }
 
-    func testUnsupportedDynamicPolygonsAreRejectedAtomicallyInsteadOfStallingWorld() async throws {
-        for role in [MotionRole.dynamic, .motorDriven] {
+    func testUnsupportedDrivenPolygonsAreRejectedAtomicallyInsteadOfStallingWorld() async throws {
+        for role in [MotionRole.pathDriven, .playerDriven] {
             let world = try BubbleWorld(configuration: initial(policy: .remove).configuration)
             let token = world.submit(try WorldTransaction()
                 .updateRenderStyle(.init(rawValue: 1), style: RenderStyle())

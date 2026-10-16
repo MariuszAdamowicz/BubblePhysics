@@ -334,6 +334,114 @@ kernel void nativeCheckFinite(device NativeBubble *bubbles [[buffer(0)]],
     }
 }
 
+kernel void nativeRigidPredict(device NativeRigidBody *bodies [[buffer(0)]],
+    device float2 *vertices [[buffer(1)]], constant uint4 &counts [[buffer(2)]],
+    constant NativeControl &control [[buffer(3)]], device NativeSegment *segments [[buffer(4)]],
+    device atomic_uint *safety [[buffer(5)]], uint index [[thread_position_in_grid]]) {
+    if(index>=counts.x)return;
+    NativeRigidBody b=bodies[index];b.previous.xy=b.pose.xy;b.pose.w=b.pose.z;b.flags.z=0;
+    if(b.flags.x){b.motion.xyz=0;bodies[index]=b;return;}
+    float dt=control.physics.x;b.motion.xyz*=exp(-b.motion.w*dt);
+    float3 start=b.pose.xyz;b.pose.xyz+=b.motion.xyz*dt;
+    if(!all(isfinite(b.pose)) || !all(isfinite(b.motion))) { nativeSafetyFailure(safety,1);bodies[index]=b;return; }
+    // Konserwatywny sweep wierzchołków zatrzymuje bryłę przed cienką ścianą.
+    // Próbkowanie obrotu obejmuje łuk; przekroczenie budżetu odrzuca klatkę.
+    uint steps=max(1u,uint(ceil(abs(b.pose.z-start.z)/0.05f)));
+    if(steps>128){nativeSafetyFailure(safety,2);bodies[index]=b;return;}
+    bool crossed=false;
+    for(uint sample=0;sample<steps && !crossed;++sample){
+        float3 p=mix(start,b.pose.xyz,float(sample)/float(steps));
+        float3 q=mix(start,b.pose.xyz,float(sample+1)/float(steps));
+        for(uint j=0;j<control.counts.y && !crossed;++j){
+            NativeSegment wall=segments[j];
+            if(ulong(wall.identity.y)==b.identity.x && wall.flags.y)continue;
+            for(uint k=0;k<b.ranges.y;++k){
+                float2 v=vertices[b.ranges.x+k];
+                if(nativeCenterCrossing(p.xy+nativeRotate(v,p.z),q.xy+nativeRotate(v,q.z),wall)){crossed=true;break;}
+                // Koniec ściany również nie może przejść przez krawędź bryły.
+                float2 next=vertices[b.ranges.x+(k+1)%b.ranges.y];
+                NativeSegment edge=wall;
+                edge.previous=float4(p.xy+nativeRotate(v,p.z),p.xy+nativeRotate(next,p.z));
+                edge.current=float4(q.xy+nativeRotate(v,q.z),q.xy+nativeRotate(next,q.z));
+                if(nativeCenterCrossing(wall.current.xy,wall.current.xy,edge) || nativeCenterCrossing(wall.current.zw,wall.current.zw,edge)){crossed=true;break;}
+            }
+        }
+    }
+    if(crossed){b.pose.xyz=start;b.motion.xyz=0;}
+    bodies[index]=b;
+}
+
+// Projekcja bryły po korektach kontaktowych. Statyczne rekordy nigdy nie są
+// zapisywane; każdy work-item ma wyłączną własność swojej dynamicznej bryły.
+kernel void nativeRigidGuardWalls(device NativeRigidBody *bodies [[buffer(0)]],
+    device float2 *vertices [[buffer(1)]], device uint4 *triangles [[buffer(2)]],
+    constant uint4 &counts [[buffer(3)]], uint index [[thread_position_in_grid]]) {
+    if(index>=counts.x || bodies[index].flags.x)return;
+    NativeRigidBody b=bodies[index];
+    for(uint j=0;j<counts.x;++j){
+        if(!bodies[j].flags.x)continue;
+        NativeRigidBody wall=bodies[j];
+        for(uint k=0;k<b.ranges.y;++k){
+            float2 p=nativeRigidVertex(b,vertices,k);
+            float2 start=b.previous.xy+nativeRotate(vertices[b.ranges.x+k],b.pose.w);
+            bool inside=nativeRigidInside(p,wall,vertices,triangles);
+            bool startedInside=nativeRigidInside(start,wall,vertices,triangles);
+            if(startedInside)for(uint e=0;e<wall.ranges.y;++e){
+                float4 edge=float4(nativeRigidVertex(wall,vertices,e),nativeRigidVertex(wall,vertices,(e+1)%wall.ranges.y));
+                if(distance(start,nativeClosestPoint(start,edge))<1e-5f){startedInside=false;break;}
+            }
+            float nearest=INFINITY;float2 normal=0;float depth=0;
+            for(uint e=0;e<wall.ranges.y;++e){
+                NativeSegment edge;edge.current=float4(nativeRigidVertex(wall,vertices,e),nativeRigidVertex(wall,vertices,(e+1)%wall.ranges.y));edge.previous=edge.current;
+                float2 direction=edge.current.zw-edge.current.xy,out=normalize(float2(direction.y,-direction.x));
+                float signedStart=dot(start-edge.current.xy,out);
+                bool onBoundary=distance(start,nativeClosestPoint(start,edge.current))<1e-5f;
+                bool crossing=signedStart>=-1e-5f && (nativeCenterCrossing(start,p,edge)
+                    || (onBoundary && dot(p-edge.current.xy,out)<0));
+                if(!inside&&!crossing)continue;
+                if(inside && !startedInside && signedStart < -1e-5f)continue;
+                float2 closest=nativeClosestPoint(p,edge.current);
+                float d=(crossing||!startedInside)?distance(start,nativeClosestPoint(start,edge.current)):distance(p,closest);
+                if(d<nearest){nearest=d;normal=out;depth=max(0.0f,-dot(p-closest,out));}
+            }
+            if(isfinite(nearest) && depth>0){
+                b.pose.xy+=normal*(depth+1e-5f);
+                float2 r=p-b.pose.xy;float lever=nativeCross(r,normal);
+                float speed=dot(b.motion.xy,normal)+b.motion.z*lever;
+                float denom=b.physical.x+b.physical.y*lever*lever;
+                float impulse=max(0.0f,-speed)/max(denom,FLT_MIN);
+                b.motion.xy+=normal*b.physical.x*impulse;b.motion.z+=lever*b.physical.y*impulse;
+            }
+        }
+    }
+    bodies[index]=b;
+}
+
+kernel void nativeRigidFinish(device NativeRigidBody *bodies [[buffer(0)]],
+    device float2 *vertices [[buffer(1)]], constant uint4 &counts [[buffer(2)]],
+    constant NativeControl &control [[buffer(3)]], device atomic_uint *safety [[buffer(4)]],
+    uint index [[thread_position_in_grid]]) {
+    if(index>=counts.x)return;
+    NativeRigidBody b=bodies[index];
+    if(!all(isfinite(b.pose))||!all(isfinite(b.previous))||!all(isfinite(b.motion))){nativeSafetyFailure(safety,1);return;}
+    if(b.flags.x)return;
+    float2 low=float2(INFINITY),high=float2(-INFINITY);
+    for(uint i=0;i<b.ranges.y;++i){float2 v=nativeRigidVertex(b,vertices,i);low=min(low,v);high=max(high,v);}
+    float2 shift=0,size=control.region.zw-control.region.xy;
+    bool outside=high.x<control.region.x||high.y<control.region.y||low.x>control.region.z||low.y>control.region.w;
+    if(outside){
+        if(!b.flags.y)b.flags.z=1;
+        else {
+            if(high.x<control.region.x)shift.x=ceil((control.region.x-high.x)/size.x)*size.x;
+            if(low.x>control.region.z)shift.x=-ceil((low.x-control.region.z)/size.x)*size.x;
+            if(high.y<control.region.y)shift.y=ceil((control.region.y-high.y)/size.y)*size.y;
+            if(low.y>control.region.w)shift.y=-ceil((low.y-control.region.w)/size.y)*size.y;
+            b.pose.xy+=shift;b.previous.xy+=shift;b.flags.z=2;
+        }
+    }
+    bodies[index]=b;
+}
+
 struct NativeContourControl { uint4 counts; float4 shape; };
 
 float nativeContourRayLimit(float2 center, float2 direction, float2 a, float2 b,

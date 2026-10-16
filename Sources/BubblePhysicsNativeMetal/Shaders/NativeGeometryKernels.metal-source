@@ -23,6 +23,18 @@ struct NativeGridEntry { long2 cell; uint4 metadata; };
 struct NativeContactControl { uint4 limits; uint4 counts; uint4 cache; float4 thresholds; float4 cellWidth; };
 struct NativeControl { uint4 counts; float4 physics; float4 contactDamping; float4 region; };
 struct NativeRenderPacket { long2 identity; float4 geometry; float4 deformation; };
+struct NativeRigidBody {
+    ulong2 identity; float4 pose; float4 previous; float4 motion; float4 physical;
+    uint4 ranges; uint4 flags;
+};
+struct NativeRigidCorrection { float4 first; float4 second; float4 velocityFirst; float4 velocitySecond; };
+
+float2 nativeRotate(float2 p, float angle) {
+    float c = cos(angle), s = sin(angle); return float2(p.x*c-p.y*s, p.x*s+p.y*c);
+}
+float2 nativeRigidVertex(NativeRigidBody body, device float2 *vertices, uint i) {
+    return body.pose.xy + nativeRotate(vertices[body.ranges.x + i], body.pose.z);
+}
 
 void nativeCountWork(device atomic_uint *statistics, uint slot) {
     if (atomic_load_explicit(statistics + 4, memory_order_relaxed))
