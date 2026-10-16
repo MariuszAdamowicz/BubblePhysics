@@ -262,7 +262,8 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
                      "nativeUpdateVelocities", "nativeDampContactNormalMotion", "nativeFinalizeSolverContacts", "nativeFindFastCandidates",
                      "nativeResolveCCD", "nativeApplyCenterGuards", "nativeSeparateContainedBubbles",
                      "nativeReapplyCenterGuards", "nativeValidateBubbleContainment", "nativeInvalidateSafetyCache", "nativeCheckFinite",
-                     "nativeAccumulateContactPressure", "nativeGenerateContours", "nativePrepareRenderData"] {
+                     "nativeAccumulateContactPressure", "nativeGenerateContours", "nativePrepareRenderData",
+                     "nativeApplyPublicRegion", "nativeInvalidateRegionCache"] {
             guard let function = library.makeFunction(name: name) else { throw NativeMetalSolverError.resourceUnavailable }
             stages[name] = try device.makeComputePipelineState(function: function)
         }
@@ -271,6 +272,10 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
 
     func executeFrame(world: ReferenceWorld, scenarioStep: Int) async throws -> NativeMetalWorldFrame {
         try await executeFrame(snapshot: .init(world: world, previous: lastSnapshot), scenarioStep: scenarioStep)
+    }
+
+    func executePublicFrame(world: ReferenceWorld, settings: NativePublicSettings) async throws -> NativeMetalWorldFrame {
+        try await executeFrame(snapshot: .init(world: world, previous: lastSnapshot, publicSettings: settings), scenarioStep: 0)
     }
 
     // Runner potwierdza, że świat gry otrzymał wynik. Bez potwierdzenia zachowujemy
@@ -337,10 +342,13 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
         for change in snapshot.segmentChanges {
             state.segmentUpdates.contents().advanced(by: change.index * segmentStride).storeBytes(of: change.value, as: NativeMetalSegment.self)
         }
-        let parameters = NativeMetalControl(counts: SIMD4(UInt32(count), UInt32(segmentCount), UInt32(truncatingIfNeeded: scenarioStep), 0),
+        var parameters = NativeMetalControl(counts: SIMD4(UInt32(count), UInt32(segmentCount), UInt32(truncatingIfNeeded: scenarioStep), 0),
             physics: SIMD4(snapshot.configuration.timeStep, snapshot.configuration.linearDamping,
                            snapshot.configuration.angularDamping, snapshot.configuration.contactStiffness),
             contactDamping: SIMD4(snapshot.configuration.contactDamping, 0, 0, 0))
+        if let region = snapshot.publicSettings?.region {
+            parameters.region = SIMD4(region.min.x, region.min.y, region.max.x, region.max.y)
+        }
         state.control.contents().storeBytes(of: parameters, as: NativeMetalControl.self)
         state.contourControl.contents().storeBytes(of: NativeMetalContourControl(
             counts: SIMD4(UInt32(state.contourStride), UInt32(lastSnapshot?.sourceBubbles.count ?? 0), 0, 0),
@@ -406,6 +414,10 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
         for change in snapshot.bubbleChanges {
             blit.copy(from: state.bubbleUpdates, sourceOffset: change.index * bubbleStride,
                       to: state.workingBubbles, destinationOffset: change.index * bubbleStride, size: bubbleStride)
+        }
+        for remap in snapshot.segmentRemaps {
+            blit.copy(from: state.segments, sourceOffset: remap.sourceIndex * segmentStride,
+                      to: state.workingSegments, destinationOffset: remap.destinationIndex * segmentStride, size: segmentStride)
         }
         for change in snapshot.segmentChanges {
             blit.copy(from: state.segmentUpdates, sourceOffset: change.index * segmentStride,
@@ -639,6 +651,12 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
         dispatch("nativePrepareRenderData", buffers: [state.workingBubbles, state.workingDeformation,
             state.workingContourCounts, state.contourPoints, state.renderPackets, state.control,
             state.contourControl, state.safetyControl], threads: count)
+        if snapshot.publicSettings != nil {
+            dispatch("nativeApplyPublicRegion", buffers: [state.workingBubbles, state.contourPoints,
+                state.renderPackets, state.workingContourCounts, state.control, state.contourControl, state.safetyControl], threads: count)
+            dispatchContacts("nativeInvalidateRegionCache", buffers: [state.workingBubbles, state.workingCache,
+                state.control, state.contactControl], argument: 3)
+        }
         encoder.endEncoding()
         let encodingEnd = DispatchTime.now().uptimeNanoseconds
         // Jedyny await/commit: wszystkie etapy zostały już zakodowane.
@@ -651,6 +669,7 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
         profile.commandBufferCount = 1
         profile.encoderCount = 2
         profile.bubbleUploadCount = snapshot.bubbleChanges.count
+        profile.segmentUploadCount = snapshot.segmentChanges.count
         profile.hostEncodingMilliseconds = milliseconds(encodingEnd - encodingStart)
         profile.hostWaitingMilliseconds = milliseconds(waitingEnd - encodingEnd)
         profile.stageGPUMilliseconds = ["frame": timing.gpuMilliseconds]
@@ -761,7 +780,7 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
             sideCorrectionCount: Int(safetyResult.counts.y), ccdBudgetExhaustionCount: 0, predictionMilliseconds: 0,
             broadPhaseMilliseconds: 0, contactMilliseconds: 0, solverMilliseconds: 0,
             totalMilliseconds: milliseconds(waitingEnd - encodingStart), hasNonFiniteState: false)
-        let frame = NativeMetalWorldFrame(bubbles: bubbles, contacts: contacts, report: report,
+        var frame = NativeMetalWorldFrame(bubbles: bubbles, contacts: contacts, report: report,
             telemetry: .init(backend: .nativeMetal, commandBufferCount: 1, encoderCount: 2,
                 cacheHitCount: Int(contactResult.cache.x), cacheResetCount: Int(contactResult.cache.y),
                 contactCount: contacts.count, gpuMilliseconds: timing.gpuMilliseconds,
@@ -769,6 +788,7 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
                 ccdCandidateCount: Int(safetyResult.counts.x), guardCorrectionCount: Int(safetyResult.counts.y),
                 cacheInvalidationCount: Int(safetyResult.counts.z)),
             profile: profile, contours: contours, renderData: renderData, isComplete: true)
+        frame.regionRemovals = Set(bubbles.indices.compactMap { records[$0].publicFlags.w == 1 ? bubbles[$0].id : nil })
         // Synchroniczna publikacja dopiero po pomyślnym wykonaniu i readbacku.
         state.publish()
         state.publishedCacheCount = completedCache.count

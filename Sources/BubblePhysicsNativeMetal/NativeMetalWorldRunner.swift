@@ -20,6 +20,7 @@ struct NativeMetalWorldFrame {
     var contours: [ReferenceBubbleID: [ReferenceVector2]] = [:]
     var renderData: [SIMD4<Float>] = []
     var isComplete = false
+    var regionRemovals: Set<ReferenceBubbleID> = []
 }
 
 enum NativeMetalWorldError: Error {

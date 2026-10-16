@@ -12,6 +12,9 @@ public enum TransactionRejectionReason: Error, Equatable, Sendable {
     case incompatiblePhysicsMaterial(PhysicsMaterialID, ObjectID)
     case incompatibleObjectKind(ObjectID)
     case incompatibleMotionRole(ObjectID)
+    /// Tymczasowy limit wdrożonego runtime; deskryptor nadal jest poprawny dla kontraktu v1.
+    case unsupportedMotionRole(ObjectID, MotionRole)
+    case unsupportedPhysicsParameter(PhysicsMaterialID, PhysicsParameter)
     case driveAlreadyActive(ObjectID)
     case driveNotActive(ObjectID)
     case invalidValue(ModelValidationError)

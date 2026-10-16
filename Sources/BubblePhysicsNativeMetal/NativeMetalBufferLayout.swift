@@ -7,6 +7,9 @@ struct NativeMetalBubble: Equatable, Sendable {
     var motion: SIMD4<Float> // velocity.xy, rotation, angularVelocity
     var physical: SIMD4<Float> // mass, inverseMass, radius, stiffness
     var deformation: SIMD4<Float> // maksymalna względna deformacja konturu, reserved
+    var publicFlags = SIMD4<UInt32>.zero
+    var material = SIMD4<Float>.zero
+    var resources = SIMD2<UInt64>.zero
 
     init(_ bubble: ReferenceBubble) {
         identity = SIMD2(Int64(bubble.id.rawValue), 0)
@@ -102,6 +105,7 @@ struct NativeMetalControl: Sendable {
     var counts: SIMD4<UInt32> // bubbles, segments, scenarioStep, failure
     var physics: SIMD4<Float> // dt, linearDamping, angularDamping, contactStiffness
     var contactDamping: SIMD4<Float>
+    var region = SIMD4<Float>.zero
 }
 
 struct NativeMetalSolverControl: Sendable {
@@ -139,6 +143,11 @@ struct NativeMetalSegmentChange: Sendable {
     let value: NativeMetalSegment
 }
 
+struct NativeMetalSegmentRemap: Sendable {
+    let sourceIndex: Int
+    let destinationIndex: Int
+}
+
 /// Pełne modele służą identyfikacji i readbackowi; pakowane są tylko zmiany CPU.
 /// Poprzedni snapshot musi należeć do ostatniej pomyślnie wykonanej klatki.
 struct NativeMetalSnapshot: Sendable {
@@ -148,10 +157,13 @@ struct NativeMetalSnapshot: Sendable {
     let bubbleChanges: [NativeMetalBubbleChange]
     let bubbleRemaps: [NativeMetalBubbleRemap]
     let segmentChanges: [NativeMetalSegmentChange]
+    let segmentRemaps: [NativeMetalSegmentRemap]
     let previousBubbles: [ReferenceBubble]?
     let previousSegments: [ReferenceSegment]?
+    let publicSettings: NativePublicSettings?
 
-    init(world: ReferenceWorld, previous: NativeMetalSnapshot? = nil) {
+    init(world: ReferenceWorld, previous: NativeMetalSnapshot? = nil, publicSettings: NativePublicSettings? = nil) {
+        self.publicSettings = publicSettings
         configuration = world.configuration
         sourceBubbles = world.bubbles
         sourceSegments = world.segments
@@ -161,18 +173,30 @@ struct NativeMetalSnapshot: Sendable {
             ($0.element.id, (index: $0.offset, bubble: $0.element))
         })
         bubbleChanges = world.bubbles.enumerated().compactMap { index, bubble in
-            guard previousByID[bubble.id]?.bubble != bubble else { return nil }
-            return .init(index: index, value: .init(bubble))
+            let properties = publicSettings?.properties[bubble.id]
+            guard previousByID[bubble.id]?.bubble != bubble || properties != previous?.publicSettings?.properties[bubble.id] else { return nil }
+            var value = NativeMetalBubble(bubble)
+            if let properties {
+                value.publicFlags = properties.flags; value.material = properties.material; value.resources = properties.resources
+            }
+            return .init(index: index, value: value)
         }
         bubbleRemaps = world.bubbles.enumerated().compactMap { index, bubble in
             guard let existing = previousByID[bubble.id], existing.bubble == bubble,
                   existing.index != index else { return nil }
             return .init(sourceIndex: existing.index, destinationIndex: index)
         }
+        let previousSegmentsByID = Dictionary(uniqueKeysWithValues: (previous?.sourceSegments ?? []).enumerated().map {
+            ($0.element.id, (index: $0.offset, segment: $0.element))
+        })
         segmentChanges = world.segments.enumerated().compactMap { index, segment in
-            guard previous?.sourceSegments.indices.contains(index) != true
-                    || previous?.sourceSegments[index] != segment else { return nil }
+            guard previousSegmentsByID[segment.id]?.segment != segment else { return nil }
             return .init(index: index, value: .init(segment))
+        }
+        segmentRemaps = world.segments.enumerated().compactMap { index, segment in
+            guard let previous = previousSegmentsByID[segment.id], previous.segment == segment,
+                  previous.index != index else { return nil }
+            return .init(sourceIndex: previous.index, destinationIndex: index)
         }
     }
 }
@@ -182,6 +206,7 @@ public struct NativeMetalFrameProfile: Equatable, Sendable {
     public var encoderCount = 0
     /// Rekordy wejściowe zmienione przez grę; własna publikacja GPU nie jest uploadem.
     public var bubbleUploadCount = 0
+    public var segmentUploadCount = 0
     public var hostEncodingMilliseconds: Double = 0
     public var hostWaitingMilliseconds: Double = 0
     /// Łączny czas ukończonego command buffera; bez pozornych czasów osobnych dispatchy.

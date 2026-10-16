@@ -7,6 +7,9 @@ struct NativeBubble {
     float4 motion;
     float4 physical;
     float4 deformation;
+    uint4 publicFlags;
+    float4 material;
+    ulong2 resources;
 };
 struct NativeSegment {
     long2 identity; uint4 flags; float4 previous; float4 current;
@@ -18,7 +21,7 @@ struct NativeContactCache {
 struct NativeCandidate { long2 participants; uint4 metadata; };
 struct NativeGridEntry { long2 cell; uint4 metadata; };
 struct NativeContactControl { uint4 limits; uint4 counts; uint4 cache; float4 thresholds; float4 cellWidth; };
-struct NativeControl { uint4 counts; float4 physics; float4 contactDamping; };
+struct NativeControl { uint4 counts; float4 physics; float4 contactDamping; float4 region; };
 struct NativeRenderPacket { long2 identity; float4 geometry; float4 deformation; };
 
 void nativeCountWork(device atomic_uint *statistics, uint slot) {
@@ -31,12 +34,14 @@ kernel void nativePredict(device NativeBubble *bubbles [[buffer(0)]],
                           uint index [[thread_position_in_grid]]) {
     if (index >= control.counts.x) return;
     NativeBubble b = bubbles[index];
+    b.publicFlags.w = 0;
     float dt = control.physics.x;
     b.position.zw = b.position.xy;
-    b.motion.xy *= exp(-control.physics.y * dt);
+    if (b.publicFlags.x && b.publicFlags.y) { b.motion.xy = 0; b.motion.w = 0; bubbles[index] = b; return; }
+    b.motion.xy *= exp(-(b.publicFlags.x ? b.material.x : control.physics.y) * dt);
     b.position.xy += b.motion.xy * dt;
     b.motion.z += b.motion.w * dt;
-    b.motion.w *= exp(-control.physics.z * dt);
+    b.motion.w *= exp(-(b.publicFlags.x ? b.material.x : control.physics.z) * dt);
     bubbles[index] = b;
 }
 

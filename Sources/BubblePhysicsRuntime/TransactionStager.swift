@@ -20,6 +20,10 @@ package struct RuntimeObject: Equatable, Sendable {
     package let descriptor: WorldObject
     package var motionRole: MotionRole
     package var velocity: WorldPoint
+    package var position: WorldPoint
+    package var previousPosition: WorldPoint
+    package var rotation: Float
+    package var angularVelocity: Float
     package var playerDriveTarget: WorldPoint?
     package var motionBeforeDrive: MotionRole?
 
@@ -30,6 +34,13 @@ package struct RuntimeObject: Equatable, Sendable {
         case .polygon(let value): motionRole = value.motionRole; velocity = value.velocity
         case .forceField, .sensor: motionRole = .static; velocity = .zero
         }
+        switch descriptor {
+        case .bubble(let value): position = value.position; rotation = 0; angularVelocity = 0
+        case .polygon(let value): position = value.position; rotation = value.rotation; angularVelocity = value.angularVelocity
+        case .forceField(let value): position = value.position; rotation = value.rotation; angularVelocity = 0
+        case .sensor(let value): position = value.position; rotation = value.rotation; angularVelocity = 0
+        }
+        previousPosition = position
     }
     var material: (PhysicsMaterialID, PhysicsMaterialKind)? {
         switch descriptor {
@@ -106,7 +117,8 @@ package enum TransactionStager {
 
     /// Wywoływane raz na granicy kroku. Odrzucona transakcja nie zmienia stanu dla następnej.
     /// To tylko staging: nie wykonuje kroku fizyki ani nie publikuje stanu na zewnątrz.
-    package static func stageBatch(_ pending: [PendingTransaction], against state: RuntimeState) -> StagedTransactionBatch {
+    package static func stageBatch(_ pending: [PendingTransaction], against state: RuntimeState,
+        validate: ((StagedWorldChange) throws -> Void)? = nil) -> StagedTransactionBatch {
         var candidate = state
         var changes: [StagedWorldChange] = []
         var receipts: [TransactionReceipt] = []
@@ -114,6 +126,7 @@ package enum TransactionStager {
         for submission in pending {
             do {
                 let change = try stage(submission.transaction, against: candidate)
+                try validate?(change)
                 candidate = change.state
                 changes.append(change)
                 receipts.append(TransactionReceipt(token: submission.token,
@@ -269,14 +282,14 @@ private struct StagingContext {
                 if let scheduled = state.transitions[.bubbleRadius(value.id)], case .scalar(let radius) = scheduled.value {
                     maximumRadius = max(maximumRadius, radius)
                 }
-                try state.configuration.validate(BubbleDescriptor(id: value.id, position: value.position,
+                try state.configuration.validate(BubbleDescriptor(id: value.id, position: object.position,
                     targetRadius: maximumRadius, motionRole: .static,
                     physicsMaterialID: value.physicsMaterialID, renderStyleID: value.renderStyleID))
             }
         case .polygon(let value):
             if object.motionRole == .static {
                 try state.configuration.validate(PolygonDescriptor(id: value.id, vertices: value.geometry.vertices,
-                    position: value.position, rotation: value.rotation, motionRole: .static,
+                    position: object.position, rotation: object.rotation, motionRole: .static,
                     physicsMaterialID: value.physicsMaterialID, renderStyleID: value.renderStyleID))
             }
         case .forceField(let value): try state.configuration.validate(value)
@@ -343,7 +356,7 @@ private struct StagingContext {
             let weight = Double(descriptor.mass)
             mass += weight
             radiusSquared += Double(descriptor.targetRadius) * Double(descriptor.targetRadius)
-            weightedPosition += SIMD2<Double>(Double(descriptor.position.x), Double(descriptor.position.y)) * weight
+            weightedPosition += SIMD2<Double>(Double(existing.position.x), Double(existing.position.y)) * weight
             momentum += SIMD2<Double>(Double(existing.velocity.x), Double(existing.velocity.y)) * weight
         }
         // Wyłącznie logiczna rezerwacja wyniku. Kontur, kontakt i stan solvera obsługuje backend.
@@ -362,7 +375,7 @@ private struct StagingContext {
         let (existing, descriptor) = try bubble(source)
         try remove(source)
         for part in [first, second] {
-            try add(resultDescriptor(part.result, position: descriptor.position, velocity: existing.velocity,
+            try add(resultDescriptor(part.result, position: existing.position, velocity: existing.velocity,
                 radius: Float(Double(descriptor.targetRadius) * sqrt(Double(part.share))),
                 mass: Float(Double(descriptor.mass) * Double(part.share))))
         }

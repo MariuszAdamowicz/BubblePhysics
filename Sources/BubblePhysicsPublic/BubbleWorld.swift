@@ -20,7 +20,7 @@ public final class BubbleWorld {
 
     public convenience init(configuration: WorldConfiguration,
                             device: MTLDevice? = MTLCreateSystemDefaultDevice()) throws {
-        self.init(configuration: configuration, stepper: NoOpCompleteStepper(device: device))
+        self.init(configuration: configuration, stepper: try NativeCompleteStepper(device: device))
     }
 
     internal init(configuration: WorldConfiguration, stepper: any CompleteStepper) {
@@ -80,7 +80,7 @@ public final class BubbleWorld {
                 break
             }
             let transactionCount = pending.count
-            let batch = TransactionStager.stageBatch(pending, against: state)
+            let batch = TransactionStager.stageBatch(pending, against: state, validate: stepper.validate)
             do {
                 let complete = try await stepper.completeStep(batch, duration: clock.fixedTimeStep)
                 // W czasie await można dopisać transakcje lub włączyć pauzę.

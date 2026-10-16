@@ -344,6 +344,7 @@ kernel void nativeUpdateContactMultipliers(device NativeBubble *bubbles [[buffer
     float4 geometry = nativeReadConstraint(bubbles, segments, positions, edge.x, edge.y, edge.z, record.geometry.xy);
     float weight = bubbles[edge.x].physical.y + (edge.z == 0 ? bubbles[edge.y].physical.y : 0);
     float alpha = solver.physics.x;
+    if (weight + alpha <= 0) { corrections[index] = 0; return; }
     float delta = (geometry.z - alpha * record.response.x) / (weight + alpha);
     uint degree = edge.z == 0 ? max(degrees[edge.x], degrees[edge.y]) : degrees[edge.x];
     // Wspólna relaksacja obu końców utrzymuje równe/opposite impulsy i stabilizuje gęste grafy.

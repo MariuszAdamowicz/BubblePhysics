@@ -102,6 +102,7 @@ kernel void nativeResolveCCD(device NativeBubble *bubbles [[buffer(0)]],
     device atomic_uint *statistics [[buffer(7)]],
     uint i [[thread_position_in_grid]]) {
     if (i >= control.counts.x) return;
+    if (bubbles[i].publicFlags.x && bubbles[i].publicFlags.y) return;
     float2 start = bubbles[i].position.zw, end = positions[i].xy;
     for (uint j = 0; j < control.counts.y; ++j) {
         if (!candidates[i * control.counts.y + j]) continue;
@@ -135,6 +136,7 @@ void nativeGuardCenter(device NativeBubble *bubbles, device NativeSegment *segme
     device float4 *positions, constant NativeControl &control, device NativeContactControl &contacts,
     device uint *changed, device atomic_uint *safety, device atomic_uint *statistics,
     device uint *candidates, uint i) {
+    if (bubbles[i].publicFlags.x && bubbles[i].publicFlags.y) return;
     float2 start = bubbles[i].position.zw, end = positions[i].xy;
     float margin = max(contacts.thresholds.z * 2, 1e-5f);
     for (uint j = 0; j < control.counts.y; ++j) {
@@ -234,6 +236,7 @@ kernel void nativeSeparateContainedBubbles(device NativeBubble *bubbles [[buffer
         float2 normal = distance > margin ? delta / distance
             : float2(0, a.identity.x < b.identity.x ? -1.0f : 1.0f);
         float weight = a.physical.y + b.physical.y;
+        if (weight <= 0) continue;
         correction += normal * ((minimum + margin - distance) * a.physical.y / weight);
     }
     // Threadgroup memory works on Apple4 (iPhone X); simd_sum requires Apple7.
@@ -276,6 +279,7 @@ kernel void nativeValidateBubbleContainment(device NativeBubble *bubbles [[buffe
     if (pair >= count * count) return;
     uint i = pair / count, j = pair % count;
     if (j <= i) return;
+    if (bubbles[i].physical.y + bubbles[j].physical.y <= 0) return;
     float distance = length(positions[j].xy - positions[i].xy);
     float smaller = min(bubbles[i].physical.z, bubbles[j].physical.z);
     float larger = max(bubbles[i].physical.z, bubbles[j].physical.z);
@@ -414,6 +418,9 @@ kernel void nativeAccumulateContactPressure(device NativeBubble *bubbles [[buffe
     // geometrią konturu. Jej lokalne maksima poruszały kontur mimo prawie
     // niezmienionej geometrii zatwierdzonej klatki.
     float4 value = float4(max(deficit, recovered), deficit, 0, 0);
+    // Task 5A obsługuje publiczne deformability=0; dodatnia podatność jest
+    // odrzucana przez runtime do czasu implementacji kontaktów materiałowych.
+    if (bubble.publicFlags.x) value.xy = 0;
     if (!all(isfinite(value))) nativeSafetyFailure(safety, 1);
     pressure[index] = value;
 }
@@ -495,4 +502,53 @@ kernel void nativePrepareRenderData(device NativeBubble *bubbles [[buffer(0)]],
         float4(bubble.position.xy, bubble.physical.z, bubble.motion.z), bubble.deformation};
     if (!all(isfinite(packet.geometry))) nativeSafetyFailure(safety, 1);
     packets[index] = packet;
+}
+
+// Region nie jest ścianą. Test koła dotyczy collidera używanego przez narrow phase,
+// nie wyłącznie środka ani wizualnego konturu. Styczność nadal oznacza obecność.
+kernel void nativeApplyPublicRegion(device NativeBubble *bubbles [[buffer(0)]],
+    device float2 *points [[buffer(1)]], device NativeRenderPacket *packets [[buffer(2)]],
+    device uint *counts [[buffer(3)]], constant NativeControl &control [[buffer(4)]],
+    constant NativeContourControl &contour [[buffer(5)]], device atomic_uint *safety [[buffer(6)]],
+    uint index [[thread_position_in_grid]]) {
+    if (index >= control.counts.x) return;
+    NativeBubble b = bubbles[index];
+    if (!b.publicFlags.x || b.publicFlags.y) return;
+    float2 nearest = clamp(b.position.xy, control.region.xy, control.region.zw);
+    if (length(b.position.xy - nearest) <= b.physical.z) return;
+    if (!b.publicFlags.z) { b.publicFlags.w = 1; bubbles[index] = b; return; }
+    float2 delta = 0;
+    // Okres obejmuje średnicę collidera: wyjście całej bryły odpowiada jej
+    // ponownemu wejściu z przeciwnej strony; zachowujemy nadmiar przebytej drogi.
+    float2 span = control.region.zw - control.region.xy + 2 * b.physical.z;
+    for (uint axis = 0; axis < 2; ++axis) {
+        if (b.position[axis] > control.region[axis + 2])
+            delta[axis] = -span[axis] * max(1.0f, ceil((b.position[axis] - b.physical.z - control.region[axis + 2]) / span[axis]));
+        else if (b.position[axis] < control.region[axis])
+            delta[axis] = span[axis] * max(1.0f, ceil((control.region[axis] - b.physical.z - b.position[axis]) / span[axis]));
+    }
+    b.position += float4(delta, delta);
+    if (!all(isfinite(b.position))) { nativeSafetyFailure(safety, 1); return; }
+    b.publicFlags.w = 2;
+    bubbles[index] = b;
+    packets[index].geometry.xy += delta;
+    for (uint point = 0; point < counts[index]; ++point) {
+        uint address = index * contour.counts.x + point;
+        points[address] += delta;
+        if (!all(isfinite(points[address]))) nativeSafetyFailure(safety, 1);
+    }
+}
+
+kernel void nativeInvalidateRegionCache(device NativeBubble *bubbles [[buffer(0)]],
+    device NativeContactCache *cache [[buffer(1)]], constant NativeControl &control [[buffer(2)]],
+    device NativeContactControl &contacts [[buffer(3)]], uint index [[thread_position_in_grid]]) {
+    if (index >= contacts.counts.z || contacts.counts.w) return;
+    NativeContactCache record = cache[index];
+    uint a = nativeFindBubble(bubbles, control.counts.x, record.participants.x);
+    bool changed = a < control.counts.x && bubbles[a].publicFlags.w;
+    if (record.metadata.x == 0) {
+        uint b = nativeFindBubble(bubbles, control.counts.x, record.participants.y);
+        changed |= b < control.counts.x && bubbles[b].publicFlags.w;
+    }
+    if (changed) { record.response.x = 0; record.metadata.w |= 1; cache[index] = record; }
 }
