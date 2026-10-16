@@ -604,7 +604,8 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
             measureResidual()
             if hasRigidBodies {
                 dispatch("nativeRigidContacts", buffers: [rigidState.bodies, rigidState.vertices, rigidState.triangles,
-                    state.workingBubbles, inputPositions, rigidState.control, rigidState.contacts], threads: rigidState.contactCount)
+                    state.workingBubbles, inputPositions, rigidState.control, rigidState.contacts,
+                    state.safetyControl], threads: rigidState.contactCount)
                 dispatch("nativeRigidApplyBodies", buffers: [rigidState.bodies, rigidState.control, rigidState.contacts], threads: rigidState.count)
                 dispatch("nativeRigidGuardWalls", buffers: [rigidState.bodies, rigidState.vertices, rigidState.triangles, rigidState.control], threads: rigidState.count)
                 dispatch("nativeRigidApplyBubbles", buffers: [state.workingBubbles, inputPositions, rigidState.control,

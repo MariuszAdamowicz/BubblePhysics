@@ -485,6 +485,7 @@ kernel void nativeRigidContacts(device NativeRigidBody *bodies [[buffer(0)]],
     device float2 *vertices [[buffer(1)]], device uint4 *triangles [[buffer(2)]],
     device NativeBubble *bubbles [[buffer(3)]], device float4 *positions [[buffer(4)]],
     constant uint4 &counts [[buffer(5)]], device NativeRigidCorrection *corrections [[buffer(6)]],
+    device atomic_uint *safety [[buffer(7)]],
     uint index [[thread_position_in_grid]]) {
     if(index>=counts.z)return;
     NativeRigidCorrection result={float4(0),float4(0),float4(0),float4(0)};
@@ -528,12 +529,44 @@ kernel void nativeRigidContacts(device NativeRigidBody *bodies [[buffer(0)]],
                 depth=a.physical.z-dot(center-point,out);
             }
         }
+        // Końcowe krawędzie nie opisują łuku obrotu. Jeśli pominięty sweep
+        // mógł dotknąć bańki, odrzucamy całą klatkę zamiast publikować tunel.
+        float angle=abs(b.pose.z-b.pose.w);
+        if(depth < -0.001f && angle > 0) {
+            uint steps=max(1u,uint(ceil(angle/0.05f)));
+            float2 travel=center-a.position.zw,bodyTravel=b.pose.xy-b.previous.xy;
+            float margin=(length(travel)+length(bodyTravel)+b.physical.z*angle)/(2.0f*float(steps))+1e-4f;
+            for(uint sample=0;sample<=steps;++sample) {
+                float t=float(sample)/float(steps);
+                float2 centerAt=mix(a.position.zw,center,t);
+                NativeRigidBody poseAt=b;
+                poseAt.pose.xy=mix(b.previous.xy,b.pose.xy,t);
+                poseAt.pose.z=mix(b.pose.w,b.pose.z,t);
+                bool possible=nativeRigidInside(centerAt,poseAt,vertices,triangles);
+                for(uint i=0;i<b.ranges.y && !possible;++i) {
+                    float2 p=nativeRigidVertex(poseAt,vertices,i);
+                    float2 q=nativeRigidVertex(poseAt,vertices,(i+1)%b.ranges.y);
+                    possible=distance(centerAt,nativeClosestPoint(centerAt,float4(p,q)))<=a.physical.z+margin;
+                }
+                if(possible){atomic_fetch_or_explicit(safety+3,2u,memory_order_relaxed);break;}
+            }
+        }
         wa=a.physical.y;wb=b.physical.x;ib=b.physical.y;rb=point-b.pose.xy;
         va=a.motion.xy;vb=b.motion.xy;spinB=b.motion.z;
     } else {
         uint slot=index-bubblePairs,ai=slot/counts.x,bi=slot%counts.x;
         NativeRigidBody a=bodies[ai],b=bodies[bi];
-        if(ai>=bi || (a.flags.x&&b.flags.x) || distance(a.pose.xy,b.pose.xy)>a.physical.z+b.physical.z){corrections[index]=result;return;}
+        if(ai>=bi || (a.flags.x&&b.flags.x)){corrections[index]=result;return;}
+        float2 start=a.previous.xy-b.previous.xy,end=a.pose.xy-b.pose.xy,travel=end-start;
+        float travelSquared=dot(travel,travel);
+        float t=travelSquared>FLT_MIN ? clamp(-dot(start,travel)/travelSquared,0.0f,1.0f) : 0.0f;
+        float radius=a.physical.z+b.physical.z,radiusSquared=radius*radius;
+        float2 closest=start+t*travel;
+        bool sweptPair=t>0 && t<1 && dot(closest,closest)<=radiusSquared;
+        if(dot(end,end)>radiusSquared){
+            if(sweptPair)atomic_fetch_or_explicit(safety+3,2u,memory_order_relaxed);
+            corrections[index]=result;return;
+        }
         bool found=false;
         for(uint i=0;i<a.ranges.w;++i)for(uint j=0;j<b.ranges.w;++j){
             uint4 ta=triangles[a.ranges.z+i],tb=triangles[b.ranges.z+j];
@@ -542,7 +575,10 @@ kernel void nativeRigidContacts(device NativeRigidBody *bodies [[buffer(0)]],
             float2 normal,p;float d;
             if(nativeTriangleContact(av,bv,normal,d,p) && (!found || d>depth)){found=true;depth=d;n=normal;point=p;}
         }
-        if(!found){corrections[index]=result;return;}
+        if(!found){
+            if(sweptPair)atomic_fetch_or_explicit(safety+3,2u,memory_order_relaxed);
+            corrections[index]=result;return;
+        }
         wa=a.physical.x;wb=b.physical.x;ia=a.physical.y;ib=b.physical.y;
         ra=point-a.pose.xy;rb=point-b.pose.xy;va=a.motion.xy;vb=b.motion.xy;spinA=a.motion.z;spinB=b.motion.z;
     }

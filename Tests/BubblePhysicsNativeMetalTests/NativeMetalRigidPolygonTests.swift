@@ -15,9 +15,9 @@ final class NativeMetalRigidPolygonTests: XCTestCase {
             mass: 2, momentOfInertia: 2, motionRole: role,
             physicsMaterialID: .init(rawValue: 2), renderStyleID: .init(rawValue: 1))))
     }
-    private func bubble(position: WorldPoint = [-1.6,0.6], velocity: WorldPoint = [6,0]) throws -> NativePublicObject {
+    private func bubble(position: WorldPoint = [-1.6,0.6], velocity: WorldPoint = [6,0], radius: Float = 0.5) throws -> NativePublicObject {
         NativePublicObject(descriptor: .bubble(try BubbleDescriptor(id: bubbleID,
-            position: position, velocity: velocity, targetRadius: 0.5,
+            position: position, velocity: velocity, targetRadius: radius,
             physicsMaterialID: .init(rawValue: 1), renderStyleID: .init(rawValue: 1))))
     }
     private func step(_ world: NativePublicWorld, _ objects: [NativePublicObject], dt: Double = 1.0/60) async throws -> NativePublicFrame {
@@ -140,5 +140,36 @@ final class NativeMetalRigidPolygonTests: XCTestCase {
         let frame = try await step(world, [XCTUnwrap(first.objects[polygonID]), bubble(position: [-1.4,0], velocity: .zero)])
         XCTAssertLessThan(try XCTUnwrap(frame.objects[bubbleID]).position.x, -1.41)
         XCTAssertGreaterThan(try XCTUnwrap(frame.objects[polygonID]).position.x, 0.01)
+    }
+
+    // Pełny obrót wraca do tej samej pozy, ale jego końce przecinają po drodze nieruchomą bańkę.
+    func testRotatingThinPolygonCannotTunnelThroughStationaryBubble() async throws {
+        let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
+        let rod = try polygon(angular: 2 * .pi * 60,
+            vertices: [[-2,-0.1],[2,-0.1],[2,0.1],[-2,0.1]])
+        do {
+            let frame = try await step(world, [rod, bubble(position: [0,1.5], velocity: .zero, radius: 0.25)])
+            let ball = try XCTUnwrap(frame.objects[bubbleID])
+            XCTAssertGreaterThan(abs(ball.position.y - 1.5) + abs(ball.velocity.y), 0.01)
+        } catch let failure as NativeMetalSafetyFailure {
+            XCTAssertEqual(failure.reason, .guardFailure)
+        }
+    }
+
+    // Dwie bryły mogą minąć się między końcami kroku bez overlapu końcowych AABB.
+    func testFastDynamicPolygonsCannotSwapPositionsWithoutContact() async throws {
+        let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
+        let left = try polygon(position: [-3,0], velocity: [360,0])
+        let right = NativePublicObject(descriptor: .polygon(try PolygonDescriptor(id: .init(rawValue: 3),
+            vertices: [[-1,-1],[1,-1],[1,1],[-1,1]], position: [3,0], velocity: [-360,0],
+            mass: 2, momentOfInertia: 2, motionRole: .dynamic,
+            physicsMaterialID: .init(rawValue: 2), renderStyleID: .init(rawValue: 1))))
+        do {
+            let frame = try await step(world, [left, right])
+            XCTAssertLessThan(try XCTUnwrap(frame.objects[polygonID]).position.x,
+                              try XCTUnwrap(frame.objects[.init(rawValue: 3)]).position.x)
+        } catch let failure as NativeMetalSafetyFailure {
+            XCTAssertEqual(failure.reason, .guardFailure)
+        }
     }
 }
