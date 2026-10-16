@@ -26,6 +26,23 @@ final class RegionPolicyTests: XCTestCase {
         XCTAssertEqual(object.velocity, [-4, 0])
     }
 
+    func testDiagonalCornerWrapReentersRegionAndDoesNotOscillate() async throws {
+        let stepper = try NativeCompleteStepper(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
+        var state = try initial(policy: .wrap)
+        state.objects[.init(rawValue: 1)]?.position = [10.8, 10.8]
+        state.objects[.init(rawValue: 1)]?.velocity = .zero
+        state = try await stepper.completeStep(TransactionStager.stageBatch([], against: state), duration: 0.25).state
+        let wrapped = try XCTUnwrap(state.objects[.init(rawValue: 1)])
+        let dx = max(0, max(-wrapped.position.x, wrapped.position.x - 10))
+        let dy = max(0, max(-wrapped.position.y, wrapped.position.y - 10))
+        XCTAssertLessThanOrEqual(sqrt(dx * dx + dy * dy), 1)
+        state = try await stepper.completeStep(TransactionStager.stageBatch([], against: state), duration: 0.25).state
+        let next = try XCTUnwrap(state.objects[.init(rawValue: 1)])
+        XCTAssertEqual(next.position.x, wrapped.position.x, accuracy: 0.0001)
+        XCTAssertEqual(next.position.y, wrapped.position.y, accuracy: 0.0001)
+        XCTAssertEqual(next.velocity, .zero)
+    }
+
     func testUnsupportedDynamicPolygonsAreRejectedAtomicallyInsteadOfStallingWorld() async throws {
         for role in [MotionRole.dynamic, .motorDriven] {
             let world = try BubbleWorld(configuration: initial(policy: .remove).configuration)
@@ -61,6 +78,48 @@ final class RegionPolicyTests: XCTestCase {
                 XCTAssertEqual(rejection.reason, .unsupportedPhysicsParameter(.init(rawValue: 1),
                     material.friction != 0 ? .friction : (material.restitution != 0 ? .restitution : .deformability)))
             }
+            XCTAssertNil(world.diagnostics.lastAdvanceIssue)
+        }
+    }
+
+    func testUnsupportedMergeResultRoleIsRejectedWithoutRetryingFrame() async throws {
+        let world = try await seededWorld()
+        let token = world.submit(WorldTransaction().mergeBubbles([.init(rawValue: 1), .init(rawValue: 2)],
+            result: BubbleResult(id: .init(rawValue: 3), physicsMaterialID: .init(rawValue: 1),
+                renderStyleID: .init(rawValue: 1), motionRole: .motorDriven)))
+        let frame = await world.advance(by: 0.25)
+        XCTAssertEqual(frame.stepIndex, 2)
+        XCTAssertEqual(frame.events, [.transactionRejected(token, TransactionRejection(operationIndex: 0,
+            reason: .unsupportedMotionRole(.init(rawValue: 3), .motorDriven)))])
+        XCTAssertNil(world.diagnostics.lastAdvanceIssue)
+    }
+
+    func testUnsupportedSplitResultRoleIsRejectedWithoutRetryingFrame() async throws {
+        let world = try await seededWorld()
+        let first = BubbleSplitPart(result: BubbleResult(id: .init(rawValue: 3),
+            physicsMaterialID: .init(rawValue: 1), renderStyleID: .init(rawValue: 1)), share: 0.5)
+        let second = BubbleSplitPart(result: BubbleResult(id: .init(rawValue: 4),
+            physicsMaterialID: .init(rawValue: 1), renderStyleID: .init(rawValue: 1), motionRole: .pathDriven), share: 0.5)
+        let token = world.submit(WorldTransaction().splitBubble(.init(rawValue: 1), first: first, second: second))
+        let frame = await world.advance(by: 0.25)
+        XCTAssertEqual(frame.stepIndex, 2)
+        XCTAssertEqual(frame.events, [.transactionRejected(token, TransactionRejection(operationIndex: 0,
+            reason: .unsupportedMotionRole(.init(rawValue: 4), .pathDriven)))])
+        XCTAssertNil(world.diagnostics.lastAdvanceIssue)
+    }
+
+    func testUnsupportedPhysicsTransitionsAreRejectedWithOperationIndex() async throws {
+        for parameter in [PhysicsParameter.deformability, .friction, .restitution] {
+            let world = try BubbleWorld(configuration: initial(policy: .remove).configuration)
+            let token = world.submit(try WorldTransaction()
+                .updatePhysicsMaterial(.init(rawValue: 1), material: PhysicsMaterial(kind: .bubble))
+                .startTransition(ParameterTransition(target: .physicsMaterial(.init(rawValue: 1), parameter),
+                    value: .scalar(0.5), duration: 1)))
+            let frame = await world.advance(by: 0.25)
+            XCTAssertEqual(frame.stepIndex, 1)
+            XCTAssertEqual(frame.events, [.transactionRejected(token, TransactionRejection(operationIndex: 1,
+                reason: .unsupportedPhysicsParameter(.init(rawValue: 1), parameter)))])
+            XCTAssertTrue(frame.transactionReceipts.isEmpty)
             XCTAssertNil(world.diagnostics.lastAdvanceIssue)
         }
     }
@@ -120,5 +179,20 @@ final class RegionPolicyTests: XCTestCase {
             .add(.bubble(BubbleDescriptor(id: .init(rawValue: 1), position: [9, 5], velocity: [4, 0],
                 targetRadius: 1, regionExitPolicy: policy, physicsMaterialID: .init(rawValue: 1),
                 renderStyleID: .init(rawValue: 1)))), against: state).state
+    }
+
+    private func seededWorld() async throws -> BubbleWorld {
+        let world = try BubbleWorld(configuration: initial(policy: .remove).configuration)
+        let transaction = try WorldTransaction()
+            .updatePhysicsMaterial(.init(rawValue: 1), material: PhysicsMaterial(kind: .bubble))
+            .updateRenderStyle(.init(rawValue: 1), style: RenderStyle())
+            .add(.bubble(BubbleDescriptor(id: .init(rawValue: 1), position: [3, 3], targetRadius: 0.5,
+                physicsMaterialID: .init(rawValue: 1), renderStyleID: .init(rawValue: 1))))
+            .add(.bubble(BubbleDescriptor(id: .init(rawValue: 2), position: [7, 3], targetRadius: 0.5,
+                physicsMaterialID: .init(rawValue: 1), renderStyleID: .init(rawValue: 1))))
+        world.submit(transaction)
+        let frame = await world.advance(by: 0.25)
+        XCTAssertEqual(frame.stepIndex, 1)
+        return world
     }
 }

@@ -25,6 +25,10 @@ package final class NativeCompleteStepper: CompleteStepper {
                 switch operation {
                 case .add(let value), .replace(_, let value): try descriptor(value)
                 case .replacePolygons(_, let results): for p in results { try descriptor(.polygon(p)) }
+                case .mergeBubbles(_, let result): try role(result.id, result.motionRole, polygon: false)
+                case .splitBubble(_, let first, let second):
+                    try role(first.result.id, first.result.motionRole, polygon: false)
+                    try role(second.result.id, second.result.motionRole, polygon: false)
                 case .setMotion(let id, let value):
                     if let object = change.state.objects[id] {
                         if case .polygon = object.descriptor { try role(id, value, polygon: true) }
@@ -36,6 +40,11 @@ package final class NativeCompleteStepper: CompleteStepper {
                     if material.restitution != 0 { throw TransactionRejectionReason.unsupportedPhysicsParameter(id, .restitution) }
                     if material.deformability != 0 {
                         throw TransactionRejectionReason.unsupportedPhysicsParameter(id, .deformability)
+                    }
+                case .startTransition(let transition):
+                    if case .physicsMaterial(let id, let parameter) = transition.target,
+                       case .scalar(let value) = transition.value, value > 0, parameter != .damping {
+                        throw TransactionRejectionReason.unsupportedPhysicsParameter(id, parameter)
                     }
                 default: break
                 }

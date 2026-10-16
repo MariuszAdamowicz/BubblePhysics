@@ -527,6 +527,12 @@ kernel void nativeApplyPublicRegion(device NativeBubble *bubbles [[buffer(0)]],
         else if (b.position[axis] < control.region[axis])
             delta[axis] = span[axis] * max(1.0f, ceil((control.region[axis] - b.physical.z - b.position[axis]) / span[axis]));
     }
+    // Zawinięcie obu osi może umieścić środek za przeciwległym rogiem,
+    // mimo że każda oś osobno zachowała nadmiar drogi. Dociągnij tylko
+    // taki przypadek do najbliższego punktu regionu, aby collider wrócił.
+    float2 wrapped = b.position.xy + delta;
+    float2 nearestWrapped = clamp(wrapped, control.region.xy, control.region.zw);
+    if (length(wrapped - nearestWrapped) > b.physical.z) delta += nearestWrapped - wrapped;
     b.position += float4(delta, delta);
     if (!all(isfinite(b.position))) { nativeSafetyFailure(safety, 1); return; }
     b.publicFlags.w = 2;
