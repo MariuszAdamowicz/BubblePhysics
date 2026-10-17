@@ -12,6 +12,7 @@ struct BubblePhysicsBenchApp: App {
                         ToolbarItem(placement: .navigationBarTrailing) {
                             Menu("Wizualizacje") {
                                 NavigationLink("Publiczny renderer Metal") { PublicMetalPreviewView() }
+                                NavigationLink("Publiczny stress-300") { PublicWorldStressView() }
                                 NavigationLink("Diagnostyka CPU/GPU") {
                                     ReferenceVisualPrototypeView()
                                         .navigationTitle("Bańki CPU/GPU")

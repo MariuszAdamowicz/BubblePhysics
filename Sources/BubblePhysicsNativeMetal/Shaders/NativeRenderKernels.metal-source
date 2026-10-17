@@ -22,7 +22,22 @@ vertex ContourVertexOutput nativeContourVertex(
     uint vertexID [[vertex_id]], uint bubbleIndex [[instance_id]],
     device const float2 *points [[buffer(0)]], device const uint *counts [[buffer(1)]],
     constant float4 &viewport [[buffer(2)]], constant uint &stride [[buffer(3)]],
-    device const RenderBubble *bubbles [[buffer(4)]]) {
+    device const RenderBubble *bubbles [[buffer(4)]],
+    device const float2 *shapeVertices [[buffer(5)]],
+    constant uint &geometryMode [[buffer(6)]]) {
+    ContourVertexOutput result;
+    if (geometryMode == 1) {
+        float2 point = shapeVertices[vertexID];
+        float2 clip = (point - viewport.xy) * 2.0 / viewport.zw;
+        result.position = float4(clip.x, clip.y, 0, 1);
+        result.worldPosition = point;
+        return result;
+    }
+    if (bubbles[bubbleIndex].publicFlags.w == 1) {
+        result.position = float4(2, 2, 0, 1);
+        result.worldPosition = float2(0);
+        return result;
+    }
     uint count = min(counts[bubbleIndex], stride);
     uint triangle = vertexID / 3;
     uint corner = vertexID % 3;
@@ -33,7 +48,6 @@ vertex ContourVertexOutput nativeContourVertex(
         if (corner == 2) point = points[first + ((triangle + 1) % count)];
     }
     float2 clip = (point - viewport.xy) * 2.0 / viewport.zw;
-    ContourVertexOutput result;
     result.position = float4(clip.x, clip.y, 0, 1);
     result.worldPosition = point;
     return result;

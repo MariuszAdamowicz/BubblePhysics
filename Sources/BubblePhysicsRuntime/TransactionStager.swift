@@ -77,7 +77,7 @@ package struct RuntimeObject: Equatable, Sendable {
         case .forceField, .sensor: return nil
         }
     }
-    var style: RenderStyleID {
+    package var style: RenderStyleID {
         switch descriptor {
         case .bubble(let value): return value.renderStyleID
         case .polygon(let value): return value.renderStyleID

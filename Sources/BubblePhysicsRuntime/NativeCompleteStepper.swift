@@ -6,8 +6,12 @@ import Metal
 package final class NativeCompleteStepper: CompleteStepper {
     private let native: NativePublicWorld?
     private var previousBlockers: [ObjectID: ObjectID] = [:]
-    package init(device: MTLDevice?) throws { native = try device.map { try NativePublicWorld(device: $0) } }
+    package init(device: MTLDevice?, configuration: NativeMetalConfiguration = .default) throws {
+        native = try device.map { try NativePublicWorld(device: $0, configuration: configuration) }
+    }
     package var publishedRenderHandoff: NativeMetalRenderHandoff? { native?.publishedRenderHandoff }
+    package var publishedTelemetry: NativeMetalFrameTelemetry? { native?.publishedTelemetry }
+    package var publishedContourCPUReadbackCount: Int { native?.publishedContourCPUReadbackCount ?? 0 }
 
     package func validate(_ change: StagedWorldChange) throws {
         func role(_ id: ObjectID, _ role: MotionRole, polygon: Bool) throws {
@@ -64,15 +68,16 @@ package final class NativeCompleteStepper: CompleteStepper {
 
     package func completeStep(_ batch: StagedTransactionBatch, duration: Double,
                               commandBuffer: MTLCommandBuffer,
-                              beforeCommit: @escaping (NativeMetalRenderHandoff) throws -> Void) async throws -> CompletedRuntimeStep {
+                              beforeCommit: @escaping (NativeMetalRenderHandoff, RuntimeState) throws -> Void) async throws -> CompletedRuntimeStep {
         try await performStep(batch, duration: duration, commandBuffer: commandBuffer, beforeCommit: beforeCommit)
     }
 
     private func performStep(_ batch: StagedTransactionBatch, duration: Double,
                              commandBuffer: MTLCommandBuffer?,
-                             beforeCommit: ((NativeMetalRenderHandoff) throws -> Void)?) async throws -> CompletedRuntimeStep {
+                             beforeCommit: ((NativeMetalRenderHandoff, RuntimeState) throws -> Void)?) async throws -> CompletedRuntimeStep {
         var state = batch.state
         try MotionControllers.prepare(&state, duration: duration)
+        let renderPreparedState = state
         // Po usunięciu ostatniego ciała potrzebna jest jedna klatka GPU, aby
         // opublikować exit i wyczyścić poprzednie pary sensora.
         guard state.objects.values.contains(where: { $0.mass != nil }) || native?.hasSensorPairHistory == true else {
@@ -92,7 +97,10 @@ package final class NativeCompleteStepper: CompleteStepper {
         let frame = try await native.step(objects: input, materials: state.physicsMaterials,
             styles: state.renderStyles, region: state.configuration.simulationRegion, duration: duration,
             eventBufferCapacity: state.configuration.eventBufferCapacity,
-            commandBuffer: commandBuffer, beforeCommit: beforeCommit)
+            commandBuffer: commandBuffer,
+            beforeCommit: beforeCommit.map { callback in
+                { handoff in try callback(handoff, renderPreparedState) }
+            })
         RegionPolicy.remove(Set(state.objects.keys).subtracting(frame.objects.keys), from: &state)
         for (id, object) in frame.objects {
             state.objects[id]?.position = object.position

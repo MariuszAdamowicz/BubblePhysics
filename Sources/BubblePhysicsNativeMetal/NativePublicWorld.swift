@@ -72,10 +72,13 @@ package final class NativePublicWorld {
     private var polygons: [ObjectID: (geometry: PolygonGeometry, position: WorldPoint, rotation: Float, segments: [ReferenceSegment])] = [:]
     private var nextSegmentID = 1
 
-    package init(device: MTLDevice) throws { solver = try NativeMetalSolver(device: device) }
+    package init(device: MTLDevice, configuration: NativeMetalConfiguration = .default) throws {
+        solver = try NativeMetalSolver(device: device, configuration: configuration)
+    }
     package var hasSensorPairHistory: Bool { solver.hasSensorPairHistory }
     package var publishedRenderHandoff: NativeMetalRenderHandoff? { solver.publishedRenderHandoff }
     package var publishedContourCPUReadbackCount: Int { solver.publishedContourCPUReadbackCount }
+    package var publishedTelemetry: NativeMetalFrameTelemetry? { solver.publishedFrame?.telemetry }
 
     package func step(objects: [NativePublicObject], materials: [PhysicsMaterialID: PhysicsMaterial],
                       styles: [RenderStyleID: RenderStyle], region: WorldRectangle, duration: Double,

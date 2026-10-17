@@ -42,6 +42,8 @@ package final class NativeMetalRenderHandoff {
         encoder.setVertexBytes(&values, length: MemoryLayout<SIMD4<Float>>.stride, index: 2)
         var stride = UInt32(contourStride)
         encoder.setVertexBytes(&stride, length: MemoryLayout<UInt32>.stride, index: 3)
+        var mode: UInt32 = 0
+        encoder.setVertexBytes(&mode, length: MemoryLayout<UInt32>.stride, index: 6)
     }
 
     package func drawAll(_ encoder: MTLRenderCommandEncoder) {

@@ -10,8 +10,14 @@ package struct BubbleWorldRenderItem {
 }
 
 package struct BubbleWorldRenderState {
-    package let handoff: NativeMetalRenderHandoff
+    package let handoff: NativeMetalRenderHandoff?
     package let items: [BubbleWorldRenderItem?]
+    package let shapes: [BubbleWorldRenderShape]
+}
+
+package struct BubbleWorldRenderShape {
+    package let vertices: [WorldPoint]
+    package let item: BubbleWorldRenderItem
 }
 
 /// Jedyny właściciel świata i kolejki transakcji. Publikuje wyłącznie ukończone kroki.
@@ -35,6 +41,20 @@ public final class BubbleWorld {
         self.init(configuration: configuration, stepper: try NativeCompleteStepper(device: device))
     }
 
+    /// Konstruktor wyłącznie dla diagnostycznego harnessu; limit nie jest parametrem API gry.
+    package static func makeBenchmarkWorld(configuration: WorldConfiguration, device: MTLDevice,
+                                           solverIterationLimit: Int) throws -> BubbleWorld {
+        try BubbleWorld(configuration: configuration, stepper: NativeCompleteStepper(device: device,
+            configuration: NativeMetalConfiguration(solverIterationCount: solverIterationLimit)))
+    }
+
+    package var benchmarkTelemetry: NativeMetalFrameTelemetry? {
+        (stepper as? NativeCompleteStepper)?.publishedTelemetry
+    }
+    package var benchmarkContourCPUReadbackCount: Int {
+        (stepper as? NativeCompleteStepper)?.publishedContourCPUReadbackCount ?? 0
+    }
+
     internal init(configuration: WorldConfiguration, stepper: any CompleteStepper) {
         self.configuration = configuration
         self.state = RuntimeState(configuration: configuration)
@@ -53,24 +73,58 @@ public final class BubbleWorld {
     /// Renderer widzi tylko opublikowany uchwyt i kanały prezentacyjne.
     package var renderState: BubbleWorldRenderState? {
         if let pendingRenderState { return pendingRenderState }
-        guard let handoff = (stepper as? NativeCompleteStepper)?.publishedRenderHandoff else { return nil }
-        return makeRenderState(handoff, from: state)
+        guard clock.completedSteps > 0 else { return nil }
+        return makeRenderState((stepper as? NativeCompleteStepper)?.publishedRenderHandoff, from: state)
     }
 
-    private func makeRenderState(_ handoff: NativeMetalRenderHandoff,
+    private func makeRenderState(_ handoff: NativeMetalRenderHandoff?,
                                  from source: RuntimeState) -> BubbleWorldRenderState {
-        let items: [BubbleWorldRenderItem?] = handoff.bubbleIDs.map { id in
+        let items: [BubbleWorldRenderItem?] = (handoff?.bubbleIDs ?? []).map { id in
             guard let object = source.objects[id], case .bubble(let bubble) = object.descriptor,
                   let style = source.renderStyles[bubble.renderStyleID] else { return nil }
             return BubbleWorldRenderItem(shader: style.shader,
                 channels: style.resolvedChannels(overrides: object.presentation))
         }
-        return BubbleWorldRenderState(handoff: handoff, items: items)
+        let shapes = source.objects.sorted { $0.key.rawValue < $1.key.rawValue }.compactMap { _, object -> BubbleWorldRenderShape? in
+            guard let style = source.renderStyles[object.style] else { return nil }
+            let ring: [WorldPoint]
+            switch object.descriptor {
+            case .bubble: return nil
+            case .polygon(let polygon): ring = polygon.geometry.vertices
+            case .sensor(let sensor): ring = Self.rangeRing(sensor.geometry)
+            case .forceField(let field): ring = Self.rangeRing(field.geometry)
+            }
+            let cosine = cos(object.rotation), sine = sin(object.rotation)
+            let vertices = ring.map { point in
+                WorldPoint(object.position.x + point.x * cosine - point.y * sine,
+                           object.position.y + point.x * sine + point.y * cosine)
+            }
+            return BubbleWorldRenderShape(vertices: vertices,
+                item: BubbleWorldRenderItem(shader: style.shader,
+                    channels: style.resolvedChannels(overrides: object.presentation)))
+        }
+        return BubbleWorldRenderState(handoff: handoff, items: items, shapes: shapes)
+    }
+
+    private static func rangeRing(_ geometry: RangeGeometry) -> [WorldPoint] {
+        switch geometry.shape {
+        case .polygon(let polygon): return polygon.vertices
+        case .circle(let radius):
+            return (0..<48).map { index in
+                let angle = Float(index) * 2 * Float.pi / 48
+                return WorldPoint(radius * cos(angle), radius * sin(angle))
+            }
+        }
     }
 
     /// CPU adapter/debug. Wywołanie kopiuje opublikowane kontury z pamięci GPU.
     public func debugContourSnapshot() -> [ObjectID: [WorldPoint]] {
-        (stepper as? NativeCompleteStepper)?.publishedRenderHandoff?.debugContourSnapshot() ?? [:]
+        let snapshot = (stepper as? NativeCompleteStepper)?.publishedRenderHandoff?.debugContourSnapshot() ?? [:]
+        return snapshot.filter { id, _ in
+            guard let object = state.objects[id] else { return false }
+            if case .bubble = object.descriptor { return true }
+            return false
+        }
     }
 
     /// Token jest unikalny w obrębie świata. Walidacja nastąpi na granicy kroku.
@@ -138,8 +192,8 @@ public final class BubbleWorld {
                 if let commandBuffer, let encodeRender,
                    let native = stepper as? NativeCompleteStepper {
                     complete = try await native.completeStep(batch, duration: clock.fixedTimeStep,
-                        commandBuffer: commandBuffer) { [self] handoff in
-                        pendingRenderState = makeRenderState(handoff, from: batch.state)
+                        commandBuffer: commandBuffer) { [self] handoff, prepared in
+                        pendingRenderState = makeRenderState(handoff, from: prepared)
                         defer { pendingRenderState = nil }
                         try encodeRender()
                     }
@@ -149,9 +203,7 @@ public final class BubbleWorld {
                 // Scena bez ciał nie uruchamia solvera, ale bufor wywołującego
                 // nadal musi zawierać ukończony render przed publikacją kroku.
                 if let commandBuffer, let encodeRender, commandBuffer.status == .notEnqueued {
-                    if let handoff = (stepper as? NativeCompleteStepper)?.publishedRenderHandoff {
-                        pendingRenderState = makeRenderState(handoff, from: batch.state)
-                    }
+                    pendingRenderState = makeRenderState(nil, from: complete.state)
                     defer { pendingRenderState = nil }
                     try encodeRender()
                     try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
