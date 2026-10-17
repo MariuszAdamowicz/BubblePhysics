@@ -82,8 +82,10 @@ package enum MotionControllers {
                 object.pathStopped = true; object.pathBlocker = blocker; object.velocity = .zero; object.angularVelocity = 0
                 state.objects[id] = object
             }
+            let pathActive = object.motionRole == .pathDriven
             result.append(DriveFeedback(objectID: id, playerDriveID: object.playerDriveID, target: target,
-                achievedPoint: object.position, blockingContact: blocker ?? object.pathBlocker, isStopped: object.pathStopped))
+                achievedPoint: object.position, blockingContact: blocker ?? (pathActive ? object.pathBlocker : nil),
+                isStopped: pathActive && object.pathStopped))
         }
         return result
     }

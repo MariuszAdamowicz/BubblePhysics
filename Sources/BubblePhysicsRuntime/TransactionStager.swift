@@ -317,7 +317,7 @@ private struct StagingContext {
         case .bubble(let value):
             // Rola runtime może różnić się od roli przy dodaniu deskryptora.
             if object.motionRole == .static {
-                var maximumRadius = value.targetRadius
+                var maximumRadius = object.targetRadius
                 if let scheduled = state.transitions[.bubbleRadius(value.id)], case .scalar(let radius) = scheduled.value {
                     maximumRadius = max(maximumRadius, radius)
                 }

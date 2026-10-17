@@ -80,6 +80,24 @@ final class TransactionStagerTests: XCTestCase {
                        reason: .invalidValue(.staticGeometryOutsideSimulationRegion))
     }
 
+    func testCompletedRadiusTransitionCannotMakeBubbleStaticOutsideRegion() throws {
+        let configuration = try WorldConfiguration(simulationRegion:
+            WorldRectangle(min: [-10, -10], max: [10, 10]))
+        let initial = RuntimeState(configuration: configuration)
+        let bubble = try BubbleDescriptor(id: id(1), position: [8, 0], targetRadius: 1,
+            physicsMaterialID: materialID, renderStyleID: styleID)
+        let transition = ParameterTransition(target: .bubbleRadius(id(1)), value: .scalar(3), duration: 1)
+        var state = try TransactionStager.stage(try resources().add(.bubble(bubble))
+            .startTransition(transition), against: initial).state
+        try MotionControllers.prepare(&state, duration: 1)
+        XCTAssertEqual(state.objects[id(1)]?.targetRadius, 3)
+        XCTAssertTrue(state.transitions.isEmpty)
+
+        assertRejected(WorldTransaction().setMotion(id(1), role: .static), against: state,
+            reason: .invalidValue(.staticGeometryOutsideSimulationRegion))
+        XCTAssertEqual(state.objects[id(1)]?.motionRole, .dynamic)
+    }
+
     func testDriveLifecycleAndInvalidRoles() throws {
         let initial = try TransactionStager.stage(resources().add(.bubble(bubble(1))), against: state()).state
         let driven = try TransactionStager.stage(WorldTransaction()

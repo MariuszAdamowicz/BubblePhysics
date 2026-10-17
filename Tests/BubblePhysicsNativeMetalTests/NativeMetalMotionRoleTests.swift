@@ -72,6 +72,22 @@ final class NativeMetalMotionRoleTests: XCTestCase {
         XCTAssertEqual(complete.state.objects[ball]?.position, position)
     }
 
+    func testPlayerDriveAfterStoppedPathReportsOnlyCurrentDriveState() async throws {
+        let stepper = try NativeCompleteStepper(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
+        var complete = try await step(stepper, initial(wallAt: 2), WorldTransaction()
+            .setPathDrive(ball, drive: PathDrive(points: [[8,0]], speed: 6)))
+        for _ in 0..<35 { complete = try await step(stepper, complete.state) }
+        XCTAssertTrue(try XCTUnwrap(complete.driveFeedback.first).isStopped)
+        XCTAssertEqual(complete.driveFeedback.first?.blockingContact?.objectID, wall)
+
+        complete = try await step(stepper, complete.state, WorldTransaction().beginPlayerDrive(ball, target: [-8,0]))
+        let feedback = try XCTUnwrap(complete.driveFeedback.first)
+        XCTAssertEqual(complete.state.objects[ball]?.motionRole, .playerDriven)
+        XCTAssertEqual(feedback.target, [-8,0])
+        XCTAssertFalse(feedback.isStopped)
+        XCTAssertNil(feedback.blockingContact)
+    }
+
     func testPlayerDrivenBubbleTransitionsToEffectiveRigidCircleThenRelaxesAfterRelease() async throws {
         let stepper = try NativeCompleteStepper(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         // Initial overlap creates real compression before capture, not a test-only contour.
