@@ -186,9 +186,9 @@ final class NativeRigidPolygonState {
         for i in changes { encoder.copy(from: buffers["updates"]!, sourceOffset: i * stride, to: bodies, destinationOffset: i * stride, size: stride) }
     }
 
-    func completed() throws -> (objects: [ObjectID: NativePublicObject], removed: Set<ObjectID>) {
+    func completed() throws -> (objects: [ObjectID: NativePublicObject], removed: Set<ObjectID>, wrapped: Set<ObjectID>) {
         let values = bodies.contents().bindMemory(to: NativeRigidBody.self, capacity: count)
-        var result: [ObjectID: NativePublicObject] = [:], removed: Set<ObjectID> = []
+        var result: [ObjectID: NativePublicObject] = [:], removed: Set<ObjectID> = [], wrapped: Set<ObjectID> = []
         for i in current.indices {
             let body = values[i]
             guard body.identity.x == current[i].object.descriptor.id.rawValue,
@@ -201,8 +201,9 @@ final class NativeRigidPolygonState {
             object.rotation = body.pose.z; object.velocity = SIMD2(body.motion.x, body.motion.y); object.angularVelocity = body.motion.z
             result[object.descriptor.id] = object
             if body.flags.z == 1 { removed.insert(object.descriptor.id) }
+            if body.flags.z == 2 { wrapped.insert(object.descriptor.id) }
         }
-        return (result, removed)
+        return (result, removed, wrapped)
     }
 
     func publish(_ objects: [ObjectID: NativePublicObject]) {

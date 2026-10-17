@@ -1,4 +1,5 @@
 import Metal
+import BubblePhysicsModel
 @_spi(ReferenceMetal) import BubblePhysicsReference
 
 @MainActor
@@ -21,6 +22,9 @@ struct NativeMetalWorldFrame {
     var renderData: [SIMD4<Float>] = []
     var isComplete = false
     var regionRemovals: Set<ReferenceBubbleID> = []
+    var regionWraps: Set<ReferenceBubbleID> = []
+    var events: [WorldEvent] = []
+    var eventOverflow = WorldEventOverflow()
 }
 
 enum NativeMetalWorldError: Error {

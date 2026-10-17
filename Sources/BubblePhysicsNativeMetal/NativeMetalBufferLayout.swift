@@ -10,6 +10,7 @@ struct NativeMetalBubble: Equatable, Sendable {
     var publicFlags = SIMD4<UInt32>.zero
     var material = SIMD4<Float>.zero
     var resources = SIMD2<UInt64>.zero
+    var eventData = SIMD2<UInt64>.zero // interest, merge groups
 
     init(_ bubble: ReferenceBubble) {
         identity = SIMD2(Int64(bubble.id.rawValue), 0)
@@ -86,6 +87,23 @@ struct NativeMetalCandidate: Sendable {
     var participants: SIMD2<Int64>
     var metadata: SIMD4<UInt32> // kind, bubbleIndex, otherIndex, valid
     var key: NativeContactKey { .init(kind: metadata.x, first: participants.x, second: participants.y) }
+}
+
+struct NativeMetalEventRecord: Sendable {
+    var participants: SIMD2<UInt64>
+    var point: SIMD4<Float>
+    var metadata: SIMD4<UInt32> // 0 merge, 1 enter, 2 exit
+}
+
+struct NativeMetalSensorRecord: Sendable {
+    var identity: SIMD2<UInt64> // sensor ID, EventInterest
+    var geometry: SIMD4<Float> // center.xy, rotation, circle radius (0 = polygon)
+    var range: SIMD4<UInt32> // vertex offset/count
+}
+
+struct NativeMetalSensorPair: Sendable {
+    var participants: SIMD2<UInt64> // sensor, bubble
+    var state: SIMD4<UInt32> // overlapping, reserved
 }
 
 struct NativeMetalGridEntry: Sendable {
@@ -178,6 +196,7 @@ struct NativeMetalSnapshot: Sendable {
             var value = NativeMetalBubble(bubble)
             if let properties {
                 value.publicFlags = properties.flags; value.material = properties.material; value.resources = properties.resources
+                value.eventData = properties.eventData
             }
             return .init(index: index, value: value)
         }

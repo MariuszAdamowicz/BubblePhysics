@@ -10,6 +10,7 @@ struct NativeBubble {
     uint4 publicFlags;
     float4 material;
     ulong2 resources;
+    ulong2 eventData;
 };
 struct NativeSegment {
     long2 identity; uint4 flags; float4 previous; float4 current;

@@ -694,3 +694,161 @@ kernel void nativeInvalidateRegionCache(device NativeBubble *bubbles [[buffer(0)
     }
     if (changed) { record.response.x = 0; record.metadata.w |= 1; cache[index] = record; }
 }
+// Kandydaci merge są wybierani przed odczytem CPU. Licznik zachowuje również
+// rekordy ponad pojemność, więc utrata jest jawna dla gry.
+struct NativeEventRecord { ulong2 participants; float4 point; uint4 metadata; };
+kernel void nativeCompactMergeEvents(device NativeBubble *bubbles [[buffer(0)]],
+    device NativeContactCache *cache [[buffer(1)]], constant NativeControl &control [[buffer(2)]],
+    device NativeContactControl &contacts [[buffer(3)]], device atomic_uint &eventCount [[buffer(4)]],
+    device NativeEventRecord *events [[buffer(5)]], constant uint &capacity [[buffer(6)]],
+    uint index [[thread_position_in_grid]]) {
+    if (index >= contacts.counts.z || contacts.counts.w) return;
+    NativeContactCache contact = cache[index];
+    if (contact.metadata.x != 0 || contact.metadata.z != contacts.limits.x) return;
+    uint low = 0, high = control.counts.x;
+    while (low < high) { uint mid = (low + high) / 2; if (bubbles[mid].identity.x < contact.participants.x) low = mid + 1; else high = mid; }
+    if (low >= control.counts.x || bubbles[low].identity.x != contact.participants.x) return;
+    NativeBubble a = bubbles[low]; low = 0; high = control.counts.x;
+    while (low < high) { uint mid = (low + high) / 2; if (bubbles[mid].identity.x < contact.participants.y) low = mid + 1; else high = mid; }
+    if (low >= control.counts.x || bubbles[low].identity.x != contact.participants.y) return;
+    NativeBubble b = bubbles[low];
+    if (!(a.eventData.x & 1ul) || !(b.eventData.x & 1ul) || !(a.eventData.y & b.eventData.y)) return;
+    uint slot = atomic_fetch_add_explicit(&eventCount, 1u, memory_order_relaxed);
+    if (slot < capacity) events[slot] = {ulong2(as_type<ulong>(contact.participants.x),
+        as_type<ulong>(contact.participants.y)), float4(contact.geometry.zw, 0, 0), uint4(0)};
+}
+
+struct NativeSensorRecord { ulong2 identity; float4 geometry; uint4 range; };
+struct NativeSensorPair { ulong2 participants; uint4 state; };
+kernel void nativeCompactSensorEvents(device NativeBubble *bubbles [[buffer(0)]],
+    constant NativeControl &control [[buffer(1)]], device NativeSensorRecord *sensors [[buffer(2)]],
+    device float2 *vertices [[buffer(3)]], device uint *allowed [[buffer(4)]],
+    device NativeSensorPair *previous [[buffer(5)]], device NativeSensorPair *current [[buffer(6)]],
+    device atomic_uint &eventCount [[buffer(7)]], device NativeEventRecord *events [[buffer(8)]],
+    constant uint4 &settings [[buffer(9)]], uint index [[thread_position_in_grid]]) {
+    uint bubbleCount = control.counts.x;
+    if (!bubbleCount || index >= bubbleCount * settings.x) return;
+    uint sensorIndex = index / bubbleCount, bubbleIndex = index % bubbleCount;
+    NativeSensorRecord sensor = sensors[sensorIndex]; NativeBubble bubble = bubbles[bubbleIndex];
+    ulong2 pair = ulong2(sensor.identity.x, as_type<ulong>(bubble.identity.x));
+    bool overlapping = false;
+    if (allowed[index] && bubble.publicFlags.w != 1) {
+        float2 d = bubble.position.xy - sensor.geometry.xy;
+        float c = cos(sensor.geometry.z), s = sin(sensor.geometry.z);
+        float2 local = float2(c*d.x+s*d.y, -s*d.x+c*d.y);
+        float radius = bubble.physical.z;
+        if (sensor.range.y == 0) {
+            float reach = sensor.geometry.w + radius;
+            overlapping = dot(local, local) <= reach * reach;
+        } else {
+            bool inside = false;
+            for (uint j = 0; j < sensor.range.y; ++j) {
+                float2 a = vertices[sensor.range.x + j];
+                float2 b = vertices[sensor.range.x + (j + 1) % sensor.range.y];
+                if ((a.y > local.y) != (b.y > local.y) &&
+                    local.x < (b.x-a.x)*(local.y-a.y)/(b.y-a.y)+a.x) inside = !inside;
+                float2 ab = b-a;
+                float t = clamp(dot(local-a, ab) / max(dot(ab, ab), 1e-20f), 0.0f, 1.0f);
+                float2 delta = local - (a+t*ab);
+                if (dot(delta, delta) <= radius*radius) overlapping = true;
+            }
+            overlapping |= inside;
+        }
+    }
+    uint low = 0, high = settings.y;
+    while (low < high) {
+        uint mid = (low + high) / 2; ulong2 candidate = previous[mid].participants;
+        if (candidate.x < pair.x || (candidate.x == pair.x && candidate.y < pair.y)) low = mid + 1;
+        else high = mid;
+    }
+    bool wasOverlapping = low < settings.y && all(previous[low].participants == pair) && previous[low].state.x != 0;
+    current[index] = {pair, uint4(overlapping ? 1u : 0u, 0, 0, 0)};
+    uint kind = overlapping && !wasOverlapping && (sensor.identity.y & (1ul << 2)) ? 1u
+        : !overlapping && wasOverlapping && (sensor.identity.y & (1ul << 3)) ? 2u : 0u;
+    if (!kind) return;
+    uint slot = atomic_fetch_add_explicit(&eventCount, 1u, memory_order_relaxed);
+    if (slot < settings.z) events[slot] = {pair, float4(bubble.position.xy, 0, 0), uint4(kind, 0, 0, 0)};
+}
+
+bool nativePointInPolygon(float2 point, device float2 *vertices, uint start, uint count,
+    float2 translation, float angle) {
+    bool inside = false;
+    for (uint i = 0; i < count; ++i) {
+        float2 a = translation + nativeRotate(vertices[start+i], angle);
+        float2 b = translation + nativeRotate(vertices[start+(i+1)%count], angle);
+        if ((a.y > point.y) != (b.y > point.y) &&
+            point.x < (b.x-a.x)*(point.y-a.y)/(b.y-a.y)+a.x) inside = !inside;
+    }
+    return inside;
+}
+float nativePointSegmentDistanceSquared(float2 point, float2 a, float2 b) {
+    float2 ab = b-a;
+    float t = clamp(dot(point-a, ab)/max(dot(ab, ab), 1e-20f), 0.0f, 1.0f);
+    float2 d = point-(a+t*ab);
+    return dot(d, d);
+}
+float nativeCross2(float2 a, float2 b) { return a.x*b.y-a.y*b.x; }
+bool nativeSegmentsCross(float2 a, float2 b, float2 c, float2 d) {
+    if (max(min(a.x, b.x), min(c.x, d.x)) > min(max(a.x, b.x), max(c.x, d.x)) ||
+        max(min(a.y, b.y), min(c.y, d.y)) > min(max(a.y, b.y), max(c.y, d.y))) return false;
+    float2 ab = b-a, cd = d-c;
+    float p = nativeCross2(ab, c-a), q = nativeCross2(ab, d-a);
+    float r = nativeCross2(cd, a-c), s = nativeCross2(cd, b-c);
+    return ((p <= 0 && q >= 0) || (p >= 0 && q <= 0)) &&
+           ((r <= 0 && s >= 0) || (r >= 0 && s <= 0));
+}
+bool nativeRigidOverlapsSensor(NativeRigidBody body, device float2 *bodyVertices,
+    NativeSensorRecord sensor, device float2 *sensorVertices) {
+    uint bodyCount = body.ranges.y, sensorCount = sensor.range.y;
+    if (!bodyCount) return false;
+    if (!sensorCount && nativePointInPolygon(sensor.geometry.xy, bodyVertices,
+        body.ranges.x, bodyCount, body.pose.xy, body.pose.z)) return true;
+    for (uint i = 0; i < bodyCount; ++i) {
+        float2 a = nativeRigidVertex(body, bodyVertices, i);
+        float2 b = nativeRigidVertex(body, bodyVertices, (i+1)%bodyCount);
+        if (!sensorCount) {
+            float radius = sensor.geometry.w;
+            if (nativePointSegmentDistanceSquared(sensor.geometry.xy, a, b) <= radius*radius) return true;
+        } else {
+            if (nativePointInPolygon(a, sensorVertices, sensor.range.x, sensorCount,
+                sensor.geometry.xy, sensor.geometry.z)) return true;
+            for (uint j = 0; j < sensorCount; ++j) {
+                float2 c = sensor.geometry.xy + nativeRotate(sensorVertices[sensor.range.x+j], sensor.geometry.z);
+                float2 d = sensor.geometry.xy + nativeRotate(sensorVertices[sensor.range.x+(j+1)%sensorCount], sensor.geometry.z);
+                if (nativeSegmentsCross(a, b, c, d)) return true;
+            }
+        }
+    }
+    if (sensorCount) {
+        float2 point = sensor.geometry.xy + nativeRotate(sensorVertices[sensor.range.x], sensor.geometry.z);
+        return nativePointInPolygon(point, bodyVertices, body.ranges.x, bodyCount, body.pose.xy, body.pose.z);
+    }
+    return false;
+}
+kernel void nativeCompactPolygonSensorEvents(device NativeRigidBody *bodies [[buffer(0)]],
+    device float2 *bodyVertices [[buffer(1)]], device NativeSensorRecord *sensors [[buffer(2)]],
+    device float2 *sensorVertices [[buffer(3)]], device uint *allowed [[buffer(4)]],
+    device NativeSensorPair *previous [[buffer(5)]], device NativeSensorPair *current [[buffer(6)]],
+    device atomic_uint &eventCount [[buffer(7)]], device NativeEventRecord *events [[buffer(8)]],
+    constant uint4 &settings [[buffer(9)]], uint index [[thread_position_in_grid]]) {
+    uint bodyCount = settings.w;
+    if (!bodyCount || index >= bodyCount * settings.x) return;
+    uint sensorIndex = index / bodyCount, bodyIndex = index % bodyCount;
+    NativeSensorRecord sensor = sensors[sensorIndex]; NativeRigidBody body = bodies[bodyIndex];
+    ulong2 pair = ulong2(sensor.identity.x, body.identity.x);
+    bool overlapping = allowed[index] && body.flags.z != 1 &&
+        nativeRigidOverlapsSensor(body, bodyVertices, sensor, sensorVertices);
+    uint low = 0, high = settings.y;
+    while (low < high) {
+        uint mid = (low+high)/2; ulong2 candidate = previous[mid].participants;
+        if (candidate.x < pair.x || (candidate.x == pair.x && candidate.y < pair.y)) low = mid+1;
+        else high = mid;
+    }
+    bool wasOverlapping = low < settings.y && all(previous[low].participants == pair) && previous[low].state.x != 0;
+    current[index] = {pair, uint4(overlapping ? 1u : 0u, 0, 0, 0)};
+    uint kind = overlapping && !wasOverlapping && (sensor.identity.y & (1ul << 2)) ? 1u
+        : !overlapping && wasOverlapping && (sensor.identity.y & (1ul << 3)) ? 2u : 0u;
+    if (!kind) return;
+    uint slot = atomic_fetch_add_explicit(&eventCount, 1u, memory_order_relaxed);
+    if (slot < settings.z) events[slot] = {pair, float4(body.pose.xy, 0, 0), uint4(kind, 0, 0, 0)};
+}

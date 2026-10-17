@@ -5,6 +5,7 @@ import Metal
 @MainActor
 package final class NativeCompleteStepper: CompleteStepper {
     private let native: NativePublicWorld?
+    private var previousBlockers: [ObjectID: ObjectID] = [:]
     package init(device: MTLDevice?) throws { native = try device.map { try NativePublicWorld(device: $0) } }
 
     package func validate(_ change: StagedWorldChange) throws {
@@ -71,7 +72,8 @@ package final class NativeCompleteStepper: CompleteStepper {
             return value
         }
         let frame = try await native.step(objects: input, materials: state.physicsMaterials,
-            styles: state.renderStyles, region: state.configuration.simulationRegion, duration: duration)
+            styles: state.renderStyles, region: state.configuration.simulationRegion, duration: duration,
+            eventBufferCapacity: state.configuration.eventBufferCapacity)
         RegionPolicy.remove(Set(state.objects.keys).subtracting(frame.objects.keys), from: &state)
         for (id, object) in frame.objects {
             state.objects[id]?.position = object.position
@@ -82,7 +84,11 @@ package final class NativeCompleteStepper: CompleteStepper {
             state.objects[id]?.effectiveRadius = object.effectiveRadius
         }
         let feedback = MotionControllers.feedback(&state, contacts: frame.contacts)
-        return .init(state: state, driveFeedback: feedback)
+        let discrete = EventCompactor.finish(frame.events, overflow: frame.eventOverflow,
+            feedback: feedback, state: state, previousBlockers: previousBlockers)
+        previousBlockers = discrete.blockers
+        return .init(state: state, events: discrete.events, eventOverflow: discrete.overflow,
+            driveFeedback: feedback)
     }
 }
 

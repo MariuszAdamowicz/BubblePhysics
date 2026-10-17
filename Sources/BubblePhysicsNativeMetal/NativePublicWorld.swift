@@ -39,18 +39,23 @@ package struct NativePublicFrame {
     package let presentation: [ObjectID: [ParameterID: Float]]
     package let profile: NativeMetalFrameProfile
     package var contacts: [ObjectID: [DriveBlockingContact]] = [:]
+    package var events: [WorldEvent] = []
+    package var eventOverflow = WorldEventOverflow()
 }
 
 struct NativePublicProperties: Equatable, Sendable {
     var flags: SIMD4<UInt32> // enabled, static, wrap, region result (0 unchanged, 1 removed, 2 wrapped)
     var material: SIMD4<Float> // damping, reserved; podatność kontaktów należy do Task 5B
     var resources: SIMD2<UInt64> // material ID, style ID
+    var eventData: SIMD2<UInt64> // interest, merge groups
 }
 
 struct NativePublicSettings: Equatable, Sendable {
     var properties: [ReferenceBubbleID: NativePublicProperties]
     var region: WorldRectangle
     var rigidPolygons: [NativeRigidPolygonInput] = []
+    var eventBufferCapacity = 1024
+    var sensors: [SensorDescriptor] = []
 }
 
 /// Adapter używa trwałego solvera; pełna publikacja następuje dopiero po powodzeniu GPU.
@@ -63,7 +68,8 @@ package final class NativePublicWorld {
     package init(device: MTLDevice) throws { solver = try NativeMetalSolver(device: device) }
 
     package func step(objects: [NativePublicObject], materials: [PhysicsMaterialID: PhysicsMaterial],
-                      styles: [RenderStyleID: RenderStyle], region: WorldRectangle, duration: Double) async throws -> NativePublicFrame {
+                      styles: [RenderStyleID: RenderStyle], region: WorldRectangle, duration: Double,
+                      eventBufferCapacity: Int = 1024) async throws -> NativePublicFrame {
         let dt = Float(duration)
         guard dt.isFinite, dt > 0, Double(dt) > 0 else { throw NativeMetalSolverError.invalidSnapshot }
         var world = ReferenceWorld(configuration: .init(timeStep: dt, linearDamping: 0, angularDamping: 0),
@@ -91,7 +97,8 @@ package final class NativePublicWorld {
                 properties[id] = NativePublicProperties(
                     flags: SIMD4(1, object.motionRole == .static ? 1 : 0, b.regionExitPolicy == .wrap ? 1 : 0, 0),
                     material: SIMD4(material.damping, material.deformability, object.rigidity, 0),
-                    resources: SIMD2(b.physicsMaterialID.rawValue, b.renderStyleID.rawValue))
+                    resources: SIMD2(b.physicsMaterialID.rawValue, b.renderStyleID.rawValue),
+                    eventData: SIMD2(b.eventInterest.rawValue, b.mergeGroups.rawValue))
                 styleID = b.renderStyleID; local = b.presentation
             case .polygon(let p):
                 guard let material = materials[p.physicsMaterialID] else { throw NativeMetalSolverError.invalidSnapshot }
@@ -125,7 +132,10 @@ package final class NativePublicWorld {
             presentation[object.descriptor.id] = style.resolvedChannels(overrides: local)
         }
         let frame = try await solver.executePublicFrame(world: world,
-            settings: NativePublicSettings(properties: properties, region: region, rigidPolygons: rigidPolygons))
+            settings: NativePublicSettings(properties: properties, region: region,
+                rigidPolygons: rigidPolygons, eventBufferCapacity: eventBufferCapacity,
+                sensors: objects.compactMap { if case .sensor(let sensor) = $0.descriptor { return sensor }; return nil }
+                    .sorted { $0.id.rawValue < $1.id.rawValue }))
         for (id, object) in solver.publishedPolygons { result[id] = object }
         for id in solver.removedPolygons { result.removeValue(forKey: id); presentation.removeValue(forKey: id) }
         for bubble in frame.bubbles {
@@ -149,9 +159,35 @@ package final class NativePublicWorld {
             contacts[first, default: []].append(.init(objectID: second, point: point, normal: normal))
             contacts[second, default: []].append(.init(objectID: first, point: point, normal: -normal))
         }
+        var discreteEvents = frame.events
+        var dropped = frame.eventOverflow.droppedCount
+        func append(_ event: WorldEvent) {
+            if discreteEvents.count < eventBufferCapacity { discreteEvents.append(event) }
+            else { dropped += 1 }
+        }
+        for bubble in frame.bubbles {
+            let id = ObjectID(rawValue: UInt64(bitPattern: Int64(bubble.id.rawValue)))
+            guard let original = objects.first(where: { $0.descriptor.id == id }), case .bubble(let descriptor) = original.descriptor else { continue }
+            if frame.regionRemovals.contains(bubble.id), descriptor.eventInterest.contains(.didExitSimulationRegion) {
+                append(.didExitSimulationRegion(id))
+            }
+            if frame.regionWraps.contains(bubble.id), descriptor.eventInterest.contains(.didWrap) {
+                append(.didWrap(id))
+            }
+        }
+        for object in objects {
+            guard case .polygon(let descriptor) = object.descriptor else { continue }
+            if solver.removedPolygons.contains(descriptor.id), descriptor.eventInterest.contains(.didExitSimulationRegion) {
+                append(.didExitSimulationRegion(descriptor.id))
+            }
+            if solver.wrappedPolygons.contains(descriptor.id), descriptor.eventInterest.contains(.didWrap) {
+                append(.didWrap(descriptor.id))
+            }
+        }
         solver.acknowledgePublication()
         polygons = candidatePolygons
         nextSegmentID = candidateNextSegmentID
-        return NativePublicFrame(objects: result, presentation: presentation, profile: frame.profile, contacts: contacts)
+        return NativePublicFrame(objects: result, presentation: presentation, profile: frame.profile,
+            contacts: contacts, events: discreteEvents, eventOverflow: WorldEventOverflow(droppedCount: dropped))
     }
 }

@@ -47,6 +47,12 @@ public enum WorldEvent: Equatable, Sendable {
     case didAdd(ObjectID)
     case didRemove(ObjectID)
     case didReplace(ObjectID)
+    case mergeContact(ObjectID, ObjectID, point: WorldPoint)
+    case driveBlocked(ObjectID, by: ObjectID, point: WorldPoint)
+    case enteredSensor(sensor: ObjectID, object: ObjectID)
+    case exitedSensor(sensor: ObjectID, object: ObjectID)
+    case didExitSimulationRegion(ObjectID)
+    case didWrap(ObjectID)
 }
 
 /// Ostatni kompletny stan. Wyniki transakcji i zdarzenia obejmują wszystkie kroki
@@ -57,11 +63,14 @@ public struct WorldFrame: Equatable, Sendable {
     public let simulationTime: Double
     public let transactionReceipts: [TransactionReceipt]
     public let events: [WorldEvent]
+    public let eventOverflow: WorldEventOverflow
     public let driveFeedback: [DriveFeedback]
     package init(stepIndex: UInt64 = 0, simulationTime: Double = 0,
-                 transactionReceipts: [TransactionReceipt], events: [WorldEvent], driveFeedback: [DriveFeedback] = []) {
+                 transactionReceipts: [TransactionReceipt], events: [WorldEvent],
+                 eventOverflow: WorldEventOverflow = WorldEventOverflow(), driveFeedback: [DriveFeedback] = []) {
         self.stepIndex = stepIndex; self.simulationTime = simulationTime
         self.transactionReceipts = transactionReceipts; self.events = events
+        self.eventOverflow = eventOverflow
         self.driveFeedback = driveFeedback
     }
 }

@@ -20,4 +20,5 @@ public struct WorldDiagnostics: Equatable, Sendable {
     public let isPaused: Bool
     public let isAdvancing: Bool
     public let lastAdvanceIssue: WorldAdvanceIssue?
+    public let eventOverflow: WorldEventOverflow
 }

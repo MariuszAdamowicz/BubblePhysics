@@ -34,7 +34,8 @@ public final class BubbleWorld {
         WorldDiagnostics(backlogSeconds: clock.backlogSeconds,
             consecutiveBackloggedAdvances: clock.consecutiveBackloggedAdvances,
             stepsInLastAdvance: stepsInLastAdvance, pendingTransactionCount: pending.count,
-            isPaused: isPaused, isAdvancing: isAdvancing, lastAdvanceIssue: lastAdvanceIssue)
+            isPaused: isPaused, isAdvancing: isAdvancing, lastAdvanceIssue: lastAdvanceIssue,
+            eventOverflow: lastFrame.eventOverflow)
     }
 
     /// Token jest unikalny w obrębie świata. Walidacja nastąpi na granicy kroku.
@@ -74,6 +75,7 @@ public final class BubbleWorld {
         defer { isAdvancing = false; clock.finishAdvance() }
         var receipts: [TransactionReceipt] = []
         var events: [WorldEvent] = []
+        var droppedEvents = 0
         while !isPaused && clock.canStep && stepsInLastAdvance < clock.maximumStepsPerAdvance {
             guard !Task.isCancelled else {
                 lastAdvanceIssue = .advanceCancelled
@@ -91,8 +93,10 @@ public final class BubbleWorld {
                 stepsInLastAdvance += 1
                 receipts += batch.frame.transactionReceipts
                 events += batch.frame.events + complete.events
+                droppedEvents += complete.eventOverflow.droppedCount
                 lastFrame = WorldFrame(stepIndex: clock.completedSteps, simulationTime: clock.simulationTime,
-                    transactionReceipts: receipts, events: events, driveFeedback: complete.driveFeedback)
+                    transactionReceipts: receipts, events: events,
+                    eventOverflow: WorldEventOverflow(droppedCount: droppedEvents), driveFeedback: complete.driveFeedback)
             } catch {
                 lastAdvanceIssue = error is CancellationError ? .advanceCancelled : .stepFailed
                 break
