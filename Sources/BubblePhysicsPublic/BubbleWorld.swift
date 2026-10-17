@@ -92,7 +92,7 @@ public final class BubbleWorld {
                 receipts += batch.frame.transactionReceipts
                 events += batch.frame.events + complete.events
                 lastFrame = WorldFrame(stepIndex: clock.completedSteps, simulationTime: clock.simulationTime,
-                    transactionReceipts: receipts, events: events)
+                    transactionReceipts: receipts, events: events, driveFeedback: complete.driveFeedback)
             } catch {
                 lastAdvanceIssue = error is CancellationError ? .advanceCancelled : .stepFailed
                 break

@@ -337,7 +337,8 @@ kernel void nativeCheckFinite(device NativeBubble *bubbles [[buffer(0)]],
 kernel void nativeRigidPredict(device NativeRigidBody *bodies [[buffer(0)]],
     device float2 *vertices [[buffer(1)]], constant uint4 &counts [[buffer(2)]],
     constant NativeControl &control [[buffer(3)]], device NativeSegment *segments [[buffer(4)]],
-    device atomic_uint *safety [[buffer(5)]], uint index [[thread_position_in_grid]]) {
+    device atomic_uint *safety [[buffer(5)]], device NativeRigidCorrection *corrections [[buffer(6)]],
+    uint index [[thread_position_in_grid]]) {
     if(index>=counts.x)return;
     NativeRigidBody b=bodies[index];b.previous.xy=b.pose.xy;b.pose.w=b.pose.z;b.flags.z=0;
     if(b.flags.x){b.motion.xyz=0;bodies[index]=b;return;}
@@ -348,7 +349,7 @@ kernel void nativeRigidPredict(device NativeRigidBody *bodies [[buffer(0)]],
     // Próbkowanie obrotu obejmuje łuk; przekroczenie budżetu odrzuca klatkę.
     uint steps=max(1u,uint(ceil(abs(b.pose.z-start.z)/0.05f)));
     if(steps>128){nativeSafetyFailure(safety,2);bodies[index]=b;return;}
-    bool crossed=false;
+    bool crossed=false;float2 contactPoint=0,contactNormal=0;long contactOwner=0;
     for(uint sample=0;sample<steps && !crossed;++sample){
         float3 p=mix(start,b.pose.xyz,float(sample)/float(steps));
         float3 q=mix(start,b.pose.xyz,float(sample+1)/float(steps));
@@ -357,17 +358,39 @@ kernel void nativeRigidPredict(device NativeRigidBody *bodies [[buffer(0)]],
             if(ulong(wall.identity.y)==b.identity.x && wall.flags.y)continue;
             for(uint k=0;k<b.ranges.y;++k){
                 float2 v=vertices[b.ranges.x+k];
-                if(nativeCenterCrossing(p.xy+nativeRotate(v,p.z),q.xy+nativeRotate(v,q.z),wall)){crossed=true;break;}
+                float2 startVertex=p.xy+nativeRotate(v,p.z),endVertex=q.xy+nativeRotate(v,q.z);
+                if(nativeCenterCrossing(startVertex,endVertex,wall)){
+                    crossed=true;contactPoint=nativeClosestPoint(endVertex,wall.current);
+                    float2 edge=wall.current.zw-wall.current.xy;
+                    contactNormal=normalize(float2(edge.y,-edge.x));
+                    if(dot(startVertex-wall.current.xy,contactNormal)<0)contactNormal=-contactNormal;
+                    contactOwner=wall.identity.y;break;
+                }
                 // Koniec ściany również nie może przejść przez krawędź bryły.
                 float2 next=vertices[b.ranges.x+(k+1)%b.ranges.y];
                 NativeSegment edge=wall;
                 edge.previous=float4(p.xy+nativeRotate(v,p.z),p.xy+nativeRotate(next,p.z));
                 edge.current=float4(q.xy+nativeRotate(v,q.z),q.xy+nativeRotate(next,q.z));
-                if(nativeCenterCrossing(wall.current.xy,wall.current.xy,edge) || nativeCenterCrossing(wall.current.zw,wall.current.zw,edge)){crossed=true;break;}
+                if(nativeCenterCrossing(wall.current.xy,wall.current.xy,edge) || nativeCenterCrossing(wall.current.zw,wall.current.zw,edge)){
+                    crossed=true;contactPoint=nativeClosestPoint(endVertex,wall.current);
+                    float2 wallEdge=wall.current.zw-wall.current.xy;
+                    contactNormal=normalize(float2(wallEdge.y,-wallEdge.x));
+                    if(dot(startVertex-wall.current.xy,contactNormal)<0)contactNormal=-contactNormal;
+                    contactOwner=wall.identity.y;break;
+                }
             }
         }
     }
-    if(crossed){b.pose.xyz=start;b.motion.xyz=0;}
+    if(crossed){
+        b.pose.xyz=start;b.motion.xyz=0;
+        for(uint j=0;j<counts.x;++j)if(j!=index && bodies[j].flags.x && bodies[j].identity.x==ulong(contactOwner)){
+            uint slot=counts.x*counts.y+min(index,j)*counts.x+max(index,j);
+            float2 pairNormal=index<j ? -contactNormal : contactNormal;
+            corrections[slot].first.w=pairNormal.x;corrections[slot].second.w=pairNormal.y;
+            corrections[slot].velocityFirst.w=contactPoint.x;corrections[slot].velocitySecond.w=contactPoint.y;
+            break;
+        }
+    }
     bodies[index]=b;
 }
 
@@ -518,17 +541,22 @@ kernel void nativeAccumulateContactPressure(device NativeBubble *bubbles [[buffe
         uint oldCount = previousCounts[old];
         float location = float(sample) * float(oldCount) / float(count);
         uint first = uint(location) % oldCount, second = (first + 1) % oldCount;
-        recovered = mix(previousDeformation[old * contour.counts.x + first].x,
-            previousDeformation[old * contour.counts.x + second].x, fract(location))
+        float oldDeficit = mix(previousDeformation[old * contour.counts.x + first].x,
+            previousDeformation[old * contour.counts.x + second].x, fract(location));
+        // Zmiana promienia zachowuje światowy kontur, a dopiero potem relaksuje go w czasie.
+        recovered = max(0.0f, 1 - previousBubbles[old].physical.z * (1-oldDeficit) / bubble.physical.z)
             * exp(-contour.shape.y * max(0.0f, bubble.physical.w) * control.physics.x);
     }
     // Wartość lambda jest używana przez solver, ale nie jest dodatkową
     // geometrią konturu. Jej lokalne maksima poruszały kontur mimo prawie
     // niezmienionej geometrii zatwierdzonej klatki.
     float4 value = float4(max(deficit, recovered), deficit, 0, 0);
-    // Task 5A obsługuje publiczne deformability=0; dodatnia podatność jest
-    // odrzucana przez runtime do czasu implementacji kontaktów materiałowych.
-    if (bubble.publicFlags.x) value.xy = 0;
+    if (bubble.publicFlags.x) {
+        float softness = bubble.material.y * (1 - bubble.material.z);
+        value = float4(max(max(deficit, directionalPressure * softness), recovered), deficit, 0, 0);
+        if (softness == 0 && bubble.material.z == 0) value.xy = 0;
+        if (bubble.material.z >= 1) value.xy = 0;
+    }
     if (!all(isfinite(value))) nativeSafetyFailure(safety, 1);
     pressure[index] = value;
 }

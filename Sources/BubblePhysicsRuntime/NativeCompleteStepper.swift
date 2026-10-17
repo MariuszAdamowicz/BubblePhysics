@@ -9,9 +9,7 @@ package final class NativeCompleteStepper: CompleteStepper {
 
     package func validate(_ change: StagedWorldChange) throws {
         func role(_ id: ObjectID, _ role: MotionRole, polygon: Bool) throws {
-            guard role == .static || role == .dynamic || (polygon && role == .motorDriven) else {
-                throw TransactionRejectionReason.unsupportedMotionRole(id, role)
-            }
+            // Wszystkie role fizyczne mają kontroler; brak aktywnego celu oznacza spoczynek.
         }
         func descriptor(_ value: WorldObject) throws {
             switch value {
@@ -25,25 +23,29 @@ package final class NativeCompleteStepper: CompleteStepper {
                 switch operation {
                 case .add(let value), .replace(_, let value): try descriptor(value)
                 case .replacePolygons(_, let results): for p in results { try descriptor(.polygon(p)) }
-                case .mergeBubbles(_, let result): try role(result.id, result.motionRole, polygon: false)
+                case .mergeBubbles(_, let result):
+                    guard result.motionRole == .dynamic || result.motionRole == .static else {
+                        throw TransactionRejectionReason.unsupportedMotionRole(result.id, result.motionRole)
+                    }
                 case .splitBubble(_, let first, let second):
-                    try role(first.result.id, first.result.motionRole, polygon: false)
-                    try role(second.result.id, second.result.motionRole, polygon: false)
+                    for result in [first.result, second.result] where result.motionRole != .dynamic && result.motionRole != .static {
+                        throw TransactionRejectionReason.unsupportedMotionRole(result.id, result.motionRole)
+                    }
                 case .setMotion(let id, let value):
                     if let object = change.state.objects[id] {
                         if case .polygon = object.descriptor { try role(id, value, polygon: true) }
                         else { try role(id, value, polygon: false) }
                     }
-                case .beginPlayerDrive(let id, _): throw TransactionRejectionReason.unsupportedMotionRole(id, .playerDriven)
                 case .updatePhysicsMaterial(let id, let material):
                     if material.friction != 0 { throw TransactionRejectionReason.unsupportedPhysicsParameter(id, .friction) }
                     if material.restitution != 0 { throw TransactionRejectionReason.unsupportedPhysicsParameter(id, .restitution) }
-                    if material.deformability != 0 {
+                    if material.kind == .polygon && material.deformability != 0 {
                         throw TransactionRejectionReason.unsupportedPhysicsParameter(id, .deformability)
                     }
                 case .startTransition(let transition):
                     if case .physicsMaterial(let id, let parameter) = transition.target,
-                       case .scalar(let value) = transition.value, value > 0, parameter != .damping {
+                       case .scalar(let value) = transition.value, value > 0,
+                       parameter == .friction || parameter == .restitution || (parameter == .deformability && change.state.physicsMaterials[id]?.kind == .polygon) {
                         throw TransactionRejectionReason.unsupportedPhysicsParameter(id, parameter)
                     }
                 default: break
@@ -56,6 +58,7 @@ package final class NativeCompleteStepper: CompleteStepper {
 
     package func completeStep(_ batch: StagedTransactionBatch, duration: Double) async throws -> CompletedRuntimeStep {
         var state = batch.state
+        try MotionControllers.prepare(&state, duration: duration)
         // Pusty świat i nieruchome niekolizyjne obiekty nie wymagają wykonania GPU.
         guard state.objects.values.contains(where: { $0.mass != nil }) else { return .init(state: state) }
         guard let native else { throw NativeRuntimeError.deviceUnavailable }
@@ -64,6 +67,7 @@ package final class NativeCompleteStepper: CompleteStepper {
             value.position = object.position; value.previousPosition = object.previousPosition
             value.velocity = object.velocity; value.rotation = object.rotation
             value.angularVelocity = object.angularVelocity; value.motionRole = object.motionRole
+            value.collisionRadius = object.collisionRadius; value.rigidity = object.rigidity
             return value
         }
         let frame = try await native.step(objects: input, materials: state.physicsMaterials,
@@ -75,8 +79,10 @@ package final class NativeCompleteStepper: CompleteStepper {
             state.objects[id]?.velocity = object.velocity
             state.objects[id]?.rotation = object.rotation
             state.objects[id]?.angularVelocity = object.angularVelocity
+            state.objects[id]?.effectiveRadius = object.effectiveRadius
         }
-        return .init(state: state)
+        let feedback = MotionControllers.feedback(&state, contacts: frame.contacts)
+        return .init(state: state, driveFeedback: feedback)
     }
 }
 

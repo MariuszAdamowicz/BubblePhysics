@@ -222,6 +222,7 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
     private var frameNumber: UInt32 = 0
     private let rigidState: NativeRigidPolygonState
     private(set) var publishedPolygons: [ObjectID: NativePublicObject] = [:]
+    private(set) var publishedDriveContacts: [ObjectID: [DriveBlockingContact]] = [:]
     private(set) var removedPolygons: Set<ObjectID> = []
     private(set) var cachedContacts: [NativeContactCacheRecord] = []
     private(set) var candidateKeys: [NativeContactKey] = []
@@ -530,7 +531,7 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
         }
         if hasRigidBodies {
             dispatch("nativeRigidPredict", buffers: [rigidState.bodies, rigidState.vertices, rigidState.control,
-                state.control, state.workingSegments, state.safetyControl], threads: rigidState.count)
+                state.control, state.workingSegments, state.safetyControl, rigidState.contacts], threads: rigidState.count)
         }
         dispatchReduction("nativePrepareGrid", buffers: [state.workingBubbles, state.control, state.contactControl])
         dispatch("nativeBuildGrid", buffers: [state.workingBubbles, state.control, state.contactControl, state.grid], threads: state.bubbleCapacity)
@@ -818,9 +819,13 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
             profile: profile, contours: contours, renderData: renderData, isComplete: true)
         frame.regionRemovals = Set(bubbles.indices.compactMap { records[$0].publicFlags.w == 1 ? bubbles[$0].id : nil })
         let rigidResult = try rigidState.completed()
+        let driveContacts = hasRigidBodies ? rigidState.driveContacts(bubbleIDs: bubbles.map {
+            ObjectID(rawValue: UInt64(bitPattern: Int64($0.id.rawValue)))
+        }) : [:]
         // Synchroniczna publikacja dopiero po pomyślnym wykonaniu i readbacku.
         rigidState.publish(rigidResult.objects)
         publishedPolygons = rigidResult.objects
+        publishedDriveContacts = driveContacts
         removedPolygons = rigidResult.removed
         state.publish()
         state.publishedCacheCount = completedCache.count

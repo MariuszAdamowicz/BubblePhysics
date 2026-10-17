@@ -98,6 +98,7 @@ public struct ObjectFilter: Equatable, Sendable {
 }
 
 public struct BubbleDescriptor: Equatable, Sendable {
+    public let drivePolicy: BubbleDrivePolicy
     public let id: ObjectID
     public let position: WorldPoint
     public let velocity: WorldPoint
@@ -115,12 +116,14 @@ public struct BubbleDescriptor: Equatable, Sendable {
                 targetRadius: Float, mass: Float = 1, motionRole: MotionRole = .dynamic,
                 regionExitPolicy: RegionExitPolicy = .remove, physicsMaterialID: PhysicsMaterialID,
                 renderStyleID: RenderStyleID, mergeGroups: MergeGroupSet = [],
-                eventInterest: EventInterest = [], presentation: PresentationParameters = .empty) throws {
+                eventInterest: EventInterest = [], presentation: PresentationParameters = .empty,
+                drivePolicy: BubbleDrivePolicy = .standard) throws {
         try requireFinite(position, "bubble.position")
         try requireFinite(velocity, "bubble.velocity")
         try requirePositive(targetRadius, "bubble.targetRadius")
         try requirePositive(mass, "bubble.mass")
         self.id = id
+        self.drivePolicy = drivePolicy
         self.position = position
         self.velocity = velocity
         self.targetRadius = targetRadius

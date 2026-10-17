@@ -9,6 +9,8 @@ package struct RuntimeState: Equatable, Sendable {
     package var renderStyles: [RenderStyleID: RenderStyle] = [:]
     package var transitions: [TransitionTarget: ParameterTransition] = [:]
     package var globalForce: WorldPoint
+    package var nextDriveID: UInt64 = 1
+    package var transitionProgress: [TransitionTarget: PhysicalTransitionProgress] = [:]
 
     package init(configuration: WorldConfiguration) {
         self.configuration = configuration
@@ -26,6 +28,20 @@ package struct RuntimeObject: Equatable, Sendable {
     package var angularVelocity: Float
     package var playerDriveTarget: WorldPoint?
     package var motionBeforeDrive: MotionRole?
+    package var playerDriveID: PlayerDriveID?
+    package var pathDrive: PathDrive?
+    package var pathIndex = 0
+    package var pathStopped = false
+    package var pathBlocker: DriveBlockingContact?
+    package var motorDrive: MotorDrive?
+    package var targetRadius: Float = 0
+    package var collisionRadius: Float = 0
+    package var effectiveRadius: Float = 0
+    package var capturedRadius: Float?
+    package var rigidity: Float = 0
+    package var radiusBlendStart: Float = 0
+    package var rigidityBlendStart: Float = 0
+    package var shapeElapsed: Double = 0
 
     init(_ descriptor: WorldObject) {
         self.descriptor = descriptor
@@ -41,6 +57,9 @@ package struct RuntimeObject: Equatable, Sendable {
         case .sensor(let value): position = value.position; rotation = value.rotation; angularVelocity = 0
         }
         previousPosition = position
+        if case .bubble(let bubble) = descriptor {
+            targetRadius = bubble.targetRadius; collisionRadius = bubble.targetRadius; effectiveRadius = bubble.targetRadius
+        }
     }
     var material: (PhysicsMaterialID, PhysicsMaterialKind)? {
         switch descriptor {
@@ -180,9 +199,21 @@ private struct StagingContext {
                 throw TransactionRejectionReason.driveNotActive(id)
             }
             existing.motionRole = role
-            if role != .playerDriven { existing.playerDriveTarget = nil; existing.motionBeforeDrive = nil }
+            if role != .playerDriven {
+                existing.playerDriveTarget = nil; existing.playerDriveID = nil; existing.motionBeforeDrive = nil
+                existing.radiusBlendStart = existing.collisionRadius; existing.rigidityBlendStart = existing.rigidity; existing.shapeElapsed = 0
+            }
+            if role != .pathDriven { existing.pathDrive = nil; existing.pathBlocker = nil; existing.pathStopped = false }
+            if role != .motorDriven { existing.motorDrive = nil }
             try validate(existing)
             state.objects[id] = existing
+        case .setPathDrive(let id, let drive):
+            try apply(.setMotion(id, .pathDriven))
+            state.objects[id]?.pathDrive = drive; state.objects[id]?.pathIndex = 0
+            state.objects[id]?.pathStopped = false; state.objects[id]?.pathBlocker = nil
+        case .setMotorDrive(let id, let drive):
+            try apply(.setMotion(id, .motorDriven))
+            state.objects[id]?.motorDrive = drive
         case .setGlobalForce(let force):
             try requireFinite(force, "globalForce")
             state.globalForce = force
@@ -205,6 +236,11 @@ private struct StagingContext {
             guard existing.playerDriveTarget == nil else { throw TransactionRejectionReason.driveAlreadyActive(id) }
             existing.motionBeforeDrive = existing.motionRole == .playerDriven ? .dynamic : existing.motionRole
             existing.motionRole = .playerDriven; existing.playerDriveTarget = target
+            existing.playerDriveID = PlayerDriveID(rawValue: state.nextDriveID)
+            guard state.nextDriveID < UInt64.max else { throw ModelValidationError.valueOutOfRange("drive.id") }
+            state.nextDriveID += 1
+            existing.capturedRadius = existing.effectiveRadius
+            existing.radiusBlendStart = existing.collisionRadius; existing.rigidityBlendStart = existing.rigidity; existing.shapeElapsed = 0
             state.objects[id] = existing
         case .updatePlayerDrive(let id, let target):
             try requireFinite(target, "playerDrive.target")
@@ -216,12 +252,14 @@ private struct StagingContext {
             var existing = try physicalObject(id)
             guard existing.playerDriveTarget != nil else { throw TransactionRejectionReason.driveNotActive(id) }
             existing.motionRole = existing.motionBeforeDrive ?? .dynamic
-            existing.playerDriveTarget = nil; existing.motionBeforeDrive = nil
+            existing.playerDriveTarget = nil; existing.playerDriveID = nil; existing.motionBeforeDrive = nil
+            existing.radiusBlendStart = existing.collisionRadius; existing.rigidityBlendStart = existing.rigidity; existing.shapeElapsed = 0
             try validate(existing)
             state.objects[id] = existing
         case .startTransition(let transition):
             try validate(transition)
             state.transitions[transition.target] = transition
+            state.transitionProgress.removeValue(forKey: transition.target)
         case .mergeBubbles(let sources, let result): try merge(sources, result: result)
         case .splitBubble(let source, let first, let second): try split(source, first: first, second: second)
         case .replacePolygons(let sources, let results):
@@ -267,6 +305,7 @@ private struct StagingContext {
             default: return true
             }
         }
+        state.transitionProgress = state.transitionProgress.filter { state.transitions[$0.key] != nil }
     }
     func validate(_ object: RuntimeObject) throws {
         if let (id, kind) = object.material {

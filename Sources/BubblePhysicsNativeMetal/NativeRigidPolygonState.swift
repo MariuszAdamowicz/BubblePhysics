@@ -169,6 +169,8 @@ final class NativeRigidPolygonState {
     }
 
     func encodeInputs(_ encoder: MTLBlitCommandEncoder) {
+        // Feedback obejmuje kontakty napotkane w tym kroku, także po rozdzieleniu brył.
+        encoder.fill(buffer: contacts, range: 0..<contacts.length, value: 0)
         let stride = MemoryLayout<NativeRigidBody>.stride
         if copyPublishedGeometry {
             if vertexCount > 0 {
@@ -210,5 +212,26 @@ final class NativeRigidPolygonState {
         let oldVertices = buffers["publishedVertices"]!; buffers["publishedVertices"] = vertices; buffers["vertices"] = oldVertices
         let oldTriangles = buffers["publishedTriangles"]!; buffers["publishedTriangles"] = triangles; buffers["triangles"] = oldTriangles
         geometryCache = geometryCache.filter { objects[$0.key] != nil }
+    }
+
+    /// Geometria ostatniej iteracji GPU; nie przelicza kontaktów na CPU.
+    func driveContacts(bubbleIDs: [ObjectID]) -> [ObjectID: [DriveBlockingContact]] {
+        let values = contacts.contents().bindMemory(to: SIMD4<Float>.self, capacity: contactCount * 4)
+        var result: [ObjectID: [DriveBlockingContact]] = [:]
+        for index in 0..<contactCount {
+            let normal = WorldPoint(values[index*4].w, values[index*4+1].w)
+            guard normal.x != 0 || normal.y != 0 else { continue }
+            let point = WorldPoint(values[index*4+2].w, values[index*4+3].w)
+            let first: ObjectID, second: ObjectID
+            if index < count * bubbleIDs.count {
+                first = bubbleIDs[index / count]; second = current[index % count].object.descriptor.id
+            } else {
+                let slot = index - count * bubbleIDs.count
+                first = current[slot / count].object.descriptor.id; second = current[slot % count].object.descriptor.id
+            }
+            result[first, default: []].append(.init(objectID: second, point: point, normal: -normal))
+            result[second, default: []].append(.init(objectID: first, point: point, normal: normal))
+        }
+        return result
     }
 }

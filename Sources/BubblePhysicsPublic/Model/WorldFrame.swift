@@ -57,9 +57,11 @@ public struct WorldFrame: Equatable, Sendable {
     public let simulationTime: Double
     public let transactionReceipts: [TransactionReceipt]
     public let events: [WorldEvent]
+    public let driveFeedback: [DriveFeedback]
     package init(stepIndex: UInt64 = 0, simulationTime: Double = 0,
-                 transactionReceipts: [TransactionReceipt], events: [WorldEvent]) {
+                 transactionReceipts: [TransactionReceipt], events: [WorldEvent], driveFeedback: [DriveFeedback] = []) {
         self.stepIndex = stepIndex; self.simulationTime = simulationTime
         self.transactionReceipts = transactionReceipts; self.events = events
+        self.driveFeedback = driveFeedback
     }
 }

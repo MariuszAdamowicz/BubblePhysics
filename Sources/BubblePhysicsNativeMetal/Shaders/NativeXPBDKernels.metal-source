@@ -488,7 +488,9 @@ kernel void nativeRigidContacts(device NativeRigidBody *bodies [[buffer(0)]],
     device atomic_uint *safety [[buffer(7)]],
     uint index [[thread_position_in_grid]]) {
     if(index>=counts.z)return;
-    NativeRigidCorrection result={float4(0),float4(0),float4(0),float4(0)};
+    NativeRigidCorrection previous=corrections[index];
+    NativeRigidCorrection result={float4(0,0,0,previous.first.w),float4(0,0,0,previous.second.w),
+        float4(0,0,0,previous.velocityFirst.w),float4(0,0,0,previous.velocitySecond.w)};
     uint bubblePairs=counts.x*counts.y;
     float2 n=0,point=0,va=0,vb=0,ra=0,rb=0;
     float wa=0,wb=0,ia=0,ib=0,depth=0,spinA=0,spinB=0;
@@ -585,12 +587,13 @@ kernel void nativeRigidContacts(device NativeRigidBody *bodies [[buffer(0)]],
     float ca=nativeCross(ra,n),cb=nativeCross(rb,n),denom=wa+wb+ia*ca*ca+ib*cb*cb;
     if(depth < -0.001f || denom<=FLT_MIN){corrections[index]=result;return;}
     float lambda=max(0.0f,depth)/denom*0.5f;
-    result.first=float4(-n*wa*lambda,-ca*ia*lambda,0);
-    result.second=float4(n*wb*lambda,cb*ib*lambda,0);
+    // Nieużywane lane'y w przenoszą geometrię ciągłego feedbacku bez drugiego solve/readbacku.
+    result.first=float4(-n*wa*lambda,-ca*ia*lambda,n.x);
+    result.second=float4(n*wb*lambda,cb*ib*lambda,n.y);
     float closing=dot(vb-va,n)+spinB*cb-spinA*ca;
     float impulse=max(0.0f,-closing)/denom*0.5f;
-    result.velocityFirst=float4(-n*wa*impulse,-ca*ia*impulse,0);
-    result.velocitySecond=float4(n*wb*impulse,cb*ib*impulse,0);
+    result.velocityFirst=float4(-n*wa*impulse,-ca*ia*impulse,point.x);
+    result.velocitySecond=float4(n*wb*impulse,cb*ib*impulse,point.y);
     corrections[index]=result;
 }
 

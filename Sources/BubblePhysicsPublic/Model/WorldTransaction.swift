@@ -87,6 +87,8 @@ public enum WorldOperation: Equatable, Sendable {
     case updatePhysicsMaterial(PhysicsMaterialID, PhysicsMaterial)
     case updateRenderStyle(RenderStyleID, RenderStyle)
     case setMotion(ObjectID, MotionRole)
+    case setPathDrive(ObjectID, PathDrive)
+    case setMotorDrive(ObjectID, MotorDrive)
     case setGlobalForce(WorldPoint)
     case applyImpulse(ObjectID, WorldPoint)
     case beginPlayerDrive(ObjectID, WorldPoint)
@@ -112,6 +114,8 @@ public struct WorldTransaction: Equatable, Sendable {
     public func updatePhysicsMaterial(_ id: PhysicsMaterialID, material: PhysicsMaterial) -> Self { appending(.updatePhysicsMaterial(id, material)) }
     public func updateRenderStyle(_ id: RenderStyleID, style: RenderStyle) -> Self { appending(.updateRenderStyle(id, style)) }
     public func setMotion(_ id: ObjectID, role: MotionRole) -> Self { appending(.setMotion(id, role)) }
+    public func setPathDrive(_ id: ObjectID, drive: PathDrive) -> Self { appending(.setPathDrive(id, drive)) }
+    public func setMotorDrive(_ id: ObjectID, drive: MotorDrive) -> Self { appending(.setMotorDrive(id, drive)) }
     public func setGlobalForce(_ force: WorldPoint) -> Self { appending(.setGlobalForce(force)) }
     public func applyImpulse(to id: ObjectID, impulse: WorldPoint) -> Self { appending(.applyImpulse(id, impulse)) }
     public func beginPlayerDrive(_ id: ObjectID, target: WorldPoint) -> Self { appending(.beginPlayerDrive(id, target)) }

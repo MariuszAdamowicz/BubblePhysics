@@ -10,5 +10,6 @@ package enum RegionPolicy {
             default: return true
             }
         }
+        state.transitionProgress = state.transitionProgress.filter { state.transitions[$0.key] != nil }
     }
 }

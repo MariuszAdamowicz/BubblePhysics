@@ -14,7 +14,9 @@ extension CompleteStepper {
 package struct CompletedRuntimeStep {
     package let state: RuntimeState
     package let events: [WorldEvent]
-    package init(state: RuntimeState, events: [WorldEvent] = []) {
+    package let driveFeedback: [DriveFeedback]
+    package init(state: RuntimeState, events: [WorldEvent] = [], driveFeedback: [DriveFeedback] = []) {
         self.state = state; self.events = events
+        self.driveFeedback = driveFeedback
     }
 }

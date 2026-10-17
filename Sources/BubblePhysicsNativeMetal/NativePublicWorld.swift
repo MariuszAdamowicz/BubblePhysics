@@ -12,12 +12,16 @@ package struct NativePublicObject: Equatable, Sendable {
     package var rotation: Float
     package var angularVelocity: Float
     package var motionRole: MotionRole
+    package var collisionRadius: Float = 0
+    package var effectiveRadius: Float = 0
+    package var rigidity: Float = 0
 
     package init(descriptor: WorldObject) {
         self.descriptor = descriptor
         switch descriptor {
         case .bubble(let b):
             position = b.position; velocity = b.velocity; rotation = 0; angularVelocity = 0; motionRole = b.motionRole
+            collisionRadius = b.targetRadius; effectiveRadius = b.targetRadius
         case .polygon(let p):
             position = p.position; velocity = p.velocity; rotation = p.rotation
             angularVelocity = p.angularVelocity; motionRole = p.motionRole
@@ -34,6 +38,7 @@ package struct NativePublicFrame {
     package var objects: [ObjectID: NativePublicObject]
     package let presentation: [ObjectID: [ParameterID: Float]]
     package let profile: NativeMetalFrameProfile
+    package var contacts: [ObjectID: [DriveBlockingContact]] = [:]
 }
 
 struct NativePublicProperties: Equatable, Sendable {
@@ -75,23 +80,21 @@ package final class NativePublicWorld {
             switch object.descriptor {
             case .bubble(let b):
                 guard let material = materials[b.physicsMaterialID], material.friction == 0, material.restitution == 0,
-                      material.deformability == 0,
-                      object.motionRole == .dynamic || object.motionRole == .static else { throw NativeMetalSolverError.invalidSnapshot }
+                      object.collisionRadius > 0, object.collisionRadius.isFinite else { throw NativeMetalSolverError.invalidSnapshot }
                 let id = ReferenceBubbleID(rawValue: Int(bitPattern: UInt(b.id.rawValue)))
                 var bubble = try ReferenceBubble(id: id, center: .init(x: object.position.x, y: object.position.y),
-                    velocity: .init(x: object.velocity.x, y: object.velocity.y), mass: b.mass, targetRadius: b.targetRadius,
+                    velocity: .init(x: object.velocity.x, y: object.velocity.y), mass: b.mass, targetRadius: object.collisionRadius,
                     stiffness: 1, rotation: object.rotation, angularVelocity: object.angularVelocity)
                 bubble.previousCenter = .init(x: object.previousPosition.x, y: object.previousPosition.y)
                 if object.motionRole == .static { bubble.inverseMass = 0 }
                 world.addBubble(bubble)
                 properties[id] = NativePublicProperties(
                     flags: SIMD4(1, object.motionRole == .static ? 1 : 0, b.regionExitPolicy == .wrap ? 1 : 0, 0),
-                    material: SIMD4(material.damping, 0, 0, 0),
+                    material: SIMD4(material.damping, material.deformability, object.rigidity, 0),
                     resources: SIMD2(b.physicsMaterialID.rawValue, b.renderStyleID.rawValue))
                 styleID = b.renderStyleID; local = b.presentation
             case .polygon(let p):
-                guard [.static, .dynamic, .motorDriven].contains(object.motionRole),
-                      let material = materials[p.physicsMaterialID] else { throw NativeMetalSolverError.invalidSnapshot }
+                guard let material = materials[p.physicsMaterialID] else { throw NativeMetalSolverError.invalidSnapshot }
                 rigidPolygons.append(.init(object: object, damping: material.damping))
                 styleID = p.renderStyleID; local = p.presentation
                 // Statyczne krawędzie zachowują dotychczasowy cache i guardy baniek.
@@ -133,10 +136,22 @@ package final class NativePublicWorld {
             result[id]?.velocity = [bubble.velocity.x, bubble.velocity.y]
             result[id]?.rotation = bubble.rotation
             result[id]?.angularVelocity = bubble.angularVelocity
+            result[id]?.effectiveRadius = frame.contours[bubble.id]?.map { ($0 - bubble.center).length }.min() ?? bubble.targetRadius
+        }
+        var contacts = solver.publishedDriveContacts
+        func objectID(_ value: Int) -> ObjectID { ObjectID(rawValue: UInt64(bitPattern: Int64(value))) }
+        let segmentOwners = Dictionary(uniqueKeysWithValues: candidatePolygons.flatMap { id, polygon in polygon.segments.map { ($0.id, id) } })
+        for contact in frame.contacts {
+            let first = objectID(contact.bubbleA.rawValue)
+            let second = contact.bubbleB.map { objectID($0.rawValue) } ?? contact.segment.flatMap { segmentOwners[$0] }
+            guard let second else { continue }
+            let normal = WorldPoint(contact.normal.x, contact.normal.y), point = WorldPoint(contact.pointQ.x, contact.pointQ.y)
+            contacts[first, default: []].append(.init(objectID: second, point: point, normal: normal))
+            contacts[second, default: []].append(.init(objectID: first, point: point, normal: -normal))
         }
         solver.acknowledgePublication()
         polygons = candidatePolygons
         nextSegmentID = candidateNextSegmentID
-        return NativePublicFrame(objects: result, presentation: presentation, profile: frame.profile)
+        return NativePublicFrame(objects: result, presentation: presentation, profile: frame.profile, contacts: contacts)
     }
 }
