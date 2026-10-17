@@ -281,7 +281,7 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
                      "nativeUpdateVelocities", "nativeDampContactNormalMotion", "nativeFinalizeSolverContacts", "nativeFindFastCandidates",
                      "nativeResolveCCD", "nativeApplyCenterGuards", "nativeSeparateContainedBubbles",
                      "nativeReapplyCenterGuards", "nativeValidateBubbleContainment", "nativeInvalidateSafetyCache", "nativeCheckFinite",
-                     "nativeAccumulateContactPressure", "nativeGenerateContours", "nativePrepareRenderData",
+                     "nativeAccumulateContactPressure", "nativeSeedStructuralContours", "nativeGenerateContours", "nativePrepareRenderData",
                      "nativeApplyPublicRegion", "nativeInvalidateRegionCache",
                      "nativeCompactMergeEvents",
                      "nativeCompactSensorEvents",
@@ -410,6 +410,14 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
                 invalidationRecords.append(SIMD2(Int64(segment.id.rawValue), 1))
             }
         }
+        if let structuralShapes = snapshot.publicSettings?.structuralShapes {
+            for id in structuralShapes.keys.sorted(by: { $0.rawValue < $1.rawValue }) {
+                let value = Int64(bitPattern: id.rawValue)
+                if !invalidationRecords.contains(where: { $0.x == value && $0.y == 0 }) {
+                    invalidationRecords.append(SIMD2(value, 0))
+                }
+            }
+        }
         for (index, value) in invalidationRecords.enumerated() {
             state.invalidations.contents().advanced(by: index * MemoryLayout<SIMD2<Int64>>.stride).storeBytes(of: value, as: SIMD2<Int64>.self)
         }
@@ -431,6 +439,41 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
             if !values.isEmpty { values.withUnsafeBytes { memcpy(buffer.contents(), $0.baseAddress!, $0.count) } }
             return buffer
         }
+        var structuralHeaders: [NativeStructuralHeader] = []
+        var structuralSources: [NativeStructuralSourceRecord] = []
+        var structuralClips: [SIMD4<Float>] = []
+        let previousStructuralIndices: [ObjectID: UInt64] = snapshot.publicSettings?.structuralShapes.isEmpty == false
+            ? Dictionary(uniqueKeysWithValues: (lastSnapshot?.sourceBubbles ?? []).enumerated().map { index, bubble in
+                (ObjectID(rawValue: UInt64(bitPattern: Int64(bubble.id.rawValue))), UInt64(index))
+            }) : [:]
+        for bubble in snapshot.sourceBubbles {
+            let id = ObjectID(rawValue: UInt64(bitPattern: Int64(bubble.id.rawValue)))
+            let shape = snapshot.publicSettings?.structuralShapes[id]
+            let first = structuralSources.count
+            if let shape {
+                for source in shape.sources {
+                    let clipStart = structuralClips.count
+                    structuralClips += source.clips
+                    guard clipStart <= Int(UInt32.max), source.clips.count <= Int(UInt32.max),
+                          structuralClips.count <= Int(UInt32.max) else { throw NativeMetalSolverError.allocationFailed }
+                    structuralSources.append(.init(identity: SIMD2(source.id.rawValue,
+                        previousStructuralIndices[source.id] ?? UInt64.max),
+                        geometry: SIMD4(source.center.x, source.center.y, source.radius, 0),
+                        clips: SIMD4(UInt32(clipStart), UInt32(source.clips.count), 0, 0)))
+                }
+            }
+            guard first <= Int(UInt32.max), structuralSources.count <= Int(UInt32.max),
+                  structuralSources.count - first <= Int(UInt32.max) else { throw NativeMetalSolverError.allocationFailed }
+            structuralHeaders.append(.init(range: SIMD4(UInt32(first), UInt32(structuralSources.count - first), 0, 0),
+                origin: SIMD4(shape?.origin.x ?? 0, shape?.origin.y ?? 0, 0, 0)))
+        }
+        guard structuralSources.count <= Int(UInt32.max), structuralClips.count <= Int(UInt32.max) else {
+            throw NativeMetalSolverError.allocationFailed
+        }
+        // Standardowe klatki nie alokują buforów operacji strukturalnych.
+        let structuralHeaderBuffer = try structuralSources.isEmpty ? state.eventRecords : eventBuffer(structuralHeaders)
+        let structuralSourceBuffer = try structuralSources.isEmpty ? state.eventRecords : eventBuffer(structuralSources)
+        let structuralClipBuffer = try structuralClips.isEmpty ? state.eventRecords : eventBuffer(structuralClips)
         let sensors = snapshot.publicSettings?.sensors ?? []
         let (pairCount, pairOverflow) = sensors.count.multipliedReportingOverflow(by: count)
         let rigidInputs = snapshot.publicSettings?.rigidPolygons ?? []
@@ -751,6 +794,12 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
             state.workingCache, state.control, state.contactControl, state.contourControl, state.publishedBubbles,
             state.publishedDeformation, state.publishedContourCounts, state.contourScratch, state.workingContourCounts,
             state.adjacency, state.adjacencyCounts, state.safetyControl], threads: count * state.contourStride)
+        if !structuralSources.isEmpty {
+            dispatch("nativeSeedStructuralContours", buffers: [state.workingBubbles, structuralHeaderBuffer,
+                structuralSourceBuffer, structuralClipBuffer, state.contourScratch, state.workingContourCounts,
+                state.control, state.contourControl, state.safetyControl, state.publishedBubbles,
+                state.publishedDeformation, state.publishedContourCounts], threads: count * state.contourStride)
+        }
         var contourInput = state.contourScratch
         var contourOutput = state.workingDeformation
         // Liczba nieparzysta: wynik pozostaje w roboczym buforze ping-pong.

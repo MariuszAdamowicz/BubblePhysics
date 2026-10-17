@@ -118,7 +118,8 @@ package enum MotionControllers {
 
     private static func advanceTransitions(_ state: inout RuntimeState, duration: Double) throws {
         // Wartości wszystkich przejść są próbkowane z tego samego początku kroku.
-        for (target, transition) in state.transitions {
+        let original = state
+        for (target, transition) in original.transitions {
             let start: TransitionValue
             switch target {
             case .globalForce: start = .vector(state.globalForce)
@@ -131,7 +132,12 @@ package enum MotionControllers {
                 case .friction: start = .scalar(material.friction)
                 case .restitution: start = .scalar(material.restitution)
                 }
-            default: continue // Kanały prezentacji należą do warstwy prezentacji.
+            case .renderStyle(let id, let parameter):
+                start = .scalar(original.renderStyles[id]?.presentation.channels[parameter] ?? 0)
+            case .objectPresentation(let id, let parameter):
+                guard let object = original.objects[id] else { continue }
+                start = .scalar(object.presentation.channels[parameter]
+                    ?? original.renderStyles[object.style]?.presentation.channels[parameter] ?? 0)
             }
             var progress = state.transitionProgress[target] ?? PhysicalTransitionProgress(initial: start, elapsed: 0)
             progress.elapsed += duration
@@ -153,6 +159,16 @@ package enum MotionControllers {
                         damping: parameter == .damping ? scalar : m.damping,
                         friction: parameter == .friction ? scalar : m.friction,
                         restitution: parameter == .restitution ? scalar : m.restitution)
+                }
+            case (.renderStyle(let id, let parameter), .scalar(let scalar)):
+                if let style = state.renderStyles[id] {
+                    var channels = style.presentation.channels; channels[parameter] = scalar
+                    state.renderStyles[id] = try RenderStyle(shader: style.shader, channels: channels)
+                }
+            case (.objectPresentation(let id, let parameter), .scalar(let scalar)):
+                if let object = state.objects[id] {
+                    var channels = object.presentation.channels; channels[parameter] = scalar
+                    state.objects[id]?.presentation = try PresentationParameters(channels: channels)
                 }
             default: break
             }

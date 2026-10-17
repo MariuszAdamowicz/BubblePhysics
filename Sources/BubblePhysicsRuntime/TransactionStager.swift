@@ -1,5 +1,6 @@
 import Foundation
 import BubblePhysicsModel
+import BubblePhysicsNativeMetal
 
 /// Stan logiczny, całkowicie wartościowy. Nie przechowuje buforów ani uchwytów backendu.
 package struct RuntimeState: Equatable, Sendable {
@@ -39,6 +40,8 @@ package struct RuntimeObject: Equatable, Sendable {
     package var effectiveRadius: Float = 0
     package var capturedRadius: Float?
     package var rigidity: Float = 0
+    package var presentation: PresentationParameters = .empty
+    package var structuralShape: NativeStructuralShape?
     package var radiusBlendStart: Float = 0
     package var rigidityBlendStart: Float = 0
     package var shapeElapsed: Double = 0
@@ -57,6 +60,12 @@ package struct RuntimeObject: Equatable, Sendable {
         case .sensor(let value): position = value.position; rotation = value.rotation; angularVelocity = 0
         }
         previousPosition = position
+        switch descriptor {
+        case .bubble(let b): presentation = b.presentation
+        case .polygon(let p): presentation = p.presentation
+        case .sensor(let s): presentation = s.presentation
+        case .forceField(let f): presentation = f.presentation
+        }
         if case .bubble(let bubble) = descriptor {
             targetRadius = bubble.targetRadius; collisionRadius = bubble.targetRadius; effectiveRadius = bubble.targetRadius
         }
@@ -389,22 +398,27 @@ private struct StagingContext {
     mutating func merge(_ sources: [ObjectID], result: BubbleResult) throws {
         guard sources.count >= 2, Set(sources).count == sources.count else { throw TransactionRejectionReason.invalidStructuralOperation }
         var mass: Double = 0, radiusSquared: Double = 0
-        var weightedPosition = SIMD2<Double>.zero, momentum = SIMD2<Double>.zero
+        var momentum = SIMD2<Double>.zero
         for id in sources {
             let (existing, descriptor) = try bubble(id)
             let weight = Double(descriptor.mass)
             mass += weight
-            radiusSquared += Double(descriptor.targetRadius) * Double(descriptor.targetRadius)
-            weightedPosition += SIMD2<Double>(Double(existing.position.x), Double(existing.position.y)) * weight
+            radiusSquared += Double(existing.targetRadius) * Double(existing.targetRadius)
             momentum += SIMD2<Double>(Double(existing.velocity.x), Double(existing.velocity.y)) * weight
         }
         // Wyłącznie logiczna rezerwacja wyniku. Kontur, kontakt i stan solvera obsługuje backend.
+        let inputs = try sources.sorted { $0.rawValue < $1.rawValue }.map { try bubble($0).0 }
+        let center = StructuralOperations.mergeCenter(inputs)
         let descriptor = try resultDescriptor(result,
-            position: WorldPoint(Float(weightedPosition.x / mass), Float(weightedPosition.y / mass)),
+            position: center,
             velocity: WorldPoint(Float(momentum.x / mass), Float(momentum.y / mass)),
             radius: Float(sqrt(radiusSquared)), mass: Float(mass))
         for id in sources { try remove(id) }
         try add(descriptor)
+        if var merged = state.objects[result.id] {
+            StructuralOperations.initializeMerge(&merged, sources: inputs)
+            state.objects[result.id] = merged
+        }
     }
     mutating func split(_ source: ObjectID, first: BubbleSplitPart, second: BubbleSplitPart) throws {
         guard first.share.isFinite, second.share.isFinite, first.share > 0, second.share > 0,
@@ -415,8 +429,13 @@ private struct StagingContext {
         try remove(source)
         for part in [first, second] {
             try add(resultDescriptor(part.result, position: existing.position, velocity: existing.velocity,
-                radius: Float(Double(descriptor.targetRadius) * sqrt(Double(part.share))),
+                radius: Float(Double(existing.targetRadius) * sqrt(Double(part.share))),
                 mass: Float(Double(descriptor.mass) * Double(part.share))))
+        }
+        if var a = state.objects[first.result.id], var b = state.objects[second.result.id] {
+            StructuralOperations.initializeSplit(&a, &b, source: existing, share: first.share)
+            try validate(a); try validate(b)
+            state.objects[first.result.id] = a; state.objects[second.result.id] = b
         }
     }
 }

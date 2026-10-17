@@ -15,6 +15,8 @@ package struct NativePublicObject: Equatable, Sendable {
     package var collisionRadius: Float = 0
     package var effectiveRadius: Float = 0
     package var rigidity: Float = 0
+    package var structuralShape: NativeStructuralShape?
+    package var presentation: PresentationParameters = .empty
 
     package init(descriptor: WorldObject) {
         self.descriptor = descriptor
@@ -22,13 +24,17 @@ package struct NativePublicObject: Equatable, Sendable {
         case .bubble(let b):
             position = b.position; velocity = b.velocity; rotation = 0; angularVelocity = 0; motionRole = b.motionRole
             collisionRadius = b.targetRadius; effectiveRadius = b.targetRadius
+            presentation = b.presentation
         case .polygon(let p):
             position = p.position; velocity = p.velocity; rotation = p.rotation
             angularVelocity = p.angularVelocity; motionRole = p.motionRole
+            presentation = p.presentation
         case .sensor(let s):
             position = s.position; velocity = .zero; rotation = s.rotation; angularVelocity = 0; motionRole = .static
+            presentation = s.presentation
         case .forceField(let f):
             position = f.position; velocity = .zero; rotation = f.rotation; angularVelocity = 0; motionRole = .static
+            presentation = f.presentation
         }
         previousPosition = position
     }
@@ -56,6 +62,7 @@ struct NativePublicSettings: Equatable, Sendable {
     var rigidPolygons: [NativeRigidPolygonInput] = []
     var eventBufferCapacity = 1024
     var sensors: [SensorDescriptor] = []
+    var structuralShapes: [ObjectID: NativeStructuralShape] = [:]
 }
 
 /// Adapter używa trwałego solvera; pełna publikacja następuje dopiero po powodzeniu GPU.
@@ -81,6 +88,7 @@ package final class NativePublicWorld {
         var result = Dictionary(uniqueKeysWithValues: objects.map { ($0.descriptor.id, $0) })
         var presentation: [ObjectID: [ParameterID: Float]] = [:]
         var rigidPolygons: [NativeRigidPolygonInput] = []
+        var structuralShapes: [ObjectID: NativeStructuralShape] = [:]
         for object in objects.sorted(by: { $0.descriptor.id.rawValue < $1.descriptor.id.rawValue }) {
             let styleID: RenderStyleID
             let local: PresentationParameters
@@ -100,11 +108,12 @@ package final class NativePublicWorld {
                     material: SIMD4(material.damping, material.deformability, object.rigidity, 0),
                     resources: SIMD2(b.physicsMaterialID.rawValue, b.renderStyleID.rawValue),
                     eventData: SIMD2(b.eventInterest.rawValue, b.mergeGroups.rawValue))
-                styleID = b.renderStyleID; local = b.presentation
+                if let shape = object.structuralShape { structuralShapes[b.id] = shape }
+                styleID = b.renderStyleID; local = object.presentation
             case .polygon(let p):
                 guard let material = materials[p.physicsMaterialID] else { throw NativeMetalSolverError.invalidSnapshot }
                 rigidPolygons.append(.init(object: object, damping: material.damping))
-                styleID = p.renderStyleID; local = p.presentation
+                styleID = p.renderStyleID; local = object.presentation
                 // Statyczne krawędzie zachowują dotychczasowy cache i guardy baniek.
                 // Bryły dynamiczne trafiają wyłącznie do obustronnego solvera brył.
                 if object.motionRole != .static { break }
@@ -126,8 +135,8 @@ package final class NativePublicWorld {
                 }
                 candidatePolygons[p.id] = entry
                 for segment in entry.segments { world.addSegment(segment) }
-            case .sensor(let s): styleID = s.renderStyleID; local = s.presentation
-            case .forceField(let f): styleID = f.renderStyleID; local = f.presentation
+            case .sensor(let s): styleID = s.renderStyleID; local = object.presentation
+            case .forceField(let f): styleID = f.renderStyleID; local = object.presentation
             }
             guard let style = styles[styleID] else { throw NativeMetalSolverError.invalidSnapshot }
             presentation[object.descriptor.id] = style.resolvedChannels(overrides: local)
@@ -136,7 +145,7 @@ package final class NativePublicWorld {
             settings: NativePublicSettings(properties: properties, region: region,
                 rigidPolygons: rigidPolygons, eventBufferCapacity: eventBufferCapacity,
                 sensors: objects.compactMap { if case .sensor(let sensor) = $0.descriptor { return sensor }; return nil }
-                    .sorted { $0.id.rawValue < $1.id.rawValue }))
+                    .sorted { $0.id.rawValue < $1.id.rawValue }, structuralShapes: structuralShapes))
         for (id, object) in solver.publishedPolygons { result[id] = object }
         for id in solver.removedPolygons { result.removeValue(forKey: id); presentation.removeValue(forKey: id) }
         for bubble in frame.bubbles {

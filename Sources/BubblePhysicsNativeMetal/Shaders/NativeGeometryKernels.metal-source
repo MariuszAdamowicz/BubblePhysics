@@ -29,6 +29,81 @@ struct NativeRigidBody {
     uint4 ranges; uint4 flags;
 };
 struct NativeRigidCorrection { float4 first; float4 second; float4 velocityFirst; float4 velocitySecond; };
+struct NativeStructuralHeader { uint4 range; float4 origin; };
+struct NativeStructuralSource { ulong2 identity; float4 geometry; uint4 clips; };
+struct NativeStructuralContourControl { uint4 counts; float4 shape; };
+
+// Pierwszy kontur wyniku powstaje na GPU z unii źródeł (merge) lub ich
+// przecięć z półpłaszczyznami (split). Późniejsze kroki używają normalnej
+// relaksacji trwałego bufora deformacji.
+kernel void nativeSeedStructuralContours(device NativeBubble *bubbles [[buffer(0)]],
+    device NativeStructuralHeader *headers [[buffer(1)]],
+    device NativeStructuralSource *sources [[buffer(2)]], device float4 *clips [[buffer(3)]],
+    device float4 *pressure [[buffer(4)]], device uint *counts [[buffer(5)]],
+    constant NativeControl &control [[buffer(6)]],
+    constant NativeStructuralContourControl &contour [[buffer(7)]],
+    device atomic_uint *safety [[buffer(8)]],
+    device NativeBubble *previousBubbles [[buffer(9)]],
+    device float4 *previousDeformation [[buffer(10)]],
+    device uint *previousCounts [[buffer(11)]], uint index [[thread_position_in_grid]]) {
+    uint bubbleIndex = index / contour.counts.x, sample = index % contour.counts.x;
+    if (bubbleIndex >= control.counts.x || sample >= counts[bubbleIndex]) return;
+    NativeStructuralHeader header = headers[bubbleIndex];
+    if (!header.range.y) return;
+    NativeBubble bubble = bubbles[bubbleIndex];
+    float radius = bubble.physical.z;
+    float angle = 2 * M_PI_F * float(sample) / float(counts[bubbleIndex]);
+    float2 direction = float2(cos(angle), sin(angle));
+    float2 origin = bubble.position.xy;
+    float reach = 0;
+    for (uint i = 0; i < header.range.y; ++i) {
+        NativeStructuralSource source = sources[header.range.x + i];
+        float2 center = source.geometry.xy + origin - header.origin.xy;
+        float2 offset = origin - center;
+        float projection = dot(offset, direction);
+        float discriminant = projection * projection - dot(offset, offset)
+            + source.geometry.z * source.geometry.z;
+        if (discriminant < 0) continue;
+        float root = sqrt(discriminant);
+        float low = max(0.0f, -projection - root);
+        float high = min(radius, -projection + root);
+        if (source.identity.y < ulong(contour.counts.y) && high >= low) {
+            uint old = uint(source.identity.y), oldCount = previousCounts[old];
+            if (oldCount > 0 && oldCount <= contour.counts.x) {
+                float2 towardSurface = origin + direction * high - center;
+                float oldAngle = atan2(towardSurface.y, towardSurface.x);
+                if (oldAngle < 0) oldAngle += 2 * M_PI_F;
+                float location = oldAngle * float(oldCount) / (2 * M_PI_F);
+                uint first = uint(location) % oldCount, second = (first + 1) % oldCount;
+                float oldDeficit = mix(previousDeformation[old * contour.counts.x + first].x,
+                    previousDeformation[old * contour.counts.x + second].x, fract(location));
+                float preservedRadius = min(source.geometry.z,
+                    previousBubbles[old].physical.z * (1 - clamp(oldDeficit, 0.0f, 1.0f)));
+                float preservedDiscriminant = projection * projection - dot(offset, offset)
+                    + preservedRadius * preservedRadius;
+                if (preservedDiscriminant < 0) continue;
+                float preservedRoot = sqrt(preservedDiscriminant);
+                low = max(0.0f, -projection - preservedRoot);
+                high = min(radius, -projection + preservedRoot);
+            }
+        }
+        for (uint j = 0; j < source.clips.y; ++j) {
+            float4 clip = clips[source.clips.x + j];
+            float atOrigin = clip.z - dot(clip.xy, header.origin.xy);
+            float slope = dot(clip.xy, direction);
+            if (abs(slope) < 1e-7f) { if (atOrigin < 0) high = -1; }
+            else if (slope > 0) high = min(high, atOrigin / slope);
+            else low = max(low, atOrigin / slope);
+        }
+        if (high >= low) reach = max(reach, high);
+    }
+    float deficit = clamp(1 - reach / radius, 0.0f, 1.0f);
+    float4 value = pressure[index];
+    value.x = max(value.x, deficit);
+    value.y = max(value.y, deficit);
+    if (!all(isfinite(value))) atomic_fetch_or_explicit(safety + 3, 1, memory_order_relaxed);
+    pressure[index] = value;
+}
 
 float2 nativeRotate(float2 p, float angle) {
     float c = cos(angle), s = sin(angle); return float2(p.x*c-p.y*s, p.x*s+p.y*c);

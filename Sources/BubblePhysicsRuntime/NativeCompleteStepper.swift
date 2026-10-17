@@ -72,6 +72,8 @@ package final class NativeCompleteStepper: CompleteStepper {
             value.velocity = object.velocity; value.rotation = object.rotation
             value.angularVelocity = object.angularVelocity; value.motionRole = object.motionRole
             value.collisionRadius = object.collisionRadius; value.rigidity = object.rigidity
+            value.structuralShape = object.structuralShape
+            value.presentation = object.presentation
             return value
         }
         let frame = try await native.step(objects: input, materials: state.physicsMaterials,
@@ -85,6 +87,7 @@ package final class NativeCompleteStepper: CompleteStepper {
             state.objects[id]?.rotation = object.rotation
             state.objects[id]?.angularVelocity = object.angularVelocity
             state.objects[id]?.effectiveRadius = object.effectiveRadius
+            state.objects[id]?.structuralShape = nil
         }
         let feedback = MotionControllers.feedback(&state, contacts: frame.contacts)
         let discrete = EventCompactor.finish(frame.events, overflow: frame.eventOverflow,

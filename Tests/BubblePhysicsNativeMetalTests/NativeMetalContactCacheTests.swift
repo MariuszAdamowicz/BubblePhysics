@@ -1,6 +1,7 @@
 import XCTest
 import Metal
 import BubblePhysicsReference
+import BubblePhysicsModel
 @testable import BubblePhysicsNativeMetal
 
 @MainActor
@@ -38,6 +39,22 @@ final class NativeMetalContactCacheTests: XCTestCase {
         XCTAssertNil(solver.cachedContacts.first { $0.key == .bubblePair(1, 2) })
         XCTAssertEqual(solver.cachedContacts.first?.key, .bubblePair(3, 4))
         XCTAssertEqual(solver.cachedContacts.first?.age, 3)
+        XCTAssertEqual(frame.telemetry.cacheResetCount, 1)
+    }
+
+    func testStructuralResultReusingSourceIDInvalidatesOnlyIncidentCache() async throws {
+        let solver = try makeSolver()
+        let world = try cacheWorld()
+        let region = try WorldRectangle(min: [-100,-100], max: [100,100])
+        let initial = NativePublicSettings(properties: [:], region: region)
+        _ = try await solver.executeFrame(snapshot: .init(world: world, publicSettings: initial), scenarioStep: 1)
+        XCTAssertEqual(solver.cachedContacts.count, 2)
+        var changed = initial
+        changed.structuralShapes[ObjectID(rawValue: 1)] = NativeStructuralShape(origin: .zero,
+            sources: [NativeStructuralSource(id: ObjectID(rawValue: 1), center: .zero, radius: 1)])
+        let frame = try await solver.executeFrame(snapshot: .init(world: world, publicSettings: changed), scenarioStep: 2)
+        XCTAssertEqual(solver.cachedContacts.first { $0.key == .bubblePair(1, 2) }?.age, 1)
+        XCTAssertEqual(solver.cachedContacts.first { $0.key == .bubblePair(3, 4) }?.age, 2)
         XCTAssertEqual(frame.telemetry.cacheResetCount, 1)
     }
 
