@@ -26,3 +26,11 @@ Powtórne pełne `swift test` zakończyło się kodem 0: 698 testów, 0 porażek
 ## Uwagi
 
 Pojemność dotyczy dyskretnych zdarzeń symulacji. Dotychczasowe potwierdzenia i odrzucenia transakcji są kontrolnym wynikiem operacji i nie są usuwane przez bufor GPU. Niezwiązany, wcześniej obecny `Benchmarks/iOS/BubblePhysicsBench/.DS_Store` pozostaje nietknięty i nie będzie dodany do commita.
+
+## Korekta P2 — kolejność par i usuwanie obserwowanych obiektów
+
+Test RED wykazał, że stała para sensora z identyfikatorami obiektów `1` i `UInt64.max` ponownie emitowała `enteredSensor`, a po wyjściu nie emitowała obu `exitedSensor`. Przyczyną był porządek bańek według signed `ReferenceBubbleID` i wyszukiwanie poprzednich par według unsigned `UInt64`. Wyszukiwanie i skan brakujących par używają teraz tego samego porządku signed dla bańek, z zachowaniem pełnych bitów `UInt64` w rekordach; wielokąty nadal używają własnego porządku unsigned.
+
+Drugi test RED wykazał brak `exitedSensor` po usunięciu obserwowanego obiektu. Poprzednie aktywne pary, których nie ma w bieżącej uporządkowanej tablicy, są teraz skanowane i kompaktowane na GPU do wspólnego ograniczonego bufora zdarzeń. Stan par przechowuje bit zainteresowania wyjściem. Po usunięciu ostatniego ciała runtime wykonuje jedną klatkę GPU tylko wtedy, gdy istnieje historia par do rozliczenia; wyczyszczenie historii pozwala ponownemu użyciu tego samego ID wygenerować nowe wejście.
+
+Regresje obejmują trwałe przecięcie `1`/`UInt64.max`, usunięcie i ponowne dodanie bańki i wielokąta, ścieżkę bez ciała oraz dwa usunięte przecięcia przy pojemności 1. Ostatni przypadek potwierdza 1 opublikowane wyjście, `droppedCount == 1` i brak ponownej emisji w następnej klatce. `swift test --filter 'NativeMetalEventCompactionTests|EventInterestTests/testRemovingLastBody'`: 11 testów, 0 porażek. Pełny `swift test`: 703 testy, 0 porażek, 1 istniejący test pominięty; osiem pakietów XCTest przeszło. Log: `/tmp/task7-p2-full.log`.

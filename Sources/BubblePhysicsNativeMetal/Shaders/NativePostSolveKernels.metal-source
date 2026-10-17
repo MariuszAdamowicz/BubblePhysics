@@ -720,6 +720,13 @@ kernel void nativeCompactMergeEvents(device NativeBubble *bubbles [[buffer(0)]],
 
 struct NativeSensorRecord { ulong2 identity; float4 geometry; uint4 range; };
 struct NativeSensorPair { ulong2 participants; uint4 state; };
+// ReferenceWorld porządkuje bubble ID jako Int; bity ID pozostają UInt64 w zdarzeniu.
+bool nativeBubblePairBefore(ulong2 lhs, ulong2 rhs) {
+    return lhs.x < rhs.x || (lhs.x == rhs.x && as_type<long>(lhs.y) < as_type<long>(rhs.y));
+}
+bool nativePolygonPairBefore(ulong2 lhs, ulong2 rhs) {
+    return lhs.x < rhs.x || (lhs.x == rhs.x && lhs.y < rhs.y);
+}
 kernel void nativeCompactSensorEvents(device NativeBubble *bubbles [[buffer(0)]],
     constant NativeControl &control [[buffer(1)]], device NativeSensorRecord *sensors [[buffer(2)]],
     device float2 *vertices [[buffer(3)]], device uint *allowed [[buffer(4)]],
@@ -758,11 +765,11 @@ kernel void nativeCompactSensorEvents(device NativeBubble *bubbles [[buffer(0)]]
     uint low = 0, high = settings.y;
     while (low < high) {
         uint mid = (low + high) / 2; ulong2 candidate = previous[mid].participants;
-        if (candidate.x < pair.x || (candidate.x == pair.x && candidate.y < pair.y)) low = mid + 1;
+        if (nativeBubblePairBefore(candidate, pair)) low = mid + 1;
         else high = mid;
     }
     bool wasOverlapping = low < settings.y && all(previous[low].participants == pair) && previous[low].state.x != 0;
-    current[index] = {pair, uint4(overlapping ? 1u : 0u, 0, 0, 0)};
+    current[index] = {pair, uint4(overlapping ? 1u : 0u, (sensor.identity.y & (1ul << 3)) ? 1u : 0u, 0, 0)};
     uint kind = overlapping && !wasOverlapping && (sensor.identity.y & (1ul << 2)) ? 1u
         : !overlapping && wasOverlapping && (sensor.identity.y & (1ul << 3)) ? 2u : 0u;
     if (!kind) return;
@@ -841,14 +848,36 @@ kernel void nativeCompactPolygonSensorEvents(device NativeRigidBody *bodies [[bu
     uint low = 0, high = settings.y;
     while (low < high) {
         uint mid = (low+high)/2; ulong2 candidate = previous[mid].participants;
-        if (candidate.x < pair.x || (candidate.x == pair.x && candidate.y < pair.y)) low = mid+1;
+        if (nativePolygonPairBefore(candidate, pair)) low = mid+1;
         else high = mid;
     }
     bool wasOverlapping = low < settings.y && all(previous[low].participants == pair) && previous[low].state.x != 0;
-    current[index] = {pair, uint4(overlapping ? 1u : 0u, 0, 0, 0)};
+    current[index] = {pair, uint4(overlapping ? 1u : 0u, (sensor.identity.y & (1ul << 3)) ? 1u : 0u, 0, 0)};
     uint kind = overlapping && !wasOverlapping && (sensor.identity.y & (1ul << 2)) ? 1u
         : !overlapping && wasOverlapping && (sensor.identity.y & (1ul << 3)) ? 2u : 0u;
     if (!kind) return;
     uint slot = atomic_fetch_add_explicit(&eventCount, 1u, memory_order_relaxed);
     if (slot < settings.z) events[slot] = {pair, float4(body.pose.xy, 0, 0), uint4(kind, 0, 0, 0)};
+}
+
+// Para istniejąca wyłącznie w poprzedniej klatce oznacza usunięty obiekt lub sensor.
+// Skan i publikacja pozostają na GPU, a licznik zdarzeń zachowuje jawny overflow.
+kernel void nativeCompactMissingSensorEvents(device NativeSensorPair *previous [[buffer(0)]],
+    device NativeSensorPair *current [[buffer(1)]], device atomic_uint &eventCount [[buffer(2)]],
+    device NativeEventRecord *events [[buffer(3)]], constant uint4 &settings [[buffer(4)]],
+    uint index [[thread_position_in_grid]]) {
+    if (index >= settings.x) return;
+    NativeSensorPair oldPair = previous[index];
+    if (!oldPair.state.x || !oldPair.state.y) return;
+    uint low = 0, high = settings.y;
+    while (low < high) {
+        uint mid = (low + high) / 2;
+        bool before = settings.w == 0 ? nativeBubblePairBefore(current[mid].participants, oldPair.participants)
+                                      : nativePolygonPairBefore(current[mid].participants, oldPair.participants);
+        if (before) low = mid + 1;
+        else high = mid;
+    }
+    if (low < settings.y && all(current[low].participants == oldPair.participants)) return;
+    uint slot = atomic_fetch_add_explicit(&eventCount, 1u, memory_order_relaxed);
+    if (slot < settings.z) events[slot] = {oldPair.participants, float4(0), uint4(2, 0, 0, 0)};
 }

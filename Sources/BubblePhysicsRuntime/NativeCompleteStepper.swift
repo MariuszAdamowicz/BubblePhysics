@@ -60,8 +60,11 @@ package final class NativeCompleteStepper: CompleteStepper {
     package func completeStep(_ batch: StagedTransactionBatch, duration: Double) async throws -> CompletedRuntimeStep {
         var state = batch.state
         try MotionControllers.prepare(&state, duration: duration)
-        // Pusty świat i nieruchome niekolizyjne obiekty nie wymagają wykonania GPU.
-        guard state.objects.values.contains(where: { $0.mass != nil }) else { return .init(state: state) }
+        // Po usunięciu ostatniego ciała potrzebna jest jedna klatka GPU, aby
+        // opublikować exit i wyczyścić poprzednie pary sensora.
+        guard state.objects.values.contains(where: { $0.mass != nil }) || native?.hasSensorPairHistory == true else {
+            return .init(state: state)
+        }
         guard let native else { throw NativeRuntimeError.deviceUnavailable }
         let input = state.objects.values.map { object in
             var value = NativePublicObject(descriptor: object.descriptor)

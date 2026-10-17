@@ -66,6 +66,7 @@ package final class NativePublicWorld {
     private var nextSegmentID = 1
 
     package init(device: MTLDevice) throws { solver = try NativeMetalSolver(device: device) }
+    package var hasSensorPairHistory: Bool { solver.hasSensorPairHistory }
 
     package func step(objects: [NativePublicObject], materials: [PhysicsMaterialID: PhysicsMaterial],
                       styles: [RenderStyleID: RenderStyle], region: WorldRectangle, duration: Double,

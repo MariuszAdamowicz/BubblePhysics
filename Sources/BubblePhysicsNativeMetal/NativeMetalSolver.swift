@@ -231,6 +231,7 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
     private var previousSensorPairCount = 0
     private var previousPolygonSensorPairs: MTLBuffer?
     private var previousPolygonSensorPairCount = 0
+    var hasSensorPairHistory: Bool { previousSensorPairCount > 0 || previousPolygonSensorPairCount > 0 }
     private let rigidState: NativeRigidPolygonState
     private(set) var publishedPolygons: [ObjectID: NativePublicObject] = [:]
     private(set) var publishedDriveContacts: [ObjectID: [DriveBlockingContact]] = [:]
@@ -285,6 +286,7 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
                      "nativeCompactMergeEvents",
                      "nativeCompactSensorEvents",
                      "nativeCompactPolygonSensorEvents",
+                     "nativeCompactMissingSensorEvents",
                      "nativeRigidPredict", "nativeRigidContacts", "nativeRigidApplyBubbles", "nativeRigidApplyBodies", "nativeRigidGuardWalls", "nativeRigidFinish"] {
             guard let function = library.makeFunction(name: name) else { throw NativeMetalSolverError.resourceUnavailable }
             stages[name] = try device.makeComputePipelineState(function: function)
@@ -781,6 +783,21 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
                     threadsPerThreadgroup: .init(width: min(pipeline.threadExecutionWidth, pipeline.maxTotalThreadsPerThreadgroup),
                                                  height: 1, depth: 1))
             }
+            if previousSensorPairCount > 0 {
+                encoder.memoryBarrier(scope: .buffers)
+                let pipeline = pipelines["nativeCompactMissingSensorEvents"]!
+                encoder.setComputePipelineState(pipeline)
+                for (index, buffer) in [previousSensorPairBuffer, currentSensorPairs,
+                    state.eventCount, state.eventRecords].enumerated() {
+                    encoder.setBuffer(buffer, offset: 0, index: index)
+                }
+                var settings = SIMD4(UInt32(previousSensorPairCount), UInt32(pairCount),
+                                     UInt32(requestedEventCapacity), UInt32(0))
+                encoder.setBytes(&settings, length: MemoryLayout<SIMD4<UInt32>>.stride, index: 4)
+                encoder.dispatchThreads(.init(width: previousSensorPairCount, height: 1, depth: 1),
+                    threadsPerThreadgroup: .init(width: min(pipeline.threadExecutionWidth, pipeline.maxTotalThreadsPerThreadgroup),
+                                                 height: 1, depth: 1))
+            }
         }
         if hasRigidBodies {
             dispatch("nativeRigidFinish", buffers: [rigidState.bodies, rigidState.vertices, rigidState.control,
@@ -799,6 +816,21 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
                                        UInt32(requestedEventCapacity), UInt32(rigidInputs.count))
             encoder.setBytes(&sensorSettings, length: MemoryLayout<SIMD4<UInt32>>.stride, index: 9)
             encoder.dispatchThreads(.init(width: polygonPairCount, height: 1, depth: 1),
+                threadsPerThreadgroup: .init(width: min(pipeline.threadExecutionWidth, pipeline.maxTotalThreadsPerThreadgroup),
+                                             height: 1, depth: 1))
+        }
+        if previousPolygonSensorPairCount > 0 {
+            encoder.memoryBarrier(scope: .buffers)
+            let pipeline = pipelines["nativeCompactMissingSensorEvents"]!
+            encoder.setComputePipelineState(pipeline)
+            for (index, buffer) in [previousPolygonSensorPairBuffer, currentPolygonSensorPairs,
+                state.eventCount, state.eventRecords].enumerated() {
+                encoder.setBuffer(buffer, offset: 0, index: index)
+            }
+            var settings = SIMD4(UInt32(previousPolygonSensorPairCount), UInt32(polygonPairCount),
+                                 UInt32(requestedEventCapacity), UInt32(1))
+            encoder.setBytes(&settings, length: MemoryLayout<SIMD4<UInt32>>.stride, index: 4)
+            encoder.dispatchThreads(.init(width: previousPolygonSensorPairCount, height: 1, depth: 1),
                 threadsPerThreadgroup: .init(width: min(pipeline.threadExecutionWidth, pipeline.maxTotalThreadsPerThreadgroup),
                                              height: 1, depth: 1))
         }
