@@ -74,10 +74,13 @@ package final class NativePublicWorld {
 
     package init(device: MTLDevice) throws { solver = try NativeMetalSolver(device: device) }
     package var hasSensorPairHistory: Bool { solver.hasSensorPairHistory }
+    package var publishedRenderHandoff: NativeMetalRenderHandoff? { solver.publishedRenderHandoff }
+    package var publishedContourCPUReadbackCount: Int { solver.publishedContourCPUReadbackCount }
 
     package func step(objects: [NativePublicObject], materials: [PhysicsMaterialID: PhysicsMaterial],
                       styles: [RenderStyleID: RenderStyle], region: WorldRectangle, duration: Double,
-                      eventBufferCapacity: Int = 1024) async throws -> NativePublicFrame {
+                      eventBufferCapacity: Int = 1024, commandBuffer: MTLCommandBuffer? = nil,
+                      beforeCommit: ((NativeMetalRenderHandoff) throws -> Void)? = nil) async throws -> NativePublicFrame {
         let dt = Float(duration)
         guard dt.isFinite, dt > 0, Double(dt) > 0 else { throw NativeMetalSolverError.invalidSnapshot }
         var world = ReferenceWorld(configuration: .init(timeStep: dt, linearDamping: 0, angularDamping: 0),
@@ -145,7 +148,8 @@ package final class NativePublicWorld {
             settings: NativePublicSettings(properties: properties, region: region,
                 rigidPolygons: rigidPolygons, eventBufferCapacity: eventBufferCapacity,
                 sensors: objects.compactMap { if case .sensor(let sensor) = $0.descriptor { return sensor }; return nil }
-                    .sorted { $0.id.rawValue < $1.id.rawValue }, structuralShapes: structuralShapes))
+                    .sorted { $0.id.rawValue < $1.id.rawValue }, structuralShapes: structuralShapes),
+            commandBuffer: commandBuffer, beforeCommit: beforeCommit)
         for (id, object) in solver.publishedPolygons { result[id] = object }
         for id in solver.removedPolygons { result.removeValue(forKey: id); presentation.removeValue(forKey: id) }
         for bubble in frame.bubbles {
@@ -156,7 +160,7 @@ package final class NativePublicWorld {
             result[id]?.velocity = [bubble.velocity.x, bubble.velocity.y]
             result[id]?.rotation = bubble.rotation
             result[id]?.angularVelocity = bubble.angularVelocity
-            result[id]?.effectiveRadius = frame.contours[bubble.id]?.map { ($0 - bubble.center).length }.min() ?? bubble.targetRadius
+            result[id]?.effectiveRadius = frame.effectiveRadii[bubble.id] ?? bubble.targetRadius
         }
         var contacts = solver.publishedDriveContacts
         func objectID(_ value: Int) -> ObjectID { ObjectID(rawValue: UInt64(bitPattern: Int64(value))) }

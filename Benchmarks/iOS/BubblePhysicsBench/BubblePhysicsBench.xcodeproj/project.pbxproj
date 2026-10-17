@@ -7,19 +7,22 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		025F960B53023824F477BD62 /* ReferenceVisualPrototypeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5623D96B2D634BB76813F9E /* ReferenceVisualPrototypeView.swift */; };
+		05A6786E220F59C32760C0F7 /* BubblePhysicsMetalRender in Frameworks */ = {isa = PBXBuildFile; productRef = 89B6ABD2BAFA5E538E24C1CE /* BubblePhysicsMetalRender */; };
 		1D6D60ADC2F7C6AE3AD1C4C9 /* BubblePhysicsBenchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 061528BD02245748875CB02D /* BubblePhysicsBenchApp.swift */; };
-		C0DE00010000000000000001 /* ReferenceBenchmarkView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00010000000000000002 /* ReferenceBenchmarkView.swift */; };
-		C0DE00020000000000000001 /* ReferenceVisualPrototypeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00020000000000000002 /* ReferenceVisualPrototypeView.swift */; };
-		400C6DD42752722E6154A68C /* BubblePhysicsBenchmarkSupport in Frameworks */ = {isa = PBXBuildFile; productRef = 30D026171047D8A2CA0CBBC5 /* BubblePhysicsBenchmarkSupport */; };
+		400C6DD42752722E6154A68C /* BubblePhysicsBenchmarkSupport in Frameworks */ = {isa = PBXBuildFile; productRef = DF323298C2E357AC7441126D /* BubblePhysicsBenchmarkSupport */; };
+		7BC2B254A0945215C1D8391C /* BubblePhysics in Frameworks */ = {isa = PBXBuildFile; productRef = 30D026171047D8A2CA0CBBC5 /* BubblePhysics */; };
+		B35A6D05D7874158050FB7D4 /* PublicMetalPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF4D42263F09F8A85448FD49 /* PublicMetalPreviewView.swift */; };
+		E47E753F9A63F70CD29FACE0 /* ReferenceBenchmarkView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 893EB9DCF501AFDF87558BFC /* ReferenceBenchmarkView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		061528BD02245748875CB02D /* BubblePhysicsBenchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BubblePhysicsBenchApp.swift; sourceTree = "<group>"; };
-		D48CFEA6D18C4A95BAE9717F /* RadialBubblePrototypeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RadialBubblePrototypeView.swift; sourceTree = "<group>"; };
-		C0DE00010000000000000002 /* ReferenceBenchmarkView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceBenchmarkView.swift; sourceTree = "<group>"; };
-		C0DE00020000000000000002 /* ReferenceVisualPrototypeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceVisualPrototypeView.swift; sourceTree = "<group>"; };
 		70DEEBEF64919AF7D59AE563 /* BubblePhysicsBench.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = BubblePhysicsBench.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		EBE118F3EF470FF445638A9A /* bubble-physics */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "bubble-physics"; path = ../../..; sourceTree = SOURCE_ROOT; };
+		893EB9DCF501AFDF87558BFC /* ReferenceBenchmarkView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceBenchmarkView.swift; sourceTree = "<group>"; };
+		B5623D96B2D634BB76813F9E /* ReferenceVisualPrototypeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceVisualPrototypeView.swift; sourceTree = "<group>"; };
+		CF4D42263F09F8A85448FD49 /* PublicMetalPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PublicMetalPreviewView.swift; sourceTree = "<group>"; };
+		FFDC0D441DF38BF844B3AAB9 /* bubble-physics-device-benchmark */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "bubble-physics-device-benchmark"; path = ../../..; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -28,6 +31,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				400C6DD42752722E6154A68C /* BubblePhysicsBenchmarkSupport in Frameworks */,
+				7BC2B254A0945215C1D8391C /* BubblePhysics in Frameworks */,
+				05A6786E220F59C32760C0F7 /* BubblePhysicsMetalRender in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -46,7 +51,7 @@
 		62B73258DB6FD046BDDB8E57 /* Packages */ = {
 			isa = PBXGroup;
 			children = (
-				EBE118F3EF470FF445638A9A /* bubble-physics */,
+				FFDC0D441DF38BF844B3AAB9 /* bubble-physics-device-benchmark */,
 			);
 			name = Packages;
 			sourceTree = "<group>";
@@ -63,9 +68,9 @@
 			isa = PBXGroup;
 			children = (
 				061528BD02245748875CB02D /* BubblePhysicsBenchApp.swift */,
-				D48CFEA6D18C4A95BAE9717F /* RadialBubblePrototypeView.swift */,
-				C0DE00010000000000000002 /* ReferenceBenchmarkView.swift */,
-				C0DE00020000000000000002 /* ReferenceVisualPrototypeView.swift */,
+				CF4D42263F09F8A85448FD49 /* PublicMetalPreviewView.swift */,
+				893EB9DCF501AFDF87558BFC /* ReferenceBenchmarkView.swift */,
+				B5623D96B2D634BB76813F9E /* ReferenceVisualPrototypeView.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -86,7 +91,9 @@
 			);
 			name = BubblePhysicsBench;
 			packageProductDependencies = (
-				30D026171047D8A2CA0CBBC5 /* BubblePhysicsBenchmarkSupport */,
+				DF323298C2E357AC7441126D /* BubblePhysicsBenchmarkSupport */,
+				30D026171047D8A2CA0CBBC5 /* BubblePhysics */,
+				89B6ABD2BAFA5E538E24C1CE /* BubblePhysicsMetalRender */,
 			);
 			productName = BubblePhysicsBench;
 			productReference = 70DEEBEF64919AF7D59AE563 /* BubblePhysicsBench.app */;
@@ -101,6 +108,9 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
+					55DE780700A92AA9FAE5BFE0 = {
+						DevelopmentTeam = T8K3TYUY9D;
+					};
 				};
 			};
 			buildConfigurationList = C239D3798C9901F22D792578 /* Build configuration list for PBXProject "BubblePhysicsBench" */;
@@ -131,8 +141,9 @@
 			buildActionMask = 2147483647;
 			files = (
 				1D6D60ADC2F7C6AE3AD1C4C9 /* BubblePhysicsBenchApp.swift in Sources */,
-				C0DE00010000000000000001 /* ReferenceBenchmarkView.swift in Sources */,
-				C0DE00020000000000000001 /* ReferenceVisualPrototypeView.swift in Sources */,
+				B35A6D05D7874158050FB7D4 /* PublicMetalPreviewView.swift in Sources */,
+				E47E753F9A63F70CD29FACE0 /* ReferenceBenchmarkView.swift in Sources */,
+				025F960B53023824F477BD62 /* ReferenceVisualPrototypeView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -325,7 +336,15 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		30D026171047D8A2CA0CBBC5 /* BubblePhysicsBenchmarkSupport */ = {
+		30D026171047D8A2CA0CBBC5 /* BubblePhysics */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = BubblePhysics;
+		};
+		89B6ABD2BAFA5E538E24C1CE /* BubblePhysicsMetalRender */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = BubblePhysicsMetalRender;
+		};
+		DF323298C2E357AC7441126D /* BubblePhysicsBenchmarkSupport */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = BubblePhysicsBenchmarkSupport;
 		};

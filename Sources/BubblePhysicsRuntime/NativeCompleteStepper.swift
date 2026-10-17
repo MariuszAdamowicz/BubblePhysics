@@ -7,6 +7,7 @@ package final class NativeCompleteStepper: CompleteStepper {
     private let native: NativePublicWorld?
     private var previousBlockers: [ObjectID: ObjectID] = [:]
     package init(device: MTLDevice?) throws { native = try device.map { try NativePublicWorld(device: $0) } }
+    package var publishedRenderHandoff: NativeMetalRenderHandoff? { native?.publishedRenderHandoff }
 
     package func validate(_ change: StagedWorldChange) throws {
         func role(_ id: ObjectID, _ role: MotionRole, polygon: Bool) throws {
@@ -58,6 +59,18 @@ package final class NativeCompleteStepper: CompleteStepper {
     }
 
     package func completeStep(_ batch: StagedTransactionBatch, duration: Double) async throws -> CompletedRuntimeStep {
+        try await performStep(batch, duration: duration, commandBuffer: nil, beforeCommit: nil)
+    }
+
+    package func completeStep(_ batch: StagedTransactionBatch, duration: Double,
+                              commandBuffer: MTLCommandBuffer,
+                              beforeCommit: @escaping (NativeMetalRenderHandoff) throws -> Void) async throws -> CompletedRuntimeStep {
+        try await performStep(batch, duration: duration, commandBuffer: commandBuffer, beforeCommit: beforeCommit)
+    }
+
+    private func performStep(_ batch: StagedTransactionBatch, duration: Double,
+                             commandBuffer: MTLCommandBuffer?,
+                             beforeCommit: ((NativeMetalRenderHandoff) throws -> Void)?) async throws -> CompletedRuntimeStep {
         var state = batch.state
         try MotionControllers.prepare(&state, duration: duration)
         // Po usunięciu ostatniego ciała potrzebna jest jedna klatka GPU, aby
@@ -78,7 +91,8 @@ package final class NativeCompleteStepper: CompleteStepper {
         }
         let frame = try await native.step(objects: input, materials: state.physicsMaterials,
             styles: state.renderStyles, region: state.configuration.simulationRegion, duration: duration,
-            eventBufferCapacity: state.configuration.eventBufferCapacity)
+            eventBufferCapacity: state.configuration.eventBufferCapacity,
+            commandBuffer: commandBuffer, beforeCommit: beforeCommit)
         RegionPolicy.remove(Set(state.objects.keys).subtracting(frame.objects.keys), from: &state)
         for (id, object) in frame.objects {
             state.objects[id]?.position = object.position

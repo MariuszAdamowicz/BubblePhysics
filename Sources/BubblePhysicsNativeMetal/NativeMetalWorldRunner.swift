@@ -20,6 +20,7 @@ struct NativeMetalWorldFrame {
     var profile = NativeMetalFrameProfile()
     var contours: [ReferenceBubbleID: [ReferenceVector2]] = [:]
     var renderData: [SIMD4<Float>] = []
+    var effectiveRadii: [ReferenceBubbleID: Float] = [:]
     var isComplete = false
     var regionRemovals: Set<ReferenceBubbleID> = []
     var regionWraps: Set<ReferenceBubbleID> = []

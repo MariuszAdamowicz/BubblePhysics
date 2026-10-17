@@ -2,6 +2,17 @@ import Foundation
 import Metal
 import BubblePhysicsModel
 import BubblePhysicsRuntime
+import BubblePhysicsNativeMetal
+
+package struct BubbleWorldRenderItem {
+    package let shader: RenderShader
+    package let channels: [ParameterID: Float]
+}
+
+package struct BubbleWorldRenderState {
+    package let handoff: NativeMetalRenderHandoff
+    package let items: [BubbleWorldRenderItem?]
+}
 
 /// Jedyny właściciel świata i kolejki transakcji. Publikuje wyłącznie ukończone kroki.
 @MainActor
@@ -17,6 +28,7 @@ public final class BubbleWorld {
     private var isAdvancing = false
     private var stepsInLastAdvance = 0
     private var lastAdvanceIssue: WorldAdvanceIssue?
+    private var pendingRenderState: BubbleWorldRenderState?
 
     public convenience init(configuration: WorldConfiguration,
                             device: MTLDevice? = MTLCreateSystemDefaultDevice()) throws {
@@ -38,6 +50,29 @@ public final class BubbleWorld {
             eventOverflow: lastFrame.eventOverflow)
     }
 
+    /// Renderer widzi tylko opublikowany uchwyt i kanały prezentacyjne.
+    package var renderState: BubbleWorldRenderState? {
+        if let pendingRenderState { return pendingRenderState }
+        guard let handoff = (stepper as? NativeCompleteStepper)?.publishedRenderHandoff else { return nil }
+        return makeRenderState(handoff, from: state)
+    }
+
+    private func makeRenderState(_ handoff: NativeMetalRenderHandoff,
+                                 from source: RuntimeState) -> BubbleWorldRenderState {
+        let items: [BubbleWorldRenderItem?] = handoff.bubbleIDs.map { id in
+            guard let object = source.objects[id], case .bubble(let bubble) = object.descriptor,
+                  let style = source.renderStyles[bubble.renderStyleID] else { return nil }
+            return BubbleWorldRenderItem(shader: style.shader,
+                channels: style.resolvedChannels(overrides: object.presentation))
+        }
+        return BubbleWorldRenderState(handoff: handoff, items: items)
+    }
+
+    /// CPU adapter/debug. Wywołanie kopiuje opublikowane kontury z pamięci GPU.
+    public func debugContourSnapshot() -> [ObjectID: [WorldPoint]] {
+        (stepper as? NativeCompleteStepper)?.publishedRenderHandoff?.debugContourSnapshot() ?? [:]
+    }
+
     /// Token jest unikalny w obrębie świata. Walidacja nastąpi na granicy kroku.
     @discardableResult
     public func submit(_ transaction: WorldTransaction) -> TransactionToken {
@@ -56,6 +91,20 @@ public final class BubbleWorld {
     /// Jedno wywołanie wykonuje ograniczoną liczbę kroków; cały nadmiar zostaje w diagnostyce.
     /// Brak ukończonego kroku (także błąd) zwraca ostatnią kompletną klatkę.
     public func advance(by seconds: TimeInterval) async -> WorldFrame {
+        await advanceImpl(by: seconds, commandBuffer: nil, encodeRender: nil)
+    }
+
+    /// Koduje krok fizyki, następnie render do tego samego bufora aplikacji;
+    /// po jego ukończeniu publikuje wynik. Jeden bufor obejmuje najwyżej jeden krok.
+    /// Drawable należy prezentować dopiero po zwrocie ukończonej klatki bez błędu.
+    /// Gdy czas nie wystarcza na krok, bufor pozostaje niezatwierdzony.
+    public func advance(by seconds: TimeInterval, commandBuffer: MTLCommandBuffer,
+                        encodeRender: @escaping () throws -> Void) async -> WorldFrame {
+        await advanceImpl(by: seconds, commandBuffer: commandBuffer, encodeRender: encodeRender)
+    }
+
+    private func advanceImpl(by seconds: TimeInterval, commandBuffer: MTLCommandBuffer?,
+                             encodeRender: (() throws -> Void)?) async -> WorldFrame {
         guard !isAdvancing else {
             lastAdvanceIssue = .advanceAlreadyInProgress
             return lastFrame
@@ -76,7 +125,8 @@ public final class BubbleWorld {
         var receipts: [TransactionReceipt] = []
         var events: [WorldEvent] = []
         var droppedEvents = 0
-        while !isPaused && clock.canStep && stepsInLastAdvance < clock.maximumStepsPerAdvance {
+        let stepLimit = commandBuffer == nil ? clock.maximumStepsPerAdvance : 1
+        while !isPaused && clock.canStep && stepsInLastAdvance < stepLimit {
             guard !Task.isCancelled else {
                 lastAdvanceIssue = .advanceCancelled
                 break
@@ -84,7 +134,34 @@ public final class BubbleWorld {
             let transactionCount = pending.count
             let batch = TransactionStager.stageBatch(pending, against: state, validate: stepper.validate)
             do {
-                let complete = try await stepper.completeStep(batch, duration: clock.fixedTimeStep)
+                let complete: CompletedRuntimeStep
+                if let commandBuffer, let encodeRender,
+                   let native = stepper as? NativeCompleteStepper {
+                    complete = try await native.completeStep(batch, duration: clock.fixedTimeStep,
+                        commandBuffer: commandBuffer) { [self] handoff in
+                        pendingRenderState = makeRenderState(handoff, from: batch.state)
+                        defer { pendingRenderState = nil }
+                        try encodeRender()
+                    }
+                } else {
+                    complete = try await stepper.completeStep(batch, duration: clock.fixedTimeStep)
+                }
+                // Scena bez ciał nie uruchamia solvera, ale bufor wywołującego
+                // nadal musi zawierać ukończony render przed publikacją kroku.
+                if let commandBuffer, let encodeRender, commandBuffer.status == .notEnqueued {
+                    if let handoff = (stepper as? NativeCompleteStepper)?.publishedRenderHandoff {
+                        pendingRenderState = makeRenderState(handoff, from: batch.state)
+                    }
+                    defer { pendingRenderState = nil }
+                    try encodeRender()
+                    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                        commandBuffer.addCompletedHandler { completed in
+                            if completed.status == .completed { continuation.resume() }
+                            else { continuation.resume(throwing: WorldRenderCommandError.failed) }
+                        }
+                        commandBuffer.commit()
+                    }
+                }
                 // W czasie await można dopisać transakcje lub włączyć pauzę.
                 // Dopiero tutaj publikujemy kandydat i zdejmujemy wyłącznie jego prefiks kolejki.
                 state = complete.state
@@ -105,3 +182,5 @@ public final class BubbleWorld {
         return lastFrame
     }
 }
+
+private enum WorldRenderCommandError: Error { case failed }

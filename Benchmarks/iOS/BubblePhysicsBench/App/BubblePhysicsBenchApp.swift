@@ -10,10 +10,13 @@ struct BubblePhysicsBenchApp: App {
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {
                         ToolbarItem(placement: .navigationBarTrailing) {
-                            NavigationLink("Wizualizacja CPU/GPU") {
-                                ReferenceVisualPrototypeView()
-                                    .navigationTitle("Bańki CPU/GPU")
-                                    .navigationBarTitleDisplayMode(.inline)
+                            Menu("Wizualizacje") {
+                                NavigationLink("Publiczny renderer Metal") { PublicMetalPreviewView() }
+                                NavigationLink("Diagnostyka CPU/GPU") {
+                                    ReferenceVisualPrototypeView()
+                                        .navigationTitle("Bańki CPU/GPU")
+                                        .navigationBarTitleDisplayMode(.inline)
+                                }
                             }
                         }
                     }

@@ -1,4 +1,13 @@
 name: BubblePhysicsBench
+schemes:
+  BubblePhysicsBench:
+    build:
+      targets:
+        BubblePhysicsBench: all
+    run:
+      config: Release
+    archive:
+      config: Release
 options:
   bundleIdPrefix: com.mariuszadamowicz
 packages:
@@ -10,12 +19,19 @@ targets:
     platform: iOS
     deploymentTarget: "16.0"
     sources:
-      - App
+      - path: App
+        excludes:
+          - RadialBubblePrototypeView.swift
     dependencies:
       - package: BubblePhysics
         product: BubblePhysicsBenchmarkSupport
+      - package: BubblePhysics
+        product: BubblePhysics
+      - package: BubblePhysics
+        product: BubblePhysicsMetalRender
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.mariuszadamowicz.BubblePhysicsBench
+        DEVELOPMENT_TEAM: T8K3TYUY9D
         GENERATE_INFOPLIST_FILE: YES
         SWIFT_VERSION: 5.0
