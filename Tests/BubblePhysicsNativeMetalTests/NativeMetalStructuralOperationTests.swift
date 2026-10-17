@@ -48,6 +48,29 @@ final class NativeMetalStructuralOperationTests: XCTestCase {
         XCTAssertLessThan(second.effectiveRadius, second.targetRadius * 0.95)
     }
 
+    func testBubbleSplitNearUnitShareHasFiniteGeometryAndRejectsUnrepresentableRemainder() throws {
+        let state = try initial([bubble(1, radius: 2, mass: 8)])
+        let nearUnit = WorldTransaction().splitBubble(id(1),
+            first: .init(result: result(2), share: 0.999999),
+            second: .init(result: result(3), share: 0.000001))
+        let staged = try TransactionStager.stage(nearUnit, against: state).state
+        for objectID in [id(2), id(3)] {
+            let object = try XCTUnwrap(staged.objects[objectID])
+            XCTAssertTrue(object.position.x.isFinite)
+            XCTAssertTrue(object.position.y.isFinite)
+            XCTAssertTrue(object.velocity.x.isFinite)
+            XCTAssertTrue(object.velocity.y.isFinite)
+            XCTAssertTrue(object.angularVelocity.isFinite)
+            XCTAssertTrue(object.targetRadius.isFinite)
+        }
+        XCTAssertNotEqual(staged.objects[id(2)]?.position, staged.objects[id(3)]?.position)
+
+        let roundedToOne = WorldTransaction().splitBubble(id(1),
+            first: .init(result: result(2), share: 1),
+            second: .init(result: result(3), share: Float.leastNonzeroMagnitude))
+        XCTAssertThrowsError(try TransactionStager.stage(roundedToOne, against: state))
+    }
+
     // Masa nierówna: środek masy nie jest rejonem styku; start nie może być zwykłym kołem.
     func testBubbleMergeCarriesMomentumAndStartsAtContactRegion() async throws {
         let state = try initial([bubble(1, x: -1, mass: 1, vx: 3), bubble(2, x: 1, mass: 3, vx: -1)])
@@ -135,5 +158,39 @@ final class NativeMetalStructuralOperationTests: XCTestCase {
         let second = try await native.step(objects: [input], materials: merged.physicsMaterials,
             styles: merged.renderStyles, region: merged.configuration.simulationRegion, duration: 1.0/60)
         XCTAssertLessThan(try XCTUnwrap(second.objects[id(3)]).effectiveRadius, 0.7)
+    }
+
+    func testMergeContourDoesNotDependOnWhetherOutputReusesSourceID() async throws {
+        func mergedRadius(_ outputID: UInt64) async throws -> Float {
+            let left = try BubbleDescriptor(id: id(1), position: [-0.2,0], targetRadius: 1,
+                motionRole: .static, physicsMaterialID: material, renderStyleID: style)
+            let right = try BubbleDescriptor(id: id(2), position: [0,0], targetRadius: 1,
+                motionRole: .static, physicsMaterialID: material, renderStyleID: style)
+            var state = try initial([left, right])
+            let wallMaterial = PhysicsMaterialID(rawValue: 2)
+            let wall = try PolygonDescriptor(id: id(100), vertices: [[0.5,-4],[2,-4],[2,4],[0.5,4]],
+                physicsMaterialID: wallMaterial, renderStyleID: style)
+            state = try TransactionStager.stage(WorldTransaction()
+                .updatePhysicsMaterial(wallMaterial, material: PhysicsMaterial(kind: .polygon))
+                .add(.polygon(wall)), against: state).state
+            let native = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
+            let first = try await native.step(objects: state.objects.values.map { NativePublicObject(descriptor: $0.descriptor) },
+                materials: state.physicsMaterials, styles: state.renderStyles,
+                region: state.configuration.simulationRegion, duration: 1.0/60)
+            XCTAssertLessThan(try XCTUnwrap(first.objects[id(2)]).effectiveRadius, 0.7)
+            let merged = try TransactionStager.stage(WorldTransaction().mergeBubbles([id(1), id(2)],
+                result: .init(id: id(outputID), physicsMaterialID: material, renderStyleID: style, motionRole: .static)),
+                against: state).state
+            let object = try XCTUnwrap(merged.objects[id(outputID)])
+            var input = NativePublicObject(descriptor: object.descriptor)
+            input.position = object.position
+            input.structuralShape = object.structuralShape
+            let second = try await native.step(objects: [input], materials: merged.physicsMaterials,
+                styles: merged.renderStyles, region: merged.configuration.simulationRegion, duration: 1.0/60)
+            return try XCTUnwrap(second.objects[id(outputID)]).effectiveRadius
+        }
+        let fresh = try await mergedRadius(3)
+        let reused = try await mergedRadius(2)
+        XCTAssertEqual(reused, fresh, accuracy: 0.0001)
     }
 }

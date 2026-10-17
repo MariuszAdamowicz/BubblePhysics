@@ -381,11 +381,10 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
             parameters.region = SIMD4(region.min.x, region.min.y, region.max.x, region.max.y)
         }
         state.control.contents().storeBytes(of: parameters, as: NativeMetalControl.self)
-        state.contourControl.contents().storeBytes(of: NativeMetalContourControl(
+        var contourParameters = NativeMetalContourControl(
             counts: SIMD4(UInt32(state.contourStride), UInt32(lastSnapshot?.sourceBubbles.count ?? 0), 0, 0),
             shape: SIMD4(contourConfiguration.maxContourSegmentLength, contourConfiguration.deformationRecoveryRate,
-                         contourConfiguration.contourSurfaceTension, contourConfiguration.positionTolerance)),
-            as: NativeMetalContourControl.self)
+                         contourConfiguration.contourSurfaceTension, contourConfiguration.positionTolerance))
         let solverParameters = NativeMetalSolverControl(
             counts: SIMD4(1, 0, 0, UInt32(clamping: configuration.solverIterationCount)),
             physics: SIMD4(configuration.contactCompliance / (snapshot.configuration.timeStep * snapshot.configuration.timeStep),
@@ -471,6 +470,8 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
             throw NativeMetalSolverError.allocationFailed
         }
         // Standardowe klatki nie alokują buforów operacji strukturalnych.
+        contourParameters.counts.z = structuralSources.isEmpty ? 0 : 1
+        state.contourControl.contents().storeBytes(of: contourParameters, as: NativeMetalContourControl.self)
         let structuralHeaderBuffer = try structuralSources.isEmpty ? state.eventRecords : eventBuffer(structuralHeaders)
         let structuralSourceBuffer = try structuralSources.isEmpty ? state.eventRecords : eventBuffer(structuralSources)
         let structuralClipBuffer = try structuralClips.isEmpty ? state.eventRecords : eventBuffer(structuralClips)
@@ -793,7 +794,8 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
         dispatch("nativeAccumulateContactPressure", buffers: [state.workingBubbles, state.workingSegments,
             state.workingCache, state.control, state.contactControl, state.contourControl, state.publishedBubbles,
             state.publishedDeformation, state.publishedContourCounts, state.contourScratch, state.workingContourCounts,
-            state.adjacency, state.adjacencyCounts, state.safetyControl], threads: count * state.contourStride)
+            state.adjacency, state.adjacencyCounts, state.safetyControl, structuralHeaderBuffer],
+            threads: count * state.contourStride)
         if !structuralSources.isEmpty {
             dispatch("nativeSeedStructuralContours", buffers: [state.workingBubbles, structuralHeaderBuffer,
                 structuralSourceBuffer, structuralClipBuffer, state.contourScratch, state.workingContourCounts,

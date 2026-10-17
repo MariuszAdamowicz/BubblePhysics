@@ -421,19 +421,24 @@ private struct StagingContext {
         }
     }
     mutating func split(_ source: ObjectID, first: BubbleSplitPart, second: BubbleSplitPart) throws {
+        let totalShare = Double(first.share) + Double(second.share)
         guard first.share.isFinite, second.share.isFinite, first.share > 0, second.share > 0,
-              abs(Double(first.share) + Double(second.share) - 1) <= 1e-6 else {
+              abs(totalShare - 1) <= 1e-6 else {
+            throw TransactionRejectionReason.invalidStructuralOperation
+        }
+        let shares = (Double(first.share) / totalShare, Double(second.share) / totalShare)
+        guard shares.0 > 0, shares.0 < 1, shares.1 > 0, shares.1 < 1 else {
             throw TransactionRejectionReason.invalidStructuralOperation
         }
         let (existing, descriptor) = try bubble(source)
         try remove(source)
-        for part in [first, second] {
+        for (part, share) in zip([first, second], [shares.0, shares.1]) {
             try add(resultDescriptor(part.result, position: existing.position, velocity: existing.velocity,
-                radius: Float(Double(existing.targetRadius) * sqrt(Double(part.share))),
-                mass: Float(Double(descriptor.mass) * Double(part.share))))
+                radius: Float(Double(existing.targetRadius) * sqrt(share)),
+                mass: Float(Double(descriptor.mass) * share)))
         }
         if var a = state.objects[first.result.id], var b = state.objects[second.result.id] {
-            StructuralOperations.initializeSplit(&a, &b, source: existing, share: first.share)
+            try StructuralOperations.initializeSplit(&a, &b, source: existing, shares: shares)
             try validate(a); try validate(b)
             state.objects[first.result.id] = a; state.objects[second.result.id] = b
         }

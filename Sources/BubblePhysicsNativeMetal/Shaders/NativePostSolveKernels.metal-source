@@ -487,7 +487,8 @@ kernel void nativeAccumulateContactPressure(device NativeBubble *bubbles [[buffe
     device float4 *previousDeformation [[buffer(7)]], device uint *previousCounts [[buffer(8)]],
     device float4 *pressure [[buffer(9)]], device uint *counts [[buffer(10)]],
     device uint4 *adjacency [[buffer(11)]], device uint *degrees [[buffer(12)]],
-    device atomic_uint *safety [[buffer(13)]], uint index [[thread_position_in_grid]]) {
+    device atomic_uint *safety [[buffer(13)]], device NativeStructuralHeader *structuralHeaders [[buffer(14)]],
+    uint index [[thread_position_in_grid]]) {
     uint bubbleIndex = index / contour.counts.x, sample = index % contour.counts.x;
     if (bubbleIndex >= control.counts.x || contacts.counts.w
         || atomic_load_explicit(safety + 3, memory_order_relaxed)) return;
@@ -535,7 +536,11 @@ kernel void nativeAccumulateContactPressure(device NativeBubble *bubbles [[buffe
     }
     float deficit = clamp(1 - limit / bubble.physical.z, 0.0f, 1.0f);
     float recovered = 0;
-    uint old = nativeSafetyBubbleIndex(bubble.identity.x, previousBubbles, contour.counts.y);
+    // Wynik merge/split o ponownie użytym ID nie dziedziczy starego konturu tego ID.
+    // Jego źródła fizyczne są próbkowane jawnie przez nativeSeedStructuralContours.
+    bool hasStructuralShape = contour.counts.z != 0 && structuralHeaders[bubbleIndex].range.y != 0;
+    uint old = hasStructuralShape ? contour.counts.y
+        : nativeSafetyBubbleIndex(bubble.identity.x, previousBubbles, contour.counts.y);
     if (old < contour.counts.y && previousCounts[old] > 0) {
         // Resampling przy zmianie promienia/liczby punktów zachowuje lokalność nacisku.
         uint oldCount = previousCounts[old];
