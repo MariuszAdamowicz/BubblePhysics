@@ -59,20 +59,22 @@ final class RegionPolicyTests: XCTestCase {
         }
     }
 
-    func testUnsupportedMaterialPropertiesAreRejectedBeforePublication() async throws {
+    func testMaterialContactPropertiesAreAcceptedAndPublished() async throws {
         for material in [try PhysicsMaterial(kind: .bubble, friction: 0.5),
                          try PhysicsMaterial(kind: .bubble, restitution: 0.5)] {
             let world = try BubbleWorld(configuration: initial(policy: .remove).configuration)
-            world.submit(WorldTransaction().updatePhysicsMaterial(.init(rawValue: 1), material: material))
+            let token = world.submit(WorldTransaction().updatePhysicsMaterial(.init(rawValue: 1), material: material))
             let frame = await world.advance(by: 0.25)
             XCTAssertEqual(frame.stepIndex, 1)
-            XCTAssertTrue(frame.transactionReceipts.isEmpty)
-            XCTAssertEqual(frame.events.count, 1)
-            if case .transactionRejected(_, let rejection) = frame.events.first {
-                XCTAssertEqual(rejection.reason, .unsupportedPhysicsParameter(.init(rawValue: 1),
-                    material.friction != 0 ? .friction : (material.restitution != 0 ? .restitution : .deformability)))
-            }
+            XCTAssertEqual(frame.transactionReceipts.map(\.token), [token])
+            XCTAssertTrue(frame.events.isEmpty)
             XCTAssertNil(world.diagnostics.lastAdvanceIssue)
+
+            let stepper = try NativeCompleteStepper(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
+            let pending = PendingTransaction(token: .init(rawValue: 1), transaction:
+                WorldTransaction().updatePhysicsMaterial(.init(rawValue: 1), material: material))
+            let complete = try await stepper.completeStep(TransactionStager.stageBatch([pending], against: initial(policy: .remove)), duration: 0.25)
+            XCTAssertEqual(complete.state.physicsMaterials[.init(rawValue: 1)], material)
         }
     }
 
@@ -102,7 +104,7 @@ final class RegionPolicyTests: XCTestCase {
         XCTAssertNil(world.diagnostics.lastAdvanceIssue)
     }
 
-    func testUnsupportedPhysicsTransitionsAreRejectedWithOperationIndex() async throws {
+    func testMaterialContactTransitionsAreAcceptedAndAdvancePublishedValue() async throws {
         for parameter in [PhysicsParameter.friction, .restitution] {
             let world = try BubbleWorld(configuration: initial(policy: .remove).configuration)
             let token = world.submit(try WorldTransaction()
@@ -111,10 +113,20 @@ final class RegionPolicyTests: XCTestCase {
                     value: .scalar(0.5), duration: 1)))
             let frame = await world.advance(by: 0.25)
             XCTAssertEqual(frame.stepIndex, 1)
-            XCTAssertEqual(frame.events, [.transactionRejected(token, TransactionRejection(operationIndex: 1,
-                reason: .unsupportedPhysicsParameter(.init(rawValue: 1), parameter)))])
-            XCTAssertTrue(frame.transactionReceipts.isEmpty)
+            XCTAssertEqual(frame.transactionReceipts.map(\.token), [token])
+            XCTAssertTrue(frame.events.isEmpty)
             XCTAssertNil(world.diagnostics.lastAdvanceIssue)
+
+            let stepper = try NativeCompleteStepper(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
+            let transaction = try WorldTransaction()
+                .updatePhysicsMaterial(.init(rawValue: 1), material: PhysicsMaterial(kind: .bubble))
+                .startTransition(ParameterTransition(target: .physicsMaterial(.init(rawValue: 1), parameter),
+                    value: .scalar(0.5), duration: 1))
+            let complete = try await stepper.completeStep(TransactionStager.stageBatch([
+                .init(token: .init(rawValue: 1), transaction: transaction)
+            ], against: initial(policy: .remove)), duration: 0.25)
+            let material = try XCTUnwrap(complete.state.physicsMaterials[.init(rawValue: 1)])
+            XCTAssertEqual(parameter == .friction ? material.friction : material.restitution, 0.125, accuracy: 0.0001)
         }
     }
 
