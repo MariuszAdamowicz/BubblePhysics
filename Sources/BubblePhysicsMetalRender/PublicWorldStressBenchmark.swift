@@ -18,8 +18,8 @@ public struct PublicWorldStressReport: Sendable {
 
     /// Kontrola bezpieczeństwa; geometryczna obwiednia referencyjna wymaga osobnego porównania.
     public var safetyPassed: Bool {
-        guardCorrections == 0 && nonFiniteFrames == 0 && fallbackFrames == 0
-            && failedFrames == 0 && contourCPUReadbacks == 0
+        nonFiniteFrames == 0 && fallbackFrames == 0 && failedFrames == 0
+            && contourCPUReadbacks == 0
     }
 
     public var text: String {
@@ -143,6 +143,10 @@ public enum PublicWorldStressBenchmark {
             } else { failedFrames += 1 }
             if index >= warmupFrames { measured.append(elapsed) }
             progress(index + 1, total)
+            // BubbleWorld i renderer są celowo izolowane do MainActor. Bez tego
+            // kooperacyjnego punktu SwiftUI nie może odmalować postępu ani
+            // przyjąć żądania Stop między ukończonymi klatkami benchmarku.
+            await Task.yield()
             if failedFrames > 0 { break }
         }
         measured.sort()

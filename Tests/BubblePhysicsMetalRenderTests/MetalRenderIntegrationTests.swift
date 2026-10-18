@@ -25,6 +25,24 @@ final class MetalRenderIntegrationTests: XCTestCase {
         let diagnostic = String(data: errors.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
         XCTAssertEqual(process.terminationStatus, 0, diagnostic)
     }
+
+    func testPolygonRenderPassesMetalValidation() throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: ProcessInfo.processInfo.arguments[0])
+        process.arguments = ["-XCTest",
+            "BubblePhysicsMetalRenderTests.MetalRenderIntegrationTests/testStyledPolygonInvokesCustomPipelineAndDrawsItsGeometry",
+            Bundle(for: MetalRenderIntegrationTests.self).bundlePath]
+        var environment = ProcessInfo.processInfo.environment
+        environment["MTL_DEBUG_LAYER"] = "1"
+        process.environment = environment
+        process.standardOutput = FileHandle.nullDevice
+        let errors = Pipe()
+        process.standardError = errors
+        try process.run()
+        process.waitUntilExit()
+        let diagnostic = String(data: errors.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        XCTAssertEqual(process.terminationStatus, 0, diagnostic)
+    }
 #endif
 
     func testRendererAcceptsViewportAndCallerCommandBuffer() async throws {
@@ -305,14 +323,19 @@ final class MetalRenderIntegrationTests: XCTestCase {
 
     func testPublicStressHarnessExercisesSameBufferWithoutContourReadback() async throws {
         let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        var progress: [Int] = []
         let report = try await PublicWorldStressBenchmark.run(device: device,
-            warmupFrames: 1, measuredFrames: 2) { _, _ in }
+            warmupFrames: 1, measuredFrames: 2) { completed, _ in
+                progress.append(completed)
+            }
         XCTAssertEqual(report.solverIterationLimit, 4)
         XCTAssertEqual(report.warmupFrames, 1)
         XCTAssertEqual(report.measuredFrames, 2)
         XCTAssertEqual(report.contourCPUReadbacks, 0)
         XCTAssertEqual(report.failedFrames, 0)
         XCTAssertTrue(report.p95Milliseconds.isFinite)
+        XCTAssertTrue(report.safetyPassed)
+        XCTAssertEqual(progress, [1, 2, 3])
     }
 
     private func makeTexture(device: MTLDevice) throws -> MTLTexture {

@@ -12,11 +12,18 @@ public final class BubblePhysicsMetalRender {
     private let device: MTLDevice
     private let vertexFunction: MTLFunction
     private let technicalFragment: MTLFunction
+    /// W trybie wielokąta shader nie czyta `bubbles`, lecz walidacja Metal
+    /// wymaga bufora o pełnym ABI `RenderBubble` (144 bajtów).
+    private let polygonBubblePlaceholder: MTLBuffer
     private var technicalPipelines: [MTLPixelFormat: MTLRenderPipelineState] = [:]
     public var customPipelines: [String: RenderStylePipeline]
 
     public init(device: MTLDevice, customPipelines: [String: RenderStylePipeline] = [:]) throws {
         self.device = device
+        guard let polygonBubblePlaceholder = device.makeBuffer(length: 144, options: .storageModeShared) else {
+            throw BubblePhysicsMetalRenderError.renderEncoderUnavailable
+        }
+        self.polygonBubblePlaceholder = polygonBubblePlaceholder
         let functions = try NativeMetalRenderHandoff.makeFunctions(device: device)
         self.vertexFunction = functions.vertex
         self.technicalFragment = functions.fragment
@@ -65,7 +72,7 @@ public final class BubblePhysicsMetalRender {
             // Metal argument validation requires all declared slots to be bound.
             encoder.setVertexBuffer(buffer, offset: 0, index: 0)
             encoder.setVertexBuffer(buffer, offset: 0, index: 1)
-            encoder.setVertexBuffer(buffer, offset: 0, index: 4)
+            encoder.setVertexBuffer(polygonBubblePlaceholder, offset: 0, index: 4)
             var values = SIMD4<Float>(viewport.center.x, viewport.center.y, viewport.size.x, viewport.size.y)
             encoder.setVertexBytes(&values, length: MemoryLayout<SIMD4<Float>>.stride, index: 2)
             var stride: UInt32 = 0
