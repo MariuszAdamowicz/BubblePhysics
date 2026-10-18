@@ -197,7 +197,9 @@ struct NativeMetalSnapshot: Sendable {
             var value = NativeMetalBubble(bubble)
             if let properties {
                 value.publicFlags = properties.flags; value.material = properties.material; value.resources = properties.resources
-                value.deformation.w = properties.restitution
+                // GPU nie rozwiązuje po ID zasobu; wolny lane niesie stabilną
+                // restitucję bez współdzielenia bufora deformacji konturu.
+                value.resources.x = UInt64(properties.restitution.bitPattern)
                 value.eventData = properties.eventData
             }
             return .init(index: index, value: value)

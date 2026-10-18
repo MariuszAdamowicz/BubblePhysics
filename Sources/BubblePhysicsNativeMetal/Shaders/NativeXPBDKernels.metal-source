@@ -555,7 +555,7 @@ kernel void nativeRigidContacts(device NativeRigidBody *bodies [[buffer(0)]],
         }
         wa=a.physical.y;wb=b.physical.x;ib=b.physical.y;rb=point-b.pose.xy;
         va=a.motion.xy;vb=b.motion.xy;spinB=b.motion.z;
-        frictionA=a.material.w;frictionB=b.physical.w;restitutionA=a.deformation.w;restitutionB=as_type<float>(b.flags.w);
+        frictionA=a.material.w;frictionB=b.physical.w;restitutionA=as_type<float>(uint(a.resources.x));restitutionB=as_type<float>(b.flags.w);
     } else {
         uint slot=index-bubblePairs,ai=slot/counts.x,bi=slot%counts.x;
         NativeRigidBody a=bodies[ai],b=bodies[bi];
@@ -670,9 +670,9 @@ kernel void nativeDampContactNormalMotion(device NativeBubble *bubbles [[buffer(
         // Tarcie: średnia geometryczna. Restitucja: maksimum. To samo
         // mieszanie obsługuje bubble↔bubble i bubble↔statyczny polygon.
         float otherFriction = edge.z == 0 ? bubbles[edge.y].material.w : segments[edge.y].collision.y;
-        float otherRestitution = edge.z == 0 ? bubbles[edge.y].deformation.w : segments[edge.y].collision.z;
+        float otherRestitution = edge.z == 0 ? as_type<float>(uint(bubbles[edge.y].resources.x)) : segments[edge.y].collision.z;
         float friction = sqrt(max(0.0f, bubble.material.w * otherFriction));
-        float restitution = max(bubble.deformation.w, otherRestitution);
+        float restitution = max(as_type<float>(uint(bubble.resources.x)), otherRestitution);
         // Dashpot usuwa energię oscylacji zarówno podczas dojścia, jak i
         // odbicia; sama korekcja XPBD nadal egzekwuje brak penetracji.
         float normalVelocity = dot(bubble.motion.xy - otherVelocity, outward);
@@ -680,14 +680,16 @@ kernel void nativeDampContactNormalMotion(device NativeBubble *bubbles [[buffer(
         // kinematycznej przeszkody. Granica jest skalowana promieniem, więc
         // drobne bańki stabilizują się szybciej niż duże.
         float restSpeed = max(40.0f, 2.0f * bubble.physical.z);
-        if (abs(normalVelocity) > restSpeed) continue;
         float inverseMassSum = bubble.physical.y + otherInverseMass;
         float share = inverseMassSum > 0 ? bubble.physical.y / inverseMassSum : 0;
+        // Szybki kontakt nadal ma materialną odpowiedź; próg dotyczy wyłącznie
+        // dashpotu, który przy prędkości CCD nie może dodać sztucznego hamowania.
         if (normalVelocity < 0 && restitution > 0)
             bubble.motion.xy -= outward * (normalVelocity * (1.0f + restitution) * share);
         float2 relativeVelocity = bubble.motion.xy - otherVelocity;
         float2 tangentialVelocity = relativeVelocity - outward * dot(relativeVelocity, outward);
         bubble.motion.xy -= tangentialVelocity * clamp(friction * share, 0.0f, 1.0f);
+        if (abs(normalVelocity) > restSpeed) continue;
         bubble.motion.xy -= outward * (normalVelocity * factor * share);
     }
     bubbles[index] = bubble;
