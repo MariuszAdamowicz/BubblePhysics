@@ -1,22 +1,24 @@
 import BubblePhysicsReference
+import BubblePhysicsNativeMetal
 import SwiftUI
 
+@MainActor
 struct ReferenceVisualPrototypeView: View {
-    @Binding var selectedMode: PrototypeMode
-    @State private var runner: ReferenceVisualRunner
-    @State private var snapshot: ReferenceVisualSnapshot
+    @State private var runner: VisualSimulationDriver
+    @State private var frame: VisualSimulationFrame
     @State private var isPaused = false
     @State private var showsPoints = false
     @State private var showsDiagnostics = false
     @State private var showsContactForces = false
-    @State private var density = ReferenceVisualDensity.six
+    @State private var density = ReferenceVisualDensity.twentyFour
+    @State private var backend = ReferenceSimulationBackend.nativeMetal
 
-    init(selectedMode: Binding<PrototypeMode>) {
-        _selectedMode = selectedMode
-        var runner = try! ReferenceVisualRunner()
-        let snapshot = runner.advance(to: 0)
+    private var snapshot: ReferenceVisualSnapshot { frame.snapshot }
+
+    init() {
+        let runner = try! VisualSimulationDriver()
         _runner = State(initialValue: runner)
-        _snapshot = State(initialValue: snapshot)
+        _frame = State(initialValue: runner.frame)
     }
 
     var body: some View {
@@ -27,16 +29,17 @@ struct ReferenceVisualPrototypeView: View {
                         .background(Color(red: 0.025, green: 0.04, blue: 0.07))
                         .contentShape(Rectangle())
                         .gesture(DragGesture(minimumDistance: 0).onChanged { drag in
-                            let scale = min(proxy.size.width / 375, proxy.size.height / 700)
-                            let offsetX = (proxy.size.width - 375 * scale) * 0.5
-                            let offsetY = (proxy.size.height - 700 * scale) * 0.5
-                            runner.movePolygon(to: .init(x: Float((drag.location.x - offsetX) / scale), y: Float((drag.location.y - offsetY) / scale)))
+                            if let point = VisualSimulationDriver.worldPoint(
+                                x: drag.location.x, y: drag.location.y,
+                                width: proxy.size.width, height: proxy.size.height) {
+                                runner.movePolygon(to: point)
+                            }
                         })
                     controls
                 }
                 .onChange(of: timeline.date) { date in
                     guard !isPaused else { return }
-                    snapshot = runner.advance(to: date.timeIntervalSinceReferenceDate)
+                    Task { frame = await runner.advance(to: date.timeIntervalSinceReferenceDate) }
                 }
             }
         }
@@ -45,26 +48,39 @@ struct ReferenceVisualPrototypeView: View {
     private var controls: some View {
         VStack(spacing: 6) {
             HStack {
-                Text("Kontakty").font(.headline)
+                Picker("Silnik", selection: $backend) {
+                    Text("CPU reference").tag(ReferenceSimulationBackend.cpu)
+                    Text("GPU native").tag(ReferenceSimulationBackend.nativeMetal)
+                }
+                .pickerStyle(.segmented)
+            }
+            HStack {
                 Picker("Liczba baniek", selection: $density) {
                     Text("6").tag(ReferenceVisualDensity.six)
                     Text("24").tag(ReferenceVisualDensity.twentyFour)
+                    Text("300").tag(ReferenceVisualDensity.threeHundred)
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 100)
-                Spacer()
                 Button(showsDiagnostics ? "Ukryj dane" : "Dane") { showsDiagnostics.toggle() }
                 Button(isPaused ? "Wznów" : "Pauza") { isPaused.toggle() }
                 Button("Reset") {
                     runner.reset()
-                    snapshot = runner.advance(to: Date.timeIntervalSinceReferenceDate)
+                    frame = runner.frame
                 }
             }
+            Text(frame.fallbackReason.map { "CPU fallback: \($0)" }
+                 ?? (frame.actualBackend == .nativeMetal ? "GPU native · XPBD/PBD 4" : "CPU reference"))
+                .foregroundStyle(frame.fallbackReason == nil ? Color.primary : Color.orange)
+            Text(String(format: "GPU %.2f ms · kontakty %d · containment %d · non-finite %@",
+                        frame.gpuMilliseconds, snapshot.contacts.count, frame.containmentCount,
+                        frame.hasNonFiniteState ? "tak" : "nie"))
             if showsDiagnostics {
                 Toggle("Punkty kontaktowe", isOn: $showsPoints)
                 Toggle("Siły kontaktów", isOn: $showsContactForces)
                 let report = snapshot.lastReport
-                Text(String(format: "%.2f ms · Newton %d · PCG %d · grupy %d%@", report.totalMilliseconds, report.solver.iterations, report.solver.pcgIterationCount, report.eventGroupCount, report.didReachEventGroupLimit ? " LIMIT" : ""))
+                if frame.actualBackend == .cpu {
+                    Text(String(format: "%.2f ms · Newton %d · PCG %d · grupy %d%@", report.totalMilliseconds, report.solver.iterations, report.solver.pcgIterationCount, report.eventGroupCount, report.didReachEventGroupLimit ? " LIMIT" : ""))
+                }
                 Text(String(format: "ścisk %.3f · residual %.2f→%.2f", report.solver.maximumCompression, report.solver.initialResidualNorm, report.solver.finalResidualNorm))
                 Text(String(format: "guard %d · kontakty %d · non-finite %@", report.centerGuardCount, report.persistentContactCount, report.hasNonFiniteState ? "tak" : "nie"))
             }
@@ -76,7 +92,11 @@ struct ReferenceVisualPrototypeView: View {
         .padding()
         .onChange(of: density) { value in
             runner.setDensity(value)
-            snapshot = runner.advance(to: Date.timeIntervalSinceReferenceDate)
+            frame = runner.frame
+        }
+        .onChange(of: backend) { value in
+            runner.setBackend(value)
+            frame = runner.frame
         }
     }
 

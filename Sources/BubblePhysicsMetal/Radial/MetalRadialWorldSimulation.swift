@@ -1,5 +1,5 @@
 import Metal
-import BubblePhysics
+import BubblePhysicsLegacy
 
 public struct MetalRadialWorldStep: Sendable {
     public let polygons: [SimulationPolygonSnapshot]

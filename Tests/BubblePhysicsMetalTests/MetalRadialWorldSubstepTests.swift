@@ -1,6 +1,6 @@
 import Metal
 import XCTest
-@testable import BubblePhysics
+@testable import BubblePhysicsLegacy
 @testable import BubblePhysicsMetal
 
 final class MetalRadialWorldSubstepTests: XCTestCase {

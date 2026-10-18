@@ -1,5 +1,5 @@
 import Metal
-import BubblePhysics
+import BubblePhysicsLegacy
 
 public final class MetalRadialSimulation: @unchecked Sendable {
     private let device: MTLDevice

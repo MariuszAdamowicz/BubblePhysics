@@ -12,26 +12,35 @@ public final class ReferenceBenchmarkPresentation: ObservableObject {
         ReferenceBenchmarkMatrixConfiguration,
         @escaping @Sendable (ReferenceBenchmarkProgress) async -> Void
     ) async throws -> ReferenceBenchmarkMatrixReport
+    public typealias RunActivitySetter = @MainActor (Bool) -> Void
 
     @Published public var scene: ReferenceConvergenceScene = .interactive24
     @Published public var mode: ReferenceBenchmarkMode = .matrix
     @Published public var selectedLimit = 4
+    @Published public var backend: ReferenceSimulationBackend = .cpu
+    @Published public var gpuDiagnosticsEnabled = false
     @Published public private(set) var progress = 0.0
     @Published public private(set) var reportText: String?
     @Published public private(set) var errorMessage: String?
     @Published public private(set) var isRunning = false
 
     private let runner: Runner
+    private let setRunActivity: RunActivitySetter
     private var task: Task<Void, Never>?
     private var generation: UInt64 = 0
+    private var isRunActivityActive = false
 
-    public init(runner: @escaping Runner = { configuration, progress in
-        try await ReferenceBenchmarkMatrixRunner.measure(
-            configuration: configuration,
-            progress: progress
-        )
-    }) {
+    public init(
+        runner: @escaping Runner = { configuration, progress in
+            try await ReferenceBenchmarkMatrixRunner.measure(
+                configuration: configuration,
+                progress: progress
+            )
+        },
+        setRunActivity: @escaping RunActivitySetter = { _ in }
+    ) {
         self.runner = runner
+        self.setRunActivity = setRunActivity
     }
 
     public func start(
@@ -47,12 +56,15 @@ public final class ReferenceBenchmarkPresentation: ObservableObject {
             scene: scene,
             warmupSteps: warmupSteps,
             measuredSteps: measuredSteps,
-            iterationLimits: limits
+            iterationLimits: limits,
+            backend: backend,
+            gpuDiagnosticsEnabled: gpuDiagnosticsEnabled
         )
         progress = 0
         reportText = nil
         errorMessage = nil
         isRunning = true
+        updateRunActivity(true)
 
         task = Task { [weak self, runner] in
             guard let self else { return }
@@ -65,15 +77,18 @@ public final class ReferenceBenchmarkPresentation: ObservableObject {
                 self.progress = 1
                 self.isRunning = false
                 self.task = nil
+                self.updateRunActivity(false)
             } catch is CancellationError {
                 guard self.generation == currentGeneration else { return }
                 self.isRunning = false
                 self.task = nil
+                self.updateRunActivity(false)
             } catch {
                 guard self.generation == currentGeneration else { return }
                 self.errorMessage = String(describing: error)
                 self.isRunning = false
                 self.task = nil
+                self.updateRunActivity(false)
             }
         }
     }
@@ -87,6 +102,13 @@ public final class ReferenceBenchmarkPresentation: ObservableObject {
         generation &+= 1
         task?.cancel()
         task = nil
+        updateRunActivity(false)
+    }
+
+    private func updateRunActivity(_ active: Bool) {
+        guard isRunActivityActive != active else { return }
+        isRunActivityActive = active
+        setRunActivity(active)
     }
 
     private func publish(_ value: ReferenceBenchmarkProgress, generation expected: UInt64) {

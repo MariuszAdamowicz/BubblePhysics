@@ -1,4 +1,4 @@
-import BubblePhysics
+import BubblePhysicsLegacy
 
 public struct MetalEngineStepResult: Equatable, Sendable {
     public let snapshot: MetalWorldSnapshot

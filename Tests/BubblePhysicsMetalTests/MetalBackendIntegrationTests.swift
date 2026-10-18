@@ -1,5 +1,5 @@
 import XCTest
-import BubblePhysics
+import BubblePhysicsLegacy
 @testable import BubblePhysicsMetal
 
 final class MetalBackendIntegrationTests: XCTestCase {

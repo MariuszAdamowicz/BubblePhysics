@@ -1,5 +1,5 @@
 import XCTest
-@testable import BubblePhysics
+@testable import BubblePhysicsLegacy
 
 final class BubbleOperationsTests: XCTestCase {
     func testResizeChangesRestAreaAndEmitsEvent() {

@@ -1,5 +1,5 @@
 import XCTest
-@testable import BubblePhysics
+@testable import BubblePhysicsLegacy
 
 final class RadialEnvironmentContactTests: XCTestCase {
     private let bounds = AABB(minimum: .zero, maximum: Vector2(x: 100, y: 100))

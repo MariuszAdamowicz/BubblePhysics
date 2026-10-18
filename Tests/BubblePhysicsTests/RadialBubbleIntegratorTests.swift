@@ -1,5 +1,5 @@
 import XCTest
-@testable import BubblePhysics
+@testable import BubblePhysicsLegacy
 
 final class RadialBubbleIntegratorTests: XCTestCase {
     private let dt: Float = 1 / 60

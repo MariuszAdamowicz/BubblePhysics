@@ -1,6 +1,6 @@
 import Metal
 import simd
-import BubblePhysics
+import BubblePhysicsLegacy
 
 public struct MetalRadialBody: Equatable, Sendable {
     public var pose: SIMD4<Float>

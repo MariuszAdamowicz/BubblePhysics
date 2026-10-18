@@ -3,6 +3,45 @@ import XCTest
 
 @MainActor
 final class ReferenceBenchmarkPresentationTests: XCTestCase {
+    #if os(macOS)
+    // Exercise the actual CLI parser/report boundary, including a valueless flag.
+    func testCLIEmitsProfileRowsOnlyWhenDiagnosticsIsRequested() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        for enabled in [false, true] {
+            let process = Process()
+            process.executableURL = root.appendingPathComponent(".build/debug/BubblePhysicsReferenceBench")
+            process.arguments = ["--scene", "interactive-24", "--backend", "metal", "--limits", "4",
+                                 "--warmup", "0", "--measured", "0"] + (enabled ? ["--diagnostics"] : [])
+            let output = Pipe()
+            process.standardOutput = output
+            process.standardError = output
+            try process.run()
+            let data = output.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            let text = String(decoding: data, as: UTF8.self)
+            XCTAssertEqual(process.terminationStatus, 0, text)
+            XCTAssertEqual(text.contains("gpu_profile "), enabled)
+            XCTAssertEqual(text.contains("gpu_stage "), enabled)
+            XCTAssertTrue(text.contains("gpu_completed limit=4 measured_frames=0"))
+        }
+    }
+    #endif
+
+    func testDiagnosticsSelectionReachesRunnerAndDefaultsOff() async {
+        for enabled in [false, true] {
+            let called = expectation(description: "runner \(enabled)")
+            let model = ReferenceBenchmarkPresentation { configuration, _ in
+                XCTAssertEqual(configuration.gpuDiagnosticsEnabled, enabled)
+                called.fulfill()
+                return .init(configuration: configuration, runs: [])
+            }
+            if enabled { model.gpuDiagnosticsEnabled = true }
+            model.start(deviceName: "test", systemVersion: "test", warmupSteps: 0, measuredSteps: 0)
+            await fulfillment(of: [called], timeout: 2)
+        }
+    }
+
     func testStoppingRunPreventsLateResultPublication() async {
         let model = ReferenceBenchmarkPresentation { configuration, _ in
             try? await Task.sleep(for: .milliseconds(30))
@@ -12,6 +51,43 @@ final class ReferenceBenchmarkPresentationTests: XCTestCase {
         model.stop()
         try? await Task.sleep(for: .milliseconds(60))
         XCTAssertNil(model.reportText)
+        XCTAssertFalse(model.isRunning)
+    }
+
+    func testRunActivityStaysActiveUntilCompletedBenchmarkPublishesReport() async {
+        let activity = RunActivityRecorder()
+        let model = ReferenceBenchmarkPresentation(
+            runner: { configuration, _ in
+                try? await Task.sleep(for: .milliseconds(20))
+                return .init(configuration: configuration, runs: [])
+            },
+            setRunActivity: { active in activity.record(active) }
+        )
+
+        model.start(deviceName: "iPhone", systemVersion: "iOS", warmupSteps: 0, measuredSteps: 0)
+        XCTAssertEqual(activity.values, [true])
+        try? await Task.sleep(for: .milliseconds(50))
+
+        XCTAssertEqual(activity.values, [true, false])
+        XCTAssertFalse(model.isRunning)
+        XCTAssertNotNil(model.reportText)
+    }
+
+    func testStoppingBenchmarkEndsRunActivity() async {
+        let activity = RunActivityRecorder()
+        let model = ReferenceBenchmarkPresentation(
+            runner: { configuration, _ in
+                try? await Task.sleep(for: .seconds(1))
+                return .init(configuration: configuration, runs: [])
+            },
+            setRunActivity: { active in activity.record(active) }
+        )
+
+        model.start(deviceName: "iPhone", systemVersion: "iOS", warmupSteps: 0, measuredSteps: 0)
+        model.stop()
+        try? await Task.sleep(for: .milliseconds(20))
+
+        XCTAssertEqual(activity.values, [true, false])
         XCTAssertFalse(model.isRunning)
     }
 
@@ -54,4 +130,10 @@ final class ReferenceBenchmarkPresentationTests: XCTestCase {
 private actor InvocationCounter {
     private var count = 0
     func next() -> Int { count += 1; return count }
+}
+
+@MainActor
+private final class RunActivityRecorder {
+    private(set) var values: [Bool] = []
+    func record(_ active: Bool) { values.append(active) }
 }

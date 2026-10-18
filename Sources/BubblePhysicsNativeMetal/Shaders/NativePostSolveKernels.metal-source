@@ -1,0 +1,890 @@
+// ABI: cztery atomiki uint, wyłącznie liczniki i bity statusu.
+// Każdy wątek bańki zapisuje tylko własną pozycję oraz rząd kandydatów.
+void nativeSafetyEvent(device atomic_uint *safety, uint slot) {
+    atomic_fetch_add_explicit(safety + slot, 1, memory_order_relaxed);
+}
+void nativeSafetyFailure(device atomic_uint *safety, uint bit) {
+    atomic_fetch_or_explicit(safety + 3, bit, memory_order_relaxed);
+}
+
+// Tylko probe: kopia granicy potoku do bufora shared. Nie jest kodowany
+// w normalnej konfiguracji solvera.
+kernel void nativeCapturePositions(device float4 *source [[buffer(0)]],
+                                   device float2 *destination [[buffer(1)]],
+                                   constant NativeControl &control [[buffer(2)]],
+                                   uint index [[thread_position_in_grid]]) {
+    if (index < control.counts.x) destination[index] = source[index].xy;
+}
+
+kernel void nativeFindFastCandidates(device NativeBubble *bubbles [[buffer(0)]],
+    device NativeSegment *segments [[buffer(1)]], constant NativeControl &control [[buffer(2)]],
+    device NativeContactControl &contacts [[buffer(3)]], device uint *candidates [[buffer(4)]],
+    device uint *changed [[buffer(5)]], device atomic_uint *safety [[buffer(6)]],
+    uint i [[thread_position_in_grid]]) {
+    if (i >= control.counts.x) return;
+    changed[i] = 0;
+    NativeBubble b = bubbles[i];
+    float2 movement = b.motion.xy * control.physics.x;
+    float2 lower = min(b.position.zw, b.position.xy) - b.physical.z;
+    float2 upper = max(b.position.zw, b.position.xy) + b.physical.z;
+    for (uint j = 0; j < control.counts.y; ++j) {
+        NativeSegment s = segments[j];
+        float relative = max(length(movement - (s.current.xy - s.previous.xy)),
+                             length(movement - (s.current.zw - s.previous.zw)));
+        float2 segmentLower = min(min(s.previous.xy, s.previous.zw), min(s.current.xy, s.current.zw));
+        float2 segmentUpper = max(max(s.previous.xy, s.previous.zw), max(s.current.xy, s.current.zw));
+        bool fast = relative > contacts.thresholds.y * b.physical.z
+            && all(lower <= segmentUpper) && all(upper >= segmentLower);
+        candidates[i * control.counts.y + j] = fast ? 1 : 0;
+        if (fast) nativeSafetyEvent(safety, 0);
+    }
+}
+
+float2 nativeReturnToOriginalSide(float2 start, float2 end, NativeSegment s, float margin) {
+    float2 normal = nativeSegmentNormal(s.current);
+    float side = dot(start - s.previous.xy, nativeSegmentNormal(s.previous));
+    float sign = s.flags.z ? s.collision.x : (side < 0 ? -1.0f : 1.0f);
+    float distance = dot(end - s.current.xy, normal);
+    if (distance * sign < margin) end += normal * (sign * margin - distance);
+    return end;
+}
+
+bool nativeInsideOwner(float2 p, device NativeSegment *segments, uint count, long owner, bool previous);
+
+bool nativeForbiddenCenterCrossing(float2 start, float2 end, NativeSegment s,
+    device NativeSegment *segments, uint count, device atomic_uint *statistics, bool guardStage) {
+    // Guard ma zezwalać na naprawę stanu początkowego w przeszkodzie.
+    if (s.flags.z && dot(start - s.previous.xy, nativeSegmentNormal(s.previous)) * s.collision.x < 0) return false;
+    if (s.flags.y && nativeInsideOwner(start, segments, count, s.identity.y, true)) return false;
+    nativeCountWork(statistics, guardStage ? 6 : 5);
+    return nativeCenterCrossing(start, end, s);
+}
+
+bool nativeCenterPathFinite(float2 start, float2 end, NativeSegment s, device atomic_uint *statistics) {
+    nativeCountWork(statistics, 7);
+    float2 e0 = s.previous.zw - s.previous.xy, e1 = s.current.zw - s.current.xy;
+    float2 de = e1 - e0, r0 = start - s.previous.xy;
+    float2 dr = (end - start) - (s.current.xy - s.previous.xy);
+    float a = nativeCross(de, dr), b = nativeCross(e0, dr) + nativeCross(de, r0);
+    float c = nativeCross(e0, r0);
+    if (a == 0 && b == 0 && c == 0) {
+        float q0 = dot(r0, r0 - e0), qa = dot(dr, dr - de);
+        float qb = dot(dr, r0 - e0) + dot(r0, dr - de);
+        if (!all(isfinite(float4(q0, qa, qb, qa + qb + q0)))) return false;
+    }
+    return all(isfinite(e0)) && all(isfinite(e1)) && all(isfinite(r0)) && all(isfinite(dr))
+        && isfinite(dot(e0, e0)) && isfinite(dot(e1, e1))
+        && isfinite(dot(r0, r0)) && isfinite(dot(dr, dr))
+        && all(isfinite(float3(a, b, c))) && isfinite(b * b - 4 * a * c);
+}
+
+// Tani przesiew ochrony wolnego crossing lub korekcji Jacobi poza maską
+// prędkości: bez współczynników kwadratowych, discriminant ani pierwiastków.
+bool nativePossibleCenterCrossing(float2 start, float2 end, NativeSegment s) {
+    float2 lower = min(start, end), upper = max(start, end);
+    float2 segmentLower = min(min(s.previous.xy, s.previous.zw), min(s.current.xy, s.current.zw));
+    float2 segmentUpper = max(max(s.previous.xy, s.previous.zw), max(s.current.xy, s.current.zw));
+    if (any(lower > segmentUpper) || any(upper < segmentLower)) return false;
+    if (all(start == end) && all(s.previous == s.current)) return false;
+    float2 previousEdge = s.previous.zw - s.previous.xy, currentEdge = s.current.zw - s.current.xy;
+    if (all(previousEdge == currentEdge)) {
+        float previousSide = nativeCross(previousEdge, start - s.previous.xy);
+        float currentSide = nativeCross(currentEdge, end - s.current.xy);
+        if ((previousSide > 0 && currentSide > 0) || (previousSide < 0 && currentSide < 0)) return false;
+    }
+    return true;
+}
+
+kernel void nativeResolveCCD(device NativeBubble *bubbles [[buffer(0)]],
+    device NativeSegment *segments [[buffer(1)]], device float4 *positions [[buffer(2)]],
+    constant NativeControl &control [[buffer(3)]], device uint *candidates [[buffer(4)]],
+    device uint *changed [[buffer(5)]], device atomic_uint *safety [[buffer(6)]],
+    device atomic_uint *statistics [[buffer(7)]],
+    uint i [[thread_position_in_grid]]) {
+    if (i >= control.counts.x) return;
+    if (bubbles[i].publicFlags.x && bubbles[i].publicFlags.y) return;
+    float2 start = bubbles[i].position.zw, end = positions[i].xy;
+    for (uint j = 0; j < control.counts.y; ++j) {
+        if (!candidates[i * control.counts.y + j]) continue;
+        NativeSegment s = segments[j];
+        if (!nativeCenterPathFinite(start, end, s, statistics)) { nativeSafetyFailure(safety, 1); continue; }
+        if (!nativeForbiddenCenterCrossing(start, end, s, segments, control.counts.y, statistics, false)) continue;
+        float2 corrected = nativeReturnToOriginalSide(start, end, s, bubbles[i].physical.z);
+        if (any(corrected != end)) { end = corrected; changed[i] = 1; nativeSafetyEvent(safety, 1); }
+    }
+    positions[i].xy = end;
+}
+
+bool nativeInsideOwner(float2 p, device NativeSegment *segments, uint count, long owner, bool previous) {
+    bool inside = false;
+    uint edges = 0;
+    for (uint j = 0; j < count; ++j) {
+        NativeSegment s = segments[j];
+        if (!s.flags.y || s.identity.y != owner) continue;
+        ++edges;
+        float4 endpoints = previous ? s.previous : s.current;
+        float2 a = endpoints.xy, b = endpoints.zw;
+        if ((a.y > p.y) != (b.y > p.y)) {
+            float x = a.x + (b.x - a.x) * (p.y - a.y) / (b.y - a.y);
+            if (p.x < x) inside = !inside;
+        }
+    }
+    return edges >= 3 && inside;
+}
+
+void nativeGuardCenter(device NativeBubble *bubbles, device NativeSegment *segments,
+    device float4 *positions, constant NativeControl &control, device NativeContactControl &contacts,
+    device uint *changed, device atomic_uint *safety, device atomic_uint *statistics,
+    device uint *candidates, uint i) {
+    if (bubbles[i].publicFlags.x && bubbles[i].publicFlags.y) return;
+    float2 start = bubbles[i].position.zw, end = positions[i].xy;
+    float margin = max(contacts.thresholds.z * 2, 1e-5f);
+    for (uint j = 0; j < control.counts.y; ++j) {
+        NativeSegment s = segments[j];
+        float2 corrected = end;
+        if (candidates[i * control.counts.y + j] || nativePossibleCenterCrossing(start, end, s)) {
+            if (!nativeCenterPathFinite(start, end, s, statistics)) { nativeSafetyFailure(safety, 1); continue; }
+            if (nativeForbiddenCenterCrossing(start, end, s, segments, control.counts.y, statistics, true))
+                corrected = nativeReturnToOriginalSide(start, end, s, margin);
+        }
+        if (s.flags.z) {
+            float2 normal = nativeSegmentNormal(s.current) * s.collision.x;
+            float side = dot(corrected - s.current.xy, normal);
+            if (side < 0) corrected += normal * (margin - side);
+        }
+        if (any(corrected != end)) { end = corrected; changed[i] = 1; nativeSafetyEvent(safety, 1); }
+    }
+    for (uint j = 0; j < control.counts.y; ++j) {
+        NativeSegment s = segments[j];
+        if (!s.flags.y) continue;
+        bool first = true;
+        for (uint k = 0; k < j; ++k)
+            if (segments[k].flags.y && segments[k].identity.y == s.identity.y) first = false;
+        if (!first || !nativeInsideOwner(end, segments, control.counts.y, s.identity.y, false)) continue;
+        float best = INFINITY;
+        float2 point = end, outward = float2(1, 0);
+        for (uint k = 0; k < control.counts.y; ++k) {
+            NativeSegment edge = segments[k];
+            if (!edge.flags.y || edge.identity.y != s.identity.y) continue;
+            float2 q = nativeClosestPoint(end, edge.current);
+            float distance = length(q - end);
+            if (distance < best) {
+                best = distance; point = q;
+                outward = distance > FLT_MIN ? (q - end) / distance : nativeSegmentNormal(edge.current);
+            }
+        }
+        end = point + outward * margin;
+        changed[i] = 1; nativeSafetyEvent(safety, 1);
+    }
+    positions[i].xy = end;
+    // Walidacja po WSZYSTKICH korekcjach: ostatnia przeszkoda może zepsuć
+    // wcześniejszą. Niespójne ściany/rotacje odrzucają klatkę, bez pętli hosta.
+    if (!all(isfinite(end))) nativeSafetyFailure(safety, 1);
+    for (uint j = 0; j < control.counts.y; ++j) {
+        NativeSegment s = segments[j];
+        if (candidates[i * control.counts.y + j] || nativePossibleCenterCrossing(start, end, s)) {
+            if (!nativeCenterPathFinite(start, end, s, statistics)) nativeSafetyFailure(safety, 1);
+            else if (nativeForbiddenCenterCrossing(start, end, s, segments, control.counts.y, statistics, true))
+                nativeSafetyFailure(safety, 2);
+        }
+        if (s.flags.z && dot(end - s.current.xy, nativeSegmentNormal(s.current)) * s.collision.x < 0)
+            nativeSafetyFailure(safety, 2);
+        if (s.flags.y && nativeInsideOwner(end, segments, control.counts.y, s.identity.y, false))
+            nativeSafetyFailure(safety, 2);
+    }
+}
+
+kernel void nativeApplyCenterGuards(device NativeBubble *bubbles [[buffer(0)]],
+    device NativeSegment *segments [[buffer(1)]], device float4 *positions [[buffer(2)]],
+    constant NativeControl &control [[buffer(3)]], device NativeContactControl &contacts [[buffer(4)]],
+    device uint *changed [[buffer(5)]], device atomic_uint *safety [[buffer(6)]],
+    device atomic_uint *statistics [[buffer(7)]], device uint *candidates [[buffer(8)]],
+    uint i [[thread_position_in_grid]]) {
+    if (i >= control.counts.x) return;
+    nativeGuardCenter(bubbles, segments, positions, control, contacts, changed, safety, statistics, candidates, i);
+}
+
+// The contact graph was built before obstacle projection. Scan the current
+// positions, including pairs created by that projection. One SIMDgroup owns a
+// bubble, with fixed-lane reduction; only lane zero writes its ping/pong slot.
+kernel void nativeSeparateContainedBubbles(device NativeBubble *bubbles [[buffer(0)]],
+    device float4 *input [[buffer(1)]], device float4 *output [[buffer(2)]],
+    constant NativeControl &control [[buffer(3)]], device NativeSolverControl &solver [[buffer(4)]],
+    device uint *changed [[buffer(5)]], device atomic_uint *safety [[buffer(6)]],
+    device atomic_uint *repairActive [[buffer(7)]], constant uint &pass [[buffer(8)]],
+    threadgroup float2 *laneCorrections [[threadgroup(0)]],
+    uint i [[threadgroup_position_in_grid]], uint lane [[thread_index_in_simdgroup]],
+    uint width [[threads_per_simdgroup]]) {
+    if (i >= control.counts.x) return;
+    if (!atomic_load_explicit(repairActive + pass, memory_order_relaxed)) {
+        if (lane == 0) output[i] = float4(input[i].xy, 0, 0);
+        return;
+    }
+    NativeBubble a = bubbles[i];
+    float2 center = input[i].xy, correction = 0;
+    for (uint j = lane; j < control.counts.x; j += width) {
+        if (i == j) continue;
+        NativeBubble b = bubbles[j];
+        float minimum = abs(a.physical.z - b.physical.z);
+        if (minimum <= solver.physics.y) continue;
+        float2 delta = center - input[j].xy;
+        float distance = length(delta);
+        // Preserve elastic overlap: only prohibit full nominal containment.
+        // A small outward margin covers float rounding and obstacle reprojection.
+        float margin = max(2 * solver.physics.y, 8 * FLT_EPSILON * max(a.physical.z, b.physical.z));
+        if (distance >= minimum + margin) continue;
+        float2 normal = distance > margin ? delta / distance
+            : float2(0, a.identity.x < b.identity.x ? -1.0f : 1.0f);
+        float weight = a.physical.y + b.physical.y;
+        if (weight <= 0) continue;
+        correction += normal * ((minimum + margin - distance) * a.physical.y / weight);
+    }
+    // Threadgroup memory works on Apple4 (iPhone X); simd_sum requires Apple7.
+    // Fixed lane order makes the reduction independent of scheduling, with no
+    // float atomics or cross-SIMD permute requirement.
+    laneCorrections[lane] = correction;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (lane != 0) return;
+    correction = 0;
+    for (uint k = 0; k < width; ++k) correction += laneCorrections[k];
+    float2 next = center + correction;
+    // A sub-ULP correction that rounds back to the same position cannot create
+    // a new pair or require obstacle projection in a subsequent pass.
+    bool moved = any(next != center);
+    output[i] = float4(next, moved ? 1.0f : 0.0f, 0);
+    if (moved) {
+        changed[i] = 1; nativeSafetyEvent(safety, 1);
+        atomic_fetch_or_explicit(repairActive + pass + 1, 1, memory_order_relaxed);
+    }
+}
+
+kernel void nativeReapplyCenterGuards(device NativeBubble *bubbles [[buffer(0)]],
+    device NativeSegment *segments [[buffer(1)]], device float4 *positions [[buffer(2)]],
+    constant NativeControl &control [[buffer(3)]], device NativeContactControl &contacts [[buffer(4)]],
+    device uint *changed [[buffer(5)]], device atomic_uint *safety [[buffer(6)]],
+    device atomic_uint *statistics [[buffer(7)]], device uint *candidates [[buffer(8)]],
+    uint i [[thread_position_in_grid]]) {
+    if (i >= control.counts.x || positions[i].z == 0) return;
+    nativeGuardCenter(bubbles, segments, positions, control, contacts, changed, safety, statistics, candidates, i);
+}
+
+// This final validator runs AFTER the last obstacle projection. It must never
+// rely on the old adjacency, and no subsequent stage may change centers.
+kernel void nativeValidateBubbleContainment(device NativeBubble *bubbles [[buffer(0)]],
+    device float4 *positions [[buffer(1)]], constant NativeControl &control [[buffer(2)]],
+    device NativeSolverControl &solver [[buffer(3)]], device atomic_uint *safety [[buffer(4)]],
+    uint pair [[thread_position_in_grid]]) {
+    uint count = control.counts.x;
+    // Host validates the capacity product before allocation/dispatch.
+    if (pair >= count * count) return;
+    uint i = pair / count, j = pair % count;
+    if (j <= i) return;
+    if (bubbles[i].physical.y + bubbles[j].physical.y <= 0) return;
+    float distance = length(positions[j].xy - positions[i].xy);
+    float smaller = min(bubbles[i].physical.z, bubbles[j].physical.z);
+    float larger = max(bubbles[i].physical.z, bubbles[j].physical.z);
+    if (!isfinite(distance)) nativeSafetyFailure(safety, 1);
+    else if (distance + smaller < larger - solver.physics.y) nativeSafetyFailure(safety, 2);
+}
+
+uint nativeSafetyBubbleIndex(long id, device NativeBubble *bubbles, uint count) {
+    uint lo = 0, hi = count;
+    while (lo < hi) { uint mid = lo + (hi - lo) / 2;
+        if (bubbles[mid].identity.x < id) lo = mid + 1; else hi = mid; }
+    return lo < count && bubbles[lo].identity.x == id ? lo : count;
+}
+
+kernel void nativeInvalidateSafetyCache(device NativeBubble *bubbles [[buffer(0)]],
+    device NativeContactCache *cache [[buffer(1)]], constant NativeControl &control [[buffer(2)]],
+    device NativeContactControl &contacts [[buffer(3)]], device uint *changed [[buffer(4)]],
+    device atomic_uint *safety [[buffer(5)]], uint i [[thread_position_in_grid]]) {
+    if (contacts.counts.w || i >= contacts.counts.z) return;
+    NativeContactCache c = cache[i];
+    uint a = nativeSafetyBubbleIndex(c.participants.x, bubbles, control.counts.x);
+    uint b = c.metadata.x == 0 ? nativeSafetyBubbleIndex(c.participants.y, bubbles, control.counts.x) : control.counts.x;
+    if ((a < control.counts.x && changed[a]) || (b < control.counts.x && changed[b])) {
+        c.response.x = 0; c.metadata.y = 1; c.metadata.w |= 8;
+        cache[i] = c; nativeSafetyEvent(safety, 2);
+    }
+}
+
+kernel void nativeCheckFinite(device NativeBubble *bubbles [[buffer(0)]],
+    device NativeSegment *segments [[buffer(1)]], device NativeContactCache *cache [[buffer(2)]],
+    constant NativeControl &control [[buffer(3)]], device NativeContactControl &contacts [[buffer(4)]],
+    device NativeSolverControl &solver [[buffer(5)]], device atomic_uint *safety [[buffer(6)]],
+    uint i [[thread_position_in_grid]]) {
+    if (i == 0 && !all(isfinite(solver.physics))) nativeSafetyFailure(safety, 1);
+    if (i < control.counts.x) {
+        NativeBubble b = bubbles[i];
+        if (!all(isfinite(b.position)) || !all(isfinite(b.motion)) || !all(isfinite(b.physical))
+            || !all(isfinite(b.deformation))) nativeSafetyFailure(safety, 1);
+    }
+    if (i < control.counts.y) {
+        NativeSegment s = segments[i];
+        float2 previousEdge = s.previous.zw - s.previous.xy, currentEdge = s.current.zw - s.current.xy;
+        if (!all(isfinite(s.previous)) || !all(isfinite(s.current)) || !all(isfinite(s.velocity))
+            || !all(isfinite(s.collision)) || !all(isfinite(previousEdge)) || !all(isfinite(currentEdge))
+            || !isfinite(dot(previousEdge, previousEdge)) || !isfinite(dot(currentEdge, currentEdge)))
+            nativeSafetyFailure(safety, 1);
+    }
+    if (!contacts.counts.w && i < contacts.counts.z) {
+        NativeContactCache c = cache[i];
+        if (!all(isfinite(c.geometry)) || !all(isfinite(c.response)) || c.response.x < 0)
+            nativeSafetyFailure(safety, 1);
+    }
+}
+
+kernel void nativeRigidPredict(device NativeRigidBody *bodies [[buffer(0)]],
+    device float2 *vertices [[buffer(1)]], constant uint4 &counts [[buffer(2)]],
+    constant NativeControl &control [[buffer(3)]], device NativeSegment *segments [[buffer(4)]],
+    device atomic_uint *safety [[buffer(5)]], device NativeRigidCorrection *corrections [[buffer(6)]],
+    uint index [[thread_position_in_grid]]) {
+    if(index>=counts.x)return;
+    NativeRigidBody b=bodies[index];b.previous.xy=b.pose.xy;b.pose.w=b.pose.z;b.flags.z=0;
+    if(b.flags.x){b.motion.xyz=0;bodies[index]=b;return;}
+    float dt=control.physics.x;b.motion.xyz*=exp(-b.motion.w*dt);
+    float3 start=b.pose.xyz;b.pose.xyz+=b.motion.xyz*dt;
+    if(!all(isfinite(b.pose)) || !all(isfinite(b.motion))) { nativeSafetyFailure(safety,1);bodies[index]=b;return; }
+    // Konserwatywny sweep wierzchołków zatrzymuje bryłę przed cienką ścianą.
+    // Próbkowanie obrotu obejmuje łuk; przekroczenie budżetu odrzuca klatkę.
+    uint steps=max(1u,uint(ceil(abs(b.pose.z-start.z)/0.05f)));
+    if(steps>128){nativeSafetyFailure(safety,2);bodies[index]=b;return;}
+    bool crossed=false;float2 contactPoint=0,contactNormal=0;long contactOwner=0;
+    for(uint sample=0;sample<steps && !crossed;++sample){
+        float3 p=mix(start,b.pose.xyz,float(sample)/float(steps));
+        float3 q=mix(start,b.pose.xyz,float(sample+1)/float(steps));
+        for(uint j=0;j<control.counts.y && !crossed;++j){
+            NativeSegment wall=segments[j];
+            if(ulong(wall.identity.y)==b.identity.x && wall.flags.y)continue;
+            for(uint k=0;k<b.ranges.y;++k){
+                float2 v=vertices[b.ranges.x+k];
+                float2 startVertex=p.xy+nativeRotate(v,p.z),endVertex=q.xy+nativeRotate(v,q.z);
+                if(nativeCenterCrossing(startVertex,endVertex,wall)){
+                    crossed=true;contactPoint=nativeClosestPoint(endVertex,wall.current);
+                    float2 edge=wall.current.zw-wall.current.xy;
+                    contactNormal=normalize(float2(edge.y,-edge.x));
+                    if(dot(startVertex-wall.current.xy,contactNormal)<0)contactNormal=-contactNormal;
+                    contactOwner=wall.identity.y;break;
+                }
+                // Koniec ściany również nie może przejść przez krawędź bryły.
+                float2 next=vertices[b.ranges.x+(k+1)%b.ranges.y];
+                NativeSegment edge=wall;
+                edge.previous=float4(p.xy+nativeRotate(v,p.z),p.xy+nativeRotate(next,p.z));
+                edge.current=float4(q.xy+nativeRotate(v,q.z),q.xy+nativeRotate(next,q.z));
+                if(nativeCenterCrossing(wall.current.xy,wall.current.xy,edge) || nativeCenterCrossing(wall.current.zw,wall.current.zw,edge)){
+                    crossed=true;contactPoint=nativeClosestPoint(endVertex,wall.current);
+                    float2 wallEdge=wall.current.zw-wall.current.xy;
+                    contactNormal=normalize(float2(wallEdge.y,-wallEdge.x));
+                    if(dot(startVertex-wall.current.xy,contactNormal)<0)contactNormal=-contactNormal;
+                    contactOwner=wall.identity.y;break;
+                }
+            }
+        }
+    }
+    if(crossed){
+        b.pose.xyz=start;b.motion.xyz=0;
+        for(uint j=0;j<counts.x;++j)if(j!=index && bodies[j].flags.x && bodies[j].identity.x==ulong(contactOwner)){
+            uint slot=counts.x*counts.y+min(index,j)*counts.x+max(index,j);
+            float2 pairNormal=index<j ? -contactNormal : contactNormal;
+            corrections[slot].first.w=pairNormal.x;corrections[slot].second.w=pairNormal.y;
+            corrections[slot].velocityFirst.w=contactPoint.x;corrections[slot].velocitySecond.w=contactPoint.y;
+            break;
+        }
+    }
+    bodies[index]=b;
+}
+
+// Projekcja bryły po korektach kontaktowych. Statyczne rekordy nigdy nie są
+// zapisywane; każdy work-item ma wyłączną własność swojej dynamicznej bryły.
+kernel void nativeRigidGuardWalls(device NativeRigidBody *bodies [[buffer(0)]],
+    device float2 *vertices [[buffer(1)]], device uint4 *triangles [[buffer(2)]],
+    constant uint4 &counts [[buffer(3)]], uint index [[thread_position_in_grid]]) {
+    if(index>=counts.x || bodies[index].flags.x)return;
+    NativeRigidBody b=bodies[index];
+    for(uint j=0;j<counts.x;++j){
+        if(!bodies[j].flags.x)continue;
+        NativeRigidBody wall=bodies[j];
+        for(uint k=0;k<b.ranges.y;++k){
+            float2 p=nativeRigidVertex(b,vertices,k);
+            float2 start=b.previous.xy+nativeRotate(vertices[b.ranges.x+k],b.pose.w);
+            bool inside=nativeRigidInside(p,wall,vertices,triangles);
+            bool startedInside=nativeRigidInside(start,wall,vertices,triangles);
+            if(startedInside)for(uint e=0;e<wall.ranges.y;++e){
+                float4 edge=float4(nativeRigidVertex(wall,vertices,e),nativeRigidVertex(wall,vertices,(e+1)%wall.ranges.y));
+                if(distance(start,nativeClosestPoint(start,edge))<1e-5f){startedInside=false;break;}
+            }
+            float nearest=INFINITY;float2 normal=0;float depth=0;
+            for(uint e=0;e<wall.ranges.y;++e){
+                NativeSegment edge;edge.current=float4(nativeRigidVertex(wall,vertices,e),nativeRigidVertex(wall,vertices,(e+1)%wall.ranges.y));edge.previous=edge.current;
+                float2 direction=edge.current.zw-edge.current.xy,out=normalize(float2(direction.y,-direction.x));
+                float signedStart=dot(start-edge.current.xy,out);
+                bool onBoundary=distance(start,nativeClosestPoint(start,edge.current))<1e-5f;
+                bool crossing=signedStart>=-1e-5f && (nativeCenterCrossing(start,p,edge)
+                    || (onBoundary && dot(p-edge.current.xy,out)<0));
+                if(!inside&&!crossing)continue;
+                if(inside && !startedInside && signedStart < -1e-5f)continue;
+                float2 closest=nativeClosestPoint(p,edge.current);
+                float d=(crossing||!startedInside)?distance(start,nativeClosestPoint(start,edge.current)):distance(p,closest);
+                if(d<nearest){nearest=d;normal=out;depth=max(0.0f,-dot(p-closest,out));}
+            }
+            if(isfinite(nearest) && depth>0){
+                b.pose.xy+=normal*(depth+1e-5f);
+                float2 r=p-b.pose.xy;float lever=nativeCross(r,normal);
+                float speed=dot(b.motion.xy,normal)+b.motion.z*lever;
+                float denom=b.physical.x+b.physical.y*lever*lever;
+                float impulse=max(0.0f,-speed)/max(denom,FLT_MIN);
+                b.motion.xy+=normal*b.physical.x*impulse;b.motion.z+=lever*b.physical.y*impulse;
+            }
+        }
+    }
+    bodies[index]=b;
+}
+
+kernel void nativeRigidFinish(device NativeRigidBody *bodies [[buffer(0)]],
+    device float2 *vertices [[buffer(1)]], constant uint4 &counts [[buffer(2)]],
+    constant NativeControl &control [[buffer(3)]], device atomic_uint *safety [[buffer(4)]],
+    uint index [[thread_position_in_grid]]) {
+    if(index>=counts.x)return;
+    NativeRigidBody b=bodies[index];
+    if(!all(isfinite(b.pose))||!all(isfinite(b.previous))||!all(isfinite(b.motion))){nativeSafetyFailure(safety,1);return;}
+    if(b.flags.x)return;
+    float2 low=float2(INFINITY),high=float2(-INFINITY);
+    for(uint i=0;i<b.ranges.y;++i){float2 v=nativeRigidVertex(b,vertices,i);low=min(low,v);high=max(high,v);}
+    float2 shift=0,size=control.region.zw-control.region.xy;
+    bool outside=high.x<control.region.x||high.y<control.region.y||low.x>control.region.z||low.y>control.region.w;
+    if(outside){
+        if(!b.flags.y)b.flags.z=1;
+        else {
+            if(high.x<control.region.x)shift.x=ceil((control.region.x-high.x)/size.x)*size.x;
+            if(low.x>control.region.z)shift.x=-ceil((low.x-control.region.z)/size.x)*size.x;
+            if(high.y<control.region.y)shift.y=ceil((control.region.y-high.y)/size.y)*size.y;
+            if(low.y>control.region.w)shift.y=-ceil((low.y-control.region.w)/size.y)*size.y;
+            b.pose.xy+=shift;b.previous.xy+=shift;b.flags.z=2;
+        }
+    }
+    bodies[index]=b;
+}
+
+struct NativeContourControl { uint4 counts; float4 shape; };
+
+float nativeContourRayLimit(float2 center, float2 direction, float2 a, float2 b,
+    float radius, float clearance) {
+    float2 edge = b - a, offset = a - center;
+    float denominator = nativeCross(direction, edge);
+    if (abs(denominator) < 1e-6f) return radius;
+    float distance = nativeCross(offset, edge) / denominator;
+    float fraction = nativeCross(offset, direction) / denominator;
+    return distance >= 0 && fraction >= 0 && fraction <= 1
+        ? min(radius, max(0.0f, distance - clearance)) : radius;
+}
+
+// Nacisk jest polem radialnym w świecie, a nie sumą skalarnych zgniotów.
+// Geometria pochodzi wyłącznie z pozycji zakończonych przez CCD i guardy.
+kernel void nativeAccumulateContactPressure(device NativeBubble *bubbles [[buffer(0)]],
+    device NativeSegment *segments [[buffer(1)]], device NativeContactCache *cache [[buffer(2)]],
+    constant NativeControl &control [[buffer(3)]], device NativeContactControl &contacts [[buffer(4)]],
+    constant NativeContourControl &contour [[buffer(5)]], device NativeBubble *previousBubbles [[buffer(6)]],
+    device float4 *previousDeformation [[buffer(7)]], device uint *previousCounts [[buffer(8)]],
+    device float4 *pressure [[buffer(9)]], device uint *counts [[buffer(10)]],
+    device uint4 *adjacency [[buffer(11)]], device uint *degrees [[buffer(12)]],
+    device atomic_uint *safety [[buffer(13)]], device NativeStructuralHeader *structuralHeaders [[buffer(14)]],
+    uint index [[thread_position_in_grid]]) {
+    uint bubbleIndex = index / contour.counts.x, sample = index % contour.counts.x;
+    if (bubbleIndex >= control.counts.x || contacts.counts.w
+        || atomic_load_explicit(safety + 3, memory_order_relaxed)) return;
+    NativeBubble bubble = bubbles[bubbleIndex];
+    uint count = min(contour.counts.x, max(64u, uint(ceil((bubble.physical.z / contour.shape.x) * (4 * M_PI_F)))));
+    if (sample == 0) counts[bubbleIndex] = count;
+    if (sample >= count) return;
+    float angle = 2 * M_PI_F * float(sample) / float(count);
+    float2 direction = float2(cos(angle), sin(angle));
+    float limit = bubble.physical.z;
+    // Rzeczywiste skończone krawędzie: także te, które guard dopiero dosunął do bańki.
+    for (uint j = 0; j < control.counts.y; ++j)
+        limit = nativeContourRayLimit(bubble.position.xy, direction, segments[j].current.xy,
+            segments[j].current.zw, limit, contour.shape.w);
+    float directionalPressure = 0;
+    for (uint j = 0; j < degrees[bubbleIndex]; ++j) {
+        uint4 edge = adjacency[bubbleIndex * contacts.cache.w + j];
+        NativeContactCache contact = cache[edge.x];
+        if (contact.metadata.z != contacts.limits.x) continue;
+        float2 toward = edge.z == 0 ? bubbles[edge.y].position.xy - bubble.position.xy : -contact.geometry.xy;
+        float towardLength = length(toward);
+        if (towardLength > FLT_EPSILON) {
+            float alignment = max(0.0f, dot(direction, toward / towardLength));
+            // Zakończona lambda reprezentuje lokalną kompresję także po rozdzieleniu
+            // środków przez twardy PBD. Safety reset zeruje ją przed tym etapem.
+            float compression = clamp(contact.response.x * bubble.physical.y / bubble.physical.z,
+                0.0f, 0.5f);
+            directionalPressure = max(directionalPressure, compression * pow(alignment, 8.0f));
+        }
+        if (edge.z != 0) continue;
+        NativeBubble other = bubbles[edge.y];
+        float2 delta = other.position.xy - bubble.position.xy;
+        float distance = length(delta);
+        float radius = bubble.physical.z, otherRadius = other.physical.z;
+        if (distance <= FLT_EPSILON || distance >= radius + otherRadius + contacts.thresholds.z) continue;
+        float2 normal = delta / distance;
+        // Wspólna skończona cięciwa obu naturalnych kół.
+        float planeDistance = clamp((distance * distance + radius * radius - otherRadius * otherRadius)
+            / (2 * distance), 0.0f, radius);
+        float halfLength = sqrt(max(0.0f, radius * radius - planeDistance * planeDistance));
+        float2 tangent = float2(-normal.y, normal.x);
+        float2 point = bubble.position.xy + normal * planeDistance;
+        limit = nativeContourRayLimit(bubble.position.xy, direction, point - tangent * halfLength,
+            point + tangent * halfLength, limit, contour.shape.w);
+    }
+    float deficit = clamp(1 - limit / bubble.physical.z, 0.0f, 1.0f);
+    float recovered = 0;
+    // Wynik merge/split o ponownie użytym ID nie dziedziczy starego konturu tego ID.
+    // Jego źródła fizyczne są próbkowane jawnie przez nativeSeedStructuralContours.
+    bool hasStructuralShape = contour.counts.z != 0 && structuralHeaders[bubbleIndex].range.y != 0;
+    uint old = hasStructuralShape ? contour.counts.y
+        : nativeSafetyBubbleIndex(bubble.identity.x, previousBubbles, contour.counts.y);
+    if (old < contour.counts.y && previousCounts[old] > 0) {
+        // Resampling przy zmianie promienia/liczby punktów zachowuje lokalność nacisku.
+        uint oldCount = previousCounts[old];
+        float location = float(sample) * float(oldCount) / float(count);
+        uint first = uint(location) % oldCount, second = (first + 1) % oldCount;
+        float oldDeficit = mix(previousDeformation[old * contour.counts.x + first].x,
+            previousDeformation[old * contour.counts.x + second].x, fract(location));
+        // Zmiana promienia zachowuje światowy kontur, a dopiero potem relaksuje go w czasie.
+        recovered = max(0.0f, 1 - previousBubbles[old].physical.z * (1-oldDeficit) / bubble.physical.z)
+            * exp(-contour.shape.y * max(0.0f, bubble.physical.w) * control.physics.x);
+    }
+    // Wartość lambda jest używana przez solver, ale nie jest dodatkową
+    // geometrią konturu. Jej lokalne maksima poruszały kontur mimo prawie
+    // niezmienionej geometrii zatwierdzonej klatki.
+    float4 value = float4(max(deficit, recovered), deficit, 0, 0);
+    if (bubble.publicFlags.x) {
+        float softness = bubble.material.y * (1 - bubble.material.z);
+        value = float4(max(max(deficit, directionalPressure * softness), recovered), deficit, 0, 0);
+        if (softness == 0 && bubble.material.z == 0) value.xy = 0;
+        if (bubble.material.z >= 1) value.xy = 0;
+    }
+    if (!all(isfinite(value))) nativeSafetyFailure(safety, 1);
+    pressure[index] = value;
+}
+
+// Jacobi na lokalnych naciskach wygładza przejście, zachowując twardy envelope.
+// Kombinacja wypukła nie zwiększa maksimum deformacji i nie wzbudza oscylacji.
+kernel void nativeGenerateContours(device float4 *input [[buffer(0)]], device float4 *output [[buffer(1)]],
+    device uint *counts [[buffer(2)]], constant NativeControl &control [[buffer(3)]],
+    constant NativeContourControl &contour [[buffer(4)]], device atomic_uint *safety [[buffer(5)]],
+    uint index [[thread_position_in_grid]]) {
+    uint bubbleIndex = index / contour.counts.x, sample = index % contour.counts.x;
+    if (bubbleIndex >= control.counts.x || atomic_load_explicit(safety + 3, memory_order_relaxed)) return;
+    uint count = counts[bubbleIndex];
+    if (sample >= count) return;
+    uint base = bubbleIndex * contour.counts.x;
+    float4 value = input[index];
+    float neighbor = (input[base + (sample + count - 1) % count].x + input[base + (sample + 1) % count].x) * 0.5f;
+    float tension = min(0.8f, contour.shape.z / (contour.shape.z + 10));
+    value.x = clamp(max(value.y, mix(value.x, neighbor, tension)), 0.0f, 1.0f);
+    if (!all(isfinite(value))) nativeSafetyFailure(safety, 1);
+    output[index] = value;
+}
+
+kernel void nativePrepareRenderData(device NativeBubble *bubbles [[buffer(0)]],
+    device float4 *deformation [[buffer(1)]], device uint *counts [[buffer(2)]],
+    device float2 *points [[buffer(3)]], device NativeRenderPacket *packets [[buffer(4)]],
+    constant NativeControl &control [[buffer(5)]], constant NativeContourControl &contour [[buffer(6)]],
+    device atomic_uint *safety [[buffer(7)]], uint index [[thread_position_in_grid]]) {
+    if (index >= control.counts.x || atomic_load_explicit(safety + 3, memory_order_relaxed)) return;
+    NativeBubble bubble = bubbles[index];
+    float maximum = 0;
+    uint count = counts[index], base = index * contour.counts.x, anchor = 0;
+    for (uint sample = 0; sample < count; ++sample) {
+        float deficit = deformation[base + sample].x;
+        if (deficit > maximum) { maximum = deficit; anchor = sample; }
+    }
+    // Domknięcie radialnego pola: najmniejsza majoranta o ograniczonym
+    // nachyleniu, więc nigdy nie cofa nacisku ani twardego envelope.
+    // Próbkowanie n >= 4*pi*r/maxEdge ogranicza składową kątową do
+    // maxEdge/2. Różnica promieni <= maxEdge/2 ogranicza całą krawędź:
+    // |p-q|^2 = (rp-rq)^2 + 4*rp*rq*sin(pi/n)^2 <= maxEdge^2/2.
+    // Dwa przejścia od globalnego maksimum domykają także szew koła
+    // w O(n), niezależnie od szerokości kontaktu i napięcia powierzchniowego.
+    float slope = contour.shape.x / (2 * bubble.physical.z);
+    float previous = maximum;
+    for (uint step = 1; step < count; ++step) {
+        uint sample = (anchor + step) % count;
+        float value = max(deformation[base + sample].x, previous - slope);
+        deformation[base + sample].x = value;
+        previous = value;
+    }
+    previous = maximum;
+    for (uint step = 1; step < count; ++step) {
+        uint sample = (anchor + count - step) % count;
+        float value = max(deformation[base + sample].x, previous - slope);
+        deformation[base + sample].x = value;
+        previous = value;
+    }
+    float effectiveRadius = bubble.physical.z;
+    for (uint sample = 0; sample < counts[index]; ++sample) {
+        uint address = index * contour.counts.x + sample;
+        float angle = 2 * M_PI_F * float(sample) / float(counts[index]);
+        float2 point = bubble.position.xy + float2(cos(angle), sin(angle))
+            * bubble.physical.z * (1 - deformation[address].x);
+        if (!all(isfinite(point))) nativeSafetyFailure(safety, 1);
+        points[address] = point;
+        effectiveRadius = min(effectiveRadius, length(point - bubble.position.xy));
+        maximum = max(maximum, deformation[address].x);
+    }
+    // Walidacja rzeczywistych współrzędnych, po zaokrągleniu float32.
+    // Bardzo duży środek może nie pozwalać na reprezentację krótkiej
+    // krawędzi. Takiej klatki nie wolno publikować jako ukończonej.
+    for (uint sample = 0; sample < count; ++sample) {
+        float edge = length(points[base + (sample + 1) % count] - points[base + sample]);
+        if (!isfinite(edge)) nativeSafetyFailure(safety, 1);
+        else if (edge > contour.shape.x) nativeSafetyFailure(safety, 4);
+    }
+    bubble.deformation = float4(maximum, effectiveRadius, 0, 0);
+    bubbles[index] = bubble;
+    NativeRenderPacket packet = {bubble.identity,
+        float4(bubble.position.xy, bubble.physical.z, bubble.motion.z), bubble.deformation};
+    if (!all(isfinite(packet.geometry))) nativeSafetyFailure(safety, 1);
+    packets[index] = packet;
+}
+
+// Region nie jest ścianą. Test koła dotyczy collidera używanego przez narrow phase,
+// nie wyłącznie środka ani wizualnego konturu. Styczność nadal oznacza obecność.
+kernel void nativeApplyPublicRegion(device NativeBubble *bubbles [[buffer(0)]],
+    device float2 *points [[buffer(1)]], device NativeRenderPacket *packets [[buffer(2)]],
+    device uint *counts [[buffer(3)]], constant NativeControl &control [[buffer(4)]],
+    constant NativeContourControl &contour [[buffer(5)]], device atomic_uint *safety [[buffer(6)]],
+    uint index [[thread_position_in_grid]]) {
+    if (index >= control.counts.x) return;
+    NativeBubble b = bubbles[index];
+    if (!b.publicFlags.x || b.publicFlags.y) return;
+    float2 nearest = clamp(b.position.xy, control.region.xy, control.region.zw);
+    if (length(b.position.xy - nearest) <= b.physical.z) return;
+    if (!b.publicFlags.z) { b.publicFlags.w = 1; bubbles[index] = b; return; }
+    float2 delta = 0;
+    // Okres obejmuje średnicę collidera: wyjście całej bryły odpowiada jej
+    // ponownemu wejściu z przeciwnej strony; zachowujemy nadmiar przebytej drogi.
+    float2 span = control.region.zw - control.region.xy + 2 * b.physical.z;
+    for (uint axis = 0; axis < 2; ++axis) {
+        if (b.position[axis] > control.region[axis + 2])
+            delta[axis] = -span[axis] * max(1.0f, ceil((b.position[axis] - b.physical.z - control.region[axis + 2]) / span[axis]));
+        else if (b.position[axis] < control.region[axis])
+            delta[axis] = span[axis] * max(1.0f, ceil((control.region[axis] - b.physical.z - b.position[axis]) / span[axis]));
+    }
+    // Zawinięcie obu osi może umieścić środek za przeciwległym rogiem,
+    // mimo że każda oś osobno zachowała nadmiar drogi. Dociągnij tylko
+    // taki przypadek do najbliższego punktu regionu, aby collider wrócił.
+    float2 wrapped = b.position.xy + delta;
+    float2 nearestWrapped = clamp(wrapped, control.region.xy, control.region.zw);
+    if (length(wrapped - nearestWrapped) > b.physical.z) delta += nearestWrapped - wrapped;
+    b.position += float4(delta, delta);
+    if (!all(isfinite(b.position))) { nativeSafetyFailure(safety, 1); return; }
+    b.publicFlags.w = 2;
+    bubbles[index] = b;
+    packets[index].geometry.xy += delta;
+    for (uint point = 0; point < counts[index]; ++point) {
+        uint address = index * contour.counts.x + point;
+        points[address] += delta;
+        if (!all(isfinite(points[address]))) nativeSafetyFailure(safety, 1);
+    }
+}
+
+kernel void nativeInvalidateRegionCache(device NativeBubble *bubbles [[buffer(0)]],
+    device NativeContactCache *cache [[buffer(1)]], constant NativeControl &control [[buffer(2)]],
+    device NativeContactControl &contacts [[buffer(3)]], uint index [[thread_position_in_grid]]) {
+    if (index >= contacts.counts.z || contacts.counts.w) return;
+    NativeContactCache record = cache[index];
+    uint a = nativeFindBubble(bubbles, control.counts.x, record.participants.x);
+    bool changed = a < control.counts.x && bubbles[a].publicFlags.w;
+    if (record.metadata.x == 0) {
+        uint b = nativeFindBubble(bubbles, control.counts.x, record.participants.y);
+        changed |= b < control.counts.x && bubbles[b].publicFlags.w;
+    }
+    if (changed) { record.response.x = 0; record.metadata.w |= 1; cache[index] = record; }
+}
+// Kandydaci merge są wybierani przed odczytem CPU. Licznik zachowuje również
+// rekordy ponad pojemność, więc utrata jest jawna dla gry.
+struct NativeEventRecord { ulong2 participants; float4 point; uint4 metadata; };
+kernel void nativeCompactMergeEvents(device NativeBubble *bubbles [[buffer(0)]],
+    device NativeContactCache *cache [[buffer(1)]], constant NativeControl &control [[buffer(2)]],
+    device NativeContactControl &contacts [[buffer(3)]], device atomic_uint &eventCount [[buffer(4)]],
+    device NativeEventRecord *events [[buffer(5)]], constant uint &capacity [[buffer(6)]],
+    uint index [[thread_position_in_grid]]) {
+    if (index >= contacts.counts.z || contacts.counts.w) return;
+    NativeContactCache contact = cache[index];
+    if (contact.metadata.x != 0 || contact.metadata.z != contacts.limits.x) return;
+    uint low = 0, high = control.counts.x;
+    while (low < high) { uint mid = (low + high) / 2; if (bubbles[mid].identity.x < contact.participants.x) low = mid + 1; else high = mid; }
+    if (low >= control.counts.x || bubbles[low].identity.x != contact.participants.x) return;
+    NativeBubble a = bubbles[low]; low = 0; high = control.counts.x;
+    while (low < high) { uint mid = (low + high) / 2; if (bubbles[mid].identity.x < contact.participants.y) low = mid + 1; else high = mid; }
+    if (low >= control.counts.x || bubbles[low].identity.x != contact.participants.y) return;
+    NativeBubble b = bubbles[low];
+    if (!(a.eventData.x & 1ul) || !(b.eventData.x & 1ul) || !(a.eventData.y & b.eventData.y)) return;
+    uint slot = atomic_fetch_add_explicit(&eventCount, 1u, memory_order_relaxed);
+    if (slot < capacity) events[slot] = {ulong2(as_type<ulong>(contact.participants.x),
+        as_type<ulong>(contact.participants.y)), float4(contact.geometry.zw, 0, 0), uint4(0)};
+}
+
+struct NativeSensorRecord { ulong2 identity; float4 geometry; uint4 range; };
+struct NativeSensorPair { ulong2 participants; uint4 state; };
+// ReferenceWorld porządkuje bubble ID jako Int; bity ID pozostają UInt64 w zdarzeniu.
+bool nativeBubblePairBefore(ulong2 lhs, ulong2 rhs) {
+    return lhs.x < rhs.x || (lhs.x == rhs.x && as_type<long>(lhs.y) < as_type<long>(rhs.y));
+}
+bool nativePolygonPairBefore(ulong2 lhs, ulong2 rhs) {
+    return lhs.x < rhs.x || (lhs.x == rhs.x && lhs.y < rhs.y);
+}
+kernel void nativeCompactSensorEvents(device NativeBubble *bubbles [[buffer(0)]],
+    constant NativeControl &control [[buffer(1)]], device NativeSensorRecord *sensors [[buffer(2)]],
+    device float2 *vertices [[buffer(3)]], device uint *allowed [[buffer(4)]],
+    device NativeSensorPair *previous [[buffer(5)]], device NativeSensorPair *current [[buffer(6)]],
+    device atomic_uint &eventCount [[buffer(7)]], device NativeEventRecord *events [[buffer(8)]],
+    constant uint4 &settings [[buffer(9)]], uint index [[thread_position_in_grid]]) {
+    uint bubbleCount = control.counts.x;
+    if (!bubbleCount || index >= bubbleCount * settings.x) return;
+    uint sensorIndex = index / bubbleCount, bubbleIndex = index % bubbleCount;
+    NativeSensorRecord sensor = sensors[sensorIndex]; NativeBubble bubble = bubbles[bubbleIndex];
+    ulong2 pair = ulong2(sensor.identity.x, as_type<ulong>(bubble.identity.x));
+    bool overlapping = false;
+    if (allowed[index] && bubble.publicFlags.w != 1) {
+        float2 d = bubble.position.xy - sensor.geometry.xy;
+        float c = cos(sensor.geometry.z), s = sin(sensor.geometry.z);
+        float2 local = float2(c*d.x+s*d.y, -s*d.x+c*d.y);
+        float radius = bubble.physical.z;
+        if (sensor.range.y == 0) {
+            float reach = sensor.geometry.w + radius;
+            overlapping = dot(local, local) <= reach * reach;
+        } else {
+            bool inside = false;
+            for (uint j = 0; j < sensor.range.y; ++j) {
+                float2 a = vertices[sensor.range.x + j];
+                float2 b = vertices[sensor.range.x + (j + 1) % sensor.range.y];
+                if ((a.y > local.y) != (b.y > local.y) &&
+                    local.x < (b.x-a.x)*(local.y-a.y)/(b.y-a.y)+a.x) inside = !inside;
+                float2 ab = b-a;
+                float t = clamp(dot(local-a, ab) / max(dot(ab, ab), 1e-20f), 0.0f, 1.0f);
+                float2 delta = local - (a+t*ab);
+                if (dot(delta, delta) <= radius*radius) overlapping = true;
+            }
+            overlapping |= inside;
+        }
+    }
+    uint low = 0, high = settings.y;
+    while (low < high) {
+        uint mid = (low + high) / 2; ulong2 candidate = previous[mid].participants;
+        if (nativeBubblePairBefore(candidate, pair)) low = mid + 1;
+        else high = mid;
+    }
+    bool wasOverlapping = low < settings.y && all(previous[low].participants == pair) && previous[low].state.x != 0;
+    current[index] = {pair, uint4(overlapping ? 1u : 0u, (sensor.identity.y & (1ul << 3)) ? 1u : 0u, 0, 0)};
+    uint kind = overlapping && !wasOverlapping && (sensor.identity.y & (1ul << 2)) ? 1u
+        : !overlapping && wasOverlapping && (sensor.identity.y & (1ul << 3)) ? 2u : 0u;
+    if (!kind) return;
+    uint slot = atomic_fetch_add_explicit(&eventCount, 1u, memory_order_relaxed);
+    if (slot < settings.z) events[slot] = {pair, float4(bubble.position.xy, 0, 0), uint4(kind, 0, 0, 0)};
+}
+
+bool nativePointInPolygon(float2 point, device float2 *vertices, uint start, uint count,
+    float2 translation, float angle) {
+    bool inside = false;
+    for (uint i = 0; i < count; ++i) {
+        float2 a = translation + nativeRotate(vertices[start+i], angle);
+        float2 b = translation + nativeRotate(vertices[start+(i+1)%count], angle);
+        if ((a.y > point.y) != (b.y > point.y) &&
+            point.x < (b.x-a.x)*(point.y-a.y)/(b.y-a.y)+a.x) inside = !inside;
+    }
+    return inside;
+}
+float nativePointSegmentDistanceSquared(float2 point, float2 a, float2 b) {
+    float2 ab = b-a;
+    float t = clamp(dot(point-a, ab)/max(dot(ab, ab), 1e-20f), 0.0f, 1.0f);
+    float2 d = point-(a+t*ab);
+    return dot(d, d);
+}
+float nativeCross2(float2 a, float2 b) { return a.x*b.y-a.y*b.x; }
+bool nativeSegmentsCross(float2 a, float2 b, float2 c, float2 d) {
+    if (max(min(a.x, b.x), min(c.x, d.x)) > min(max(a.x, b.x), max(c.x, d.x)) ||
+        max(min(a.y, b.y), min(c.y, d.y)) > min(max(a.y, b.y), max(c.y, d.y))) return false;
+    float2 ab = b-a, cd = d-c;
+    float p = nativeCross2(ab, c-a), q = nativeCross2(ab, d-a);
+    float r = nativeCross2(cd, a-c), s = nativeCross2(cd, b-c);
+    return ((p <= 0 && q >= 0) || (p >= 0 && q <= 0)) &&
+           ((r <= 0 && s >= 0) || (r >= 0 && s <= 0));
+}
+bool nativeRigidOverlapsSensor(NativeRigidBody body, device float2 *bodyVertices,
+    NativeSensorRecord sensor, device float2 *sensorVertices) {
+    uint bodyCount = body.ranges.y, sensorCount = sensor.range.y;
+    if (!bodyCount) return false;
+    if (!sensorCount && nativePointInPolygon(sensor.geometry.xy, bodyVertices,
+        body.ranges.x, bodyCount, body.pose.xy, body.pose.z)) return true;
+    for (uint i = 0; i < bodyCount; ++i) {
+        float2 a = nativeRigidVertex(body, bodyVertices, i);
+        float2 b = nativeRigidVertex(body, bodyVertices, (i+1)%bodyCount);
+        if (!sensorCount) {
+            float radius = sensor.geometry.w;
+            if (nativePointSegmentDistanceSquared(sensor.geometry.xy, a, b) <= radius*radius) return true;
+        } else {
+            if (nativePointInPolygon(a, sensorVertices, sensor.range.x, sensorCount,
+                sensor.geometry.xy, sensor.geometry.z)) return true;
+            for (uint j = 0; j < sensorCount; ++j) {
+                float2 c = sensor.geometry.xy + nativeRotate(sensorVertices[sensor.range.x+j], sensor.geometry.z);
+                float2 d = sensor.geometry.xy + nativeRotate(sensorVertices[sensor.range.x+(j+1)%sensorCount], sensor.geometry.z);
+                if (nativeSegmentsCross(a, b, c, d)) return true;
+            }
+        }
+    }
+    if (sensorCount) {
+        float2 point = sensor.geometry.xy + nativeRotate(sensorVertices[sensor.range.x], sensor.geometry.z);
+        return nativePointInPolygon(point, bodyVertices, body.ranges.x, bodyCount, body.pose.xy, body.pose.z);
+    }
+    return false;
+}
+kernel void nativeCompactPolygonSensorEvents(device NativeRigidBody *bodies [[buffer(0)]],
+    device float2 *bodyVertices [[buffer(1)]], device NativeSensorRecord *sensors [[buffer(2)]],
+    device float2 *sensorVertices [[buffer(3)]], device uint *allowed [[buffer(4)]],
+    device NativeSensorPair *previous [[buffer(5)]], device NativeSensorPair *current [[buffer(6)]],
+    device atomic_uint &eventCount [[buffer(7)]], device NativeEventRecord *events [[buffer(8)]],
+    constant uint4 &settings [[buffer(9)]], uint index [[thread_position_in_grid]]) {
+    uint bodyCount = settings.w;
+    if (!bodyCount || index >= bodyCount * settings.x) return;
+    uint sensorIndex = index / bodyCount, bodyIndex = index % bodyCount;
+    NativeSensorRecord sensor = sensors[sensorIndex]; NativeRigidBody body = bodies[bodyIndex];
+    ulong2 pair = ulong2(sensor.identity.x, body.identity.x);
+    bool overlapping = allowed[index] && body.flags.z != 1 &&
+        nativeRigidOverlapsSensor(body, bodyVertices, sensor, sensorVertices);
+    uint low = 0, high = settings.y;
+    while (low < high) {
+        uint mid = (low+high)/2; ulong2 candidate = previous[mid].participants;
+        if (nativePolygonPairBefore(candidate, pair)) low = mid+1;
+        else high = mid;
+    }
+    bool wasOverlapping = low < settings.y && all(previous[low].participants == pair) && previous[low].state.x != 0;
+    current[index] = {pair, uint4(overlapping ? 1u : 0u, (sensor.identity.y & (1ul << 3)) ? 1u : 0u, 0, 0)};
+    uint kind = overlapping && !wasOverlapping && (sensor.identity.y & (1ul << 2)) ? 1u
+        : !overlapping && wasOverlapping && (sensor.identity.y & (1ul << 3)) ? 2u : 0u;
+    if (!kind) return;
+    uint slot = atomic_fetch_add_explicit(&eventCount, 1u, memory_order_relaxed);
+    if (slot < settings.z) events[slot] = {pair, float4(body.pose.xy, 0, 0), uint4(kind, 0, 0, 0)};
+}
+
+// Para istniejąca wyłącznie w poprzedniej klatce oznacza usunięty obiekt lub sensor.
+// Skan i publikacja pozostają na GPU, a licznik zdarzeń zachowuje jawny overflow.
+kernel void nativeCompactMissingSensorEvents(device NativeSensorPair *previous [[buffer(0)]],
+    device NativeSensorPair *current [[buffer(1)]], device atomic_uint &eventCount [[buffer(2)]],
+    device NativeEventRecord *events [[buffer(3)]], constant uint4 &settings [[buffer(4)]],
+    uint index [[thread_position_in_grid]]) {
+    if (index >= settings.x) return;
+    NativeSensorPair oldPair = previous[index];
+    if (!oldPair.state.x || !oldPair.state.y) return;
+    uint low = 0, high = settings.y;
+    while (low < high) {
+        uint mid = (low + high) / 2;
+        bool before = settings.w == 0 ? nativeBubblePairBefore(current[mid].participants, oldPair.participants)
+                                      : nativePolygonPairBefore(current[mid].participants, oldPair.participants);
+        if (before) low = mid + 1;
+        else high = mid;
+    }
+    if (low < settings.y && all(current[low].participants == oldPair.participants)) return;
+    uint slot = atomic_fetch_add_explicit(&eventCount, 1u, memory_order_relaxed);
+    if (slot < settings.z) events[slot] = {oldPair.participants, float4(0), uint4(2, 0, 0, 0)};
+}

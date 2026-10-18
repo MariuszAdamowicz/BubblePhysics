@@ -7,6 +7,8 @@ public struct ReferenceBenchmarkMatrixConfiguration: Sendable, Equatable {
     public var warmupSteps: Int
     public var measuredSteps: Int
     public var iterationLimits: [Int]
+    public var backend: ReferenceSimulationBackend
+    public var gpuDiagnosticsEnabled: Bool
 
     public init(
         scene: ReferenceConvergenceScene,
@@ -14,7 +16,9 @@ public struct ReferenceBenchmarkMatrixConfiguration: Sendable, Equatable {
         broadPhase: ReferenceBroadPhaseSelection = .sweepAndPrune,
         warmupSteps: Int,
         measuredSteps: Int,
-        iterationLimits: [Int] = [4, 8, 12, 16]
+        iterationLimits: [Int] = [4, 8, 12, 16],
+        backend: ReferenceSimulationBackend = .cpu,
+        gpuDiagnosticsEnabled: Bool = false
     ) {
         self.scene = scene
         self.seed = seed
@@ -22,6 +26,8 @@ public struct ReferenceBenchmarkMatrixConfiguration: Sendable, Equatable {
         self.warmupSteps = max(0, warmupSteps)
         self.measuredSteps = max(0, measuredSteps)
         self.iterationLimits = iterationLimits.map { max(1, $0) }
+        self.backend = backend
+        self.gpuDiagnosticsEnabled = gpuDiagnosticsEnabled
     }
 }
 
@@ -44,8 +50,15 @@ public struct ReferenceBenchmarkMatrixReport: Sendable, Equatable {
             "scene: \(configuration.scene.rawValue)",
             "seed: \(configuration.seed)",
             "warmup: \(configuration.warmupSteps) measured: \(configuration.measuredSteps)",
-            "limit full_p50_ms full_p95_ms full_max_ms solver_p95_ms contour_p95_ms render_p95_ms penetration_p95 penetration_max residual_p95 residual_max unconverged_components containment non_finite",
+            "limit full_p50_ms full_p95_ms full_max_ms solver_p95_ms contour_p95_ms render_p95_ms penetration_p95 penetration_max residual_p95 residual_max unconverged_components containment non_finite backend cpu_frames metal_frames fallbacks warmup_fallbacks gpu_measurement",
         ]
+        if configuration.backend == .metal {
+            lines.insert("gpu_diagnostics=\(configuration.gpuDiagnosticsEnabled ? "enabled" : "disabled"); diagnostyka dodaje narzut hosta — nie mieszaj jej z pomiarem akceptacyjnym. Etapy obejmują całe command buffery; newton zawiera inicjalizację PCG, geometry inicjalizację klatki, ccd rozpoczęcie solve i finalizację świata.", at: 6)
+            lines.insert("Uwaga GPU: solver_p95_ms obejmuje cały command buffer GPU (sumę etapów) albo solver CPU przy fallbacku; contour_p95_ms mierzy pobranie/pakowanie konturów na hoście. Osobny gpu_completed zawiera wyłącznie ukończone klatki Metal; czasy tabeli przy fallbackach są mieszane i nie kwalifikują GPU.", at: 6)
+        }
+        if configuration.backend == .nativeMetal {
+            lines.insert("GPU-native: limit oznacza stałą liczbę iteracji XPBD/PBD. solver_p95_ms obejmuje cały command buffer GPU albo solver CPU przy fallbacku; contour_p95_ms obejmuje pobranie/pakowanie gotowych konturów na hoście. gpu_completed i native_work zawierają wyłącznie ukończone zmierzone klatki native GPU; profil liczby command bufferów jest zawsze raportowany. Czasy tabeli z fallbackami są mieszane i nie kwalifikują GPU.", at: 6)
+        }
         for run in runs {
             lines.append([
                 "\(run.newtonIterationLimit)",
@@ -62,9 +75,78 @@ public struct ReferenceBenchmarkMatrixReport: Sendable, Equatable {
                 "\(run.maximumUnconvergedContactComponents)",
                 "\(run.maximumConsecutiveContainmentFrames)",
                 run.hasNonFiniteState ? "yes" : "no",
+                run.backend.rawValue,
+                "\(run.cpuFrameCount)",
+                "\(run.metalFrameCount)",
+                "\(run.fallbackCount)",
+                "\(run.warmupFallbackCount)",
+                run.isGPUAcceptanceMeasurementEligible ? "eligible" : (run.backend == .cpu ? "not_applicable" : "ineligible"),
             ].joined(separator: " "))
         }
+        for run in runs where !run.fallbackReasons.isEmpty {
+            for reason in run.fallbackReasons.keys.sorted() {
+                lines.append("fallback_reason limit=\(run.newtonIterationLimit) count=\(run.fallbackReasons[reason]!) reason=\(singleLine(reason))")
+            }
+        }
+        for run in runs where configuration.backend.isGPU {
+            let limit = run.newtonIterationLimit
+            let gpu = run.completedMetalTiming
+            let cpu = run.cpuFallbackFullFrameTiming
+            func gpuTime(_ value: Double) -> String { run.completedMetalSampleCount > 0 ? format(value) : "unavailable" }
+            func cpuTime(_ value: Double) -> String { run.cpuFallbackSampleCount > 0 ? format(value) : "unavailable" }
+            lines.append("gpu_completed limit=\(limit) measured_frames=\(run.completedMetalSampleCount) command_buffers_p50_ms=\(gpuTime(gpu.p50Milliseconds)) command_buffers_p95_ms=\(gpuTime(gpu.p95Milliseconds)) command_buffers_max_ms=\(gpuTime(gpu.maximumMilliseconds))")
+            if configuration.gpuDiagnosticsEnabled || configuration.backend == .nativeMetal {
+                func fields(_ label: String, _ summary: ReferenceTimingSummary, count: Int, unit: String = "") -> String {
+                    func value(_ value: Double) -> String { count > 0 ? format(value) : "unavailable" }
+                    let prefix = label.isEmpty ? "" : label + "_"
+                    return "\(prefix)p50\(unit)=\(value(summary.p50Milliseconds)) \(prefix)p95\(unit)=\(value(summary.p95Milliseconds)) \(prefix)max\(unit)=\(value(summary.maximumMilliseconds))"
+                }
+                let count = run.gpuProfileSampleCount
+                lines.append("gpu_profile limit=\(limit) measured_frames=\(count) " + [
+                    fields("command_buffers", run.gpuProfileCommandBuffers, count: count),
+                    fields("encoders", run.gpuProfileEncoders, count: count),
+                    fields("host_encoding", run.gpuProfileHostEncoding, count: count, unit: "_ms"),
+                    fields("host_waiting", run.gpuProfileHostWaiting, count: count, unit: "_ms"),
+                    fields("host_readback", run.gpuProfileHostReadback,
+                           count: configuration.backend == .nativeMetal ? 0 : count, unit: "_ms")
+                ].joined(separator: " "))
+                let stages = configuration.backend == .nativeMetal ? ["frame"] : ReferenceBenchmarkGPUFrameProfile.stages
+                for stage in stages {
+                    let samples = run.gpuProfileStageSampleCounts[stage] ?? 0
+                    lines.append("gpu_stage limit=\(limit) stage=\(stage) measured_frames=\(samples) " +
+                        fields("", run.gpuProfileStages[stage] ?? .init(values: []), count: samples, unit: "_ms"))
+                }
+            }
+            lines.append("cpu_fallback limit=\(limit) measured_frames=\(run.cpuFallbackSampleCount) full_p50_ms=\(cpuTime(cpu.p50Milliseconds)) full_p95_ms=\(cpuTime(cpu.p95Milliseconds)) full_max_ms=\(cpuTime(cpu.maximumMilliseconds))")
+            lines.append("gpu_work limit=\(limit) scope=completed_measured_frames solve_calls_max=\(optionalCount(run.maximumGPUSolveCalls)) tentative_solve_calls_max=\(optionalCount(run.maximumGPUTentativeSolveCalls)) contacts_max=\(optionalCount(run.maximumGPUContacts)) ccd_groups_max=\(optionalCount(run.maximumGPUCCDGroups))")
+            if configuration.backend == .nativeMetal {
+                lines.append("native_work limit=\(limit) scope=completed_measured_frames measured_frames=\(run.nativeTelemetrySampleCount) native_cache_hits=\(optionalCount(run.nativeCacheHits)) native_cache_resets=\(optionalCount(run.nativeCacheResets)) native_solver_iterations=\(optionalCount(run.maximumNativeSolverIterations)) native_ccd_candidates=\(optionalCount(run.nativeCCDCandidates))")
+                let evidence = run.nativeQuality ?? .init()
+                let violations = run.nativeQuality?.violations ?? ["missingEvidence"]
+                func metric(_ value: Double?) -> String {
+                    value.map { String(format: "%.9g", locale: Locale(identifier: "en_US_POSIX"), $0) } ?? "unavailable"
+                }
+                func hash(_ value: UInt64?) -> String { value.map { String($0, radix: 16) } ?? "unavailable" }
+                lines.append("native_quality limit=\(limit) native_quality_envelope=\(violations.isEmpty ? "pass" : "fail") scope=separate_untimed_acceptance_batches cpu_baseline_measured_frames=\(evidence.cpuBaselineMeasuredFrames) cpu_penetration_p95=\(metric(evidence.cpuPenetrationP95)) cpu_penetration_max=\(metric(evidence.cpuPenetrationMaximum))")
+                lines.append("native_quality_dynamic limit=\(limit) rest_settle_frames=\(evidence.restSettleFrames) rest_measured_frames=\(evidence.restMeasuredFrames) rest_displacement_radius_fraction=\(metric(evidence.maximumRestDisplacementRadiusFraction)) released_contour_frames=\(evidence.releasedContourFrames) loaded_contour_mean_radius_error_fraction=\(metric(evidence.loadedContourMeanRadiusErrorFraction)) released_contour_mean_radius_error_fraction=\(metric(evidence.releasedContourMeanRadiusErrorFraction)) contour_oscillation_grows=\(evidence.contourOscillationGrows.map { $0 ? "yes" : "no" } ?? "unavailable") repeat_measured_frames=\(evidence.repeatMeasuredFrames) published_hash=\(hash(evidence.publishedStateHash)) repeated_published_hash=\(hash(evidence.repeatedPublishedStateHash))")
+                for violation in violations {
+                    lines.append("native_quality_violation limit=\(limit) reason=\(singleLine(violation))")
+                }
+            }
+            for (label, failure) in [("gpu_first_failure", run.firstGPUFailure), ("gpu_fatal_failure", run.firstFatalGPUFailure)] {
+                if let failure {
+                    lines.append("\(label) limit=\(limit) stage=\(singleLine(failure.stage)) step=\(failure.scenarioStep) classification=\(singleLine(failure.classification)) reason=\(singleLine(failure.reason))")
+                }
+            }
+        }
         return lines.joined(separator: "\n")
+    }
+
+    private func optionalCount(_ value: Int?) -> String { value.map(String.init) ?? "unavailable" }
+
+    private func singleLine(_ value: String) -> String {
+        // Driver text must not inject rows or terminal controls into copied data.
+        value.components(separatedBy: .controlCharacters.union(.newlines)).joined(separator: " ")
     }
 
     private func format(_ value: Double) -> String {
@@ -73,7 +155,7 @@ public struct ReferenceBenchmarkMatrixReport: Sendable, Equatable {
 }
 
 public enum ReferenceBenchmarkMatrixRunner {
-    typealias Run = @Sendable (
+    public typealias Run = @Sendable (
         _ scenario: ReferenceConvergenceScenario,
         _ warmupSteps: Int,
         _ measuredSteps: Int,
@@ -84,7 +166,8 @@ public enum ReferenceBenchmarkMatrixRunner {
         configuration: ReferenceBenchmarkMatrixConfiguration,
         progress: @escaping @Sendable (ReferenceBenchmarkProgress) async -> Void = { _ in }
     ) async throws -> ReferenceBenchmarkMatrixReport {
-        try await measure(
+        guard configuration.backend == .cpu else { throw ReferenceBenchmarkError.backendRequiresFrameExecutor }
+        return try await measure(
             configuration: configuration,
             progress: progress,
             run: { scenario, warmup, measured, localProgress in
@@ -98,7 +181,7 @@ public enum ReferenceBenchmarkMatrixRunner {
         )
     }
 
-    static func measure(
+    public static func measure(
         configuration: ReferenceBenchmarkMatrixConfiguration,
         progress: @escaping @Sendable (ReferenceBenchmarkProgress) async -> Void,
         run: @escaping Run

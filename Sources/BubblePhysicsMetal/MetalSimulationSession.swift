@@ -1,5 +1,5 @@
 import Metal
-import BubblePhysics
+import BubblePhysicsLegacy
 
 public enum MetalSessionFailure: Equatable, Sendable {
     case overflow

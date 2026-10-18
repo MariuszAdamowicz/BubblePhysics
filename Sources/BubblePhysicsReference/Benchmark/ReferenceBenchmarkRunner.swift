@@ -1,6 +1,102 @@
 import Foundation
 
+public enum ReferenceBenchmarkError: Error {
+    case backendRequiresFrameExecutor
+}
+
 public enum ReferenceBenchmarkRunner {
+    public typealias FrameExecutor = @MainActor (
+        _ world: inout ReferenceWorld, _ scenario: ReferenceConvergenceScenario, _ step: Int
+    ) async -> ReferenceBenchmarkFrameResult
+
+    /// Neutral integration seam; the reference module does not depend on Metal.
+    @MainActor
+    public static func measureAsync(
+        scenario: ReferenceConvergenceScenario,
+        warmupSteps: Int,
+        measuredSteps: Int,
+        backend: ReferenceSimulationBackend,
+        frameExecutor: FrameExecutor,
+        progress: @escaping @Sendable (Int, Int) async -> Void = { _, _ in }
+    ) async throws -> ReferenceBenchmarkReport {
+        var world = try scenario.makeWorld()
+        let warmup = max(0, warmupSteps)
+        let measured = max(0, measuredSteps)
+        let total = warmup + measured
+        var frames: [ReferenceBenchmarkFrameResult] = []
+        var tracker = ReferenceContainmentTracker(positionTolerance: world.configuration.positionTolerance)
+        var cpuFrames = 0, metalFrames = 0, fallbacks = 0, warmupFallbacks = 0
+        var reasons: [String: Int] = [:]
+        var firstFailure: ReferenceBenchmarkGPUFailureSummary?
+        var fatalFailure: ReferenceBenchmarkGPUFailureSummary?
+        for step in 0..<total {
+            try Task.checkCancellation()
+            let result = await frameExecutor(&world, scenario, step)
+            if result.backend == backend && result.backend.isGPU { metalFrames += 1 } else { cpuFrames += 1 }
+            let fallbackReason = result.fallbackReason
+                ?? (backend.isGPU && result.backend != backend ? "missingGPUFallbackReason" : nil)
+            if let reason = fallbackReason {
+                fallbacks += 1
+                if step < warmup { warmupFallbacks += 1 }
+                reasons[reason, default: 0] += 1
+            }
+            if let failure = result.gpuTelemetry?.failure {
+                if firstFailure == nil { firstFailure = failure }
+                if failure.isFatal && fatalFailure == nil { fatalFailure = failure }
+            }
+            if step >= warmup {
+                tracker.observe(world.bubbles)
+                frames.append(result)
+            }
+            await progress(step + 1, total)
+        }
+        try Task.checkCancellation()
+        var report = makeConvergenceReport(scenario: scenario, warmup: warmup, measured: measured,
+                                           frames: frames, tracker: tracker)
+        report.backend = backend
+        report.cpuFrameCount = cpuFrames
+        report.metalFrameCount = metalFrames
+        report.fallbackCount = fallbacks
+        report.warmupFallbackCount = warmupFallbacks
+        report.fallbackReasons = reasons
+        report.firstGPUFailure = firstFailure
+        report.firstFatalGPUFailure = fatalFailure
+        let completed = frames.filter { backend.isGPU && $0.backend == backend && $0.fallbackReason == nil }
+        let gpuTimes = completed.compactMap { $0.gpuTelemetry?.completedCommandBuffersMilliseconds }
+            .filter { $0.isFinite && $0 >= 0 }
+        report.completedMetalTiming = .init(values: gpuTimes)
+        report.completedMetalSampleCount = gpuTimes.count
+        let profiles = completed.compactMap { $0.gpuTelemetry?.profile }
+        report.gpuProfileSampleCount = profiles.count
+        report.gpuProfileCommandBuffers = .init(values: profiles.map { Double($0.commandBufferCount) })
+        report.gpuProfileEncoders = .init(values: profiles.map { Double($0.encoderCount) })
+        report.gpuProfileHostEncoding = .init(values: profiles.map(\.hostEncodingMilliseconds))
+        report.gpuProfileHostWaiting = .init(values: profiles.map(\.hostWaitingMilliseconds))
+        report.gpuProfileHostReadback = .init(values: profiles.map(\.hostReadbackMilliseconds))
+        let profileStages = backend == .nativeMetal ? ["frame"] : ReferenceBenchmarkGPUFrameProfile.stages
+        for stage in profileStages {
+            let values = profiles.compactMap { $0.stageGPUMilliseconds[stage] }
+            if !values.isEmpty { report.gpuProfileStages[stage] = .init(values: values) }
+            report.gpuProfileStageSampleCounts[stage] = values.count
+        }
+        let fallbackFrames = frames.filter { backend.isGPU && ($0.backend != backend || $0.fallbackReason != nil) }
+        report.cpuFallbackSampleCount = fallbackFrames.count
+        report.cpuFallbackFullFrameTiming = .init(values: fallbackFrames.map(\.fullFrameMilliseconds))
+        report.maximumGPUSolveCalls = completed.compactMap { $0.gpuTelemetry?.solveCallCount }.max()
+        report.maximumGPUTentativeSolveCalls = completed.compactMap { $0.gpuTelemetry?.tentativeSolveCallCount }.max()
+        report.maximumGPUContacts = completed.compactMap { $0.gpuTelemetry?.contactCount }.max()
+        report.maximumGPUCCDGroups = completed.compactMap { $0.gpuTelemetry?.ccdGroupCount }.max()
+        let native = completed.compactMap { $0.gpuTelemetry?.native }
+        report.nativeTelemetrySampleCount = native.count
+        if !native.isEmpty {
+            report.nativeCacheHits = native.reduce(0) { $0 + $1.cacheHits }
+            report.nativeCacheResets = native.reduce(0) { $0 + $1.cacheResets }
+            report.maximumNativeSolverIterations = native.map(\.solverIterations).max()
+            report.nativeCCDCandidates = native.reduce(0) { $0 + $1.ccdCandidates }
+        }
+        return report
+    }
+
     public static func measure(
         scenario: ReferenceConvergenceScenario,
         warmupSteps: Int,
@@ -248,7 +344,8 @@ public enum ReferenceBenchmarkRunner {
             maximumComponentResidualNorm: reports.map(\.solver.maximumComponentResidualNorm).max() ?? 0,
             maximumPCGIterations: reports.map(\.solver.pcgIterationCount).max() ?? 0,
             maximumConsecutiveContainmentFrames: tracker.maximumConsecutiveFrames,
-            maximumContourPointCount: frames.map(\.contourPointCount).max() ?? 0
+            maximumContourPointCount: frames.map(\.contourPointCount).max() ?? 0,
+            cpuFrameCount: warmup + measured
         )
     }
 

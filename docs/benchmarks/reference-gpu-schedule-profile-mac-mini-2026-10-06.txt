@@ -1,0 +1,22 @@
+BubblePhysics reference convergence benchmark
+device: macOS Mac14,12; GPU: Apple M2 Pro
+system: Version 26.6.2 (Build 25G83)
+scene: interactive-24
+seed: 2842869
+warmup: 30 measured: 300
+Uwaga GPU: solver_p95_ms obejmuje cały command buffer GPU (sumę etapów) albo solver CPU przy fallbacku; contour_p95_ms mierzy pobranie/pakowanie konturów na hoście. Osobny gpu_completed zawiera wyłącznie ukończone klatki Metal; czasy tabeli przy fallbackach są mieszane i nie kwalifikują GPU.
+gpu_diagnostics=enabled; diagnostyka dodaje narzut hosta — nie mieszaj jej z pomiarem akceptacyjnym. Etapy obejmują całe command buffery; newton zawiera inicjalizację PCG, geometry inicjalizację klatki, ccd rozpoczęcie solve i finalizację świata.
+limit full_p50_ms full_p95_ms full_max_ms solver_p95_ms contour_p95_ms render_p95_ms penetration_p95 penetration_max residual_p95 residual_max unconverged_components containment non_finite backend cpu_frames metal_frames fallbacks warmup_fallbacks gpu_measurement
+4 46.5066 155.6493 261.1302 117.6158 0.0072 0.0081 38.3238 46.4683 884.5847 5811.5098 9 0 no metal 0 330 0 0 eligible
+gpu_completed limit=4 measured_frames=300 command_buffers_p50_ms=33.9541 command_buffers_p95_ms=117.6158 command_buffers_max_ms=192.9419
+gpu_profile limit=4 measured_frames=300 command_buffers_p50=32.0000 command_buffers_p95=82.0000 command_buffers_max=124.0000 encoders_p50=1757.0000 encoders_p95=4607.0000 encoders_max=7029.0000 host_encoding_p50_ms=3.7220 host_encoding_p95_ms=13.2420 host_encoding_max_ms=23.6107 host_waiting_p50_ms=42.3847 host_waiting_p95_ms=138.8421 host_waiting_max_ms=235.4569 host_readback_p50_ms=0.0360 host_readback_p95_ms=0.0935 host_readback_max_ms=0.3644
+gpu_stage limit=4 stage=geometry measured_frames=300 p50_ms=0.1734 p95_ms=0.2837 max_ms=0.3379
+gpu_stage limit=4 stage=newton measured_frames=300 p50_ms=0.8822 p95_ms=3.7508 max_ms=7.0338
+gpu_stage limit=4 stage=pcg measured_frames=300 p50_ms=14.7501 p95_ms=59.7551 max_ms=105.3537
+gpu_stage limit=4 stage=lineSearch measured_frames=300 p50_ms=4.6078 p95_ms=26.4662 max_ms=46.1418
+gpu_stage limit=4 stage=ccd measured_frames=300 p50_ms=3.0800 p95_ms=11.5505 max_ms=26.9259
+gpu_stage limit=4 stage=guards measured_frames=300 p50_ms=0.8575 p95_ms=1.5133 max_ms=1.6465
+gpu_stage limit=4 stage=contours measured_frames=300 p50_ms=7.6727 p95_ms=14.8746 max_ms=20.3035
+gpu_stage limit=4 stage=render measured_frames=300 p50_ms=0.1959 p95_ms=0.3346 max_ms=0.6719
+cpu_fallback limit=4 measured_frames=0 full_p50_ms=unavailable full_p95_ms=unavailable full_max_ms=unavailable
+gpu_work limit=4 scope=completed_measured_frames solve_calls_max=12 tentative_solve_calls_max=8 contacts_max=24 ccd_groups_max=7

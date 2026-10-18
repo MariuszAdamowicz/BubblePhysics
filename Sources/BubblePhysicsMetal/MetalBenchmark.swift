@@ -1,5 +1,5 @@
 import Foundation
-import BubblePhysics
+import BubblePhysicsLegacy
 
 public struct MetalBenchmarkReport: Equatable, Sendable {
     public let stepCount: Int
