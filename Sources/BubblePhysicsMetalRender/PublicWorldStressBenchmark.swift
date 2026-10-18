@@ -9,6 +9,10 @@ public struct PublicWorldStressReport: Sendable {
     public let measuredFrames: Int
     public let solverIterationLimit: Int
     public let p95Milliseconds: Double
+    /// Czas GPU całego command buffera: solver, kontury i bezpośredni renderer.
+    public let gpuP95Milliseconds: Double
+    /// Część klatki poza czasem GPU, liczona na tej samej ukończonej próbce.
+    public let hostNonGPUP95Milliseconds: Double
     public let maximumMilliseconds: Double
     public let guardCorrections: Int
     public let nonFiniteFrames: Int
@@ -29,6 +33,7 @@ public struct PublicWorldStressReport: Sendable {
         scene=stress-300; solver_iteration_limit=\(solverIterationLimit)
         warmup=\(warmupFrames); measured=\(measuredFrames)
         p95_ms=\(String(format: "%.4f", p95Milliseconds)); max_ms=\(String(format: "%.4f", maximumMilliseconds))
+        gpu_p95_ms=\(String(format: "%.4f", gpuP95Milliseconds)); host_non_gpu_p95_ms=\(String(format: "%.4f", hostNonGPUP95Milliseconds))
         guard_corrections=\(guardCorrections); non_finite_frames=\(nonFiniteFrames)
         fallback_frames=\(fallbackFrames); failed_frames=\(failedFrames)
         contour_cpu_readbacks=\(contourCPUReadbacks)
@@ -116,6 +121,8 @@ public enum PublicWorldStressBenchmark {
         pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1)
         pass.colorAttachments[0].storeAction = .store
         var measured: [Double] = []
+        var gpuMeasured: [Double] = []
+        var hostNonGPUMeasured: [Double] = []
         var guardCorrections = 0
         var nonFiniteFrames = 0
         var fallbackFrames = 0
@@ -140,6 +147,10 @@ public enum PublicWorldStressBenchmark {
                 guardCorrections += telemetry.guardCorrectionCount
                 if telemetry.didEncounterNonFinite { nonFiniteFrames += 1 }
                 if telemetry.fallbackReason != nil { fallbackFrames += 1 }
+                if index >= warmupFrames {
+                    gpuMeasured.append(telemetry.gpuMilliseconds)
+                    hostNonGPUMeasured.append(max(0, elapsed - telemetry.gpuMilliseconds))
+                }
             } else { failedFrames += 1 }
             if index >= warmupFrames { measured.append(elapsed) }
             progress(index + 1, total)
@@ -149,11 +160,16 @@ public enum PublicWorldStressBenchmark {
             await Task.yield()
             if failedFrames > 0 { break }
         }
+        func p95(_ values: [Double]) -> Double {
+            let sorted = values.sorted()
+            return sorted.isEmpty ? .infinity : sorted[min(sorted.count - 1,
+                Int(ceil(Double(sorted.count) * 0.95)) - 1)]
+        }
         measured.sort()
-        let p95 = measured.isEmpty ? .infinity : measured[min(measured.count - 1,
-            Int(ceil(Double(measured.count) * 0.95)) - 1)]
+        let frameP95 = p95(measured)
         return PublicWorldStressReport(deviceName: device.name, warmupFrames: warmupFrames,
-            measuredFrames: measured.count, solverIterationLimit: 4, p95Milliseconds: p95,
+            measuredFrames: measured.count, solverIterationLimit: 4, p95Milliseconds: frameP95,
+            gpuP95Milliseconds: p95(gpuMeasured), hostNonGPUP95Milliseconds: p95(hostNonGPUMeasured),
             maximumMilliseconds: measured.last ?? .infinity, guardCorrections: guardCorrections,
             nonFiniteFrames: nonFiniteFrames, fallbackFrames: fallbackFrames, failedFrames: failedFrames,
             contourCPUReadbacks: world.benchmarkContourCPUReadbackCount)
