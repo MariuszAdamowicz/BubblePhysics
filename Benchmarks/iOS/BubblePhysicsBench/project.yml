@@ -20,11 +20,7 @@ targets:
     deploymentTarget: "16.0"
     sources:
       - path: App
-        excludes:
-          - RadialBubblePrototypeView.swift
     dependencies:
-      - package: BubblePhysics
-        product: BubblePhysicsBenchmarkSupport
       - package: BubblePhysics
         product: BubblePhysics
       - package: BubblePhysics
