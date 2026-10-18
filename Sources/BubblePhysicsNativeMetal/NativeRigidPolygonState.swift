@@ -5,6 +5,8 @@ import BubblePhysicsModel
 struct NativeRigidPolygonInput: Equatable, Sendable {
     var object: NativePublicObject
     var damping: Float
+    var friction: Float
+    var restitution: Float
 }
 
 // Prywatny ABI Swift/MSL. Pozycja publiczna jest początkiem lokalnej geometrii;
@@ -139,9 +141,10 @@ final class NativeRigidPolygonState {
                 pose: SIMD4(o.position.x + offset.x, o.position.y + offset.y, o.rotation, o.rotation),
                 previous: SIMD4(o.previousPosition.x + offset.x, o.previousPosition.y + offset.y, center.x, center.y),
                 motion: SIMD4(isStatic ? 0 : o.velocity.x, isStatic ? 0 : o.velocity.y, isStatic ? 0 : o.angularVelocity, input.damping),
-                physical: SIMD4(isStatic ? 0 : 1 / p.mass, isStatic ? 0 : 1 / p.momentOfInertia, geometry.radius, 0),
+                // Kontakt miesza tarcie przez średnią geometryczną i sprężystość przez max.
+                physical: SIMD4(isStatic ? 0 : 1 / p.mass, isStatic ? 0 : 1 / p.momentOfInertia, geometry.radius, input.friction),
                 ranges: SIMD4(UInt32(vertices.count), UInt32(geometry.vertices.count), UInt32(triangles.count), UInt32(geometry.triangles.count)),
-                flags: SIMD4(isStatic ? 1 : 0, p.regionExitPolicy == .wrap ? 1 : 0, 0, 0))
+                flags: SIMD4(isStatic ? 1 : 0, p.regionExitPolicy == .wrap ? 1 : 0, 0, input.restitution.bitPattern))
             guard record.physical.x.isFinite, record.physical.y.isFinite else { throw NativeMetalSolverError.invalidSnapshot }
             records.append(record)
             vertices += geometry.vertices

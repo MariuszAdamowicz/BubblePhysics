@@ -5,6 +5,75 @@ import XCTest
 
 @MainActor
 final class NativeMetalPublicObjectTests: XCTestCase {
+    private let style = RenderStyleID(rawValue: 1)
+
+    private func frictionOutcome(_ friction: Float, polygonRole: MotionRole? = nil) async throws -> WorldPoint {
+        let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
+        let bubbleMaterial = PhysicsMaterialID(rawValue: 1)
+        let polygonMaterial = PhysicsMaterialID(rawValue: 2)
+        let bubble = NativePublicObject(descriptor: .bubble(try BubbleDescriptor(id: .init(rawValue: 1),
+            position: [-0.75, 0], velocity: [3, 4], targetRadius: 1,
+            physicsMaterialID: bubbleMaterial, renderStyleID: style)))
+        let polygon = NativePublicObject(descriptor: .polygon(try PolygonDescriptor(id: .init(rawValue: 2),
+            vertices: [[0, -4], [2, -4], [2, 4], [0, 4]], motionRole: polygonRole ?? .static,
+            physicsMaterialID: polygonMaterial, renderStyleID: style)))
+        let materials = try [bubbleMaterial: PhysicsMaterial(kind: .bubble, friction: friction),
+                             polygonMaterial: PhysicsMaterial(kind: .polygon, friction: friction)]
+        let frame = try await world.step(objects: [bubble, polygon], materials: materials,
+            styles: [style: RenderStyle()], region: WorldRectangle(min: [-10, -10], max: [10, 10]), duration: 1.0 / 60.0)
+        return try XCTUnwrap(frame.objects[bubble.descriptor.id]).velocity
+    }
+
+    func testFrictionChangesBubbleStaticPolygonContactResponse() async throws {
+        let zero = try await frictionOutcome(0)
+        let rough = try await frictionOutcome(1)
+        XCTAssertLessThan(abs(rough.y), abs(zero.y))
+    }
+
+    func testFrictionChangesBubbleDynamicPolygonContactResponse() async throws {
+        let zero = try await frictionOutcome(0, polygonRole: .dynamic)
+        let rough = try await frictionOutcome(1, polygonRole: .dynamic)
+        XCTAssertLessThan(abs(rough.y), abs(zero.y))
+    }
+
+    func testFrictionChangesBubbleBubbleContactResponse() async throws {
+        func outcome(_ friction: Float) async throws -> WorldPoint {
+            let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
+            let material = PhysicsMaterialID(rawValue: 1)
+            let objects = try [
+                NativePublicObject(descriptor: .bubble(BubbleDescriptor(id: .init(rawValue: 1), position: [-0.75, 0], velocity: [2, 4], targetRadius: 1, physicsMaterialID: material, renderStyleID: style))),
+                NativePublicObject(descriptor: .bubble(BubbleDescriptor(id: .init(rawValue: 2), position: [0.75, 0], velocity: [-2, 0], targetRadius: 1, physicsMaterialID: material, renderStyleID: style)))
+            ]
+            let frame = try await world.step(objects: objects, materials: [material: PhysicsMaterial(kind: .bubble, friction: friction)],
+                styles: [style: RenderStyle()], region: WorldRectangle(min: [-10, -10], max: [10, 10]), duration: 1.0 / 60.0)
+            return try XCTUnwrap(frame.objects[.init(rawValue: 1)]).velocity
+        }
+        let zero = try await outcome(0)
+        let rough = try await outcome(1)
+        XCTAssertLessThan(abs(rough.y), abs(zero.y))
+    }
+
+    func testRestitutionChangesBubbleStaticPolygonContactResponse() async throws {
+        func outcome(_ restitution: Float) async throws -> WorldPoint {
+            let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
+            let bubbleMaterial = PhysicsMaterialID(rawValue: 1)
+            let polygonMaterial = PhysicsMaterialID(rawValue: 2)
+            let bubble = NativePublicObject(descriptor: .bubble(try BubbleDescriptor(id: .init(rawValue: 1),
+                position: [-0.75, 0], velocity: [3, 0], targetRadius: 1,
+                physicsMaterialID: bubbleMaterial, renderStyleID: style)))
+            let wall = NativePublicObject(descriptor: .polygon(try PolygonDescriptor(id: .init(rawValue: 2),
+                vertices: [[0, -4], [2, -4], [2, 4], [0, 4]],
+                physicsMaterialID: polygonMaterial, renderStyleID: style)))
+            let frame = try await world.step(objects: [bubble, wall], materials: [
+                bubbleMaterial: PhysicsMaterial(kind: .bubble, restitution: restitution),
+                polygonMaterial: PhysicsMaterial(kind: .polygon, restitution: restitution)
+            ], styles: [style: RenderStyle()], region: WorldRectangle(min: [-10, -10], max: [10, 10]), duration: 1.0 / 60.0)
+            return try XCTUnwrap(frame.objects[bubble.descriptor.id]).velocity
+        }
+        let zero = try await outcome(0)
+        let bouncy = try await outcome(1)
+        XCTAssertLessThan(bouncy.x, zero.x)
+    }
     func testRemovingEarlierPolygonDoesNotUploadUnchangedRemainingGeometry() async throws {
         let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         let objects = try [UInt64(1), UInt64(2)].map { id in

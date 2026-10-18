@@ -493,7 +493,7 @@ kernel void nativeRigidContacts(device NativeRigidBody *bodies [[buffer(0)]],
         float4(0,0,0,previous.velocityFirst.w),float4(0,0,0,previous.velocitySecond.w)};
     uint bubblePairs=counts.x*counts.y;
     float2 n=0,point=0,va=0,vb=0,ra=0,rb=0;
-    float wa=0,wb=0,ia=0,ib=0,depth=0,spinA=0,spinB=0;
+    float wa=0,wb=0,ia=0,ib=0,depth=0,spinA=0,spinB=0,frictionA=0,frictionB=0,restitutionA=0,restitutionB=0;
     if(index<bubblePairs) {
         uint ai=index/counts.x,bi=index%counts.x;
         NativeBubble a=bubbles[ai];NativeRigidBody b=bodies[bi];
@@ -555,6 +555,7 @@ kernel void nativeRigidContacts(device NativeRigidBody *bodies [[buffer(0)]],
         }
         wa=a.physical.y;wb=b.physical.x;ib=b.physical.y;rb=point-b.pose.xy;
         va=a.motion.xy;vb=b.motion.xy;spinB=b.motion.z;
+        frictionA=a.material.w;frictionB=b.physical.w;restitutionA=a.deformation.w;restitutionB=as_type<float>(b.flags.w);
     } else {
         uint slot=index-bubblePairs,ai=slot/counts.x,bi=slot%counts.x;
         NativeRigidBody a=bodies[ai],b=bodies[bi];
@@ -583,6 +584,7 @@ kernel void nativeRigidContacts(device NativeRigidBody *bodies [[buffer(0)]],
         }
         wa=a.physical.x;wb=b.physical.x;ia=a.physical.y;ib=b.physical.y;
         ra=point-a.pose.xy;rb=point-b.pose.xy;va=a.motion.xy;vb=b.motion.xy;spinA=a.motion.z;spinB=b.motion.z;
+        frictionA=a.physical.w;frictionB=b.physical.w;restitutionA=as_type<float>(a.flags.w);restitutionB=as_type<float>(b.flags.w);
     }
     float ca=nativeCross(ra,n),cb=nativeCross(rb,n),denom=wa+wb+ia*ca*ca+ib*cb*cb;
     if(depth < -0.001f || denom<=FLT_MIN){corrections[index]=result;return;}
@@ -591,9 +593,16 @@ kernel void nativeRigidContacts(device NativeRigidBody *bodies [[buffer(0)]],
     result.first=float4(-n*wa*lambda,-ca*ia*lambda,n.x);
     result.second=float4(n*wb*lambda,cb*ib*lambda,n.y);
     float closing=dot(vb-va,n)+spinB*cb-spinA*ca;
-    float impulse=max(0.0f,-closing)/denom*0.5f;
-    result.velocityFirst=float4(-n*wa*impulse,-ca*ia*impulse,point.x);
-    result.velocitySecond=float4(n*wb*impulse,cb*ib*impulse,point.y);
+    // Tarcie: średnia geometryczna. Restitucja: maksimum. Obie reguły są
+    // przemienne, więc wynik nie zależy od kolejności obiektów w parze.
+    float friction=sqrt(max(0.0f,frictionA*frictionB));
+    float restitution=max(restitutionA,restitutionB);
+    float impulse=max(0.0f,-closing)*(1.0f+restitution)/denom*0.5f;
+    float2 tangent=float2(-n.y,n.x);
+    float tangentSpeed=dot(vb-va,tangent)+spinB*nativeCross(rb,tangent)-spinA*nativeCross(ra,tangent);
+    float tangentImpulse=-tangentSpeed*friction/denom*0.5f;
+    result.velocityFirst=float4(-n*wa*impulse-tangent*wa*tangentImpulse,-ca*ia*impulse-nativeCross(ra,tangent)*ia*tangentImpulse,point.x);
+    result.velocitySecond=float4(n*wb*impulse+tangent*wb*tangentImpulse,cb*ib*impulse+nativeCross(rb,tangent)*ib*tangentImpulse,point.y);
     corrections[index]=result;
 }
 
@@ -658,6 +667,12 @@ kernel void nativeDampContactNormalMotion(device NativeBubble *bubbles [[buffer(
         float2 outward = edge.w ? record.geometry.xy : -record.geometry.xy;
         float2 otherVelocity = edge.z == 0 ? bubbles[edge.y].motion.xy : segments[edge.y].velocity.xy;
         float otherInverseMass = edge.z == 0 ? bubbles[edge.y].physical.y : 0;
+        // Tarcie: średnia geometryczna. Restitucja: maksimum. To samo
+        // mieszanie obsługuje bubble↔bubble i bubble↔statyczny polygon.
+        float otherFriction = edge.z == 0 ? bubbles[edge.y].material.w : segments[edge.y].collision.y;
+        float otherRestitution = edge.z == 0 ? bubbles[edge.y].deformation.w : segments[edge.y].collision.z;
+        float friction = sqrt(max(0.0f, bubble.material.w * otherFriction));
+        float restitution = max(bubble.deformation.w, otherRestitution);
         // Dashpot usuwa energię oscylacji zarówno podczas dojścia, jak i
         // odbicia; sama korekcja XPBD nadal egzekwuje brak penetracji.
         float normalVelocity = dot(bubble.motion.xy - otherVelocity, outward);
@@ -668,6 +683,11 @@ kernel void nativeDampContactNormalMotion(device NativeBubble *bubbles [[buffer(
         if (abs(normalVelocity) > restSpeed) continue;
         float inverseMassSum = bubble.physical.y + otherInverseMass;
         float share = inverseMassSum > 0 ? bubble.physical.y / inverseMassSum : 0;
+        if (normalVelocity < 0 && restitution > 0)
+            bubble.motion.xy -= outward * (normalVelocity * (1.0f + restitution) * share);
+        float2 relativeVelocity = bubble.motion.xy - otherVelocity;
+        float2 tangentialVelocity = relativeVelocity - outward * dot(relativeVelocity, outward);
+        bubble.motion.xy -= tangentialVelocity * clamp(friction * share, 0.0f, 1.0f);
         bubble.motion.xy -= outward * (normalVelocity * factor * share);
     }
     bubbles[index] = bubble;

@@ -51,7 +51,8 @@ package struct NativePublicFrame {
 
 struct NativePublicProperties: Equatable, Sendable {
     var flags: SIMD4<UInt32> // enabled, static, wrap, region result (0 unchanged, 1 removed, 2 wrapped)
-    var material: SIMD4<Float> // damping, reserved; podatność kontaktów należy do Task 5B
+    var material: SIMD4<Float> // damping, deformability, rigidity, friction
+    var restitution: Float
     var resources: SIMD2<UInt64> // material ID, style ID
     var eventData: SIMD2<UInt64> // interest, merge groups
 }
@@ -63,6 +64,7 @@ struct NativePublicSettings: Equatable, Sendable {
     var eventBufferCapacity = 1024
     var sensors: [SensorDescriptor] = []
     var structuralShapes: [ObjectID: NativeStructuralShape] = [:]
+    var staticPolygonMaterials: [ObjectID: PhysicsMaterial] = [:]
 }
 
 /// Adapter używa trwałego solvera; pełna publikacja następuje dopiero po powodzeniu GPU.
@@ -100,7 +102,7 @@ package final class NativePublicWorld {
             let local: PresentationParameters
             switch object.descriptor {
             case .bubble(let b):
-                guard let material = materials[b.physicsMaterialID], material.friction == 0, material.restitution == 0,
+                guard let material = materials[b.physicsMaterialID],
                       object.collisionRadius > 0, object.collisionRadius.isFinite else { throw NativeMetalSolverError.invalidSnapshot }
                 let id = ReferenceBubbleID(rawValue: Int(bitPattern: UInt(b.id.rawValue)))
                 var bubble = try ReferenceBubble(id: id, center: .init(x: object.position.x, y: object.position.y),
@@ -111,14 +113,16 @@ package final class NativePublicWorld {
                 world.addBubble(bubble)
                 properties[id] = NativePublicProperties(
                     flags: SIMD4(1, object.motionRole == .static ? 1 : 0, b.regionExitPolicy == .wrap ? 1 : 0, 0),
-                    material: SIMD4(material.damping, material.deformability, object.rigidity, 0),
+                    material: SIMD4(material.damping, material.deformability, object.rigidity, material.friction),
+                    restitution: material.restitution,
                     resources: SIMD2(b.physicsMaterialID.rawValue, b.renderStyleID.rawValue),
                     eventData: SIMD2(b.eventInterest.rawValue, b.mergeGroups.rawValue))
                 if let shape = object.structuralShape { structuralShapes[b.id] = shape }
                 styleID = b.renderStyleID; local = object.presentation
             case .polygon(let p):
                 guard let material = materials[p.physicsMaterialID] else { throw NativeMetalSolverError.invalidSnapshot }
-                rigidPolygons.append(.init(object: object, damping: material.damping))
+                rigidPolygons.append(.init(object: object, damping: material.damping,
+                    friction: material.friction, restitution: material.restitution))
                 styleID = p.renderStyleID; local = object.presentation
                 // Statyczne krawędzie zachowują dotychczasowy cache i guardy baniek.
                 // Bryły dynamiczne trafiają wyłącznie do obustronnego solvera brył.
@@ -147,11 +151,17 @@ package final class NativePublicWorld {
             guard let style = styles[styleID] else { throw NativeMetalSolverError.invalidSnapshot }
             presentation[object.descriptor.id] = style.resolvedChannels(overrides: local)
         }
+        let staticPolygonMaterials = Dictionary(uniqueKeysWithValues: objects.compactMap { object -> (ObjectID, PhysicsMaterial)? in
+            guard case .polygon(let polygon) = object.descriptor, object.motionRole == .static,
+                  let material = materials[polygon.physicsMaterialID] else { return nil }
+            return (polygon.id, material)
+        })
         let frame = try await solver.executePublicFrame(world: world,
             settings: NativePublicSettings(properties: properties, region: region,
                 rigidPolygons: rigidPolygons, eventBufferCapacity: eventBufferCapacity,
                 sensors: objects.compactMap { if case .sensor(let sensor) = $0.descriptor { return sensor }; return nil }
-                    .sorted { $0.id.rawValue < $1.id.rawValue }, structuralShapes: structuralShapes),
+                    .sorted { $0.id.rawValue < $1.id.rawValue }, structuralShapes: structuralShapes,
+                staticPolygonMaterials: staticPolygonMaterials),
             commandBuffer: commandBuffer, beforeCommit: beforeCommit)
         for (id, object) in solver.publishedPolygons { result[id] = object }
         for id in solver.removedPolygons { result.removeValue(forKey: id); presentation.removeValue(forKey: id) }

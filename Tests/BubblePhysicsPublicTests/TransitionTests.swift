@@ -38,4 +38,40 @@ final class TransitionTests: XCTestCase {
             XCTAssertEqual(a.globalForce, [8,4])
         }
     }
+
+    func testMaterialContactTransitionsUpdateFrictionAndRestitutionTogether() throws {
+        var state = try TransactionStager.stage(WorldTransaction()
+            .startTransition(.init(target: .physicsMaterial(material, .friction), value: .scalar(0.8), duration: 1))
+            .startTransition(.init(target: .physicsMaterial(material, .restitution), value: .scalar(0.6), duration: 1)),
+            against: initial()).state
+        try MotionControllers.prepare(&state, duration: 0.5)
+        XCTAssertEqual(state.physicsMaterials[material]?.friction, 0.4)
+        XCTAssertEqual(state.physicsMaterials[material]?.restitution, 0.3)
+        try MotionControllers.prepare(&state, duration: 0.5)
+        XCTAssertEqual(state.physicsMaterials[material]?.friction, 0.8)
+        XCTAssertEqual(state.physicsMaterials[material]?.restitution, 0.6)
+    }
+}
+
+@MainActor
+final class MaterialContactTransitionTests: XCTestCase {
+    private let material = PhysicsMaterialID(rawValue: 1)
+    private let style = RenderStyleID(rawValue: 1)
+
+    func testMaterialFrictionRestitutionAndTransitionAreAcceptedByNativeWorld() async throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let world = try BubbleWorld(configuration: WorldConfiguration(simulationRegion:
+            WorldRectangle(min: [-10, -10], max: [10, 10]), fixedTimeStep: 1.0 / 60.0), device: device)
+        let bubble = try BubbleDescriptor(id: .init(rawValue: 1), position: .zero, velocity: [2, 0],
+            targetRadius: 1, physicsMaterialID: material, renderStyleID: style)
+        let token = world.submit(WorldTransaction()
+            .updatePhysicsMaterial(material, material: try PhysicsMaterial(kind: .bubble, friction: 0.6, restitution: 0.4))
+            .updateRenderStyle(style, style: try RenderStyle())
+            .add(.bubble(bubble))
+            .startTransition(ParameterTransition(target: .physicsMaterial(material, .restitution), value: .scalar(0.8), duration: 1)))
+
+        let frame = await world.advance(by: 1.0 / 60.0)
+        XCTAssertEqual(frame.transactionReceipts.map(\.token), [token])
+        XCTAssertFalse(frame.events.contains { if case .transactionRejected = $0 { return true }; return false })
+    }
 }

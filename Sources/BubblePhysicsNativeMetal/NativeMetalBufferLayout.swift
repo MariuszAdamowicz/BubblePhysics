@@ -1,4 +1,5 @@
 import BubblePhysicsReference
+import BubblePhysicsModel
 
 // ABI Swift/MSL: wyłącznie lane'y SIMD o wyrównaniu 16 bajtów.
 struct NativeMetalBubble: Equatable, Sendable {
@@ -196,6 +197,7 @@ struct NativeMetalSnapshot: Sendable {
             var value = NativeMetalBubble(bubble)
             if let properties {
                 value.publicFlags = properties.flags; value.material = properties.material; value.resources = properties.resources
+                value.deformation.w = properties.restitution
                 value.eventData = properties.eventData
             }
             return .init(index: index, value: value)
@@ -208,9 +210,20 @@ struct NativeMetalSnapshot: Sendable {
         let previousSegmentsByID = Dictionary(uniqueKeysWithValues: (previous?.sourceSegments ?? []).enumerated().map {
             ($0.element.id, (index: $0.offset, segment: $0.element))
         })
+        func segmentMaterial(_ segment: ReferenceSegment, _ settings: NativePublicSettings?) -> PhysicsMaterial? {
+            guard let owner = segment.ownerID else { return nil }
+            return settings?.staticPolygonMaterials[ObjectID(rawValue: UInt64(bitPattern: Int64(owner)))]
+        }
         segmentChanges = world.segments.enumerated().compactMap { index, segment in
-            guard previousSegmentsByID[segment.id]?.segment != segment else { return nil }
-            return .init(index: index, value: .init(segment))
+            guard previousSegmentsByID[segment.id]?.segment != segment
+                    || segmentMaterial(segment, publicSettings) != segmentMaterial(segment, previous?.publicSettings)
+            else { return nil }
+            var value = NativeMetalSegment(segment)
+            if let material = segmentMaterial(segment, publicSettings) {
+                value.collision.y = material.friction
+                value.collision.z = material.restitution
+            }
+            return .init(index: index, value: value)
         }
         segmentRemaps = world.segments.enumerated().compactMap { index, segment in
             guard let previous = previousSegmentsByID[segment.id], previous.segment == segment,

@@ -43,15 +43,13 @@ package final class NativeCompleteStepper: CompleteStepper {
                         else { try role(id, value, polygon: false) }
                     }
                 case .updatePhysicsMaterial(let id, let material):
-                    if material.friction != 0 { throw TransactionRejectionReason.unsupportedPhysicsParameter(id, .friction) }
-                    if material.restitution != 0 { throw TransactionRejectionReason.unsupportedPhysicsParameter(id, .restitution) }
                     if material.kind == .polygon && material.deformability != 0 {
                         throw TransactionRejectionReason.unsupportedPhysicsParameter(id, .deformability)
                     }
                 case .startTransition(let transition):
                     if case .physicsMaterial(let id, let parameter) = transition.target,
                        case .scalar(let value) = transition.value, value > 0,
-                       parameter == .friction || parameter == .restitution || (parameter == .deformability && change.state.physicsMaterials[id]?.kind == .polygon) {
+                       parameter == .deformability && change.state.physicsMaterials[id]?.kind == .polygon {
                         throw TransactionRejectionReason.unsupportedPhysicsParameter(id, parameter)
                     }
                 default: break
