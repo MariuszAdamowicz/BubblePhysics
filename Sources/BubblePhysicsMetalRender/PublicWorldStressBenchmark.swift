@@ -13,6 +13,10 @@ public struct PublicWorldStressReport: Sendable {
     public let gpuP95Milliseconds: Double
     /// Część klatki poza czasem GPU, liczona na tej samej ukończonej próbce.
     public let hostNonGPUP95Milliseconds: Double
+    /// Czas kodowania solvera i renderera po stronie hosta, bez oczekiwania na GPU.
+    public let hostEncodingP95Milliseconds: Double
+    /// Czas od commit do zakończenia tego samego command buffera.
+    public let hostWaitingP95Milliseconds: Double
     public let maximumMilliseconds: Double
     public let guardCorrections: Int
     public let nonFiniteFrames: Int
@@ -34,6 +38,7 @@ public struct PublicWorldStressReport: Sendable {
         warmup=\(warmupFrames); measured=\(measuredFrames)
         p95_ms=\(String(format: "%.4f", p95Milliseconds)); max_ms=\(String(format: "%.4f", maximumMilliseconds))
         gpu_p95_ms=\(String(format: "%.4f", gpuP95Milliseconds)); host_non_gpu_p95_ms=\(String(format: "%.4f", hostNonGPUP95Milliseconds))
+        host_encoding_p95_ms=\(String(format: "%.4f", hostEncodingP95Milliseconds)); host_waiting_p95_ms=\(String(format: "%.4f", hostWaitingP95Milliseconds))
         guard_corrections=\(guardCorrections); non_finite_frames=\(nonFiniteFrames)
         fallback_frames=\(fallbackFrames); failed_frames=\(failedFrames)
         contour_cpu_readbacks=\(contourCPUReadbacks)
@@ -123,6 +128,8 @@ public enum PublicWorldStressBenchmark {
         var measured: [Double] = []
         var gpuMeasured: [Double] = []
         var hostNonGPUMeasured: [Double] = []
+        var hostEncodingMeasured: [Double] = []
+        var hostWaitingMeasured: [Double] = []
         var guardCorrections = 0
         var nonFiniteFrames = 0
         var fallbackFrames = 0
@@ -150,6 +157,10 @@ public enum PublicWorldStressBenchmark {
                 if index >= warmupFrames {
                     gpuMeasured.append(telemetry.gpuMilliseconds)
                     hostNonGPUMeasured.append(max(0, elapsed - telemetry.gpuMilliseconds))
+                    if let profile = world.benchmarkFrameProfile {
+                        hostEncodingMeasured.append(profile.hostEncodingMilliseconds)
+                        hostWaitingMeasured.append(profile.hostWaitingMilliseconds)
+                    } else { failedFrames += 1 }
                 }
             } else { failedFrames += 1 }
             if index >= warmupFrames { measured.append(elapsed) }
@@ -170,6 +181,8 @@ public enum PublicWorldStressBenchmark {
         return PublicWorldStressReport(deviceName: device.name, warmupFrames: warmupFrames,
             measuredFrames: measured.count, solverIterationLimit: 4, p95Milliseconds: frameP95,
             gpuP95Milliseconds: p95(gpuMeasured), hostNonGPUP95Milliseconds: p95(hostNonGPUMeasured),
+            hostEncodingP95Milliseconds: p95(hostEncodingMeasured),
+            hostWaitingP95Milliseconds: p95(hostWaitingMeasured),
             maximumMilliseconds: measured.last ?? .infinity, guardCorrections: guardCorrections,
             nonFiniteFrames: nonFiniteFrames, fallbackFrames: fallbackFrames, failedFrames: failedFrames,
             contourCPUReadbacks: world.benchmarkContourCPUReadbackCount)

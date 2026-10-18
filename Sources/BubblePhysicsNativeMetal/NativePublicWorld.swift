@@ -73,6 +73,7 @@ package final class NativePublicWorld {
     private let solver: NativeMetalSolver
     private var polygons: [ObjectID: (geometry: PolygonGeometry, position: WorldPoint, rotation: Float, segments: [ReferenceSegment])] = [:]
     private var nextSegmentID = 1
+    private var publishedProfile: NativeMetalFrameProfile?
 
     package init(device: MTLDevice, configuration: NativeMetalConfiguration = .default) throws {
         solver = try NativeMetalSolver(device: device, configuration: configuration)
@@ -81,6 +82,7 @@ package final class NativePublicWorld {
     package var publishedRenderHandoff: NativeMetalRenderHandoff? { solver.publishedRenderHandoff }
     package var publishedContourCPUReadbackCount: Int { solver.publishedContourCPUReadbackCount }
     package var publishedTelemetry: NativeMetalFrameTelemetry? { solver.publishedFrame?.telemetry }
+    package var lastPublishedProfile: NativeMetalFrameProfile? { publishedProfile }
 
     package func step(objects: [NativePublicObject], materials: [PhysicsMaterialID: PhysicsMaterial],
                       styles: [RenderStyleID: RenderStyle], region: WorldRectangle, duration: Double,
@@ -214,6 +216,7 @@ package final class NativePublicWorld {
         solver.acknowledgePublication()
         polygons = candidatePolygons
         nextSegmentID = candidateNextSegmentID
+        publishedProfile = frame.profile
         return NativePublicFrame(objects: result, presentation: presentation, profile: frame.profile,
             contacts: contacts, events: discreteEvents, eventOverflow: WorldEventOverflow(droppedCount: dropped))
     }

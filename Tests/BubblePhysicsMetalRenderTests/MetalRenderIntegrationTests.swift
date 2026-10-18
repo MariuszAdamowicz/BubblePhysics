@@ -336,6 +336,8 @@ final class MetalRenderIntegrationTests: XCTestCase {
         XCTAssertTrue(report.p95Milliseconds.isFinite)
         XCTAssertTrue(report.safetyPassed)
         XCTAssertTrue(report.text.contains("gpu_p95_ms="))
+        XCTAssertTrue(report.text.contains("host_encoding_p95_ms="))
+        XCTAssertTrue(report.text.contains("host_waiting_p95_ms="))
         XCTAssertEqual(progress, [1, 2, 3])
     }
 

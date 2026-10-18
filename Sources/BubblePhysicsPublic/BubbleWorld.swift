@@ -51,6 +51,9 @@ public final class BubbleWorld {
     package var benchmarkTelemetry: NativeMetalFrameTelemetry? {
         (stepper as? NativeCompleteStepper)?.publishedTelemetry
     }
+    package var benchmarkFrameProfile: NativeMetalFrameProfile? {
+        (stepper as? NativeCompleteStepper)?.publishedFrameProfile
+    }
     package var benchmarkContourCPUReadbackCount: Int {
         (stepper as? NativeCompleteStepper)?.publishedContourCPUReadbackCount ?? 0
     }

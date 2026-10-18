@@ -12,6 +12,7 @@ package final class NativeCompleteStepper: CompleteStepper {
     package var publishedRenderHandoff: NativeMetalRenderHandoff? { native?.publishedRenderHandoff }
     package var publishedTelemetry: NativeMetalFrameTelemetry? { native?.publishedTelemetry }
     package var publishedContourCPUReadbackCount: Int { native?.publishedContourCPUReadbackCount ?? 0 }
+    package var publishedFrameProfile: NativeMetalFrameProfile? { native?.lastPublishedProfile }
 
     package func validate(_ change: StagedWorldChange) throws {
         func role(_ id: ObjectID, _ role: MotionRole, polygon: Bool) throws {
