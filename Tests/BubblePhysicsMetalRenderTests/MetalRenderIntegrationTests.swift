@@ -5,6 +5,28 @@ import XCTest
 
 @MainActor
 final class MetalRenderIntegrationTests: XCTestCase {
+#if os(macOS)
+    func testBubbleRenderPassesMetalValidation() throws {
+        // Walidacja Metal musi być włączona przed utworzeniem MTLDevice;
+        // dlatego uruchamiamy prawdziwy test renderera w nowym procesie.
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: ProcessInfo.processInfo.arguments[0])
+        process.arguments = ["-XCTest",
+            "BubblePhysicsMetalRenderTests.MetalRenderIntegrationTests/testRendererAcceptsViewportAndCallerCommandBuffer",
+            Bundle(for: MetalRenderIntegrationTests.self).bundlePath]
+        var environment = ProcessInfo.processInfo.environment
+        environment["MTL_DEBUG_LAYER"] = "1"
+        process.environment = environment
+        process.standardOutput = FileHandle.nullDevice
+        let errors = Pipe()
+        process.standardError = errors
+        try process.run()
+        process.waitUntilExit()
+        let diagnostic = String(data: errors.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        XCTAssertEqual(process.terminationStatus, 0, diagnostic)
+    }
+#endif
+
     func testRendererAcceptsViewportAndCallerCommandBuffer() async throws {
         let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
         let world = try makeWorld(device: device)

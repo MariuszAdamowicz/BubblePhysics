@@ -38,6 +38,9 @@ package final class NativeMetalRenderHandoff {
         encoder.setVertexBuffer(points, offset: 0, index: 0)
         encoder.setVertexBuffer(counts, offset: 0, index: 1)
         encoder.setVertexBuffer(bubbles, offset: 0, index: 4)
+        // Shader ma wspólne ABI dla baniek i wielokątów. Slot 5 nie jest
+        // czytany w trybie baniek, ale walidacja Metal wymaga jego związania.
+        encoder.setVertexBuffer(points, offset: 0, index: 5)
         var values = SIMD4<Float>(viewport.center.x, viewport.center.y, viewport.size.x, viewport.size.y)
         encoder.setVertexBytes(&values, length: MemoryLayout<SIMD4<Float>>.stride, index: 2)
         var stride = UInt32(contourStride)

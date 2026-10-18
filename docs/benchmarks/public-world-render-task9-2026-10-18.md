@@ -6,7 +6,7 @@
 
 Styl techniczny jest neutralnym wypełnieniem. Własny fragment shader używa `makeContourVertexFunction()` i otrzymuje rozwiązane kanały przez `RenderStylePipeline.encodeChannels`. Wypełniane są bańki, proste wielokąty (w tym wklęsłe), sensory i pola sił. To świadoma polityka wizualna: sensory i pola są widocznymi, pełnymi zasięgami; gra może zastąpić ich wygląd własnym fragment shaderem. Wierzchołki wielokątów są triangulowane na CPU z jawnej geometrii modelu, lecz kontury baniek pozostają na GPU. Metoda `debugContourSnapshot()` jest wyłącznie adapterem diagnostycznym i filtruje usunięte obiekty.
 
-Podgląd iOS pobiera drawable w `MTKViewDelegate.draw(in:)`, prezentuje go przez ten sam command buffer, a kolejne żądanie rysowania wysyła po zakończeniu poprzedniego kroku. Nie używa ponownie zaprezentowanego drawable.
+Podgląd iOS pobiera drawable w `MTKViewDelegate.draw(in:)`, koduje fizykę i render do tego samego command buffera, a po jego poprawnym zakończeniu prezentuje drawable przez `drawable.present()`. Kolejne żądanie rysowania wysyła dopiero po zakończeniu poprzedniego kroku. Nie używa ponownie zaprezentowanego drawable.
 
 ## Weryfikacja lokalna
 
@@ -20,3 +20,9 @@ Podgląd iOS pobiera drawable w `MTKViewDelegate.draw(in:)`, prezentuje go przez
 W aplikacji: „Wizualizacje” → „Publiczny stress-300” → „Start”. Harness uruchamia 300 baniek z tym samym seedem, rozkładem promieni i początkowych pozycji co scena referencyjna, cztery ściany i trójkąt przechodzący po tych samych punktach trasy; w publicznym API trójkąt jest zastępowany co krok, a nie prowadzony ciągłą kinematyką referencji. Limit solvera wynosi 4, jest 30 klatek rozgrzewki i 300 mierzonych. Każda klatka koduje publiczny `BubbleWorld` i bezpośredni renderer do jednego bufora. Raport zawiera p95 i maksimum pełnej klatki, licznik korekt guard, non-finite, fallbacków, błędnych klatek i odczytów konturów CPU. `native_quality_envelope` jest jawnie oznaczone jako nieocenione przez ten harness; wymaga oddzielnych serii referencyjnych przed uznaniem bramki jakości. Różnica kinematyki trójkąta również wymaga uwzględnienia przy interpretacji porównania p95.
 
 Fizyczny iPhone X nie był podłączony: `xcrun devicectl list devices` wykazał tylko pięć wyłączonych symulatorów (iPad Pro M5, dwa iPhone 17, iPhone 17 Pro i iPhone SE 3). Dlatego **nie ma wyniku p95 na iPhone X ani zaliczonej bramki**. Wymagane jest wykonanie Release na iPhone X i porównanie p95 z zaakceptowanym przez CEO limitem **10,4568 ms**, przy zerowych fallbackach, problemach non-finite i odczytach konturów CPU oraz osobno potwierdzonej obwiedni jakości. Build na `generic/platform=iOS` dowodzi kompilacji, nie wydajności urządzenia.
+
+## Korekta walidacji Metal
+
+Shader współdzieli wejścia dla baniek i wielokątów. Nawet gdy tryb bańki nie czyta `shapeVertices`, walidator Metal wymaga związania zadeklarowanego `buffer(5)`. Przed poprawką test renderera uruchomiony z `MTL_DEBUG_LAYER=1` przerywał proces sygnałem 6 z błędem `missing Buffer binding at index 5 for shapeVertices[0]`. Handoff wiąże teraz istniejący bufor punktów także do slotu 5; test regresyjny uruchamia rzeczywisty renderer w osobnym procesie z walidacją Metal. Nie zmienia to publicznego ABI ani nie materializuje konturów na CPU.
+
+Po korekcie pełne `swift test` zakończyło się kodem 0; `MetalRenderIntegrationTests` wykonały 12 testów bez błędów. `git diff --check` również zakończył się kodem 0.
