@@ -46,7 +46,14 @@ package enum MotionControllers {
                 }
                 object.velocity += force / mass * dt
             case .playerDriven:
-                object.velocity = object.playerDriveTarget.map { velocity(to: $0, from: object.position, speed: 12, dt: dt) } ?? .zero
+                object.velocity = object.playerDriveTarget.map { target in
+                    let delta = target - object.position
+                    let speed = bubbleDriveSpeed(distance: length(delta), policy: {
+                        guard case .bubble(let bubble) = object.descriptor else { return nil }
+                        return bubble.drivePolicy
+                    }())
+                    return velocity(to: target, from: object.position, speed: speed, dt: dt)
+                } ?? .zero
             case .pathDriven:
                 if let path = object.pathDrive, !object.pathStopped {
                     while object.pathIndex < path.points.count - 1 && length(path.points[object.pathIndex] - object.position) <= 0.0001 {
@@ -65,6 +72,12 @@ package enum MotionControllers {
         let delta = target - origin, distance = length(delta)
         guard distance > 0 else { return .zero }
         return delta * (min(speed, distance / dt) / distance)
+    }
+
+    private static func bubbleDriveSpeed(distance: Float, policy: BubbleDrivePolicy?) -> Float {
+        guard let policy else { return 12 }
+        guard let response = policy.distanceResponse else { return policy.maximumSpeed }
+        return min(policy.maximumSpeed, distance * response)
     }
 
     package static func feedback(_ state: inout RuntimeState, contacts: [ObjectID: [DriveBlockingContact]]) -> [DriveFeedback] {

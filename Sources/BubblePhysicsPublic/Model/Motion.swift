@@ -6,19 +6,27 @@ public struct PlayerDriveID: RawRepresentable, Hashable, Sendable {
     public init(rawValue: UInt64) { self.rawValue = rawValue }
 }
 
-/// Polityka zmiany kształtu bańki podczas sterowania. Czasy mierzone w symulacji.
+/// Polityka zmiany kształtu i odpowiedzi prowadzenia bańki. Czasy mierzone w symulacji.
 public struct BubbleDrivePolicy: Equatable, Sendable {
     public let rigidifies: Bool
     public let rigidificationDuration: Double
     public let relaxationDuration: Double
+    /// Górna granica prędkości prowadzenia w jednostkach świata na sekundę.
+    public let maximumSpeed: Float
+    /// Prędkość na jednostkę odległości od celu. `nil` zachowuje historyczny stały napęd.
+    public let distanceResponse: Float?
     public static let standard = try! BubbleDrivePolicy()
     public init(rigidifies: Bool = true, rigidificationDuration: Double = 0.15,
-                relaxationDuration: Double = 0.25) throws {
+                relaxationDuration: Double = 0.25, maximumSpeed: Float = 12,
+                distanceResponse: Float? = nil) throws {
         for duration in [rigidificationDuration, relaxationDuration] {
             guard duration.isFinite, duration >= 0 else { throw ModelValidationError.valueOutOfRange("drive.duration") }
         }
+        try requirePositive(maximumSpeed, "drive.maximumSpeed")
+        if let distanceResponse { try requirePositive(distanceResponse, "drive.distanceResponse") }
         self.rigidifies = rigidifies; self.rigidificationDuration = rigidificationDuration
         self.relaxationDuration = relaxationDuration
+        self.maximumSpeed = maximumSpeed; self.distanceResponse = distanceResponse
     }
 }
 

@@ -37,4 +37,29 @@ final class MotionCommandTests: XCTestCase {
         XCTAssertThrowsError(try MotorDrive(force: [.infinity,0]))
         XCTAssertThrowsError(try BubbleDrivePolicy(rigidificationDuration: -.infinity))
     }
+
+    func testPlayerDriveUsesDistanceResponsiveSpeedUpToConfiguredMaximum() async throws {
+        func achievedX(targetX: Float) async throws -> Float {
+            let world = try BubbleWorld(configuration: WorldConfiguration(simulationRegion:
+                WorldRectangle(min: [-20,-20], max: [20,20])))
+            let id = ObjectID(rawValue: 1)
+            let policy = try BubbleDrivePolicy(maximumSpeed: 12, distanceResponse: 6)
+            let transaction = try WorldTransaction()
+                .updatePhysicsMaterial(.init(rawValue: 1), material: PhysicsMaterial(kind: .bubble))
+                .updateRenderStyle(.init(rawValue: 1), style: RenderStyle())
+                .add(.bubble(BubbleDescriptor(id: id, position: .zero, targetRadius: 0.5,
+                    physicsMaterialID: .init(rawValue: 1), renderStyleID: .init(rawValue: 1), drivePolicy: policy)))
+                .beginPlayerDrive(id, target: [targetX, 0])
+            world.submit(transaction)
+            let frame = await world.advance(by: 1.0 / 60)
+            return try XCTUnwrap(frame.driveFeedback.first?.achievedPoint.x)
+        }
+
+        let near = try await achievedX(targetX: 0.5)
+        let far = try await achievedX(targetX: 4)
+
+        XCTAssertGreaterThan(far, near)
+        XCTAssertEqual(near, 0.05, accuracy: 0.01)
+        XCTAssertEqual(far, 0.2, accuracy: 0.01)
+    }
 }
