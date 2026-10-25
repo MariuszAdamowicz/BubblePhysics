@@ -96,7 +96,9 @@ Brak — pierwszy plan; żaden slice nie został zaimplementowany.
 
 ## Odchylenia implementacji
 
-Brak — implementacja nie została rozpoczęta.
+| ID | Stan | Opis | Wpływ | Decyzja CEO |
+|---|---|---|---|---|
+| IMP-D-001 | pending | Po end review poprawka testów renderingu nie ma osobnego utrwalonego logu RED: pierwszą próbę zablokowały równoległe instancje SwiftPM, a po zwolnieniu blokady testy były już zmienione. Pełny `swift test` został przerwany po około trzech minutach po ukończonym buildzie, ponieważ nie kończył procesu. Dwa ukierunkowane filtry `SemanticPresentationTests` i `SemanticPresentationRenderTests` przeszły. | Nie można twierdzić o pełnym dowodzie red→green dla poprawki ani o pełnym green suite; Slice 1 pozostaje wip. | oczekuje |
 
 ## Rejestr review
 
@@ -104,3 +106,4 @@ Brak — implementacja nie została rozpoczęta.
 |---|---|---|
 | 1 | ISSUES — naprawione | [Slice 1 / tasks] „verify: swift test --filter BubblePhysicsPublicTests” — cały target nie dowodził dodatniej wartości, atomowości i kompatybilności; zastąpiono go jednym konkretnym testem kontraktu. [Slice 1 / tasks] „verify: swift test --filter BubblePhysicsMetalRenderTests” — cały target nie dowodził wartości/chwytu, wspólnej geometrii i command buffera; zastąpiono go jednym konkretnym testem renderingu. |
 | 2 | ISSUES — naprawione | `ISSUES`<br>- [R2 / grounding] "WorldConfiguration dokumentuje, że simulationRegion nie jest ścianą." Wskazana w wejściowym zakresie ścieżka `Sources/BubblePhysicsPublic/WorldConfiguration.swift` nie istnieje, więc plan odwołuje się do nierozwiązalnego seam’u.<br>- [Slice 1 / coverage] "Dodać semantyczne typy/operacje oraz staging prezentacji tak, aby receipt był granicą publikacji." Zadanie nie obejmuje wymaganego przez design przekazania prezentacji w `mergeBubbles`; implementer może dostarczyć wyłącznie osobną aktualizację prezentacji i pominąć widoczność wartości rezultatu merge w klatce z jego receipt.<br>- [Plan shape / template] "**Upstream:** design.md (Approved)" Plan pomija wymagane przez szablon pola `PRD`, `Manifest assetów`, `Komenda testowa` i `Profil modeli` oraz wymagane sekcje statusów slice’ów, odchyleń od designu, replan logu i odchyleń implementacji, więc nie zachowuje wymaganego kształtu artefaktu. |
+| 3 | CAP_REACHED — round-1 findings fixed, not re-reviewed | End review Slice 1: trzy blockery (liczba zamiast koloru modulo, publikacja merge/rejection, rozróżnialny test wartości/chwytu) naprawione przez commit `87314ecc4dafe00066f0534609c44beb8b4804e5`; usunięto rozszerzenie splitBubble poza zakresem. |
