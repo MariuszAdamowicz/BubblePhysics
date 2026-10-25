@@ -2,7 +2,7 @@
 
 **Data:** 2026-10-25
 
-**Status:** Draft
+**Status:** Approved
 
 **Strategia:** slices
 
