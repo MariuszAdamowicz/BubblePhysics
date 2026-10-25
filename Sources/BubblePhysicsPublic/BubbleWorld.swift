@@ -7,6 +7,7 @@ import BubblePhysicsNativeMetal
 package struct BubbleWorldRenderItem {
     package let shader: RenderShader
     package let channels: [ParameterID: Float]
+    package let bubblePresentation: BubblePresentation?
 }
 
 package struct BubbleWorldRenderState {
@@ -86,7 +87,8 @@ public final class BubbleWorld {
             guard let object = source.objects[id], case .bubble(let bubble) = object.descriptor,
                   let style = source.renderStyles[bubble.renderStyleID] else { return nil }
             return BubbleWorldRenderItem(shader: style.shader,
-                channels: style.resolvedChannels(overrides: object.presentation))
+                channels: style.resolvedChannels(overrides: object.presentation),
+                bubblePresentation: object.bubblePresentation)
         }
         let shapes = source.objects.sorted { $0.key.rawValue < $1.key.rawValue }.compactMap { _, object -> BubbleWorldRenderShape? in
             guard let style = source.renderStyles[object.style] else { return nil }
@@ -104,7 +106,7 @@ public final class BubbleWorld {
             }
             return BubbleWorldRenderShape(vertices: vertices,
                 item: BubbleWorldRenderItem(shader: style.shader,
-                    channels: style.resolvedChannels(overrides: object.presentation)))
+                    channels: style.resolvedChannels(overrides: object.presentation), bubblePresentation: nil))
         }
         return BubbleWorldRenderState(handoff: handoff, items: items, shapes: shapes)
     }

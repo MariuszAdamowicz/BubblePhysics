@@ -61,6 +61,14 @@ package final class NativeMetalRenderHandoff {
             vertexCount: contourStride * 3, instanceCount: 1, baseInstance: bubbleIndex)
     }
 
+    /// Nakładka semantyczna używa dokładnie tego samego deformowanego zakresu co wypełnienie.
+    package func drawPresentation(_ encoder: MTLRenderCommandEncoder, bubbleIndex: Int,
+                                  color: SIMD4<Float>) {
+        var color = color
+        encoder.setFragmentBytes(&color, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
+        draw(encoder, bubbleIndex: bubbleIndex)
+    }
+
     /// Wyłącznie adapter diagnostyczny. Produkcyjny renderer nie wywołuje tej metody.
     package func debugContourSnapshot() -> [ObjectID: [WorldPoint]] {
         let countValues = counts.contents().bindMemory(to: UInt32.self, capacity: bubbleCount)

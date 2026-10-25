@@ -12,10 +12,12 @@ public final class BubblePhysicsMetalRender {
     private let device: MTLDevice
     private let vertexFunction: MTLFunction
     private let technicalFragment: MTLFunction
+    private let presentationFragment: MTLFunction
     /// W trybie wielokąta shader nie czyta `bubbles`, lecz walidacja Metal
     /// wymaga bufora o pełnym ABI `RenderBubble` (144 bajtów).
     private let polygonBubblePlaceholder: MTLBuffer
     private var technicalPipelines: [MTLPixelFormat: MTLRenderPipelineState] = [:]
+    private var presentationPipelines: [MTLPixelFormat: MTLRenderPipelineState] = [:]
     public var customPipelines: [String: RenderStylePipeline]
 
     public init(device: MTLDevice, customPipelines: [String: RenderStylePipeline] = [:]) throws {
@@ -27,6 +29,17 @@ public final class BubblePhysicsMetalRender {
         let functions = try NativeMetalRenderHandoff.makeFunctions(device: device)
         self.vertexFunction = functions.vertex
         self.technicalFragment = functions.fragment
+        let presentationSource = """
+        #include <metal_stdlib>
+        using namespace metal;
+        struct V { float4 position [[position]]; float2 worldPosition; };
+        fragment float4 semanticPresentation(V in [[stage_in]], constant float4 &color [[buffer(0)]]) { return color; }
+        """
+        let presentationLibrary = try device.makeLibrary(source: presentationSource, options: nil)
+        guard let presentationFragment = presentationLibrary.makeFunction(name: "semanticPresentation") else {
+            throw BubblePhysicsMetalRenderError.renderEncoderUnavailable
+        }
+        self.presentationFragment = presentationFragment
         self.customPipelines = customPipelines
     }
 
@@ -49,7 +62,7 @@ public final class BubblePhysicsMetalRender {
         if let handoff = published.handoff {
             handoff.bind(encoder, viewport: viewport)
             if published.items.count == handoff.bubbleCount,
-               published.items.allSatisfy({ $0?.shader == .technical }) {
+               published.items.allSatisfy({ $0?.shader == .technical && $0?.bubblePresentation == nil }) {
                 encoder.setRenderPipelineState(technical)
                 handoff.drawAll(encoder)
             } else {
@@ -57,6 +70,11 @@ public final class BubblePhysicsMetalRender {
                     guard let item else { continue }
                     selectPipeline(for: item, encoder: encoder, technical: technical)
                     handoff.draw(encoder, bubbleIndex: index)
+                    if let presentation = item.bubblePresentation {
+                        encoder.setRenderPipelineState(try presentationPipeline(format: color.pixelFormat))
+                        handoff.drawPresentation(encoder, bubbleIndex: index,
+                            color: Self.presentationColor(for: presentation))
+                    }
                 }
             }
         }
@@ -144,6 +162,22 @@ public final class BubblePhysicsMetalRender {
         let pipeline = try device.makeRenderPipelineState(descriptor: descriptor)
         technicalPipelines[format] = pipeline
         return pipeline
+    }
+
+    private func presentationPipeline(format: MTLPixelFormat) throws -> MTLRenderPipelineState {
+        if let pipeline = presentationPipelines[format] { return pipeline }
+        let descriptor = MTLRenderPipelineDescriptor()
+        descriptor.vertexFunction = vertexFunction
+        descriptor.fragmentFunction = presentationFragment
+        descriptor.colorAttachments[0].pixelFormat = format
+        let pipeline = try device.makeRenderPipelineState(descriptor: descriptor)
+        presentationPipelines[format] = pipeline
+        return pipeline
+    }
+
+    private static func presentationColor(for presentation: BubblePresentation) -> SIMD4<Float> {
+        let tint = Float((presentation.value % 7) + 1) / 7
+        return presentation.isGrabbed ? SIMD4<Float>(1, 0.5 + tint * 0.5, tint, 0.9) : SIMD4<Float>(1, tint, tint, 0.72)
     }
 }
 

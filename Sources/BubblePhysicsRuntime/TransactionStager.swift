@@ -41,6 +41,7 @@ package struct RuntimeObject: Equatable, Sendable {
     package var capturedRadius: Float?
     package var rigidity: Float = 0
     package var presentation: PresentationParameters = .empty
+    package var bubblePresentation: BubblePresentation?
     package var structuralShape: NativeStructuralShape?
     package var radiusBlendStart: Float = 0
     package var rigidityBlendStart: Float = 0
@@ -265,6 +266,11 @@ private struct StagingContext {
             existing.radiusBlendStart = existing.collisionRadius; existing.rigidityBlendStart = existing.rigidity; existing.shapeElapsed = 0
             try validate(existing)
             state.objects[id] = existing
+        case .setBubblePresentation(let id, let presentation):
+            var existing = try object(id)
+            guard case .bubble = existing.descriptor else { throw TransactionRejectionReason.incompatibleObjectKind(id) }
+            existing.bubblePresentation = presentation
+            state.objects[id] = existing
         case .startTransition(let transition):
             try validate(transition)
             state.transitions[transition.target] = transition
@@ -417,6 +423,7 @@ private struct StagingContext {
         try add(descriptor)
         if var merged = state.objects[result.id] {
             StructuralOperations.initializeMerge(&merged, sources: inputs)
+            merged.bubblePresentation = result.bubblePresentation
             state.objects[result.id] = merged
         }
     }
@@ -436,6 +443,7 @@ private struct StagingContext {
             try add(resultDescriptor(part.result, position: existing.position, velocity: existing.velocity,
                 radius: Float(Double(existing.targetRadius) * sqrt(share)),
                 mass: Float(Double(descriptor.mass) * share)))
+            state.objects[part.result.id]?.bubblePresentation = part.result.bubblePresentation
         }
         if var a = state.objects[first.result.id], var b = state.objects[second.result.id] {
             try StructuralOperations.initializeSplit(&a, &b, source: existing, shares: shares)

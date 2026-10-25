@@ -26,13 +26,16 @@ public struct BubbleResult: Equatable, Sendable {
     public let mergeGroups: MergeGroupSet
     public let eventInterest: EventInterest
     public let presentation: PresentationParameters
+    public let bubblePresentation: BubblePresentation?
     public init(id: ObjectID, physicsMaterialID: PhysicsMaterialID, renderStyleID: RenderStyleID,
                 motionRole: MotionRole = .dynamic, regionExitPolicy: RegionExitPolicy = .remove,
                 mergeGroups: MergeGroupSet = [], eventInterest: EventInterest = [],
-                presentation: PresentationParameters = .empty) {
+                presentation: PresentationParameters = .empty,
+                bubblePresentation: BubblePresentation? = nil) {
         self.id = id; self.physicsMaterialID = physicsMaterialID; self.renderStyleID = renderStyleID
         self.motionRole = motionRole; self.regionExitPolicy = regionExitPolicy
         self.mergeGroups = mergeGroups; self.eventInterest = eventInterest; self.presentation = presentation
+        self.bubblePresentation = bubblePresentation
     }
 }
 
@@ -59,6 +62,7 @@ public enum WorldOperation: Equatable, Sendable {
     case beginPlayerDrive(ObjectID, WorldPoint)
     case updatePlayerDrive(ObjectID, WorldPoint)
     case endPlayerDrive(ObjectID)
+    case setBubblePresentation(ObjectID, BubblePresentation)
     case startTransition(ParameterTransition)
     case mergeBubbles([ObjectID], BubbleResult)
     case splitBubble(ObjectID, BubbleSplitPart, BubbleSplitPart)
@@ -86,6 +90,9 @@ public struct WorldTransaction: Equatable, Sendable {
     public func beginPlayerDrive(_ id: ObjectID, target: WorldPoint) -> Self { appending(.beginPlayerDrive(id, target)) }
     public func updatePlayerDrive(_ id: ObjectID, target: WorldPoint) -> Self { appending(.updatePlayerDrive(id, target)) }
     public func endPlayerDrive(_ id: ObjectID) -> Self { appending(.endPlayerDrive(id)) }
+    public func setBubblePresentation(_ id: ObjectID, presentation: BubblePresentation) -> Self {
+        appending(.setBubblePresentation(id, presentation))
+    }
     public func startTransition(_ transition: ParameterTransition) -> Self { appending(.startTransition(transition)) }
     public func mergeBubbles(_ sources: [ObjectID], result: BubbleResult) -> Self { appending(.mergeBubbles(sources, result)) }
     public func splitBubble(_ source: ObjectID, first: BubbleSplitPart, second: BubbleSplitPart) -> Self { appending(.splitBubble(source, first, second)) }
