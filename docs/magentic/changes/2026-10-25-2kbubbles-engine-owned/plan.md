@@ -45,16 +45,16 @@
 #### Chunk A — kontrakt i staging
 
 1. Dodać testy publiczne dodatniej BubblePresentation, atomowej aktualizacji i zachowania istniejących konstruktorów, obserwując red.  
-   verify: swift test --filter BubblePhysicsPublicTests
+   verify: swift test --filter SemanticPresentationTests.testRejectsInvalidValueAndPublishesOnlyAcceptedPresentation
 2. Dodać semantyczne typy/operacje oraz staging prezentacji tak, aby receipt był granicą publikacji.  
-   verify: swift test --filter BubblePhysicsPublicTests
+   verify: swift test --filter SemanticPresentationTests.testRejectsInvalidValueAndPublishesOnlyAcceptedPresentation
 
 #### Chunk B — renderer i publikacja
 
 3. Dodać test Metal, że wartość i chwyt są kodowane z tym samym deformowanym zakresem co bańka, w caller command buffer, bez pipeline’u integratora.  
-   verify: swift test --filter BubblePhysicsMetalRenderTests
+   verify: swift test --filter SemanticPresentationRenderTests.testValueAndGrabAreEncodedWithDeformedBubbleInCallerCommandBuffer
 4. Rozszerzyć native handoff i BubblePhysicsMetalRender o silnikową etykietę oraz stan chwytu; zachować poprzednią klatkę po błędzie renderu.  
-   verify: swift test --filter BubblePhysicsMetalRenderTests
+   verify: swift test --filter SemanticPresentationRenderTests.testValueAndGrabAreEncodedWithDeformedBubbleInCallerCommandBuffer
 
 ### Slice 2 — wybór deformowanego konturu
 
@@ -76,4 +76,4 @@ Brak. Design nie zmienia publicznego kontraktu łamiąco; dodaje kompatybilne ty
 
 | Runda | Wynik | Uwagi / zapis |
 |---|---|---|
-| 1 | oczekuje | niezależny review planu |
+| 1 | ISSUES — naprawione | [Slice 1 / tasks] „verify: swift test --filter BubblePhysicsPublicTests” — cały target nie dowodził dodatniej wartości, atomowości i kompatybilności; zastąpiono go jednym konkretnym testem kontraktu. [Slice 1 / tasks] „verify: swift test --filter BubblePhysicsMetalRenderTests” — cały target nie dowodził wartości/chwytu, wspólnej geometrii i command buffera; zastąpiono go jednym konkretnym testem renderingu. |
