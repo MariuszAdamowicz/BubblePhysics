@@ -32,8 +32,45 @@ public final class BubblePhysicsMetalRender {
         let presentationSource = """
         #include <metal_stdlib>
         using namespace metal;
-        struct V { float4 position [[position]]; float2 worldPosition; };
-        fragment float4 semanticPresentation(V in [[stage_in]], constant float4 &color [[buffer(0)]]) { return color; }
+        struct V { float4 position [[position]]; float2 worldPosition; float2 bubbleCenter; float bubbleRadius; };
+        struct SemanticPresentation { ulong value; uint isGrabbed; uint padding; };
+        bool segment(float2 point, int digit, int index) {
+            bool enabled[10][7] = {
+                {true, true, true, true, true, true, false}, {false, true, true, false, false, false, false},
+                {true, true, false, true, true, false, true}, {true, true, true, true, false, false, true},
+                {false, true, true, false, false, true, true}, {true, false, true, true, false, true, true},
+                {true, false, true, true, true, true, true}, {true, true, true, false, false, false, false},
+                {true, true, true, true, true, true, true}, {true, true, true, true, false, true, true}
+            };
+            if (!enabled[digit][index]) return false;
+            if (index == 0) return abs(point.y - 0.72) < 0.12 && abs(point.x) < 0.55;
+            if (index == 1) return abs(point.x - 0.55) < 0.12 && point.y > 0.0 && point.y < 0.72;
+            if (index == 2) return abs(point.x - 0.55) < 0.12 && point.y < 0.0 && point.y > -0.72;
+            if (index == 3) return abs(point.y + 0.72) < 0.12 && abs(point.x) < 0.55;
+            if (index == 4) return abs(point.x + 0.55) < 0.12 && point.y < 0.0 && point.y > -0.72;
+            if (index == 5) return abs(point.x + 0.55) < 0.12 && point.y > 0.0 && point.y < 0.72;
+            return abs(point.y) < 0.12 && abs(point.x) < 0.55;
+        }
+        fragment float4 semanticPresentation(V in [[stage_in]], constant SemanticPresentation &presentation [[buffer(0)]]) {
+            ulong remaining = presentation.value;
+            int count = 1;
+            while (remaining >= 10 && count < 19) { remaining /= 10; count++; }
+            float width = min(0.28, 1.55 / float(count));
+            float2 local = (in.worldPosition - in.bubbleCenter) / max(in.bubbleRadius, 0.001);
+            int glyphIndex = int(floor((local.x + width * float(count) * 0.5) / width));
+            bool glyph = false;
+            if (glyphIndex >= 0 && glyphIndex < count && abs(local.y) < 0.42) {
+                ulong divisor = 1;
+                for (int i = 0; i < count - glyphIndex - 1; i++) divisor *= 10;
+                int digit = int((presentation.value / divisor) % 10);
+                float glyphCenter = -width * float(count) * 0.5 + width * (float(glyphIndex) + 0.5);
+                float2 point = float2((local.x - glyphCenter) / (width * 0.5), local.y / 0.42);
+                for (int i = 0; i < 7; i++) glyph = glyph || segment(point, digit, i);
+            }
+            float3 fill = presentation.isGrabbed != 0 ? float3(0.18, 0.52, 0.78) : float3(0.30, 0.71, 0.85);
+            float3 ink = presentation.isGrabbed != 0 ? float3(1.0, 0.82, 0.18) : float3(1.0, 1.0, 1.0);
+            return float4(glyph ? ink : fill, 1.0);
+        }
         """
         let presentationLibrary = try device.makeLibrary(source: presentationSource, options: nil)
         guard let presentationFragment = presentationLibrary.makeFunction(name: "semanticPresentation") else {
@@ -73,7 +110,7 @@ public final class BubblePhysicsMetalRender {
                     if let presentation = item.bubblePresentation {
                         encoder.setRenderPipelineState(try presentationPipeline(format: color.pixelFormat))
                         handoff.drawPresentation(encoder, bubbleIndex: index,
-                            color: Self.presentationColor(for: presentation))
+                            value: presentation.value, isGrabbed: presentation.isGrabbed)
                     }
                 }
             }
@@ -175,10 +212,6 @@ public final class BubblePhysicsMetalRender {
         return pipeline
     }
 
-    private static func presentationColor(for presentation: BubblePresentation) -> SIMD4<Float> {
-        let tint = Float((presentation.value % 7) + 1) / 7
-        return presentation.isGrabbed ? SIMD4<Float>(1, 0.5 + tint * 0.5, tint, 0.9) : SIMD4<Float>(1, tint, tint, 0.72)
-    }
 }
 
 private struct RetainedShapeBuffer: @unchecked Sendable {

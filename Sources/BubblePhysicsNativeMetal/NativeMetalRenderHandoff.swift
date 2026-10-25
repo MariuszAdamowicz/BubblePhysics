@@ -63,9 +63,9 @@ package final class NativeMetalRenderHandoff {
 
     /// Nakładka semantyczna używa dokładnie tego samego deformowanego zakresu co wypełnienie.
     package func drawPresentation(_ encoder: MTLRenderCommandEncoder, bubbleIndex: Int,
-                                  color: SIMD4<Float>) {
-        var color = color
-        encoder.setFragmentBytes(&color, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
+                                  value: Int, isGrabbed: Bool) {
+        var presentation = SemanticPresentationUniform(value: UInt64(value), isGrabbed: isGrabbed ? 1 : 0)
+        encoder.setFragmentBytes(&presentation, length: MemoryLayout<SemanticPresentationUniform>.stride, index: 0)
         draw(encoder, bubbleIndex: bubbleIndex)
     }
 
@@ -84,6 +84,12 @@ package final class NativeMetalRenderHandoff {
         }
         return result
     }
+}
+
+private struct SemanticPresentationUniform {
+    var value: UInt64
+    var isGrabbed: UInt32
+    var padding: UInt32 = 0
 }
 
 package enum NativeRenderError: Error { case resourceUnavailable }

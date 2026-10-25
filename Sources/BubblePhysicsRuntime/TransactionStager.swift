@@ -443,7 +443,6 @@ private struct StagingContext {
             try add(resultDescriptor(part.result, position: existing.position, velocity: existing.velocity,
                 radius: Float(Double(existing.targetRadius) * sqrt(share)),
                 mass: Float(Double(descriptor.mass) * share)))
-            state.objects[part.result.id]?.bubblePresentation = part.result.bubblePresentation
         }
         if var a = state.objects[first.result.id], var b = state.objects[second.result.id] {
             try StructuralOperations.initializeSplit(&a, &b, source: existing, shares: shares)

@@ -4,6 +4,8 @@ using namespace metal;
 struct ContourVertexOutput {
     float4 position [[position]];
     float2 worldPosition;
+    float2 bubbleCenter;
+    float bubbleRadius;
 };
 
 struct RenderBubble {
@@ -31,11 +33,15 @@ vertex ContourVertexOutput nativeContourVertex(
         float2 clip = (point - viewport.xy) * 2.0 / viewport.zw;
         result.position = float4(clip.x, clip.y, 0, 1);
         result.worldPosition = point;
+        result.bubbleCenter = point;
+        result.bubbleRadius = 1;
         return result;
     }
     if (bubbles[bubbleIndex].publicFlags.w == 1) {
         result.position = float4(2, 2, 0, 1);
         result.worldPosition = float2(0);
+        result.bubbleCenter = float2(0);
+        result.bubbleRadius = 1;
         return result;
     }
     uint count = min(counts[bubbleIndex], stride);
@@ -50,6 +56,8 @@ vertex ContourVertexOutput nativeContourVertex(
     float2 clip = (point - viewport.xy) * 2.0 / viewport.zw;
     result.position = float4(clip.x, clip.y, 0, 1);
     result.worldPosition = point;
+    result.bubbleCenter = bubbles[bubbleIndex].position.xy;
+    result.bubbleRadius = bubbles[bubbleIndex].physical.z;
     return result;
 }
 
