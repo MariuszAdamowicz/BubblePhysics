@@ -41,7 +41,7 @@ BubblePhysics dostaje trzy publiczne powierzchnie: semantykę prezentacji bańki
 
 **G2: Wybór dla dragu odpowiada faktycznemu deformowanemu konturowi.**
 
-- [ ] **G2-AC1** — BubbleWorld udostępnia asynchroniczne zapytanie wyboru punktu względem ostatniej opublikowanej geometrii deformowanych baniek, zwracające najwyżej jeden stabilny ObjectID albo nil. · weryfikacja: test wnętrza, granicy, zagłębienia deformacji i pustego miejsca.
+- [ ] **G2-AC1** — BubbleWorld rejestruje asynchroniczne zapytanie wyboru punktu, oblicza je względem geometrii deformowanej najbliższego kolejnego ukończonego kroku i zwraca najwyżej jeden stabilny ObjectID albo nil dopiero po publikacji tej klatki. · weryfikacja: test wnętrza, granicy, zagłębienia deformacji i pustego miejsca.
 - [ ] **G2-AC2** — wynik wyboru zasila następną beginPlayerDrive; updatePlayerDrive i endPlayerDrive zachowują DriveFeedback, a brak wyboru nie uruchamia drive. · weryfikacja: test begin/update/end i anulowania.
 - [ ] **G2-AC3** — wybór nie wystawia grze pozycji, promienia ani wierzchołków i nie wymaga CPU readbacku normalnej ścieżki. · weryfikacja: contourCPUReadbacks = 0 podczas testu drag.
 
@@ -138,3 +138,4 @@ ArenaPreset definiuje nazwę, wymiary, statyczne granice i politykę determinist
 | Runda | Wynik | Uwagi / zapis |
 |---|---|---|
 | 1 | ISSUES | [Podejście i granice odpowiedzialności / niejednoznaczność] „Zapytanie zwraca ostatni wynik opublikowany, nigdy kandydata w toku.” — nie określało, kiedy ani dla którego punktu publikuje się wynik; naprawione przez kontrakt numerowanego żądania i następnej ukończonej klatki. |
+| 2 | CAP_REACHED — findings from round 2 fixed, not re-reviewed | [G2-AC1 / spójność] „zapytanie wyboru punktu względem ostatniej opublikowanej geometrii deformowanych baniek” — kryterium wskazywało poprzednią opublikowaną geometrię, podczas gdy podejście definiowało następną ukończoną klatkę; naprawione przez ujednolicenie G2-AC1 z kontraktem żądania. |
