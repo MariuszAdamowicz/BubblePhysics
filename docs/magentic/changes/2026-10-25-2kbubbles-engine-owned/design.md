@@ -67,7 +67,7 @@ BubblePhysics dostaje trzy publiczne powierzchnie: semantykę prezentacji bańki
 
 Nowe publiczne typy są wejściem semantycznym; wykonanie wybiera tylko BubbleWorld/native Metal. BubblePresentation zawiera value: Int i isGrabbed: Bool, jest atomową operacją setBubblePresentation, a mergeBubbles przyjmuje rezultat z prezentacją. Wartość jest dodatnia; nie jest teksturą, pozycją ani stylem gry. Renderer używa własnego atlasu i instancji zakotwiczonej w centrum/masce deformowanej bańki. Chwyt jest parametrem silnikowego materiału/obrysu, nie geometrią UI.
 
-selectBubble(at:) async -> ObjectID? korzysta z opublikowanego handoffu: native Metal koduje point-in-deformed-contour na GPU i publikuje mały wynik identyfikatora razem z ukończoną klatką. Zapytanie zwraca ostatni wynik opublikowany, nigdy kandydata w toku. Przy nakładaniu wygrywa ostatnia bańka w deterministycznym porządku renderowania. To nie jest debugContourSnapshot, promień ani analiza AABB gry.
+selectBubble(at:) async -> ObjectID? rejestruje punkt jako żądanie o unikalnym numerze w kolejce świata. Najbliższy kolejny krok, który koduje command buffer, wykonuje point-in-deformed-contour dla tego właśnie punktu po deformacji; kontynuacja zapytania wraca dopiero po ukończeniu i publikacji tej klatki, z wynikiem dla numeru żądania albo nil. Nie ma odpowiedzi z kandydackiego kroku ani wyniku należącego do innego punktu. Przy nakładaniu wygrywa ostatnia bańka w deterministycznym porządku renderowania. To nie jest debugContourSnapshot, promień ani analiza AABB gry.
 
 ArenaPreset definiuje nazwę, wymiary, statyczne granice i politykę deterministycznego spawnu. WorldConfiguration otrzymuje opcjonalny preset, a fabryka świata instaluje niewidoczne, statyczne granice w runtime. SpawnBubbleRequest(value:arena:seed:) jest operacją świata i zwraca identyfikator przez receipt. Nie usuwa istniejącego BubbleDescriptor: zachowuje kompatybilność dla obecnych klientów, ale 2KBubbles korzysta wyłącznie z nowej ścieżki.
 
@@ -137,4 +137,4 @@ ArenaPreset definiuje nazwę, wymiary, statyczne granice i politykę determinist
 
 | Runda | Wynik | Uwagi / zapis |
 |---|---|---|
-| 1 | oczekuje | niezależny review po commicie artefaktu |
+| 1 | ISSUES | [Podejście i granice odpowiedzialności / niejednoznaczność] „Zapytanie zwraca ostatni wynik opublikowany, nigdy kandydata w toku.” — nie określało, kiedy ani dla którego punktu publikuje się wynik; naprawione przez kontrakt numerowanego żądania i następnej ukończonej klatki. |
