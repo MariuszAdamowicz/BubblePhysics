@@ -2,15 +2,25 @@
 
 **Data:** 2026-10-25
 
-**Status:** Approved
+**Status:** Draft
+
+**Artefakt:** `plan`
+
+**Design:** design.md (Approved)
+
+**PRD:** brak — tryb feature
+
+**Manifest assetów:** nie dotyczy
 
 **Strategia:** slices
+
+**Komenda testowa:** `swift test`
+
+**Profil modeli:** `designer` do planu, `scout` do rekonesansu, `reviewer` do niezależnej recenzji
 
 **Wersja pluginu:** 0.1.29
 
 **Sesje agenta:** unknown: UNKNOWN
-
-**Upstream:** design.md (Approved)
 
 ---
 
@@ -20,7 +30,7 @@
 
 **R1 — przepływ.** Gra składa WorldTransaction z semantycznymi żądaniami. BubbleWorld stageruje batch, native Metal wylicza fizykę/deformację, renderer koduje tę samą opublikowaną geometrię w tym samym command bufferze, a WorldFrame publikuje receipts, zdarzenia i DriveFeedback. Żądanie hit-testu ma numer, wykonuje się w najbliższym ukończonym kroku i wraca po publikacji tej klatki.
 
-**R2 — potwierdzone seam’y.** Publiczna granica znajduje się w Sources/BubblePhysicsPublic/BubbleWorld.swift i Model/WorldTransaction.swift; BubbleDescriptor w Model/Objects.swift dziś wymaga position. Staging odbywa się w BubblePhysicsRuntime/TransactionStager.swift, wykonanie native w BubblePhysicsNativeMetal, a render w BubblePhysicsMetalRender/BubblePhysicsMetalRender.swift. WorldConfiguration dokumentuje, że simulationRegion nie jest ścianą. Testy leżą odpowiednio w BubblePhysicsPublicTests, BubblePhysicsRuntimeTests, BubblePhysicsNativeMetalTests i BubblePhysicsMetalRenderTests; iOS bench w Benchmarks/iOS/BubblePhysicsBench.
+**R2 — potwierdzone seam’y.** Publiczna granica znajduje się w Sources/BubblePhysicsPublic/BubbleWorld.swift i Model/WorldTransaction.swift; BubbleDescriptor w Model/Objects.swift dziś wymaga position. Staging odbywa się w BubblePhysicsRuntime/TransactionStager.swift, wykonanie native w BubblePhysicsNativeMetal, a render w BubblePhysicsMetalRender/BubblePhysicsMetalRender.swift. Sources/BubblePhysicsPublic/Model/WorldConfiguration.swift dokumentuje i waliduje simulationRegion. Testy leżą odpowiednio w BubblePhysicsPublicTests, BubblePhysicsRuntimeTests, BubblePhysicsNativeMetalTests i BubblePhysicsMetalRenderTests; iOS bench w Benchmarks/iOS/BubblePhysicsBench.
 
 **R3 — zachowania.**
 
@@ -32,7 +42,15 @@
 
 **Strategia testów.** Każdy slice zaczyna od testu publicznego kontraktu oraz testu właściwej warstwy Metal/runtime. Testy renderowania używają caller command buffer; testy normalnej ścieżki asercją brak konturowego readbacku. Dopiero po całości powstaje zapis Release iPhone X; nie jest substytutem testów ani benchmarku biblioteki.
 
-## Slice’y
+## Slice status
+
+| Slice | Nazwa | Dostarcza | Seams | Zachowania | Status |
+|---|---|---|---|---|---|
+| 1 | semantyczna prezentacja bańki | wartość i chwyt w silnikowym renderze, publikowane z receipt | public API, staging, native handoff, renderer | P-B-001 | todo |
+| 2 | wybór deformowanego konturu | wybór dla dragu z opublikowanej geometrii | BubbleWorld, GPU hit-test, player drive | P-B-002 | unplanned |
+| 3 | semantyczny spawn i fizyczna arena | deterministyczny spawn z granicami | WorldTransaction, runtime arena, native fizyka | P-B-003 | unplanned |
+
+**Samodzielność slice’ów:** Każdy slice dostarcza samodzielne zachowanie wraz z testami, bez wymogu wdrożenia następnego; po Slice 1 niedostępne pozostają wybór i arena, po Slice 2 — arena, a Slice 3 kończy uzgodniony zakres.
 
 ### Slice 1 — semantyczna prezentacja bańki
 
@@ -46,7 +64,7 @@
 
 1. Dodać testy publiczne dodatniej BubblePresentation, atomowej aktualizacji i zachowania istniejących konstruktorów, obserwując red.  
    verify: swift test --filter SemanticPresentationTests.testRejectsInvalidValueAndPublishesOnlyAcceptedPresentation
-2. Dodać semantyczne typy/operacje oraz staging prezentacji tak, aby receipt był granicą publikacji.  
+2. Dodać semantyczne typy/operacje oraz staging prezentacji, w tym prezentację rezultatu `mergeBubbles`, tak aby receipt był granicą publikacji.
    verify: swift test --filter SemanticPresentationTests.testRejectsInvalidValueAndPublishesOnlyAcceptedPresentation
 
 #### Chunk B — renderer i publikacja
@@ -68,12 +86,21 @@
 
 **Cel:** P-B-003. Implementacja obejmie ArenaPreset, seeded SpawnBubbleRequest, granice runtime i testy deterministyczności/kolizji. Po nim zostanie wykonany pomiar Release iPhone X z 120 klatkami rozgrzewki i 300 mierzonymi.
 
-## Odchylenia
+## Odchylenia od designu
 
 Brak. Design nie zmienia publicznego kontraktu łamiąco; dodaje kompatybilne typy i operacje.
+
+## Replan log
+
+Brak — pierwszy plan; żaden slice nie został zaimplementowany.
+
+## Odchylenia implementacji
+
+Brak — implementacja nie została rozpoczęta.
 
 ## Rejestr review
 
 | Runda | Wynik | Uwagi / zapis |
 |---|---|---|
 | 1 | ISSUES — naprawione | [Slice 1 / tasks] „verify: swift test --filter BubblePhysicsPublicTests” — cały target nie dowodził dodatniej wartości, atomowości i kompatybilności; zastąpiono go jednym konkretnym testem kontraktu. [Slice 1 / tasks] „verify: swift test --filter BubblePhysicsMetalRenderTests” — cały target nie dowodził wartości/chwytu, wspólnej geometrii i command buffera; zastąpiono go jednym konkretnym testem renderingu. |
+| 2 | ISSUES — naprawione | `ISSUES`<br>- [R2 / grounding] "WorldConfiguration dokumentuje, że simulationRegion nie jest ścianą." Wskazana w wejściowym zakresie ścieżka `Sources/BubblePhysicsPublic/WorldConfiguration.swift` nie istnieje, więc plan odwołuje się do nierozwiązalnego seam’u.<br>- [Slice 1 / coverage] "Dodać semantyczne typy/operacje oraz staging prezentacji tak, aby receipt był granicą publikacji." Zadanie nie obejmuje wymaganego przez design przekazania prezentacji w `mergeBubbles`; implementer może dostarczyć wyłącznie osobną aktualizację prezentacji i pominąć widoczność wartości rezultatu merge w klatce z jego receipt.<br>- [Plan shape / template] "**Upstream:** design.md (Approved)" Plan pomija wymagane przez szablon pola `PRD`, `Manifest assetów`, `Komenda testowa` i `Profil modeli` oraz wymagane sekcje statusów slice’ów, odchyleń od designu, replan logu i odchyleń implementacji, więc nie zachowuje wymaganego kształtu artefaktu. |
