@@ -76,16 +76,16 @@
 
 ### Slice 2 — wybór deformowanego konturu
 
-**Status:** wip
+**Status:** done
 
 **Cel:** P-B-002. Numerowane żądanie wyboru wykonuje point-in-deformed-contour dla konkretnego punktu w najbliższym ukończonym kroku i zwraca jego wynik dopiero po publikacji tej klatki. Gra otrzymuje tylko `ObjectID?`; wynik zasila istniejące begin/update/endPlayerDrive.
 
 #### Chunk A — kontrakt i publikacja
 
 1. Dodać test publicznego żądania wyboru, który przed implementacją nie kompiluje, a potem dowodzi powiązania konkretnego punktu z następną opublikowaną klatką oraz `nil` dla pustego miejsca/usuniętej bańki. Dodać test, że błąd renderu zachowuje poprzednią opublikowaną klatkę i wynik selekcji.  
-   verify: swift test --filter DeformedContourSelectionTests.testRenderFailurePreservesPreviouslyPublishedSelection
+   verify: swift test --filter DeformedContourSelectionTests.testSelectionSurvivesFailedRenderUntilTheNextPublishedFrame
 2. Dodać numerowane żądanie i wynik publikowany przez BubbleWorld bez wystawiania pozycji, promienia, konturu ani wyboru backendu.  
-   verify: swift test --filter DeformedContourSelectionTests.testRenderFailurePreservesPreviouslyPublishedSelection
+   verify: swift test --filter DeformedContourSelectionTests.testSelectionSurvivesFailedRenderUntilTheNextPublishedFrame
 
 #### Chunk B — native Metal i drag
 
@@ -122,6 +122,13 @@ Brak. Design nie zmienia publicznego kontraktu łamiąco; dodaje kompatybilne ty
 - `swift test --filter BubblePhysicsMetalRenderTests` — 15 testów, 0 failures; obejmuje różnicowanie wartości, chwyt i caller command buffer.
 - `swift test` — zakończony sukcesem 2026-10-26. Najcięższe testy bazowe: `BenchmarkScenarioTests` 148,022 s i `MetalRadialEnduranceTests` 130,490 s; brak failures.
 
+## Dowody Slice 2
+
+- `swift test --filter DeformedContourSelectionTests` — 5 testów, 0 failures; pokrywa wybór po opublikowanej klatce, granicę i zagłębienie zdeformowanego konturu, deterministyczny tie-break, brak CPU readbacku, odporność na błąd renderu oraz przepływ begin/update/endPlayerDrive.
+- `swift test --filter BubblePhysicsPublicTests` — 37 testów, 0 failures.
+- `swift test --filter BubblePhysicsMetalRenderTests` — 15 testów, 0 failures.
+- `swift test` — zakończony sukcesem 2026-10-26; `BenchmarkScenarioTests` 148,136 s i `MetalRadialEnduranceTests` 128,631 s, bez failures. Te benchmarki są regresyjną kontrolą biblioteki, nie budżetem gry.
+
 ## Rejestr review
 
 | Runda | Wynik | Uwagi / zapis |
@@ -130,3 +137,4 @@ Brak. Design nie zmienia publicznego kontraktu łamiąco; dodaje kompatybilne ty
 | 2 | ISSUES — naprawione | `ISSUES`<br>- [R2 / grounding] "WorldConfiguration dokumentuje, że simulationRegion nie jest ścianą." Wskazana w wejściowym zakresie ścieżka `Sources/BubblePhysicsPublic/WorldConfiguration.swift` nie istnieje, więc plan odwołuje się do nierozwiązalnego seam’u.<br>- [Slice 1 / coverage] "Dodać semantyczne typy/operacje oraz staging prezentacji tak, aby receipt był granicą publikacji." Zadanie nie obejmuje wymaganego przez design przekazania prezentacji w `mergeBubbles`; implementer może dostarczyć wyłącznie osobną aktualizację prezentacji i pominąć widoczność wartości rezultatu merge w klatce z jego receipt.<br>- [Plan shape / template] "**Upstream:** design.md (Approved)" Plan pomija wymagane przez szablon pola `PRD`, `Manifest assetów`, `Komenda testowa` i `Profil modeli` oraz wymagane sekcje statusów slice’ów, odchyleń od designu, replan logu i odchyleń implementacji, więc nie zachowuje wymaganego kształtu artefaktu. |
 | 3 | CAP_REACHED — round-1 findings fixed, not re-reviewed | End review Slice 1: trzy blockery (liczba zamiast koloru modulo, publikacja merge/rejection, rozróżnialny test wartości/chwytu) naprawione przez commit `87314ecc4dafe00066f0534609c44beb8b4804e5`; usunięto rozszerzenie splitBubble poza zakresem. |
 | 4 | ISSUES — naprawione, bez drugiej rundy zgodnie z plan review | Slice 2 nie pokrywał zachowania wyniku selekcji przy błędzie renderu ani kompletnego sprzężenia z begin/update/endPlayerDrive; dodano jawne testy i weryfikacje dla obu kontraktów. |
+| 5 | APPROVED | Niezależny end review Slice 2 po commitach implementacji i testów: kontrakt wyboru, publikacja po ukończonej klatce, pojedynczy command buffer, granica GPU/publicznego API oraz przepływ dragu zgodne z designem i planem. |
