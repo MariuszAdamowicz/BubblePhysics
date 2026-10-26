@@ -2,7 +2,7 @@
 
 **Data:** 2026-10-25
 
-**Status:** Approved
+**Status:** Draft
 
 **Artefakt:** `plan`
 
@@ -76,9 +76,23 @@
 
 ### Slice 2 — wybór deformowanego konturu
 
-**Status:** unplanned
+**Status:** todo po akceptacji replanu
 
-**Cel:** P-B-002. Implementacja obejmie numerowane żądanie selekcji, wynik GPU opublikowany z następną ukończoną klatką, deterministyczny tie-break i testy begin/update/endPlayerDrive bez readbacku CPU.
+**Cel:** P-B-002. Numerowane żądanie wyboru wykonuje point-in-deformed-contour dla konkretnego punktu w najbliższym ukończonym kroku i zwraca jego wynik dopiero po publikacji tej klatki. Gra otrzymuje tylko `ObjectID?`; wynik zasila istniejące begin/update/endPlayerDrive.
+
+#### Chunk A — kontrakt i publikacja
+
+1. Dodać test publicznego żądania wyboru, który przed implementacją nie kompiluje, a potem dowodzi powiązania konkretnego punktu z następną opublikowaną klatką oraz `nil` dla pustego miejsca/usuniętej bańki.  
+   verify: swift test --filter DeformedContourSelectionTests.testSelectionPublishesOnlyTheRequestedPointFromTheNextCompletedFrame
+2. Dodać numerowane żądanie i wynik publikowany przez BubbleWorld bez wystawiania pozycji, promienia, konturu ani wyboru backendu.  
+   verify: swift test --filter DeformedContourSelectionTests.testSelectionPublishesOnlyTheRequestedPointFromTheNextCompletedFrame
+
+#### Chunk B — native Metal i drag
+
+3. Dodać test native/render handoff dla punktu wewnątrz, granicy, zagłębienia deformacji i nakładania z deterministycznym tie-breakiem, obserwując red.  
+   verify: swift test --filter DeformedContourSelectionTests.testDeformedContourSelectionUsesPublishedGPUGeometryWithoutCPUReadback
+4. Zaimplementować GPU point-in-deformed-contour, publikację jego wyniku i integrację z istniejącymi begin/update/endPlayerDrive; asercją zachować `DriveFeedback` oraz zero `contourCPUReadbacks`.  
+   verify: swift test --filter DeformedContourSelectionTests.testDeformedContourSelectionUsesPublishedGPUGeometryWithoutCPUReadback
 
 ### Slice 3 — semantyczny spawn i fizyczna arena
 
@@ -92,7 +106,9 @@ Brak. Design nie zmienia publicznego kontraktu łamiąco; dodaje kompatybilne ty
 
 ## Replan log
 
-Brak — pierwszy plan; żaden slice nie został zaimplementowany.
+| Data | Slice | Różnica względem pierwotnego planu | Uzasadnienie |
+|---|---|---|---|
+| 2026-10-26 | 2 | Doprecyzowano punkt publikacji: żądanie ma numer i wynik dla tego samego punktu wraca po najbliższej ukończonej klatce. | Zamknięte uwagi review designu; istniejące seam’y BubbleWorld/native handoff potwierdzają realizację bez CPU readbacku. |
 
 ## Odchylenia implementacji
 
