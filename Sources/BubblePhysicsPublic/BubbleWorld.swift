@@ -145,15 +145,13 @@ public final class BubbleWorld {
         }
     }
 
-    private func publishSelections() async {
-        let selections = pendingSelections
-        pendingSelections.removeAll(keepingCapacity: true)
-        guard let native = stepper as? NativeCompleteStepper else {
-            selections.forEach { $0.continuation.resume(returning: nil) }; return
-        }
-        for selection in selections.sorted(by: { $0.number < $1.number }) {
-            let result = try? await native.selectPublishedBubble(at: selection.point)
-            selection.continuation.resume(returning: result ?? nil)
+    private func publish(_ selections: [(number: UInt64, point: WorldPoint,
+                                         continuation: CheckedContinuation<ObjectID?, Never>)],
+                         results: [UInt64: ObjectID?]) {
+        guard pendingSelections.starts(with: selections, by: { $0.number == $1.number }) else { return }
+        pendingSelections.removeFirst(selections.count)
+        for selection in selections {
+            selection.continuation.resume(returning: results[selection.number] ?? nil)
         }
     }
 
@@ -216,19 +214,25 @@ public final class BubbleWorld {
                 break
             }
             let transactionCount = pending.count
+            let selectionBatch = pendingSelections
             let batch = TransactionStager.stageBatch(pending, against: state, validate: stepper.validate)
             do {
                 let complete: CompletedRuntimeStep
                 if let commandBuffer, let encodeRender,
                    let native = stepper as? NativeCompleteStepper {
                     complete = try await native.completeStep(batch, duration: clock.fixedTimeStep,
-                        commandBuffer: commandBuffer) { [self] handoff, prepared in
+                        commandBuffer: commandBuffer, beforeCommit: { [self] handoff, prepared in
                         pendingRenderState = makeRenderState(handoff, from: prepared)
                         defer { pendingRenderState = nil }
                         try encodeRender()
-                    }
+                    }, selections: selectionBatch.map { .init(number: $0.number, point: $0.point) })
                 } else {
-                    complete = try await stepper.completeStep(batch, duration: clock.fixedTimeStep)
+                    if let native = stepper as? NativeCompleteStepper {
+                        complete = try await native.completeStep(batch, duration: clock.fixedTimeStep,
+                            selections: selectionBatch.map { .init(number: $0.number, point: $0.point) })
+                    } else {
+                        complete = try await stepper.completeStep(batch, duration: clock.fixedTimeStep)
+                    }
                 }
                 // Scena bez ciał nie uruchamia solvera, ale bufor wywołującego
                 // nadal musi zawierać ukończony render przed publikacją kroku.
@@ -256,7 +260,7 @@ public final class BubbleWorld {
                 lastFrame = WorldFrame(stepIndex: clock.completedSteps, simulationTime: clock.simulationTime,
                     transactionReceipts: receipts, events: events,
                     eventOverflow: WorldEventOverflow(droppedCount: droppedEvents), driveFeedback: complete.driveFeedback)
-                await publishSelections()
+                publish(selectionBatch, results: complete.selections)
             } catch {
                 lastAdvanceIssue = error is CancellationError ? .advanceCancelled : .stepFailed
                 break

@@ -26,6 +26,16 @@ struct NativeMetalWorldFrame {
     var regionWraps: Set<ReferenceBubbleID> = []
     var events: [WorldEvent] = []
     var eventOverflow = WorldEventOverflow()
+    var selections: [UInt64: ObjectID?] = [:]
+}
+
+package struct NativeSelectionRequest: Sendable {
+    package let number: UInt64
+    package let point: WorldPoint
+    package init(number: UInt64, point: WorldPoint) {
+        self.number = number
+        self.point = point
+    }
 }
 
 enum NativeMetalWorldError: Error {

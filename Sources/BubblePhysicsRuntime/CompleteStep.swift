@@ -16,10 +16,13 @@ package struct CompletedRuntimeStep {
     package let events: [WorldEvent]
     package let eventOverflow: WorldEventOverflow
     package let driveFeedback: [DriveFeedback]
+    package let selections: [UInt64: ObjectID?]
     package init(state: RuntimeState, events: [WorldEvent] = [],
-                 eventOverflow: WorldEventOverflow = WorldEventOverflow(), driveFeedback: [DriveFeedback] = []) {
+                 eventOverflow: WorldEventOverflow = WorldEventOverflow(), driveFeedback: [DriveFeedback] = [],
+                 selections: [UInt64: ObjectID?] = [:]) {
         self.state = state; self.events = events
         self.eventOverflow = eventOverflow
         self.driveFeedback = driveFeedback
+        self.selections = selections
     }
 }

@@ -13,10 +13,6 @@ package final class NativeCompleteStepper: CompleteStepper {
     package var publishedTelemetry: NativeMetalFrameTelemetry? { native?.publishedTelemetry }
     package var publishedContourCPUReadbackCount: Int { native?.publishedContourCPUReadbackCount ?? 0 }
     package var publishedFrameProfile: NativeMetalFrameProfile? { native?.lastPublishedProfile }
-    package func selectPublishedBubble(at point: WorldPoint) async throws -> ObjectID? {
-        try await native?.selectPublishedBubble(at: point)
-    }
-
     package func validate(_ change: StagedWorldChange) throws {
         func role(_ id: ObjectID, _ role: MotionRole, polygon: Bool) throws {
             // Wszystkie role fizyczne mają kontroler; brak aktywnego celu oznacza spoczynek.
@@ -70,13 +66,21 @@ package final class NativeCompleteStepper: CompleteStepper {
 
     package func completeStep(_ batch: StagedTransactionBatch, duration: Double,
                               commandBuffer: MTLCommandBuffer,
-                              beforeCommit: @escaping (NativeMetalRenderHandoff, RuntimeState) throws -> Void) async throws -> CompletedRuntimeStep {
-        try await performStep(batch, duration: duration, commandBuffer: commandBuffer, beforeCommit: beforeCommit)
+                              beforeCommit: @escaping (NativeMetalRenderHandoff, RuntimeState) throws -> Void,
+                              selections: [NativeSelectionRequest] = []) async throws -> CompletedRuntimeStep {
+        try await performStep(batch, duration: duration, commandBuffer: commandBuffer, beforeCommit: beforeCommit,
+                              selections: selections)
+    }
+
+    package func completeStep(_ batch: StagedTransactionBatch, duration: Double,
+                              selections: [NativeSelectionRequest]) async throws -> CompletedRuntimeStep {
+        try await performStep(batch, duration: duration, commandBuffer: nil, beforeCommit: nil, selections: selections)
     }
 
     private func performStep(_ batch: StagedTransactionBatch, duration: Double,
                              commandBuffer: MTLCommandBuffer?,
-                             beforeCommit: ((NativeMetalRenderHandoff, RuntimeState) throws -> Void)?) async throws -> CompletedRuntimeStep {
+                             beforeCommit: ((NativeMetalRenderHandoff, RuntimeState) throws -> Void)?,
+                             selections: [NativeSelectionRequest] = []) async throws -> CompletedRuntimeStep {
         var state = batch.state
         try MotionControllers.prepare(&state, duration: duration)
         let renderPreparedState = state
@@ -102,7 +106,7 @@ package final class NativeCompleteStepper: CompleteStepper {
             commandBuffer: commandBuffer,
             beforeCommit: beforeCommit.map { callback in
                 { handoff in try callback(handoff, renderPreparedState) }
-            })
+            }, selections: selections)
         RegionPolicy.remove(Set(state.objects.keys).subtracting(frame.objects.keys), from: &state)
         for (id, object) in frame.objects {
             state.objects[id]?.position = object.position
@@ -118,7 +122,7 @@ package final class NativeCompleteStepper: CompleteStepper {
             feedback: feedback, state: state, previousBlockers: previousBlockers)
         previousBlockers = discrete.blockers
         return .init(state: state, events: discrete.events, eventOverflow: discrete.overflow,
-            driveFeedback: feedback)
+            driveFeedback: feedback, selections: frame.selections)
     }
 }
 

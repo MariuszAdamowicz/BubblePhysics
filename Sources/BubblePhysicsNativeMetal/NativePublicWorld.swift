@@ -47,6 +47,7 @@ package struct NativePublicFrame {
     package var contacts: [ObjectID: [DriveBlockingContact]] = [:]
     package var events: [WorldEvent] = []
     package var eventOverflow = WorldEventOverflow()
+    package var selections: [UInt64: ObjectID?] = [:]
 }
 
 struct NativePublicProperties: Equatable, Sendable {
@@ -83,14 +84,11 @@ package final class NativePublicWorld {
     package var publishedContourCPUReadbackCount: Int { solver.publishedContourCPUReadbackCount }
     package var publishedTelemetry: NativeMetalFrameTelemetry? { solver.publishedFrame?.telemetry }
     package var lastPublishedProfile: NativeMetalFrameProfile? { publishedProfile }
-    package func selectPublishedBubble(at point: WorldPoint) async throws -> ObjectID? {
-        try await solver.selectPublishedBubble(at: point)
-    }
-
     package func step(objects: [NativePublicObject], materials: [PhysicsMaterialID: PhysicsMaterial],
                       styles: [RenderStyleID: RenderStyle], region: WorldRectangle, duration: Double,
                       eventBufferCapacity: Int = 1024, commandBuffer: MTLCommandBuffer? = nil,
-                      beforeCommit: ((NativeMetalRenderHandoff) throws -> Void)? = nil) async throws -> NativePublicFrame {
+                      beforeCommit: ((NativeMetalRenderHandoff) throws -> Void)? = nil,
+                      selections: [NativeSelectionRequest] = []) async throws -> NativePublicFrame {
         let dt = Float(duration)
         guard dt.isFinite, dt > 0, Double(dt) > 0 else { throw NativeMetalSolverError.invalidSnapshot }
         var world = ReferenceWorld(configuration: .init(timeStep: dt, linearDamping: 0, angularDamping: 0),
@@ -167,7 +165,7 @@ package final class NativePublicWorld {
                 sensors: objects.compactMap { if case .sensor(let sensor) = $0.descriptor { return sensor }; return nil }
                     .sorted { $0.id.rawValue < $1.id.rawValue }, structuralShapes: structuralShapes,
                 staticPolygonMaterials: staticPolygonMaterials),
-            commandBuffer: commandBuffer, beforeCommit: beforeCommit)
+            commandBuffer: commandBuffer, beforeCommit: beforeCommit, selections: selections)
         for (id, object) in solver.publishedPolygons { result[id] = object }
         for id in solver.removedPolygons { result.removeValue(forKey: id); presentation.removeValue(forKey: id) }
         for bubble in frame.bubbles {
@@ -221,6 +219,7 @@ package final class NativePublicWorld {
         nextSegmentID = candidateNextSegmentID
         publishedProfile = frame.profile
         return NativePublicFrame(objects: result, presentation: presentation, profile: frame.profile,
-            contacts: contacts, events: discreteEvents, eventOverflow: WorldEventOverflow(droppedCount: dropped))
+            contacts: contacts, events: discreteEvents, eventOverflow: WorldEventOverflow(droppedCount: dropped),
+            selections: frame.selections)
     }
 }

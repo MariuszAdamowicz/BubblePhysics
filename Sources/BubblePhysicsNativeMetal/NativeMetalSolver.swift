@@ -307,9 +307,11 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
 
     func executePublicFrame(world: ReferenceWorld, settings: NativePublicSettings,
                             commandBuffer: MTLCommandBuffer? = nil,
-                            beforeCommit: ((NativeMetalRenderHandoff) throws -> Void)? = nil) async throws -> NativeMetalWorldFrame {
+                            beforeCommit: ((NativeMetalRenderHandoff) throws -> Void)? = nil,
+                            selections: [NativeSelectionRequest] = []) async throws -> NativeMetalWorldFrame {
         try await executeFrame(snapshot: .init(world: world, previous: lastSnapshot, publicSettings: settings),
-                               scenarioStep: 0, commandBuffer: commandBuffer, beforeCommit: beforeCommit)
+                               scenarioStep: 0, commandBuffer: commandBuffer, beforeCommit: beforeCommit,
+                               selections: selections)
     }
 
     // Runner potwierdza, że świat gry otrzymał wynik. Bez potwierdzenia zachowujemy
@@ -318,38 +320,22 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
         if let publishedFrame { lastSnapshot?.sourceBubbles = publishedFrame.bubbles }
     }
 
-    /// GPU-only point query over the most recently published deforming contour.
-    /// The only CPU-visible datum is the scalar ObjectID result.
-    func selectPublishedBubble(at point: WorldPoint) async throws -> ObjectID? {
-        guard let state = persistentState, let command = queue.makeCommandBuffer() else { return nil }
-        guard point.x.isFinite, point.y.isFinite,
-              let result = device.makeBuffer(length: MemoryLayout<Int64>.stride, options: .storageModeShared),
-              let encoder = command.makeComputeCommandEncoder() else { throw NativeMetalSolverError.commandSetupFailed }
-        result.contents().storeBytes(of: Int64(-1), as: Int64.self)
-        let pipeline = pipelines["nativeSelectDeformedContour"]!
-        encoder.setComputePipelineState(pipeline)
-        for (index, buffer) in [state.publishedContourPoints, state.publishedContourCounts, state.publishedBubbles, state.control].enumerated() {
-            encoder.setBuffer(buffer, offset: 0, index: index)
-        }
-        var stride = UInt32(state.contourStride), query = SIMD2<Float>(point.x, point.y)
-        encoder.setBytes(&stride, length: MemoryLayout<UInt32>.stride, index: 4)
-        encoder.setBytes(&query, length: MemoryLayout<SIMD2<Float>>.stride, index: 5)
-        encoder.setBuffer(result, offset: 0, index: 6)
-        encoder.dispatchThreads(.init(width: 1, height: 1, depth: 1), threadsPerThreadgroup: .init(width: 1, height: 1, depth: 1))
-        encoder.endEncoding()
-        _ = try await commandExecutor.complete(command)
-        let value = result.contents().load(as: Int64.self)
-        return value < 0 ? nil : ObjectID(rawValue: UInt64(bitPattern: value))
-    }
-
     func executeFrame(snapshot: NativeMetalSnapshot, scenarioStep: Int,
                       commandBuffer: MTLCommandBuffer? = nil,
-                      beforeCommit: ((NativeMetalRenderHandoff) throws -> Void)? = nil) async throws -> NativeMetalWorldFrame {
+                      beforeCommit: ((NativeMetalRenderHandoff) throws -> Void)? = nil,
+                      selections: [NativeSelectionRequest] = []) async throws -> NativeMetalWorldFrame {
         guard !inFlight else { throw NativeMetalWorldError.frameInFlight }
         inFlight = true
         defer { inFlight = false }
         stageDiagnostics = nil
         let encodingStart = DispatchTime.now().uptimeNanoseconds
+        let selectionBuffers: [(NativeSelectionRequest, MTLBuffer)] = try selections.map { request in
+            guard request.point.x.isFinite, request.point.y.isFinite,
+                  let buffer = device.makeBuffer(length: MemoryLayout<Int64>.stride, options: .storageModeShared)
+            else { throw NativeMetalSolverError.allocationFailed }
+            buffer.contents().storeBytes(of: Int64(-1), as: Int64.self)
+            return (request, buffer)
+        }
         let count = snapshot.sourceBubbles.count
         let segmentCount = snapshot.sourceSegments.count
         try rigidState.prepare(snapshot.publicSettings?.rigidPolygons ?? [], bubbleCount: count)
@@ -922,6 +908,24 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
                 threadsPerThreadgroup: .init(width: min(pipeline.threadExecutionWidth, pipeline.maxTotalThreadsPerThreadgroup),
                                              height: 1, depth: 1))
         }
+        // Zapytania należą do tej samej klatki: po deformacji konturu i przed
+        // jedynym commitem command buffera.
+        for (request, result) in selectionBuffers {
+            encoder.memoryBarrier(scope: .buffers)
+            let pipeline = pipelines["nativeSelectDeformedContour"]!
+            encoder.setComputePipelineState(pipeline)
+            for (index, buffer) in [state.workingContourPoints, state.workingContourCounts,
+                                    state.workingBubbles, state.control].enumerated() {
+                encoder.setBuffer(buffer, offset: 0, index: index)
+            }
+            var stride = UInt32(state.contourStride)
+            var query = SIMD2<Float>(request.point.x, request.point.y)
+            encoder.setBytes(&stride, length: MemoryLayout<UInt32>.stride, index: 4)
+            encoder.setBytes(&query, length: MemoryLayout<SIMD2<Float>>.stride, index: 5)
+            encoder.setBuffer(result, offset: 0, index: 6)
+            encoder.dispatchThreads(.init(width: 1, height: 1, depth: 1),
+                threadsPerThreadgroup: .init(width: 1, height: 1, depth: 1))
+        }
         encoder.endEncoding()
         if let beforeCommit {
             let working = NativeMetalRenderHandoff(
@@ -940,7 +944,7 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
         let safetyResult = state.safetyControl.contents().load(as: NativeMetalSafetyControl.self)
         var profile = NativeMetalFrameProfile()
         profile.commandBufferCount = 1
-        profile.encoderCount = 2
+        profile.encoderCount = 2 + (selectionBuffers.isEmpty ? 0 : 1)
         profile.bubbleUploadCount = snapshot.bubbleChanges.count
         profile.segmentUploadCount = snapshot.segmentChanges.count
         profile.rigidBodyUploadCount = rigidState.bodyUploadCount
@@ -1089,6 +1093,10 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
         }
         frame.regionRemovals = Set(bubbles.indices.compactMap { records[$0].publicFlags.w == 1 ? bubbles[$0].id : nil })
         frame.regionWraps = Set(bubbles.indices.compactMap { records[$0].publicFlags.w == 2 ? bubbles[$0].id : nil })
+        frame.selections = Dictionary(uniqueKeysWithValues: selectionBuffers.map { request, buffer in
+            let value = buffer.contents().load(as: Int64.self)
+            return (request.number, value < 0 ? nil : ObjectID(rawValue: UInt64(bitPattern: value)))
+        })
         let rigidResult = try rigidState.completed()
         let driveContacts = hasRigidBodies ? rigidState.driveContacts(bubbleIDs: bubbles.map {
             ObjectID(rawValue: UInt64(bitPattern: Int64($0.id.rawValue)))
