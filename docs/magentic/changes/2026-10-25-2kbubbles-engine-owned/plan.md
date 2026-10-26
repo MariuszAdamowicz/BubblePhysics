@@ -82,17 +82,17 @@
 
 #### Chunk A — kontrakt i publikacja
 
-1. Dodać test publicznego żądania wyboru, który przed implementacją nie kompiluje, a potem dowodzi powiązania konkretnego punktu z następną opublikowaną klatką oraz `nil` dla pustego miejsca/usuniętej bańki.  
-   verify: swift test --filter DeformedContourSelectionTests.testSelectionPublishesOnlyTheRequestedPointFromTheNextCompletedFrame
+1. Dodać test publicznego żądania wyboru, który przed implementacją nie kompiluje, a potem dowodzi powiązania konkretnego punktu z następną opublikowaną klatką oraz `nil` dla pustego miejsca/usuniętej bańki. Dodać test, że błąd renderu zachowuje poprzednią opublikowaną klatkę i wynik selekcji.  
+   verify: swift test --filter DeformedContourSelectionTests.testRenderFailurePreservesPreviouslyPublishedSelection
 2. Dodać numerowane żądanie i wynik publikowany przez BubbleWorld bez wystawiania pozycji, promienia, konturu ani wyboru backendu.  
-   verify: swift test --filter DeformedContourSelectionTests.testSelectionPublishesOnlyTheRequestedPointFromTheNextCompletedFrame
+   verify: swift test --filter DeformedContourSelectionTests.testRenderFailurePreservesPreviouslyPublishedSelection
 
 #### Chunk B — native Metal i drag
 
-3. Dodać test native/render handoff dla punktu wewnątrz, granicy, zagłębienia deformacji i nakładania z deterministycznym tie-breakiem, obserwując red.  
+3. Dodać test native/render handoff dla punktu wewnątrz, granicy, zagłębienia deformacji i nakładania z deterministycznym tie-breakiem oraz test, że wynik selekcji zasila begin/update/endPlayerDrive, `nil` nie rozpoczyna drive, a DriveFeedback pozostaje ciągły. Obserwować red.  
    verify: swift test --filter DeformedContourSelectionTests.testDeformedContourSelectionUsesPublishedGPUGeometryWithoutCPUReadback
 4. Zaimplementować GPU point-in-deformed-contour, publikację jego wyniku i integrację z istniejącymi begin/update/endPlayerDrive; asercją zachować `DriveFeedback` oraz zero `contourCPUReadbacks`.  
-   verify: swift test --filter DeformedContourSelectionTests.testDeformedContourSelectionUsesPublishedGPUGeometryWithoutCPUReadback
+   verify: swift test --filter DeformedContourSelectionTests.testSelectionFeedsPlayerDriveWithoutContourReadback
 
 ### Slice 3 — semantyczny spawn i fizyczna arena
 
@@ -129,3 +129,4 @@ Brak. Design nie zmienia publicznego kontraktu łamiąco; dodaje kompatybilne ty
 | 1 | ISSUES — naprawione | [Slice 1 / tasks] „verify: swift test --filter BubblePhysicsPublicTests” — cały target nie dowodził dodatniej wartości, atomowości i kompatybilności; zastąpiono go jednym konkretnym testem kontraktu. [Slice 1 / tasks] „verify: swift test --filter BubblePhysicsMetalRenderTests” — cały target nie dowodził wartości/chwytu, wspólnej geometrii i command buffera; zastąpiono go jednym konkretnym testem renderingu. |
 | 2 | ISSUES — naprawione | `ISSUES`<br>- [R2 / grounding] "WorldConfiguration dokumentuje, że simulationRegion nie jest ścianą." Wskazana w wejściowym zakresie ścieżka `Sources/BubblePhysicsPublic/WorldConfiguration.swift` nie istnieje, więc plan odwołuje się do nierozwiązalnego seam’u.<br>- [Slice 1 / coverage] "Dodać semantyczne typy/operacje oraz staging prezentacji tak, aby receipt był granicą publikacji." Zadanie nie obejmuje wymaganego przez design przekazania prezentacji w `mergeBubbles`; implementer może dostarczyć wyłącznie osobną aktualizację prezentacji i pominąć widoczność wartości rezultatu merge w klatce z jego receipt.<br>- [Plan shape / template] "**Upstream:** design.md (Approved)" Plan pomija wymagane przez szablon pola `PRD`, `Manifest assetów`, `Komenda testowa` i `Profil modeli` oraz wymagane sekcje statusów slice’ów, odchyleń od designu, replan logu i odchyleń implementacji, więc nie zachowuje wymaganego kształtu artefaktu. |
 | 3 | CAP_REACHED — round-1 findings fixed, not re-reviewed | End review Slice 1: trzy blockery (liczba zamiast koloru modulo, publikacja merge/rejection, rozróżnialny test wartości/chwytu) naprawione przez commit `87314ecc4dafe00066f0534609c44beb8b4804e5`; usunięto rozszerzenie splitBubble poza zakresem. |
+| 4 | ISSUES — naprawione, bez drugiej rundy zgodnie z plan review | Slice 2 nie pokrywał zachowania wyniku selekcji przy błędzie renderu ani kompletnego sprzężenia z begin/update/endPlayerDrive; dodano jawne testy i weryfikacje dla obu kontraktów. |
