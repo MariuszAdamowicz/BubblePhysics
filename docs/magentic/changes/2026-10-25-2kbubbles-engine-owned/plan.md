@@ -47,7 +47,7 @@
 | Slice | Nazwa | Dostarcza | Seams | Zachowania | Status |
 |---|---|---|---|---|---|
 | 1 | semantyczna prezentacja bańki | wartość i chwyt w silnikowym renderze, publikowane z receipt | public API, staging, native handoff, renderer | P-B-001 | done |
-| 2 | wybór deformowanego konturu | wybór dla dragu z opublikowanej geometrii | BubbleWorld, GPU hit-test, player drive | P-B-002 | unplanned |
+| 2 | wybór deformowanego konturu | wybór dla dragu z opublikowanej geometrii | BubbleWorld, GPU hit-test, player drive | P-B-002 | wip |
 | 3 | semantyczny spawn i fizyczna arena | deterministyczny spawn z granicami | WorldTransaction, runtime arena, native fizyka | P-B-003 | unplanned |
 
 **Samodzielność slice’ów:** Każdy slice dostarcza samodzielne zachowanie wraz z testami, bez wymogu wdrożenia następnego; po Slice 1 niedostępne pozostają wybór i arena, po Slice 2 — arena, a Slice 3 kończy uzgodniony zakres.
@@ -76,7 +76,7 @@
 
 ### Slice 2 — wybór deformowanego konturu
 
-**Status:** todo
+**Status:** wip
 
 **Cel:** P-B-002. Numerowane żądanie wyboru wykonuje point-in-deformed-contour dla konkretnego punktu w najbliższym ukończonym kroku i zwraca jego wynik dopiero po publikacji tej klatki. Gra otrzymuje tylko `ObjectID?`; wynik zasila istniejące begin/update/endPlayerDrive.
 
