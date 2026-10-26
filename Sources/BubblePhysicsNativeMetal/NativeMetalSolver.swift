@@ -288,6 +288,7 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
                      "nativeResolveCCD", "nativeApplyCenterGuards", "nativeSeparateContainedBubbles",
                      "nativeReapplyCenterGuards", "nativeValidateBubbleContainment", "nativeInvalidateSafetyCache", "nativeCheckFinite",
                      "nativeAccumulateContactPressure", "nativeSeedStructuralContours", "nativeGenerateContours", "nativePrepareRenderData",
+                     "nativeSelectDeformedContour",
                      "nativeApplyPublicRegion", "nativeInvalidateRegionCache",
                      "nativeCompactMergeEvents",
                      "nativeCompactSensorEvents",
@@ -315,6 +316,30 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
     // kontrakt bezpośredniego solvera: niezmienione wejście kontynuuje trwały stan GPU.
     func acknowledgePublication() {
         if let publishedFrame { lastSnapshot?.sourceBubbles = publishedFrame.bubbles }
+    }
+
+    /// GPU-only point query over the most recently published deforming contour.
+    /// The only CPU-visible datum is the scalar ObjectID result.
+    func selectPublishedBubble(at point: WorldPoint) async throws -> ObjectID? {
+        guard let state = persistentState, let command = queue.makeCommandBuffer() else { return nil }
+        guard point.x.isFinite, point.y.isFinite,
+              let result = device.makeBuffer(length: MemoryLayout<Int64>.stride, options: .storageModeShared),
+              let encoder = command.makeComputeCommandEncoder() else { throw NativeMetalSolverError.commandSetupFailed }
+        result.contents().storeBytes(of: Int64(-1), as: Int64.self)
+        let pipeline = pipelines["nativeSelectDeformedContour"]!
+        encoder.setComputePipelineState(pipeline)
+        for (index, buffer) in [state.publishedContourPoints, state.publishedContourCounts, state.publishedBubbles, state.control].enumerated() {
+            encoder.setBuffer(buffer, offset: 0, index: index)
+        }
+        var stride = UInt32(state.contourStride), query = SIMD2<Float>(point.x, point.y)
+        encoder.setBytes(&stride, length: MemoryLayout<UInt32>.stride, index: 4)
+        encoder.setBytes(&query, length: MemoryLayout<SIMD2<Float>>.stride, index: 5)
+        encoder.setBuffer(result, offset: 0, index: 6)
+        encoder.dispatchThreads(.init(width: 1, height: 1, depth: 1), threadsPerThreadgroup: .init(width: 1, height: 1, depth: 1))
+        encoder.endEncoding()
+        _ = try await commandExecutor.complete(command)
+        let value = result.contents().load(as: Int64.self)
+        return value < 0 ? nil : ObjectID(rawValue: UInt64(bitPattern: value))
     }
 
     func executeFrame(snapshot: NativeMetalSnapshot, scenarioStep: Int,

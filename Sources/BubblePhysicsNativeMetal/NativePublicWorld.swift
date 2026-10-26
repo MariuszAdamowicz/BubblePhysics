@@ -83,6 +83,9 @@ package final class NativePublicWorld {
     package var publishedContourCPUReadbackCount: Int { solver.publishedContourCPUReadbackCount }
     package var publishedTelemetry: NativeMetalFrameTelemetry? { solver.publishedFrame?.telemetry }
     package var lastPublishedProfile: NativeMetalFrameProfile? { publishedProfile }
+    package func selectPublishedBubble(at point: WorldPoint) async throws -> ObjectID? {
+        try await solver.selectPublishedBubble(at: point)
+    }
 
     package func step(objects: [NativePublicObject], materials: [PhysicsMaterialID: PhysicsMaterial],
                       styles: [RenderStyleID: RenderStyle], region: WorldRectangle, duration: Double,

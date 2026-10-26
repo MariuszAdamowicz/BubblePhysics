@@ -33,6 +33,29 @@ struct NativeStructuralHeader { uint4 range; float4 origin; };
 struct NativeStructuralSource { ulong2 identity; float4 geometry; uint4 clips; };
 struct NativeStructuralContourControl { uint4 counts; float4 shape; };
 
+// One scalar result per numbered public request.  The serial scan makes the
+// documented render-order tie break explicit: the last containing contour wins.
+kernel void nativeSelectDeformedContour(device const float2 *points [[buffer(0)]],
+    device const uint *counts [[buffer(1)]], device const NativeBubble *bubbles [[buffer(2)]],
+    constant NativeControl &control [[buffer(3)]], constant uint &stride [[buffer(4)]],
+    constant float2 &query [[buffer(5)]], device long *result [[buffer(6)]], uint index [[thread_position_in_grid]]) {
+    if (index != 0) return;
+    long selected = -1;
+    for (uint bubble = 0; bubble < control.counts.x; ++bubble) {
+        uint count = min(counts[bubble], stride);
+        if (count < 3) continue;
+        bool inside = false;
+        for (uint i = 0, j = count - 1; i < count; j = i++) {
+            float2 a = points[bubble * stride + i], b = points[bubble * stride + j];
+            bool crosses = ((a.y > query.y) != (b.y > query.y)) &&
+                (query.x <= (b.x - a.x) * (query.y - a.y) / (b.y - a.y) + a.x);
+            inside = crosses ? !inside : inside;
+        }
+        if (inside) selected = bubbles[bubble].identity.x;
+    }
+    result[0] = selected;
+}
+
 // Pierwszy kontur wyniku powstaje na GPU z unii źródeł (merge) lub ich
 // przecięć z półpłaszczyznami (split). Późniejsze kroki używają normalnej
 // relaksacji trwałego bufora deformacji.

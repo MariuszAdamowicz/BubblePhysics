@@ -36,6 +36,8 @@ public final class BubbleWorld {
     private var stepsInLastAdvance = 0
     private var lastAdvanceIssue: WorldAdvanceIssue?
     private var pendingRenderState: BubbleWorldRenderState?
+    private var nextSelectionRequest: UInt64 = 1
+    private var pendingSelections: [(number: UInt64, point: WorldPoint, continuation: CheckedContinuation<ObjectID?, Never>)] = []
 
     public convenience init(configuration: WorldConfiguration,
                             device: MTLDevice? = MTLCreateSystemDefaultDevice()) throws {
@@ -129,6 +131,29 @@ public final class BubbleWorld {
             guard let object = state.objects[id] else { return false }
             if case .bubble = object.descriptor { return true }
             return false
+        }
+    }
+
+    /// Rejestruje numerowane zapytanie; odpowiedź następuje dopiero po publikacji
+    /// najbliższej ukończonej klatki, nigdy z kroku będącego w toku.
+    public func selectBubble(at point: WorldPoint) async -> ObjectID? {
+        guard point.x.isFinite, point.y.isFinite else { return nil }
+        let number = nextSelectionRequest
+        nextSelectionRequest += 1
+        return await withCheckedContinuation { continuation in
+            pendingSelections.append((number, point, continuation))
+        }
+    }
+
+    private func publishSelections() async {
+        let selections = pendingSelections
+        pendingSelections.removeAll(keepingCapacity: true)
+        guard let native = stepper as? NativeCompleteStepper else {
+            selections.forEach { $0.continuation.resume(returning: nil) }; return
+        }
+        for selection in selections.sorted(by: { $0.number < $1.number }) {
+            let result = try? await native.selectPublishedBubble(at: selection.point)
+            selection.continuation.resume(returning: result ?? nil)
         }
     }
 
@@ -231,6 +256,7 @@ public final class BubbleWorld {
                 lastFrame = WorldFrame(stepIndex: clock.completedSteps, simulationTime: clock.simulationTime,
                     transactionReceipts: receipts, events: events,
                     eventOverflow: WorldEventOverflow(droppedCount: droppedEvents), driveFeedback: complete.driveFeedback)
+                await publishSelections()
             } catch {
                 lastAdvanceIssue = error is CancellationError ? .advanceCancelled : .stepFailed
                 break
