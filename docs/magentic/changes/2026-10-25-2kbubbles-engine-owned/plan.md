@@ -46,7 +46,7 @@
 
 | Slice | Nazwa | Dostarcza | Seams | Zachowania | Status |
 |---|---|---|---|---|---|
-| 1 | semantyczna prezentacja bańki | wartość i chwyt w silnikowym renderze, publikowane z receipt | public API, staging, native handoff, renderer | P-B-001 | wip |
+| 1 | semantyczna prezentacja bańki | wartość i chwyt w silnikowym renderze, publikowane z receipt | public API, staging, native handoff, renderer | P-B-001 | done |
 | 2 | wybór deformowanego konturu | wybór dla dragu z opublikowanej geometrii | BubbleWorld, GPU hit-test, player drive | P-B-002 | unplanned |
 | 3 | semantyczny spawn i fizyczna arena | deterministyczny spawn z granicami | WorldTransaction, runtime arena, native fizyka | P-B-003 | unplanned |
 
@@ -54,7 +54,7 @@
 
 ### Slice 1 — semantyczna prezentacja bańki
 
-**Status:** wip
+**Status:** done
 
 **Dlaczego mergeowalny:** rozszerza istniejący kontrakt prezentacji bez zmiany zachowania dawnych BubbleDescriptorów; produkt nadal nie potrzebuje hit-testu ani areny, a renderer jest wyłącznym właścicielem wartości/chwytu.
 
@@ -98,7 +98,13 @@ Brak — pierwszy plan; żaden slice nie został zaimplementowany.
 
 | ID | Stan | Opis | Wpływ | Decyzja CEO |
 |---|---|---|---|---|
-| IMP-D-001 | pending | Po end review poprawka testów renderingu nie ma osobnego utrwalonego logu RED: pierwszą próbę zablokowały równoległe instancje SwiftPM, a po zwolnieniu blokady testy były już zmienione. Pełny `swift test` został przerwany po około trzech minutach po ukończonym buildzie, ponieważ nie kończył procesu. Dwa ukierunkowane filtry `SemanticPresentationTests` i `SemanticPresentationRenderTests` przeszły. | Nie można twierdzić o pełnym dowodzie red→green dla poprawki ani o pełnym green suite; Slice 1 pozostaje wip. | oczekuje |
+| IMP-D-001 | approved | Po end review poprawka testów renderingu nie ma osobnego utrwalonego logu RED: pierwszą próbę zablokowały równoległe instancje SwiftPM, a po zwolnieniu blokady testy były już zmienione. | Ukierunkowane testy oraz pełny suite są zielone; historyczny brak osobnego logu RED pozostaje ujawniony. | CEO przekazał decyzję AI 2026-10-26; zaakceptowano po kontrolowanym green suite. |
+
+## Dowody Slice 1
+
+- `swift test --filter BubblePhysicsPublicTests` — 32 testy, 0 failures; obejmuje `SemanticPresentationTests` i publikację merge/rejection.
+- `swift test --filter BubblePhysicsMetalRenderTests` — 15 testów, 0 failures; obejmuje różnicowanie wartości, chwyt i caller command buffer.
+- `swift test` — zakończony sukcesem 2026-10-26. Najcięższe testy bazowe: `BenchmarkScenarioTests` 148,022 s i `MetalRadialEnduranceTests` 130,490 s; brak failures.
 
 ## Rejestr review
 
