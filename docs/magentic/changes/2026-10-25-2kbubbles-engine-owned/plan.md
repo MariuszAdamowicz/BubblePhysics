@@ -2,7 +2,7 @@
 
 **Data:** 2026-10-25
 
-**Status:** Draft
+**Status:** Approved
 
 **Artefakt:** `plan`
 
@@ -76,7 +76,7 @@
 
 ### Slice 2 — wybór deformowanego konturu
 
-**Status:** todo po akceptacji replanu
+**Status:** todo
 
 **Cel:** P-B-002. Numerowane żądanie wyboru wykonuje point-in-deformed-contour dla konkretnego punktu w najbliższym ukończonym kroku i zwraca jego wynik dopiero po publikacji tej klatki. Gra otrzymuje tylko `ObjectID?`; wynik zasila istniejące begin/update/endPlayerDrive.
 
