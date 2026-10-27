@@ -48,7 +48,7 @@
 |---|---|---|---|---|---|
 | 1 | semantyczna prezentacja bańki | wartość i chwyt w silnikowym renderze, publikowane z receipt | public API, staging, native handoff, renderer | P-B-001 | done |
 | 2 | wybór deformowanego konturu | wybór dla dragu z opublikowanej geometrii | BubbleWorld, GPU hit-test, player drive | P-B-002 | done |
-| 3 | semantyczny spawn i fizyczna arena | deterministyczny spawn z granicami | WorldTransaction, TransactionStager, NativeCompleteStepper, NativePublicWorld | P-B-003 | todo |
+| 3 | semantyczny spawn i fizyczna arena | deterministyczny spawn z granicami | WorldTransaction, TransactionStager, NativeCompleteStepper, NativePublicWorld | P-B-003 | wip |
 
 **Samodzielność slice’ów:** Każdy slice dostarcza samodzielne zachowanie wraz z testami, bez wymogu wdrożenia następnego; po Slice 1 niedostępne pozostają wybór i arena, po Slice 2 — arena, a Slice 3 kończy uzgodniony zakres.
 
@@ -96,7 +96,7 @@
 
 ### Slice 3 — semantyczny spawn i fizyczna arena
 
-**Status:** todo
+**Status:** wip
 
 **Cel:** P-B-003. Gra przesyła wyłącznie wartość, nazwę areny i seed; silnik atomowo wybiera legalny spawn, publikuje receipt, utrzymuje fizyczne granice oraz rejestruje pełnoklatkową telemetrię Release na iPhonie X.
 
