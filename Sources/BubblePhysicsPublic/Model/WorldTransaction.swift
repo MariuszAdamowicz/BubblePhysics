@@ -67,6 +67,7 @@ public enum WorldOperation: Equatable, Sendable {
     case mergeBubbles([ObjectID], BubbleResult)
     case splitBubble(ObjectID, BubbleSplitPart, BubbleSplitPart)
     case replacePolygons([ObjectID], [PolygonDescriptor])
+    case spawnBubble(SpawnBubbleRequest)
 }
 
 /// Wartościowy builder. Każda metoda zwraca kopię; operacje zachowują kolejność dodania.
@@ -97,4 +98,5 @@ public struct WorldTransaction: Equatable, Sendable {
     public func mergeBubbles(_ sources: [ObjectID], result: BubbleResult) -> Self { appending(.mergeBubbles(sources, result)) }
     public func splitBubble(_ source: ObjectID, first: BubbleSplitPart, second: BubbleSplitPart) -> Self { appending(.splitBubble(source, first, second)) }
     public func replacePolygons(_ sources: [ObjectID], with results: [PolygonDescriptor]) -> Self { appending(.replacePolygons(sources, results)) }
+    public func spawnBubble(_ request: SpawnBubbleRequest) -> Self { appending(.spawnBubble(request)) }
 }

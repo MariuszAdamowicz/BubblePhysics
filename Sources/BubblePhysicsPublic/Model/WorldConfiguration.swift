@@ -36,17 +36,28 @@ public struct WorldConfiguration: Equatable, Sendable {
     public let fixedTimeStep: TimeInterval
     public let eventBufferCapacity: Int
     public let globalForce: WorldPoint
+    public let arenas: [ArenaPreset]
 
     public init(simulationRegion: WorldRectangle, fixedTimeStep: TimeInterval = 1.0 / 60.0,
-                eventBufferCapacity: Int = 1024, globalForce: WorldPoint = .zero) throws {
+                eventBufferCapacity: Int = 1024, globalForce: WorldPoint = .zero,
+                arenas: [ArenaPreset] = []) throws {
         guard fixedTimeStep.isFinite else { throw ModelValidationError.nonFiniteValue("fixedTimeStep") }
         guard fixedTimeStep > 0 else { throw ModelValidationError.nonPositiveValue("fixedTimeStep") }
         guard eventBufferCapacity > 0 else { throw ModelValidationError.nonPositiveValue("eventBufferCapacity") }
         try requireFinite(globalForce, "globalForce")
+        guard Set(arenas.map(\.id)).count == arenas.count else {
+            throw ModelValidationError.valueOutOfRange("arena.duplicateID")
+        }
+        for arena in arenas {
+            guard simulationRegion.contains(arena.bounds.min), simulationRegion.contains(arena.bounds.max) else {
+                throw ModelValidationError.invalidRectangle
+            }
+        }
         self.simulationRegion = simulationRegion
         self.fixedTimeStep = fixedTimeStep
         self.eventBufferCapacity = eventBufferCapacity
         self.globalForce = globalForce
+        self.arenas = arenas
     }
 
     /// Walidacja zależna od świata; stager transakcji musi ją ponowić dla swojego regionu.

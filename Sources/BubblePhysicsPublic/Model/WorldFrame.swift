@@ -20,6 +20,9 @@ public enum TransactionRejectionReason: Error, Equatable, Sendable {
     case invalidValue(ModelValidationError)
     case incompatibleTransitionValue
     case invalidStructuralOperation
+    case invalidSpawnValue
+    case unknownArena(String)
+    case arenaFull(String)
 }
 
 public struct TransactionRejection: Error, Equatable, Sendable {

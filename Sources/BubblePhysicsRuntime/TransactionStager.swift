@@ -286,7 +286,40 @@ private struct StagingContext {
             }
             for id in sources { try remove(id) }
             for result in results { try add(.polygon(result)) }
+        case .spawnBubble(let request): try spawnBubble(request)
         }
+    }
+
+    mutating func spawnBubble(_ request: SpawnBubbleRequest) throws {
+        guard request.value > 0 else { throw TransactionRejectionReason.invalidSpawnValue }
+        guard let arena = state.configuration.arenas.first(where: { $0.id == request.arena }) else {
+            throw TransactionRejectionReason.unknownArena(request.arena)
+        }
+        let radius = Double(arena.bubbleRadius)
+        let minX = Double(arena.bounds.min.x) + radius, maxX = Double(arena.bounds.max.x) - radius
+        let minY = Double(arena.bounds.min.y) + radius, maxY = Double(arena.bounds.max.y) - radius
+        var random = SpawnRandom(seed: request.seed)
+        for _ in 0..<64 {
+            let position = WorldPoint(Float(minX + (maxX - minX) * random.unit()),
+                                      Float(minY + (maxY - minY) * random.unit()))
+            let overlaps = state.objects.values.contains { object in
+                guard case .bubble = object.descriptor else { return false }
+                let dx = Double(object.position.x) - Double(position.x)
+                let dy = Double(object.position.y) - Double(position.y)
+                let minimumDistance = Double(object.effectiveRadius) + radius
+                return dx * dx + dy * dy < minimumDistance * minimumDistance
+            }
+            guard !overlaps else { continue }
+            var id = ObjectID(rawValue: random.next() & 0x7fff_ffff_ffff_ffff)
+            while state.objects[id] != nil { id = ObjectID(rawValue: random.next() & 0x7fff_ffff_ffff_ffff) }
+            let descriptor = try BubbleDescriptor(id: id, position: position,
+                targetRadius: arena.bubbleRadius, physicsMaterialID: arena.physicsMaterialID,
+                renderStyleID: arena.renderStyleID)
+            try add(.bubble(descriptor))
+            state.objects[id]?.bubblePresentation = try BubblePresentation(value: request.value, isGrabbed: false)
+            return
+        }
+        throw TransactionRejectionReason.arenaFull(request.arena)
     }
 
     func object(_ id: ObjectID) throws -> RuntimeObject {
@@ -450,4 +483,17 @@ private struct StagingContext {
             state.objects[first.result.id] = a; state.objects[second.result.id] = b
         }
     }
+}
+
+private struct SpawnRandom {
+    private var state: UInt64
+    init(seed: UInt64) { state = seed }
+    mutating func next() -> UInt64 {
+        state &+= 0x9e37_79b9_7f4a_7c15
+        var value = state
+        value = (value ^ (value >> 30)) &* 0xbf58_476d_1ce4_e5b9
+        value = (value ^ (value >> 27)) &* 0x94d0_49bb_1331_11eb
+        return value ^ (value >> 31)
+    }
+    mutating func unit() -> Double { Double(next() >> 11) / Double(UInt64(1) << 53) }
 }
