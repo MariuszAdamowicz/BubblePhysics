@@ -345,6 +345,7 @@ final class MetalRenderIntegrationTests: XCTestCase {
         for scenario in report.scenarios {
             XCTAssertEqual(scenario.warmupFrames, 1)
             XCTAssertEqual(scenario.measuredFrames, 2)
+            XCTAssertEqual(scenario.semanticInputFrames, scenario.name == "dense_arena" ? 0 : 2, scenario.name)
             XCTAssertTrue(scenario.cpuInputToEncoding.p95Milliseconds.isFinite)
             XCTAssertTrue(scenario.cpuInputToEncoding.maximumMilliseconds.isFinite)
             XCTAssertTrue(scenario.gpuCommandBuffer.p95Milliseconds.isFinite)

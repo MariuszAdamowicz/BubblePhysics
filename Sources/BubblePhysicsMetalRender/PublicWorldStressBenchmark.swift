@@ -1,5 +1,6 @@
 import BubblePhysics
 import Metal
+import QuartzCore
 import Foundation
 
 public struct PublicWorldStressTiming: Sendable {
@@ -11,6 +12,7 @@ public struct PublicWorldStressScenarioReport: Sendable {
     public let name: String
     public let warmupFrames: Int
     public let measuredFrames: Int
+    public let semanticInputFrames: Int
     public let cpuInputToEncoding: PublicWorldStressTiming
     public let gpuCommandBuffer: PublicWorldStressTiming
     public let fullFrameInputToPresentation: PublicWorldStressTiming
@@ -37,7 +39,7 @@ public struct PublicWorldStressReport: Sendable {
         var lines = ["path=public BubbleWorld + BubblePhysicsMetalRender, same command buffer",
             "device=\(deviceName)", "scenarios=\(scenarios.count); solver_iteration_limit=\(solverIterationLimit)"]
         for scenario in scenarios {
-            lines.append("scenario=\(scenario.name); warmup=\(scenario.warmupFrames); measured=\(scenario.measuredFrames)")
+            lines.append("scenario=\(scenario.name); warmup=\(scenario.warmupFrames); measured=\(scenario.measuredFrames); semantic_input_frames=\(scenario.semanticInputFrames)")
             lines.append("cpu_input_to_encoding_p95_ms=\(format(scenario.cpuInputToEncoding.p95Milliseconds)); cpu_input_to_encoding_max_ms=\(format(scenario.cpuInputToEncoding.maximumMilliseconds))")
             lines.append("gpu_command_buffer_p95_ms=\(format(scenario.gpuCommandBuffer.p95Milliseconds)); gpu_command_buffer_max_ms=\(format(scenario.gpuCommandBuffer.maximumMilliseconds))")
             lines.append("full_frame_input_to_presentation_p95_ms=\(format(scenario.fullFrameInputToPresentation.p95Milliseconds)); full_frame_input_to_presentation_max_ms=\(format(scenario.fullFrameInputToPresentation.maximumMilliseconds))")
@@ -55,12 +57,15 @@ public struct PublicWorldStressReport: Sendable {
 public enum PublicWorldStressBenchmark {
     /// iOS acceptance protocol: Release hardware, 120 warmups and 300 measured frames per scenario.
     public static func measure(device: MTLDevice,
+                               drawableProvider: @escaping @MainActor () throws -> CAMetalDrawable,
                                progress: @escaping @MainActor (Int, Int) -> Void = { _, _ in }) async throws
         -> PublicWorldStressReport {
-        try await run(device: device, warmupFrames: 120, measuredFrames: 300, progress: progress)
+        try await run(device: device, warmupFrames: 120, measuredFrames: 300,
+            drawableProvider: drawableProvider, progress: progress)
     }
 
     package static func run(device: MTLDevice, warmupFrames: Int, measuredFrames: Int,
+                            drawableProvider: (@MainActor () throws -> CAMetalDrawable)? = nil,
                             progress: @escaping @MainActor (Int, Int) -> Void) async throws
         -> PublicWorldStressReport {
         let names = ["semantic_spawn", "drag", "merge", "dense_arena"]
@@ -115,38 +120,70 @@ public enum PublicWorldStressBenchmark {
             textureDescriptor.storageMode = .private
             guard let texture = device.makeTexture(descriptor: textureDescriptor),
                   let queue = device.makeCommandQueue() else { throw StressBenchmarkError.metalUnavailable }
-            let pass = MTLRenderPassDescriptor()
-            pass.colorAttachments[0].texture = texture
-            pass.colorAttachments[0].loadAction = .clear
-            pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1)
-            pass.colorAttachments[0].storeAction = .store
             var cpu: [Double] = [], gpu: [Double] = [], full: [Double] = []
+            var semanticInputFrames = 0
             var scenarioErrors = 0
             let scenarioTotal = warmupFrames + measuredFrames
             for index in 0..<scenarioTotal {
                 try Task.checkCancellation()
+                let inputStart = DispatchTime.now().uptimeNanoseconds
+                var hasSemanticInput = false
                 switch name {
-                case "semantic_spawn" where index == warmupFrames:
+                case "semantic_spawn" where index >= warmupFrames:
                     world.submit(WorldTransaction().spawnBubble(SpawnBubbleRequest(value: 3, arena: "round", seed: 733)))
+                    hasSemanticInput = true
                 case "drag":
                     let id = ObjectID(rawValue: 1)
                     let target = WorldPoint(180 + Float(index % 20), 350)
                     if index == 0 { world.submit(WorldTransaction().beginPlayerDrive(id, target: target)) }
                     else if index == scenarioTotal - 1 { world.submit(WorldTransaction().endPlayerDrive(id)) }
                     else { world.submit(WorldTransaction().updatePlayerDrive(id, target: target)) }
-                case "merge" where index == 0:
-                    world.submit(WorldTransaction().mergeBubbles([ObjectID(rawValue: 1), ObjectID(rawValue: 2)],
-                        result: BubbleResult(id: ObjectID(rawValue: 3), physicsMaterialID: materialID,
+                    hasSemanticInput = index >= warmupFrames
+                case "merge" where index >= warmupFrames:
+                    let mergeIndex = index - warmupFrames
+                    let sourceID = UInt64(1 + mergeIndex * 3)
+                    world.submit(WorldTransaction().mergeBubbles(
+                        [ObjectID(rawValue: sourceID), ObjectID(rawValue: sourceID + 1)],
+                        result: BubbleResult(id: ObjectID(rawValue: sourceID + 2), physicsMaterialID: materialID,
                             renderStyleID: styleID, bubblePresentation: try BubblePresentation(value: 4, isGrabbed: false))))
+                    if mergeIndex + 1 < measuredFrames {
+                        let nextID = sourceID + 3
+                        let nextX = Float((mergeIndex + 1) % 7) * 45 + 30
+                        let nextY = Float((mergeIndex + 1) / 7 % 9) * 65 + 60
+                        var additions = WorldTransaction()
+                        for pairIndex in 0..<2 {
+                            additions = additions.add(.bubble(try BubbleDescriptor(
+                                id: ObjectID(rawValue: nextID + UInt64(pairIndex)),
+                                position: [nextX + Float(pairIndex) * 24, nextY], targetRadius: 12, mass: 3,
+                                physicsMaterialID: materialID, renderStyleID: styleID)))
+                        }
+                        world.submit(additions)
+                    }
+                    hasSemanticInput = true
                 default: break
                 }
+                if hasSemanticInput { semanticInputFrames += 1 }
                 guard let command = queue.makeCommandBuffer() else { throw StressBenchmarkError.metalUnavailable }
-                let start = DispatchTime.now().uptimeNanoseconds
+                let drawable = try drawableProvider?()
+                let presentation = drawable.map { drawable in
+                    let latch = DrawablePresentationLatch()
+                    drawable.addPresentedHandler { _ in latch.signal() }
+                    return latch
+                }
+                let pass = MTLRenderPassDescriptor()
+                pass.colorAttachments[0].texture = drawable?.texture ?? texture
+                pass.colorAttachments[0].loadAction = .clear
+                pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1)
+                pass.colorAttachments[0].storeAction = .store
+                var inputToEncodingMilliseconds: Double?
                 let frame = await world.advance(by: 1.0 / 60, commandBuffer: command) {
                     try renderer.encode(world: world, viewport: Viewport(center: [187.5, 350], size: [375, 700]),
                         commandBuffer: command, renderPassDescriptor: pass)
+                    if let drawable { command.present(drawable) }
+                    inputToEncodingMilliseconds = Double(DispatchTime.now().uptimeNanoseconds - inputStart) / 1_000_000
                 }
-                let elapsed = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
+                if command.status == .completed { await presentation?.wait() }
+                let elapsed = Double(DispatchTime.now().uptimeNanoseconds - inputStart) / 1_000_000
                 if command.status != .completed || world.diagnostics.lastAdvanceIssue != nil || frame.stepIndex != UInt64(index + 1) {
                     commandBufferErrors += 1; scenarioErrors += 1
                     diagnostics.append("error scenario=\(name) step=\(frame.stepIndex) expected=\(index + 1) status=\(command.status) issue=\(String(describing: world.diagnostics.lastAdvanceIssue))")
@@ -158,7 +195,7 @@ public enum PublicWorldStressBenchmark {
                     if telemetry.fallbackReason != nil { fallbackFrames += 1 }
                     if index >= warmupFrames {
                         gpu.append(telemetry.gpuMilliseconds)
-                        if let profile = world.benchmarkFrameProfile { cpu.append(profile.hostEncodingMilliseconds) }
+                        if let inputToEncodingMilliseconds { cpu.append(inputToEncodingMilliseconds) }
                         else { commandBufferErrors += 1; scenarioErrors += 1 }
                     }
                 } else {
@@ -177,7 +214,8 @@ public enum PublicWorldStressBenchmark {
                 return PublicWorldStressTiming(p95Milliseconds: p95, maximumMilliseconds: sorted.last ?? .infinity)
             }
             reports.append(PublicWorldStressScenarioReport(name: name, warmupFrames: warmupFrames,
-                measuredFrames: full.count, cpuInputToEncoding: timing(cpu), gpuCommandBuffer: timing(gpu),
+                measuredFrames: full.count, semanticInputFrames: semanticInputFrames,
+                cpuInputToEncoding: timing(cpu), gpuCommandBuffer: timing(gpu),
                 fullFrameInputToPresentation: timing(full)))
         }
         return PublicWorldStressReport(deviceName: device.name, scenarios: reports, solverIterationLimit: 4,
@@ -191,6 +229,34 @@ public enum PublicWorldStressBenchmark {
         let arena = try ArenaPreset(id: "round", bounds: region, bubbleRadius: 12,
             physicsMaterialID: PhysicsMaterialID(rawValue: 1), renderStyleID: RenderStyleID(rawValue: 1))
         return try WorldConfiguration(simulationRegion: region, fixedTimeStep: 1.0 / 60, arenas: [arena])
+    }
+}
+
+private final class DrawablePresentationLatch: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var wasPresented = false
+
+    func signal() {
+        lock.lock()
+        wasPresented = true
+        let continuation = continuation
+        self.continuation = nil
+        lock.unlock()
+        continuation?.resume()
+    }
+
+    func wait() async {
+        await withCheckedContinuation { continuation in
+            lock.lock()
+            if wasPresented {
+                lock.unlock()
+                continuation.resume()
+            } else {
+                self.continuation = continuation
+                lock.unlock()
+            }
+        }
     }
 }
 
