@@ -14,11 +14,11 @@ struct PublicWorldStressView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                Text("Publiczny stress-300").font(.title2.bold())
-                Text("BubbleWorld + bezpośredni renderer, ten sam command buffer; limit 4, 30 klatek rozgrzewki i 300 mierzonych. Wynik akceptacyjny wymaga fizycznego iPhone X.")
-                ProgressView(value: Double(completed), total: 330)
+                Text("Benchmark rundy engine-owned").font(.title2.bold())
+                Text("Semantyczny spawn, drag, merge i gęsta arena; limit 4, 120 klatek rozgrzewki i 300 mierzonych na scenariusz. Wynik akceptacyjny wymaga Release na fizycznym iPhonie X.")
+                ProgressView(value: Double(completed), total: 1680)
                 if isRunning {
-                    Text("Pomiar trwa: \(completed) / 330")
+                    Text("Pomiar trwa: \(completed) / 1680")
                         .font(.headline)
                 }
                 HStack {

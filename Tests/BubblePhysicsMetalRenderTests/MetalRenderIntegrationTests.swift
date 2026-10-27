@@ -329,16 +329,39 @@ final class MetalRenderIntegrationTests: XCTestCase {
                 progress.append(completed)
             }
         XCTAssertEqual(report.solverIterationLimit, 4)
-        XCTAssertEqual(report.warmupFrames, 1)
-        XCTAssertEqual(report.measuredFrames, 2)
+        XCTAssertEqual(report.scenarios.count, 4)
         XCTAssertEqual(report.contourCPUReadbacks, 0)
-        XCTAssertEqual(report.failedFrames, 0)
-        XCTAssertTrue(report.p95Milliseconds.isFinite)
+        XCTAssertEqual(report.commandBufferErrors, 0, report.text)
         XCTAssertTrue(report.safetyPassed)
-        XCTAssertTrue(report.text.contains("gpu_p95_ms="))
-        XCTAssertTrue(report.text.contains("host_encoding_p95_ms="))
-        XCTAssertTrue(report.text.contains("host_waiting_p95_ms="))
-        XCTAssertEqual(progress, [1, 2, 3])
+        XCTAssertTrue(report.text.contains("gpu_command_buffer_p95_ms="))
+        XCTAssertEqual(progress, Array(1...12))
+    }
+
+    func testEngineOwnedRoundBenchmarkReportsAllFrameTelemetry() async throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let report = try await PublicWorldStressBenchmark.run(device: device,
+            warmupFrames: 1, measuredFrames: 2) { _, _ in }
+        XCTAssertEqual(report.scenarios.map(\.name), ["semantic_spawn", "drag", "merge", "dense_arena"])
+        for scenario in report.scenarios {
+            XCTAssertEqual(scenario.warmupFrames, 1)
+            XCTAssertEqual(scenario.measuredFrames, 2)
+            XCTAssertTrue(scenario.cpuInputToEncoding.p95Milliseconds.isFinite)
+            XCTAssertTrue(scenario.cpuInputToEncoding.maximumMilliseconds.isFinite)
+            XCTAssertTrue(scenario.gpuCommandBuffer.p95Milliseconds.isFinite)
+            XCTAssertTrue(scenario.gpuCommandBuffer.maximumMilliseconds.isFinite)
+            XCTAssertTrue(scenario.fullFrameInputToPresentation.p95Milliseconds.isFinite)
+            XCTAssertTrue(scenario.fullFrameInputToPresentation.maximumMilliseconds.isFinite)
+        }
+        XCTAssertEqual(report.contourCPUReadbacks, 0)
+        XCTAssertEqual(report.fallbackFrames, 0)
+        XCTAssertEqual(report.commandBufferErrors, 0, report.text)
+        XCTAssertEqual(report.nonFiniteFrames, 0)
+        XCTAssertEqual(report.overflowEvents, 0)
+        XCTAssertTrue(report.text.contains("semantic_spawn"))
+        XCTAssertTrue(report.text.contains("cpu_input_to_encoding"))
+        XCTAssertTrue(report.text.contains("gpu_command_buffer"))
+        XCTAssertTrue(report.text.contains("full_frame_input_to_presentation"))
+        XCTAssertTrue(report.text.contains("overflow_events=0"))
     }
 
     private func makeTexture(device: MTLDevice) throws -> MTLTexture {

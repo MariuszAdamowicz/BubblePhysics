@@ -34,6 +34,8 @@ The committed XCTest scenario verifies construction and determinism. It is not a
 
 Host jest w `Benchmarks/iOS/BubblePhysicsBench`. Otwórz `BubblePhysicsBench.xcodeproj` w Xcode 26.6 i wybierz podłączony iPhone. Zakładka `CPU` zawiera benchmark zbieżności z wyborem `CPU reference` / `GPU reference`; pozostałe zakładki udostępniają historyczne eksperymenty. Checklistę CPU opisuje `docs/benchmarks/iphone-x-reference-solver.md`.
 
+Zakładka **Benchmark rundy engine-owned** mierzy osobno `semantic_spawn`, `drag`, `merge` oraz `dense_arena`. Dla każdego scenariusza wykonuje 120 klatek rozgrzewki i 300 mierzonych, raportuje p95 i maksimum CPU wejście→kodowanie, GPU command buffera i pełnej klatki wejście→prezentacja oraz liczniki readback, fallback, błędów command buffera, non-finite i overflow. Wymagany protokół to konfiguracja Release na fizycznym iPhonie X. Brak próbek, niezerowy licznik bezpieczeństwa lub p95 pełnej klatki powyżej 16,67 ms oznacza konieczność decyzji CEO.
+
 ### Benchmark zbieżności na urządzeniu
 
 Przed instalacją sprawdź niepodpisany build hosta w Release:
