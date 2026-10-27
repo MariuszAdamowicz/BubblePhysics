@@ -2,7 +2,7 @@
 
 **Data:** 2026-10-25
 
-**Status:** Approved
+**Status:** Draft
 
 **Artefakt:** `plan`
 
@@ -48,7 +48,7 @@
 |---|---|---|---|---|---|
 | 1 | semantyczna prezentacja bańki | wartość i chwyt w silnikowym renderze, publikowane z receipt | public API, staging, native handoff, renderer | P-B-001 | done |
 | 2 | wybór deformowanego konturu | wybór dla dragu z opublikowanej geometrii | BubbleWorld, GPU hit-test, player drive | P-B-002 | done |
-| 3 | semantyczny spawn i fizyczna arena | deterministyczny spawn z granicami | WorldTransaction, runtime arena, native fizyka | P-B-003 | unplanned |
+| 3 | semantyczny spawn i fizyczna arena | deterministyczny spawn z granicami | WorldTransaction, TransactionStager, NativeCompleteStepper, NativePublicWorld | P-B-003 | todo |
 
 **Samodzielność slice’ów:** Każdy slice dostarcza samodzielne zachowanie wraz z testami, bez wymogu wdrożenia następnego; po Slice 1 niedostępne pozostają wybór i arena, po Slice 2 — arena, a Slice 3 kończy uzgodniony zakres.
 
@@ -96,9 +96,34 @@
 
 ### Slice 3 — semantyczny spawn i fizyczna arena
 
-**Status:** unplanned
+**Status:** todo
 
-**Cel:** P-B-003. Implementacja obejmie ArenaPreset, seeded SpawnBubbleRequest, granice runtime i testy deterministyczności/kolizji. Po nim zostanie wykonany pomiar Release iPhone X z 120 klatkami rozgrzewki i 300 mierzonymi.
+**Cel:** P-B-003. Gra przesyła wyłącznie wartość, nazwę areny i seed; silnik atomowo wybiera legalny spawn, publikuje receipt, utrzymuje fizyczne granice oraz rejestruje pełnoklatkową telemetrię Release na iPhonie X.
+
+**Dlaczego mergeowalny:** zachowuje istniejące `BubbleDescriptor`, `simulationRegion` i ścieżki tworzenia obiektów; nowa ścieżka semantyczna jest kompletna wraz z receipt, kolizjami i dowodem urządzeniowym, bez wymagania zmian w 2KBubbles.
+
+**Niedostępne po slice:** brak — kończy P-B-003 i uzgodniony zakres engine-owned integracji.
+
+#### Chunk A — kontrakt semantyczny i publikacja
+
+1. Dodać najpierw test publiczny, że `SpawnBubbleRequest` zawiera dodatnią wartość, arenę i seed, ale nie przyjmuje pozycji, prędkości ani ścian; ten sam seed i arena w dwóch światach dają tę samą sekwencję `TransactionReceipt.createdObjectIDs` i identyczny testowy odcisk opublikowanych, silnikowych konturów spawnu, a nieprawidłowa wartość, nieznana arena lub brak miejsca zwracają rejection bez częściowej publikacji. Odcisk jest tylko dowodem testowym — normalna ścieżka gry nadal nie wywołuje `debugContourSnapshot`.
+   verify: `swift test --filter ArenaSpawnTests.testSeededSemanticSpawnPublishesDeterministicReceiptsWithoutGameGeometry`
+2. Dodać kompatybilne publiczne modele areny/żądania i operację `WorldTransaction`, a w `TransactionStager` zachować atomowość kolejności, receipt i semantykę odrzucenia istniejących transakcji.
+   verify: `swift test --filter ArenaSpawnTests.testSeededSemanticSpawnPublishesDeterministicReceiptsWithoutGameGeometry`
+
+#### Chunk B — fizyczna arena i granice
+
+3. Dodać najpierw testy runtime/native, że aktywny `ArenaPreset` instaluje cztery niewidoczne, statyczne granice kolizji, bańka prowadzona `BubbleDrivePolicy` nie przekracza każdej z nich, a identyczny `simulationRegion` bez areny nie staje się ścianą.
+   verify: `swift test --filter ArenaBoundaryTests.testPresetOwnsFourPhysicalBoundariesWhileSimulationRegionRemainsNonPhysical`
+4. Doprowadzić konfigurację areny przez `NativeCompleteStepper` i `NativePublicWorld` do istniejących statycznych segmentów native solvera, bez obiektów areny w render state lub publicznej geometrii gry.
+   verify: `swift test --filter ArenaBoundaryTests.testPresetOwnsFourPhysicalBoundariesWhileSimulationRegionRemainsNonPhysical`
+
+#### Chunk C — telemetria końcowej ścieżki urządzenia
+
+5. Dodać najpierw test render/benchmark z przyspieszonym 1+2 przebiegiem, który wymaga raportu dla semantycznego spawnu, dragu, merge i gęstej areny oraz osobnych CPU wejście→kodowanie, GPU command buffer, pełnej klatki wejście→prezentacja i liczników bezpieczeństwa; następnie rozszerzyć istniejący benchmark iOS do tego kontraktu.
+   verify: `swift test --filter MetalRenderIntegrationTests.testEngineOwnedRoundBenchmarkReportsAllFrameTelemetry`
+6. Ręcznie wykonać Release benchmark na fizycznym iPhonie X: 120 klatek rozgrzewki i 300 mierzonych dla każdego scenariusza, zapisać p95 i maksimum trzech czasów oraz decyzję CEO, gdy brakuje danych, licznik bezpieczeństwa jest niezerowy albo p95 pełnej klatki przekracza 16,67 ms; przed urządzeniem zbudować aplikację Release.
+   verify: manual-device — `xcodebuild -project Benchmarks/iOS/BubblePhysicsBench/BubblePhysicsBench.xcodeproj -scheme BubblePhysicsBench -configuration Release -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build` oraz raport Release iPhone X w artefakcie zmiany
 
 ## Odchylenia od designu
 
@@ -109,6 +134,7 @@ Brak. Design nie zmienia publicznego kontraktu łamiąco; dodaje kompatybilne ty
 | Data | Slice | Różnica względem pierwotnego planu | Uzasadnienie |
 |---|---|---|---|
 | 2026-10-26 | 2 | Doprecyzowano punkt publikacji: żądanie ma numer i wynik dla tego samego punktu wraca po najbliższej ukończonej klatce. | Zamknięte uwagi review designu; istniejące seam’y BubbleWorld/native handoff potwierdzają realizację bez CPU readbacku. |
+| 2026-10-27 | 3 | Pierwotny plan wskazywał ogólnie „runtime arena”; rekonesans potwierdził brak takiego seamu, za to istniejącą ścieżkę `TransactionStager` → `NativeCompleteStepper` → `NativePublicWorld` i statyczne segmenty z polygonów. | Uszczegółowiono wyłącznie następny slice: arena ma wejść przez tę istniejącą ścieżkę, a `simulationRegion` pozostaje niemodyfikowaną pojemnością obliczeń. Benchmark iOS ma obecnie 30 klatek rozgrzewki, więc zadanie jawnie podnosi go do wymaganego przez design protokołu 120+300. |
 
 ## Odchylenia implementacji
 
@@ -138,3 +164,4 @@ Brak. Design nie zmienia publicznego kontraktu łamiąco; dodaje kompatybilne ty
 | 3 | CAP_REACHED — round-1 findings fixed, not re-reviewed | End review Slice 1: trzy blockery (liczba zamiast koloru modulo, publikacja merge/rejection, rozróżnialny test wartości/chwytu) naprawione przez commit `87314ecc4dafe00066f0534609c44beb8b4804e5`; usunięto rozszerzenie splitBubble poza zakresem. |
 | 4 | ISSUES — naprawione, bez drugiej rundy zgodnie z plan review | Slice 2 nie pokrywał zachowania wyniku selekcji przy błędzie renderu ani kompletnego sprzężenia z begin/update/endPlayerDrive; dodano jawne testy i weryfikacje dla obu kontraktów. |
 | 5 | APPROVED | Niezależny end review Slice 2 po commitach implementacji i testów: kontrakt wyboru, publikacja po ukończonej klatce, pojedynczy command buffer, granica GPU/publicznego API oraz przepływ dragu zgodne z designem i planem. |
+| 6 | ISSUES — naprawione, bez drugiej rundy zgodnie z plan review | Slice 3 porównywał wyłącznie ID zamiast deterministycznego wyniku położenia oraz weryfikował telemetrię jedynie buildem. Dopisano testowy odcisk silnikowych konturów (poza normalną ścieżką gry) i test kontraktu raportu benchmarku przed ręcznym pomiarem urządzeniowym. |
