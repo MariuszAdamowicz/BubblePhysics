@@ -85,7 +85,8 @@ package final class NativePublicWorld {
     package var publishedTelemetry: NativeMetalFrameTelemetry? { solver.publishedFrame?.telemetry }
     package var lastPublishedProfile: NativeMetalFrameProfile? { publishedProfile }
     package func step(objects: [NativePublicObject], materials: [PhysicsMaterialID: PhysicsMaterial],
-                      styles: [RenderStyleID: RenderStyle], region: WorldRectangle, duration: Double,
+                      styles: [RenderStyleID: RenderStyle], region: WorldRectangle,
+                      arenas: [ArenaPreset] = [], duration: Double,
                       eventBufferCapacity: Int = 1024, commandBuffer: MTLCommandBuffer? = nil,
                       beforeCommit: ((NativeMetalRenderHandoff) throws -> Void)? = nil,
                       selections: [NativeSelectionRequest] = []) async throws -> NativePublicFrame {
@@ -93,9 +94,24 @@ package final class NativePublicWorld {
         guard dt.isFinite, dt > 0, Double(dt) > 0 else { throw NativeMetalSolverError.invalidSnapshot }
         var world = ReferenceWorld(configuration: .init(timeStep: dt, linearDamping: 0, angularDamping: 0),
                                    broadPhase: BruteForceBroadPhase())
+        var candidateNextSegmentID = max(nextSegmentID, arenas.count * 4 + 1)
+        for (arenaIndex, arena) in arenas.enumerated() {
+            let min = arena.bounds.min, max = arena.bounds.max
+            let edges = [
+                (WorldPoint(min.x, min.y), WorldPoint(min.x, max.y)),
+                (WorldPoint(max.x, min.y), WorldPoint(max.x, max.y)),
+                (WorldPoint(min.x, min.y), WorldPoint(max.x, min.y)),
+                (WorldPoint(min.x, max.y), WorldPoint(max.x, max.y))
+            ]
+            for (edgeIndex, edge) in edges.enumerated() {
+                let id = arenaIndex * 4 + edgeIndex + 1
+                world.addSegment(.staticSegment(id: .init(rawValue: id),
+                    a: .init(x: edge.0.x, y: edge.0.y), b: .init(x: edge.1.x, y: edge.1.y)))
+            }
+        }
         var properties: [ReferenceBubbleID: NativePublicProperties] = [:]
         var candidatePolygons: [ObjectID: (geometry: PolygonGeometry, position: WorldPoint, rotation: Float, segments: [ReferenceSegment])] = [:]
-        var candidateNextSegmentID = nextSegmentID
+
         var result = Dictionary(uniqueKeysWithValues: objects.map { ($0.descriptor.id, $0) })
         var presentation: [ObjectID: [ParameterID: Float]] = [:]
         var rigidPolygons: [NativeRigidPolygonInput] = []
