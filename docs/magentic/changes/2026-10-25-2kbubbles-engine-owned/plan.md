@@ -141,6 +141,7 @@ Brak. Design nie zmienia publicznego kontraktu łamiąco; dodaje kompatybilne ty
 | ID | Stan | Opis | Wpływ | Decyzja CEO |
 |---|---|---|---|---|
 | IMP-D-001 | approved | Po end review poprawka testów renderingu nie ma osobnego utrwalonego logu RED: pierwszą próbę zablokowały równoległe instancje SwiftPM, a po zwolnieniu blokady testy były już zmienione. | Ukierunkowane testy oraz pełny suite są zielone; historyczny brak osobnego logu RED pozostaje ujawniony. | CEO przekazał decyzję AI 2026-10-26; zaakceptowano po kontrolowanym green suite. |
+| IMP-D-002 | pending | Wymagany przez G4-AC3 pomiar Release na fizycznym iPhonie X nie został wykonany: `xcrun devicectl list devices` 2026-10-27 wykazał wyłącznie symulatory. | Slice 3 pozostaje `wip`; automatyczne testy i build Release nie są substytutem p95/maksimum z urządzenia ani decyzji CEO przy braku danych. | oczekuje na dostępność fizycznego iPhone’a X i decyzję CEO po raporcie. |
 
 ## Dowody Slice 1
 
@@ -165,3 +166,4 @@ Brak. Design nie zmienia publicznego kontraktu łamiąco; dodaje kompatybilne ty
 | 4 | ISSUES — naprawione, bez drugiej rundy zgodnie z plan review | Slice 2 nie pokrywał zachowania wyniku selekcji przy błędzie renderu ani kompletnego sprzężenia z begin/update/endPlayerDrive; dodano jawne testy i weryfikacje dla obu kontraktów. |
 | 5 | APPROVED | Niezależny end review Slice 2 po commitach implementacji i testów: kontrakt wyboru, publikacja po ukończonej klatce, pojedynczy command buffer, granica GPU/publicznego API oraz przepływ dragu zgodne z designem i planem. |
 | 6 | ISSUES — naprawione, bez drugiej rundy zgodnie z plan review | Slice 3 porównywał wyłącznie ID zamiast deterministycznego wyniku położenia oraz weryfikował telemetrię jedynie buildem. Dopisano testowy odcisk silnikowych konturów (poza normalną ścieżką gry) i test kontraktu raportu benchmarku przed ręcznym pomiarem urządzeniowym. |
+| 7 | CAP_REACHED — round-1 findings fixed, not re-reviewed | End review Slice 3 wskazał brak prawdziwej prezentacji drawable, zbyt wąski pomiar CPU oraz brak spawn/merge w próbie mierzonej; naprawione przez `33a1574`. Niezamknięte pozostaje jedynie wymagane urządzeniowe evidence z iPhone’a X, zapisane jako IMP-D-002. |
