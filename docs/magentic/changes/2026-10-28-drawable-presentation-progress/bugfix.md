@@ -2,7 +2,7 @@
 
 **Data:** 2026-10-28
 
-**Status:** Approved
+**Status:** Implemented (B2 — weryfikacja ręczna na iPhonie X oczekuje)
 
 **Artefakt:** `bugfix`
 
@@ -26,7 +26,7 @@
 
 ### Co ma być prawdą po poprawce
 
-- [ ] B1: Test integracyjny z kontrolowanym drawable dowodzi, że postęp nie następuje przed sygnałem prezentacji, a po sygnale kończy dokładnie jedną klatkę bez oczekiwania bez końca. · `verify: swift test --filter MetalRenderIntegrationTests.testDrawablePresentationSignalsProgressForEachFrame`
+- [x] B1: Test integracyjny z kontrolowanym drawable dowodzi, że postęp nie następuje przed sygnałem prezentacji, a po sygnale kończy dokładnie jedną klatkę bez oczekiwania bez końca; wymaga również produkcyjnego `addPresentedHandler`, `present(drawable)` i bramkowania pobrania drawable. · `verify: swift test --filter MetalRenderIntegrationTests.testDrawablePresentationSignalsProgressForEachFrame`
 - [ ] B2: Release na iPhonie X osiąga postęp większy od zera po `Start`, kończy 1680 klatek i raportuje p95/maksimum input→presentation bez timeoutu przedstawianego jako sukces. · `verify: manual-device — Release iPhone X, screenshot postępu i pełny raport po 1680 klatkach`
 
 ### Podejście i granice
@@ -50,9 +50,15 @@
 
 | # | Zadanie | Typ | Opis | Status |
 | --- | --- | --- | --- | --- |
+| 1 | B2 | Dowód | Wymagany Release build przeszedł, ale nie uruchomiono benchmarku na fizycznym iPhonie X; 1680/1680 i raport na urządzeniu pozostają do potwierdzenia. | Otwarte |
 
 ## Dowody implementacji
 
 | Element | Dowód |
 | --- | --- |
 | Przyczyna | iPhone X: `command_completed status=4`, następnie `presentation_wait_enter`, bez `drawable_presented`. |
+| RED | `swift test --filter MetalRenderIntegrationTests.testDrawablePresentationSignalsProgressForEachFrame` — najpierw niepowodzenie asercji: widok pobiera drawable bez aktywnego żądania. |
+| GREEN — B1 | `swift test --filter MetalRenderIntegrationTests.testDrawablePresentationSignalsProgressForEachFrame` — 1 test passed; test wymaga `CAMetalDrawable.addPresentedHandler`, `command.present(drawable)`, jawnego żądania rysowania i potwierdza brak postępu przed sygnałem oraz 4/4 po nim dla jednej klatki na scenariusz. |
+| Release build | `DEVELOPER_DIR=/Applications/Xcode-26.6.app/Contents/Developer xcodebuild -project Benchmarks/iOS/BubblePhysicsBench/BubblePhysicsBench.xcodeproj -scheme BubblePhysicsBench -configuration Release -destination 'id=e7cdbee72f005b19f554e4c3675383f3dbea4c0c' build` — `BUILD SUCCEEDED`. |
+| Zmiany kodu | `10ab3cce72e86b0b4fb620c8c69f3aed2703a0ac`. |
+| B2 — ograniczenie dowodu | Build Release przeszedł; nie uruchomiono benchmarku na fizycznym iPhonie X, więc postęp 1680/1680 i raport na urządzeniu pozostają do potwierdzenia. |
