@@ -57,7 +57,7 @@ public struct PublicWorldStressReport: Sendable {
 public enum PublicWorldStressBenchmark {
     /// iOS acceptance protocol: Release hardware, 120 warmups and 300 measured frames per scenario.
     public static func measure(device: MTLDevice,
-                               drawableProvider: @escaping @MainActor () throws -> CAMetalDrawable,
+                               drawableProvider: @escaping @MainActor () async throws -> CAMetalDrawable,
                                progress: @escaping @MainActor (Int, Int) -> Void = { _, _ in }) async throws
         -> PublicWorldStressReport {
         try await run(device: device, warmupFrames: 120, measuredFrames: 300,
@@ -65,7 +65,8 @@ public enum PublicWorldStressBenchmark {
     }
 
     package static func run(device: MTLDevice, warmupFrames: Int, measuredFrames: Int,
-                            drawableProvider: (@MainActor () throws -> CAMetalDrawable)? = nil,
+                            drawableProvider: (@MainActor () async throws -> CAMetalDrawable)? = nil,
+                            presentationWaiter: (@MainActor () async -> Void)? = nil,
                             progress: @escaping @MainActor (Int, Int) -> Void) async throws
         -> PublicWorldStressReport {
         let names = ["semantic_spawn", "drag", "merge", "dense_arena"]
@@ -164,7 +165,7 @@ public enum PublicWorldStressBenchmark {
                 }
                 if hasSemanticInput { semanticInputFrames += 1 }
                 guard let command = queue.makeCommandBuffer() else { throw StressBenchmarkError.metalUnavailable }
-                let drawable = try drawableProvider?()
+                let drawable = try await drawableProvider?()
                 let presentation = drawable.map { drawable in
                     let latch = DrawablePresentationLatch()
                     drawable.addPresentedHandler { _ in latch.signal() }
@@ -182,7 +183,10 @@ public enum PublicWorldStressBenchmark {
                     if let drawable { command.present(drawable) }
                     inputToEncodingMilliseconds = Double(DispatchTime.now().uptimeNanoseconds - inputStart) / 1_000_000
                 }
-                if command.status == .completed { await presentation?.wait() }
+                if command.status == .completed {
+                    if let presentationWaiter { await presentationWaiter() }
+                    else { await presentation?.wait() }
+                }
                 let elapsed = Double(DispatchTime.now().uptimeNanoseconds - inputStart) / 1_000_000
                 if command.status != .completed || world.diagnostics.lastAdvanceIssue != nil || frame.stepIndex != UInt64(index + 1) {
                     commandBufferErrors += 1; scenarioErrors += 1

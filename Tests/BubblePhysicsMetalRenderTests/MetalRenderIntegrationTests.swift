@@ -365,6 +365,53 @@ final class MetalRenderIntegrationTests: XCTestCase {
         XCTAssertTrue(report.text.contains("overflow_events=0"))
     }
 
+    func testDrawablePresentationSignalsProgressForEachFrame() async throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let presentation = ControlledPresentationSignal()
+        var progress: [Int] = []
+        var waitedForFirstPresentation = false
+        let task = Task { @MainActor in
+            try await PublicWorldStressBenchmark.run(device: device, warmupFrames: 0, measuredFrames: 1,
+                presentationWaiter: {
+                    guard !waitedForFirstPresentation else { return }
+                    waitedForFirstPresentation = true
+                    await presentation.wait()
+                }) { completed, _ in
+                    progress.append(completed)
+                }
+        }
+        await presentation.waitUntilBlocked()
+        XCTAssertTrue(progress.isEmpty, "postęp musi czekać na prezentację pierwszej klatki")
+        presentation.signal()
+        let report = try await task.value
+        XCTAssertEqual(progress, [1, 2, 3, 4])
+        XCTAssertEqual(report.scenarios.map(\.measuredFrames), [1, 1, 1, 1])
+    }
+
+    @MainActor
+    private final class ControlledPresentationSignal {
+        private var continuation: CheckedContinuation<Void, Never>?
+        private var entered: CheckedContinuation<Void, Never>?
+
+        func wait() async {
+            await withCheckedContinuation { continuation in
+                self.continuation = continuation
+                entered?.resume()
+                entered = nil
+            }
+        }
+
+        func waitUntilBlocked() async {
+            if continuation != nil { return }
+            await withCheckedContinuation { entered = $0 }
+        }
+
+        func signal() {
+            continuation?.resume()
+            continuation = nil
+        }
+    }
+
     private func makeTexture(device: MTLDevice) throws -> MTLTexture {
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm,
             width: 64, height: 64, mipmapped: false)

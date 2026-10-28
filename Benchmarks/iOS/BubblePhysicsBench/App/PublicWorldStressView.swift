@@ -50,9 +50,7 @@ struct PublicWorldStressView: View {
             await Task.yield()
             do {
                 let result = try await PublicWorldStressBenchmark.measure(device: device, drawableProvider: {
-                    guard let view = drawableSource.view,
-                          let drawable = view.currentDrawable else { throw StressDrawableError.unavailable }
-                    return drawable
+                    try await drawableSource.nextDrawable()
                 }) { done, _ in
                     completed = done
                 }
@@ -72,24 +70,50 @@ struct PublicWorldStressView: View {
 @MainActor
 private final class StressDrawableSource: ObservableObject {
     weak var view: MTKView?
-}
+    private var pending: CheckedContinuation<CAMetalDrawable, Never>?
+    private var drawables: [CAMetalDrawable] = []
 
-private enum StressDrawableError: Error { case unavailable }
+    func nextDrawable() async throws -> CAMetalDrawable {
+        if !drawables.isEmpty { return drawables.removeFirst() }
+        return await withCheckedContinuation { pending = $0 }
+    }
+
+    func didDraw(_ view: MTKView) {
+        guard let drawable = view.currentDrawable else { return }
+        if let pending {
+            self.pending = nil
+            pending.resume(returning: drawable)
+        } else {
+            drawables.append(drawable)
+        }
+    }
+}
 
 private struct StressDrawableView: UIViewRepresentable {
     @ObservedObject var source: StressDrawableSource
 
     func makeUIView(context: Context) -> MTKView {
         let view = MTKView(frame: .zero, device: MTLCreateSystemDefaultDevice())
-        view.isPaused = true
+        view.isPaused = false
         view.enableSetNeedsDisplay = false
         view.framebufferOnly = true
         view.colorPixelFormat = .bgra8Unorm
+        view.delegate = context.coordinator
         source.view = view
         return view
     }
 
     func updateUIView(_ view: MTKView, context: Context) {
         source.view = view
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(source: source) }
+
+    @MainActor
+    final class Coordinator: NSObject, MTKViewDelegate {
+        private let source: StressDrawableSource
+        init(source: StressDrawableSource) { self.source = source }
+        func draw(in view: MTKView) { source.didDraw(view) }
+        func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
     }
 }
