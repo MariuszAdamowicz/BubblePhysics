@@ -125,54 +125,35 @@ public enum PublicWorldStressBenchmark {
             var cpu: [Double] = [], gpu: [Double] = [], full: [Double] = []
             var semanticInputFrames = 0
             var scenarioErrors = 0
-            var pendingSpawnCleanup: [ObjectID] = []
-            var lastMergeResultID: ObjectID?
+            var expectedStepIndex: UInt64 = 0
             let scenarioTotal = warmupFrames + measuredFrames
             for index in 0..<scenarioTotal {
                 try Task.checkCancellation()
                 let inputStart = DispatchTime.now().uptimeNanoseconds
                 var hasSemanticInput = false
+                var semanticInputToken: TransactionToken?
                 switch name {
                 case "semantic_spawn" where index >= warmupFrames:
-                    var spawn = WorldTransaction()
-                    for id in pendingSpawnCleanup { spawn = spawn.remove(id) }
-                    pendingSpawnCleanup.removeAll(keepingCapacity: true)
-                    world.submit(spawn.spawnBubble(SpawnBubbleRequest(value: 3, arena: "round", seed: 733)))
+                    semanticInputToken = world.submit(WorldTransaction()
+                        .spawnBubble(SpawnBubbleRequest(value: 3, arena: "round", seed: 733)))
                     hasSemanticInput = true
                 case "drag":
                     let id = ObjectID(rawValue: 1)
                     let target = WorldPoint(180 + Float(index % 20), 350)
-                    if index == 0 { world.submit(WorldTransaction().beginPlayerDrive(id, target: target)) }
-                    else if index == scenarioTotal - 1 { world.submit(WorldTransaction().endPlayerDrive(id)) }
-                    else { world.submit(WorldTransaction().updatePlayerDrive(id, target: target)) }
+                    if index == 0 { semanticInputToken = world.submit(WorldTransaction().beginPlayerDrive(id, target: target)) }
+                    else if index == scenarioTotal - 1 { semanticInputToken = world.submit(WorldTransaction().endPlayerDrive(id)) }
+                    else { semanticInputToken = world.submit(WorldTransaction().updatePlayerDrive(id, target: target)) }
                     hasSemanticInput = index >= warmupFrames
                 case "merge" where index >= warmupFrames:
                     let mergeIndex = index - warmupFrames
                     let sourceID = UInt64(1 + mergeIndex * 3)
-                    var merge = WorldTransaction()
-                    if let lastMergeResultID { merge = merge.remove(lastMergeResultID) }
-                    world.submit(merge.mergeBubbles(
+                    semanticInputToken = world.submit(WorldTransaction().mergeBubbles(
                         [ObjectID(rawValue: sourceID), ObjectID(rawValue: sourceID + 1)],
                         result: BubbleResult(id: ObjectID(rawValue: sourceID + 2), physicsMaterialID: materialID,
                             renderStyleID: styleID, bubblePresentation: try BubblePresentation(value: 4, isGrabbed: false))))
-                    lastMergeResultID = ObjectID(rawValue: sourceID + 2)
-                    if mergeIndex + 1 < measuredFrames {
-                        let nextID = sourceID + 3
-                        let nextX = Float((mergeIndex + 1) % 7) * 45 + 30
-                        let nextY = Float((mergeIndex + 1) / 7 % 9) * 65 + 60
-                        var additions = WorldTransaction()
-                        for pairIndex in 0..<2 {
-                            additions = additions.add(.bubble(try BubbleDescriptor(
-                                id: ObjectID(rawValue: nextID + UInt64(pairIndex)),
-                                position: [nextX + Float(pairIndex) * 24, nextY], targetRadius: 12, mass: 3,
-                                physicsMaterialID: materialID, renderStyleID: styleID)))
-                        }
-                        world.submit(additions)
-                    }
                     hasSemanticInput = true
                 default: break
                 }
-                if hasSemanticInput { semanticInputFrames += 1 }
                 guard let command = queue.makeCommandBuffer() else { throw StressBenchmarkError.metalUnavailable }
                 let drawable = try await drawableProvider?()
                 let presentation = drawable.map { drawable in
@@ -193,17 +174,19 @@ public enum PublicWorldStressBenchmark {
                     inputToEncodingMilliseconds = Double(DispatchTime.now().uptimeNanoseconds - inputStart) / 1_000_000
                 }
                 populationObserver?(name, world.renderState?.items.compactMap { $0 }.count ?? 0)
+                expectedStepIndex += 1
                 if command.status == .completed {
                     if let presentationWaiter { await presentationWaiter() }
                     else { await presentation?.wait() }
                 }
                 let elapsed = Double(DispatchTime.now().uptimeNanoseconds - inputStart) / 1_000_000
-                if command.status != .completed || world.diagnostics.lastAdvanceIssue != nil || frame.stepIndex != UInt64(index + 1) {
+                if command.status != .completed || world.diagnostics.lastAdvanceIssue != nil || frame.stepIndex != expectedStepIndex {
                     commandBufferErrors += 1; scenarioErrors += 1
-                    diagnostics.append("error scenario=\(name) step=\(frame.stepIndex) expected=\(index + 1) status=\(command.status) issue=\(String(describing: world.diagnostics.lastAdvanceIssue))")
+                    diagnostics.append("error scenario=\(name) step=\(frame.stepIndex) expected=\(expectedStepIndex) status=\(command.status) issue=\(String(describing: world.diagnostics.lastAdvanceIssue))")
                 }
-                if name == "semantic_spawn" && index >= warmupFrames {
-                    pendingSpawnCleanup = frame.transactionReceipts.flatMap(\.createdObjectIDs)
+                if hasSemanticInput, let semanticInputToken,
+                   frame.transactionReceipts.contains(where: { $0.token == semanticInputToken }) {
+                    semanticInputFrames += 1
                 }
                 if frame.eventOverflow.droppedCount > 0 { overflowEvents += frame.eventOverflow.droppedCount }
                 if let telemetry = world.benchmarkTelemetry {
@@ -221,18 +204,42 @@ public enum PublicWorldStressBenchmark {
                 }
                 if index >= warmupFrames { full.append(elapsed) }
                 completed += 1; progress(completed, total)
+
+                // Teardown and replacement setup run after all samples for this input have been captured.
+                if name == "semantic_spawn", index >= warmupFrames {
+                    let createdIDs = frame.transactionReceipts
+                        .filter { $0.token == semanticInputToken }
+                        .flatMap(\.createdObjectIDs)
+                    if !createdIDs.isEmpty {
+                        var cleanup = WorldTransaction()
+                        for id in createdIDs { cleanup = cleanup.remove(id) }
+                        world.submit(cleanup)
+                        let cleanupFrame = await world.advance(by: 1.0 / 60)
+                        expectedStepIndex = cleanupFrame.stepIndex
+                    }
+                } else if name == "merge", index >= warmupFrames {
+                    let mergeIndex = index - warmupFrames
+                    let sourceID = UInt64(1 + mergeIndex * 3)
+                    var cleanup = WorldTransaction().remove(ObjectID(rawValue: sourceID + 2))
+                    if mergeIndex + 1 < measuredFrames {
+                        let nextID = sourceID + 3
+                        let nextX = Float((mergeIndex + 1) % 7) * 45 + 30
+                        let nextY = Float((mergeIndex + 1) / 7 % 9) * 65 + 60
+                        for pairIndex in 0..<2 {
+                            cleanup = cleanup.add(.bubble(try BubbleDescriptor(
+                                id: ObjectID(rawValue: nextID + UInt64(pairIndex)),
+                                position: [nextX + Float(pairIndex) * 24, nextY], targetRadius: 12, mass: 3,
+                                physicsMaterialID: materialID, renderStyleID: styleID)))
+                        }
+                    }
+                    world.submit(cleanup)
+                    let cleanupFrame = await world.advance(by: 1.0 / 60)
+                    expectedStepIndex = cleanupFrame.stepIndex
+                }
                 await Task.yield()
                 if scenarioErrors > 0 { break }
             }
-            if name == "semantic_spawn", !pendingSpawnCleanup.isEmpty {
-                var cleanup = WorldTransaction()
-                for id in pendingSpawnCleanup { cleanup = cleanup.remove(id) }
-                world.submit(cleanup)
-            } else if name == "merge", let lastMergeResultID {
-                world.submit(WorldTransaction().remove(lastMergeResultID))
-            }
             if name == "semantic_spawn" || name == "merge" {
-                _ = await world.advance(by: 1.0 / 60)
                 populationObserver?(name, world.renderState?.items.compactMap { $0 }.count ?? 0)
             }
             readbacks += world.benchmarkContourCPUReadbackCount

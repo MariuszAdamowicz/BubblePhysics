@@ -375,14 +375,17 @@ final class MetalRenderIntegrationTests: XCTestCase {
 
         let semanticSpawn = try XCTUnwrap(report.scenarios.first { $0.name == "semantic_spawn" })
         let merge = try XCTUnwrap(report.scenarios.first { $0.name == "merge" })
+        XCTAssertEqual(semanticSpawn.measuredFrames, 300, "all 300 semantic spawn frames must be measured")
+        XCTAssertEqual(merge.measuredFrames, 300, "all 300 semantic merge frames must be measured")
         XCTAssertEqual(semanticSpawn.semanticInputFrames, 300)
         XCTAssertEqual(merge.semanticInputFrames, 300)
         for name in ["semantic_spawn", "merge"] {
             let observed = try XCTUnwrap(populations[name])
-            let steadyBaseline = observed.dropFirst().first ?? 0
-            XCTAssertLessThanOrEqual(observed.last ?? .max, steadyBaseline,
+            let measuredAndFinal = observed.dropFirst()
+            let steadyBaseline = measuredAndFinal.first ?? 0
+            XCTAssertLessThanOrEqual(measuredAndFinal.last ?? .max, steadyBaseline,
                 "\(name) cleanup must leave no excess live bubbles")
-            XCTAssertLessThanOrEqual(observed.max() ?? .max, steadyBaseline,
+            XCTAssertLessThanOrEqual(measuredAndFinal.max() ?? .max, steadyBaseline,
                 "\(name) must not accumulate live bubbles")
         }
     }
