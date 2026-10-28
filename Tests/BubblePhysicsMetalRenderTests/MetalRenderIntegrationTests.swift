@@ -366,6 +366,24 @@ final class MetalRenderIntegrationTests: XCTestCase {
     }
 
     func testDrawablePresentationSignalsProgressForEachFrame() async throws {
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let benchmarkSource = try String(contentsOf: packageRoot
+            .appending(path: "Sources/BubblePhysicsMetalRender/PublicWorldStressBenchmark.swift"), encoding: .utf8)
+        let viewSource = try String(contentsOf: packageRoot
+            .appending(path: "Benchmarks/iOS/BubblePhysicsBench/App/PublicWorldStressView.swift"), encoding: .utf8)
+        XCTAssertTrue(benchmarkSource.contains("drawable.addPresentedHandler"),
+            "benchmark must register the actual drawable presentation callback")
+        XCTAssertTrue(benchmarkSource.contains("command.present(drawable)"),
+            "the drawable observed by the handler must be submitted for presentation")
+        XCTAssertTrue(viewSource.contains("guard let pending else { return }"),
+            "MTKView must acquire a drawable only to satisfy an active frame request")
+        XCTAssertFalse(viewSource.contains("drawables.append"),
+            "unrequested drawables must not be retained and consume the layer's drawable pool")
+        XCTAssertTrue(viewSource.contains("view.isPaused = true")
+            && viewSource.contains("view.enableSetNeedsDisplay = true"),
+            "MTKView must draw on demand instead of acquiring drawables continuously")
+
         let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
         let presentation = ControlledPresentationSignal()
         var progress: [Int] = []

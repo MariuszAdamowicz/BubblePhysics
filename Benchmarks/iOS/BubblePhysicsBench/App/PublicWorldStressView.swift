@@ -71,21 +71,19 @@ struct PublicWorldStressView: View {
 private final class StressDrawableSource: ObservableObject {
     weak var view: MTKView?
     private var pending: CheckedContinuation<CAMetalDrawable, Never>?
-    private var drawables: [CAMetalDrawable] = []
 
     func nextDrawable() async throws -> CAMetalDrawable {
-        if !drawables.isEmpty { return drawables.removeFirst() }
-        return await withCheckedContinuation { pending = $0 }
+        await withCheckedContinuation { continuation in
+            pending = continuation
+            view?.setNeedsDisplay()
+        }
     }
 
     func didDraw(_ view: MTKView) {
+        guard let pending else { return }
         guard let drawable = view.currentDrawable else { return }
-        if let pending {
-            self.pending = nil
-            pending.resume(returning: drawable)
-        } else {
-            drawables.append(drawable)
-        }
+        self.pending = nil
+        pending.resume(returning: drawable)
     }
 }
 
@@ -94,8 +92,8 @@ private struct StressDrawableView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> MTKView {
         let view = MTKView(frame: .zero, device: MTLCreateSystemDefaultDevice())
-        view.isPaused = false
-        view.enableSetNeedsDisplay = false
+        view.isPaused = true
+        view.enableSetNeedsDisplay = true
         view.framebufferOnly = true
         view.colorPixelFormat = .bgra8Unorm
         view.delegate = context.coordinator
