@@ -19,8 +19,6 @@ struct PublicWorldStressView: View {
                 Text("Benchmark rundy engine-owned").font(.title2.bold())
                 Text("Semantyczny spawn, drag, merge i gęsta arena; limit 4, 120 klatek rozgrzewki i 300 mierzonych na scenariusz. Wynik akceptacyjny wymaga Release na fizycznym iPhonie X.")
                 ProgressView(value: Double(completed), total: 1680)
-                StressDrawableView(source: drawableSource)
-                    .frame(width: 375, height: 700)
                 if isRunning {
                     Text("Pomiar trwa: \(completed) / 1680")
                         .font(.headline)
@@ -29,6 +27,9 @@ struct PublicWorldStressView: View {
                     Button("Start") { start() }.disabled(isRunning)
                     Button("Stop") { task?.cancel() }.disabled(!isRunning)
                 }
+                StressDrawableView(source: drawableSource)
+                    .frame(maxWidth: .infinity)
+                    .aspectRatio(375.0 / 700.0, contentMode: .fit)
                 if let report {
                     Button("Kopiuj raport") { UIPasteboard.general.string = report }
                     Text(report).font(.caption.monospaced()).textSelection(.enabled)
@@ -84,7 +85,6 @@ private struct StressDrawableView: UIViewRepresentable {
         view.enableSetNeedsDisplay = false
         view.framebufferOnly = true
         view.colorPixelFormat = .bgra8Unorm
-        view.drawableSize = CGSize(width: 375, height: 700)
         source.view = view
         return view
     }
