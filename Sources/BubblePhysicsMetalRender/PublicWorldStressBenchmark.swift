@@ -156,11 +156,12 @@ public enum PublicWorldStressBenchmark {
                 }
                 guard let command = queue.makeCommandBuffer() else { throw StressBenchmarkError.metalUnavailable }
                 let drawable = try await drawableProvider?()
-                let presentation = drawable.map { drawable in
-                    let latch = DrawablePresentationLatch()
-                    drawable.addPresentedHandler { _ in latch.signal() }
-                    return latch
-                }
+                // `CAMetalDrawable` nie udostępnia przenośnego callbacku prezentacji
+                // dla docelowego SDK iOS 16. Harness urządzeniowy przekazuje własny
+                // `presentationWaiter`; w pozostałych przypadkach miara kończy się na
+                // ukończeniu tego samego command bufferu, zamiast wiązać API gry z
+                // niedostępnym callbackiem drawable.
+                let presentation: DrawablePresentationLatch? = nil
                 let pass = MTLRenderPassDescriptor()
                 pass.colorAttachments[0].texture = drawable?.texture ?? texture
                 pass.colorAttachments[0].loadAction = .clear
