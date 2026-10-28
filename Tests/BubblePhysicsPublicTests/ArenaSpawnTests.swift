@@ -4,6 +4,34 @@ import XCTest
 
 @MainActor
 final class ArenaSpawnTests: XCTestCase {
+    func testSemanticArenaCarriesDriveAndMergeRulesIntoSpawnedBubbles() async throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let material = PhysicsMaterialID(rawValue: 1), style = RenderStyleID(rawValue: 1)
+        let drivePolicy = try BubbleDrivePolicy(maximumSpeed: 30, distanceResponse: 12)
+        let arena = try ArenaPreset(id: "round", bounds: .init(min: [-1.1, -5], max: [1.1, 5]),
+            bubbleRadius: 1, physicsMaterialID: material, renderStyleID: style,
+            drivePolicy: drivePolicy, mergeGroups: MergeGroupSet(rawValue: 1), eventInterest: [.mergeContact])
+        let world = try BubbleWorld(configuration: WorldConfiguration(simulationRegion: .init(min: [-10, -10], max: [10, 10]),
+            fixedTimeStep: 1.0 / 60, arenas: [arena]), device: device)
+        world.submit(WorldTransaction().updatePhysicsMaterial(material, material: try PhysicsMaterial(kind: .bubble))
+            .updateRenderStyle(style, style: try RenderStyle()))
+        _ = await world.advance(by: 1.0 / 60)
+
+        let firstToken = world.submit(WorldTransaction().spawnBubble(.init(value: 2, arena: "round", seed: 3)))
+        let firstFrame = await world.advance(by: 1.0 / 60)
+        let first = try XCTUnwrap(firstFrame.transactionReceipts.first { $0.token == firstToken }?.createdObjectIDs.first)
+        let secondToken = world.submit(WorldTransaction().spawnBubble(.init(value: 2, arena: "round", seed: 17)))
+        let secondFrame = await world.advance(by: 1.0 / 60)
+        let second = try XCTUnwrap(secondFrame.transactionReceipts.first { $0.token == secondToken }?.createdObjectIDs.first)
+        let contours = world.debugContourSnapshot()
+        let target = try XCTUnwrap(contours[second]).reduce(WorldPoint.zero, +) / Float(try XCTUnwrap(contours[second]).count)
+
+        world.submit(WorldTransaction().beginPlayerDrive(first, target: target))
+        var events: [WorldEvent] = []
+        for _ in 0..<180 { events += (await world.advance(by: 1.0 / 60)).events }
+        XCTAssertTrue(events.contains { if case .mergeContact(first, second, _) = $0 { true } else if case .mergeContact(second, first, _) = $0 { true } else { false } })
+    }
+
     func testSeededSemanticSpawnPublishesDeterministicReceiptsWithoutGameGeometry() async throws {
         let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
         let arena = try ArenaPreset(id: "small", bounds: .init(min: [-1.05, -1.05], max: [1.05, 1.05]),

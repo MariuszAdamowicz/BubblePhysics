@@ -55,20 +55,24 @@ public final class BubblePhysicsMetalRender {
             ulong remaining = presentation.value;
             int count = 1;
             while (remaining >= 10 && count < 19) { remaining /= 10; count++; }
-            float width = min(0.28, 1.55 / float(count));
+            float width = min(0.52, 1.65 / float(count));
             float2 local = (in.worldPosition - in.bubbleCenter) / max(in.bubbleRadius, 0.001);
             int glyphIndex = int(floor((local.x + width * float(count) * 0.5) / width));
             bool glyph = false;
-            if (glyphIndex >= 0 && glyphIndex < count && abs(local.y) < 0.42) {
+            if (glyphIndex >= 0 && glyphIndex < count && abs(local.y) < 0.54) {
                 ulong divisor = 1;
                 for (int i = 0; i < count - glyphIndex - 1; i++) divisor *= 10;
                 int digit = int((presentation.value / divisor) % 10);
                 float glyphCenter = -width * float(count) * 0.5 + width * (float(glyphIndex) + 0.5);
-                float2 point = float2((local.x - glyphCenter) / (width * 0.5), local.y / 0.42);
+                float2 point = float2((local.x - glyphCenter) / (width * 0.5), local.y / 0.54);
                 for (int i = 0; i < 7; i++) glyph = glyph || segment(point, digit, i);
             }
-            float3 fill = presentation.isGrabbed != 0 ? float3(0.18, 0.52, 0.78) : float3(0.30, 0.71, 0.85);
-            float3 ink = presentation.isGrabbed != 0 ? float3(1.0, 0.82, 0.18) : float3(1.0, 1.0, 1.0);
+            int palette = int(presentation.value % 4);
+            float3 fill = palette == 0 ? float3(0.45, 0.32, 0.82) :
+                          palette == 1 ? float3(0.18, 0.65, 0.42) :
+                          palette == 2 ? float3(0.18, 0.48, 0.86) : float3(0.84, 0.32, 0.49);
+            if (presentation.isGrabbed != 0) fill = mix(fill, float3(1.0, 0.68, 0.12), 0.45);
+            float3 ink = float3(1.0, 1.0, 1.0);
             return float4(glyph ? ink : fill, 1.0);
         }
         """

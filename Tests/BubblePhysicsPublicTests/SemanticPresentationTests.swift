@@ -5,6 +5,21 @@ import XCTest
 
 @MainActor
 final class SemanticPresentationTests: XCTestCase {
+    func testEngineSemanticRendererUsesDistinctPaletteForDifferentValues() async throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let first = try makeWorld(device: device, bubbleIDs: [1])
+        let second = try makeWorld(device: device, bubbleIDs: [1])
+        first.submit(WorldTransaction().setBubblePresentation(.init(rawValue: 1),
+            presentation: try BubblePresentation(value: 2, isGrabbed: false)))
+        second.submit(WorldTransaction().setBubblePresentation(.init(rawValue: 1),
+            presentation: try BubblePresentation(value: 3, isGrabbed: false)))
+
+        let firstPixel = try await render(first, device: device, sampleX: 20).pixel
+        let secondPixel = try await render(second, device: device, sampleX: 20).pixel
+
+        XCTAssertNotEqual(firstPixel, secondPixel)
+    }
+
     func testRejectsInvalidValueAndPublishesOnlyAcceptedPresentation() async throws {
         XCTAssertThrowsError(try BubblePresentation(value: 0, isGrabbed: false))
 
@@ -74,7 +89,7 @@ final class SemanticPresentationTests: XCTestCase {
         return world
     }
 
-    private func render(_ world: BubbleWorld, device: MTLDevice) async throws -> (frame: WorldFrame, pixel: [UInt8]) {
+    private func render(_ world: BubbleWorld, device: MTLDevice, sampleX: Int = 32) async throws -> (frame: WorldFrame, pixel: [UInt8]) {
         let texture = try XCTUnwrap(device.makeTexture(descriptor: textureDescriptor()))
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = texture
@@ -87,7 +102,7 @@ final class SemanticPresentationTests: XCTestCase {
                                 commandBuffer: command, renderPassDescriptor: pass)
         }
         var pixel = [UInt8](repeating: 0, count: 4)
-        texture.getBytes(&pixel, bytesPerRow: 4, from: MTLRegionMake2D(32, 32, 1, 1), mipmapLevel: 0)
+        texture.getBytes(&pixel, bytesPerRow: 4, from: MTLRegionMake2D(sampleX, 32, 1, 1), mipmapLevel: 0)
         return (frame, pixel)
     }
 

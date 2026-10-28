@@ -314,7 +314,8 @@ private struct StagingContext {
             while state.objects[id] != nil { id = ObjectID(rawValue: random.next() & 0x7fff_ffff_ffff_ffff) }
             let descriptor = try BubbleDescriptor(id: id, position: position,
                 targetRadius: arena.bubbleRadius, physicsMaterialID: arena.physicsMaterialID,
-                renderStyleID: arena.renderStyleID)
+                renderStyleID: arena.renderStyleID, mergeGroups: arena.mergeGroups,
+                eventInterest: arena.eventInterest, drivePolicy: arena.drivePolicy)
             try add(.bubble(descriptor))
             state.objects[id]?.bubblePresentation = try BubblePresentation(value: request.value, isGrabbed: false)
             return
