@@ -365,6 +365,28 @@ final class MetalRenderIntegrationTests: XCTestCase {
         XCTAssertTrue(report.text.contains("overflow_events=0"))
     }
 
+    func testEngineOwnedRoundBenchmarkKeepsSteadyPopulation() async throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        var populations: [String: [Int]] = [:]
+        let report = try await PublicWorldStressBenchmark.run(device: device,
+            warmupFrames: 1, measuredFrames: 300, populationObserver: { scenario, count in
+                populations[scenario, default: []].append(count)
+            }) { _, _ in }
+
+        let semanticSpawn = try XCTUnwrap(report.scenarios.first { $0.name == "semantic_spawn" })
+        let merge = try XCTUnwrap(report.scenarios.first { $0.name == "merge" })
+        XCTAssertEqual(semanticSpawn.semanticInputFrames, 300)
+        XCTAssertEqual(merge.semanticInputFrames, 300)
+        for name in ["semantic_spawn", "merge"] {
+            let observed = try XCTUnwrap(populations[name])
+            let steadyBaseline = observed.dropFirst().first ?? 0
+            XCTAssertLessThanOrEqual(observed.last ?? .max, steadyBaseline,
+                "\(name) cleanup must leave no excess live bubbles")
+            XCTAssertLessThanOrEqual(observed.max() ?? .max, steadyBaseline,
+                "\(name) must not accumulate live bubbles")
+        }
+    }
+
     func testDrawablePresentationSignalsProgressForEachFrame() async throws {
         let packageRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()

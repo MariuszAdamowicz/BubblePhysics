@@ -67,6 +67,7 @@ public enum PublicWorldStressBenchmark {
     package static func run(device: MTLDevice, warmupFrames: Int, measuredFrames: Int,
                             drawableProvider: (@MainActor () async throws -> CAMetalDrawable)? = nil,
                             presentationWaiter: (@MainActor () async -> Void)? = nil,
+                            populationObserver: (@MainActor (String, Int) -> Void)? = nil,
                             progress: @escaping @MainActor (Int, Int) -> Void) async throws
         -> PublicWorldStressReport {
         let names = ["semantic_spawn", "drag", "merge", "dense_arena"]
@@ -124,6 +125,8 @@ public enum PublicWorldStressBenchmark {
             var cpu: [Double] = [], gpu: [Double] = [], full: [Double] = []
             var semanticInputFrames = 0
             var scenarioErrors = 0
+            var pendingSpawnCleanup: [ObjectID] = []
+            var lastMergeResultID: ObjectID?
             let scenarioTotal = warmupFrames + measuredFrames
             for index in 0..<scenarioTotal {
                 try Task.checkCancellation()
@@ -131,7 +134,10 @@ public enum PublicWorldStressBenchmark {
                 var hasSemanticInput = false
                 switch name {
                 case "semantic_spawn" where index >= warmupFrames:
-                    world.submit(WorldTransaction().spawnBubble(SpawnBubbleRequest(value: 3, arena: "round", seed: 733)))
+                    var spawn = WorldTransaction()
+                    for id in pendingSpawnCleanup { spawn = spawn.remove(id) }
+                    pendingSpawnCleanup.removeAll(keepingCapacity: true)
+                    world.submit(spawn.spawnBubble(SpawnBubbleRequest(value: 3, arena: "round", seed: 733)))
                     hasSemanticInput = true
                 case "drag":
                     let id = ObjectID(rawValue: 1)
@@ -143,10 +149,13 @@ public enum PublicWorldStressBenchmark {
                 case "merge" where index >= warmupFrames:
                     let mergeIndex = index - warmupFrames
                     let sourceID = UInt64(1 + mergeIndex * 3)
-                    world.submit(WorldTransaction().mergeBubbles(
+                    var merge = WorldTransaction()
+                    if let lastMergeResultID { merge = merge.remove(lastMergeResultID) }
+                    world.submit(merge.mergeBubbles(
                         [ObjectID(rawValue: sourceID), ObjectID(rawValue: sourceID + 1)],
                         result: BubbleResult(id: ObjectID(rawValue: sourceID + 2), physicsMaterialID: materialID,
                             renderStyleID: styleID, bubblePresentation: try BubblePresentation(value: 4, isGrabbed: false))))
+                    lastMergeResultID = ObjectID(rawValue: sourceID + 2)
                     if mergeIndex + 1 < measuredFrames {
                         let nextID = sourceID + 3
                         let nextX = Float((mergeIndex + 1) % 7) * 45 + 30
@@ -183,6 +192,7 @@ public enum PublicWorldStressBenchmark {
                     if let drawable { command.present(drawable) }
                     inputToEncodingMilliseconds = Double(DispatchTime.now().uptimeNanoseconds - inputStart) / 1_000_000
                 }
+                populationObserver?(name, world.renderState?.items.compactMap { $0 }.count ?? 0)
                 if command.status == .completed {
                     if let presentationWaiter { await presentationWaiter() }
                     else { await presentation?.wait() }
@@ -191,6 +201,9 @@ public enum PublicWorldStressBenchmark {
                 if command.status != .completed || world.diagnostics.lastAdvanceIssue != nil || frame.stepIndex != UInt64(index + 1) {
                     commandBufferErrors += 1; scenarioErrors += 1
                     diagnostics.append("error scenario=\(name) step=\(frame.stepIndex) expected=\(index + 1) status=\(command.status) issue=\(String(describing: world.diagnostics.lastAdvanceIssue))")
+                }
+                if name == "semantic_spawn" && index >= warmupFrames {
+                    pendingSpawnCleanup = frame.transactionReceipts.flatMap(\.createdObjectIDs)
                 }
                 if frame.eventOverflow.droppedCount > 0 { overflowEvents += frame.eventOverflow.droppedCount }
                 if let telemetry = world.benchmarkTelemetry {
@@ -210,6 +223,17 @@ public enum PublicWorldStressBenchmark {
                 completed += 1; progress(completed, total)
                 await Task.yield()
                 if scenarioErrors > 0 { break }
+            }
+            if name == "semantic_spawn", !pendingSpawnCleanup.isEmpty {
+                var cleanup = WorldTransaction()
+                for id in pendingSpawnCleanup { cleanup = cleanup.remove(id) }
+                world.submit(cleanup)
+            } else if name == "merge", let lastMergeResultID {
+                world.submit(WorldTransaction().remove(lastMergeResultID))
+            }
+            if name == "semantic_spawn" || name == "merge" {
+                _ = await world.advance(by: 1.0 / 60)
+                populationObserver?(name, world.renderState?.items.compactMap { $0 }.count ?? 0)
             }
             readbacks += world.benchmarkContourCPUReadbackCount
             func timing(_ values: [Double]) -> PublicWorldStressTiming {
