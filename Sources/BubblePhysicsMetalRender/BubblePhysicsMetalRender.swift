@@ -67,10 +67,13 @@ public final class BubblePhysicsMetalRender {
                 float2 point = float2((local.x - glyphCenter) / (width * 0.5), local.y / 0.54);
                 for (int i = 0; i < 7; i++) glyph = glyph || segment(point, digit, i);
             }
-            int palette = int(presentation.value % 4);
+            int palette = int((presentation.value * 5 + presentation.value / 2) % 7);
             float3 fill = palette == 0 ? float3(0.45, 0.32, 0.82) :
                           palette == 1 ? float3(0.18, 0.65, 0.42) :
-                          palette == 2 ? float3(0.18, 0.48, 0.86) : float3(0.84, 0.32, 0.49);
+                          palette == 2 ? float3(0.18, 0.48, 0.86) :
+                          palette == 3 ? float3(0.84, 0.32, 0.49) :
+                          palette == 4 ? float3(0.88, 0.52, 0.16) :
+                          palette == 5 ? float3(0.12, 0.62, 0.64) : float3(0.62, 0.38, 0.72);
             if (presentation.isGrabbed != 0) fill = mix(fill, float3(1.0, 0.68, 0.12), 0.45);
             float3 ink = float3(1.0, 1.0, 1.0);
             return float4(glyph ? ink : fill, 1.0);

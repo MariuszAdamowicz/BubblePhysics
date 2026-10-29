@@ -16,10 +16,11 @@ final class TransactionStagerTests: XCTestCase {
             .updateRenderStyle(styleID, style: try RenderStyle())
     }
     private func bubble(_ value: UInt64, role: MotionRole = .dynamic,
-                        position: WorldPoint = .zero) throws -> BubbleDescriptor {
+                        position: WorldPoint = .zero,
+                        drivePolicy: BubbleDrivePolicy = .standard) throws -> BubbleDescriptor {
         try BubbleDescriptor(id: id(value), position: position, targetRadius: 2,
                              mass: 2, motionRole: role, physicsMaterialID: materialID,
-                             renderStyleID: styleID, eventInterest: [.didAdd, .didRemove, .didReplace])
+                             renderStyleID: styleID, eventInterest: [.didAdd, .didRemove, .didReplace], drivePolicy: drivePolicy)
     }
 
     func testRejectedTransactionPublishesNoPartialObjectOrResourceChange() throws {
@@ -124,11 +125,16 @@ final class TransactionStagerTests: XCTestCase {
     }
 
     func testMergeAndSplitReserveStableResultIDsAndRejectPartialResults() throws {
-        let initial = try TransactionStager.stage(resources().add(.bubble(bubble(1))).add(.bubble(bubble(2))), against: state()).state
+        let drive = try BubbleDrivePolicy(maximumSpeed: 30, distanceResponse: 12)
+        let initial = try TransactionStager.stage(resources().add(.bubble(bubble(1, drivePolicy: drive))).add(.bubble(bubble(2, drivePolicy: drive))), against: state()).state
         let result = BubbleResult(id: id(3), physicsMaterialID: materialID, renderStyleID: styleID)
         let merged = try TransactionStager.stage(WorldTransaction().mergeBubbles([id(1), id(2)], result: result), against: initial)
         XCTAssertEqual(Set(merged.state.objects.keys), [id(3)])
         XCTAssertEqual(merged.createdObjectIDs, [id(3)])
+        guard case .bubble(let mergedBubble) = merged.state.objects[id(3)]?.descriptor else {
+            return XCTFail("Expected merged bubble")
+        }
+        XCTAssertEqual(mergedBubble.drivePolicy, drive)
         let split = WorldTransaction().splitBubble(id(3), first: BubbleSplitPart(result:
             BubbleResult(id: id(4), physicsMaterialID: materialID, renderStyleID: styleID), share: 0.25),
             second: BubbleSplitPart(result: BubbleResult(id: id(5), physicsMaterialID: materialID, renderStyleID: styleID), share: 0.75))

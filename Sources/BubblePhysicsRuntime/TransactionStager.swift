@@ -428,19 +428,21 @@ private struct StagingContext {
         return (existing, value)
     }
     func resultDescriptor(_ result: BubbleResult, position: WorldPoint, velocity: WorldPoint,
-                          radius: Float, mass: Float) throws -> WorldObject {
+                          radius: Float, mass: Float, drivePolicy: BubbleDrivePolicy = .standard) throws -> WorldObject {
         .bubble(try BubbleDescriptor(id: result.id, position: position, velocity: velocity,
             targetRadius: radius, mass: mass, motionRole: result.motionRole,
             regionExitPolicy: result.regionExitPolicy, physicsMaterialID: result.physicsMaterialID,
             renderStyleID: result.renderStyleID, mergeGroups: result.mergeGroups,
-            eventInterest: result.eventInterest, presentation: result.presentation))
+            eventInterest: result.eventInterest, presentation: result.presentation, drivePolicy: drivePolicy))
     }
     mutating func merge(_ sources: [ObjectID], result: BubbleResult) throws {
         guard sources.count >= 2, Set(sources).count == sources.count else { throw TransactionRejectionReason.invalidStructuralOperation }
         var mass: Double = 0, radiusSquared: Double = 0
         var momentum = SIMD2<Double>.zero
+        var drivePolicy: BubbleDrivePolicy?
         for id in sources {
             let (existing, descriptor) = try bubble(id)
+            if drivePolicy == nil { drivePolicy = descriptor.drivePolicy }
             let weight = Double(descriptor.mass)
             mass += weight
             radiusSquared += Double(existing.targetRadius) * Double(existing.targetRadius)
@@ -452,7 +454,7 @@ private struct StagingContext {
         let descriptor = try resultDescriptor(result,
             position: center,
             velocity: WorldPoint(Float(momentum.x / mass), Float(momentum.y / mass)),
-            radius: Float(sqrt(radiusSquared)), mass: Float(mass))
+            radius: Float(sqrt(radiusSquared)), mass: Float(mass), drivePolicy: drivePolicy ?? .standard)
         for id in sources { try remove(id) }
         try add(descriptor)
         if var merged = state.objects[result.id] {
