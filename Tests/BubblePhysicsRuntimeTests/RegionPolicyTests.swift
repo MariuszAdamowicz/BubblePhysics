@@ -104,6 +104,25 @@ final class RegionPolicyTests: XCTestCase {
         XCTAssertNil(world.diagnostics.lastAdvanceIssue)
     }
 
+    func testKinematicMergeAndSplitResultRolesAreRejectedWithoutRetryingFrame() async throws {
+        let world = try await seededWorld()
+        let merge = world.submit(WorldTransaction().mergeBubbles([.init(rawValue: 1), .init(rawValue: 2)],
+            result: BubbleResult(id: .init(rawValue: 3), physicsMaterialID: .init(rawValue: 1),
+                renderStyleID: .init(rawValue: 1), motionRole: .kinematic)))
+        var frame = await world.advance(by: 0.25)
+        XCTAssertEqual(frame.events, [.transactionRejected(merge, TransactionRejection(operationIndex: 0,
+            reason: .unsupportedMotionRole(.init(rawValue: 3), .kinematic)))])
+        let first = BubbleSplitPart(result: BubbleResult(id: .init(rawValue: 3),
+            physicsMaterialID: .init(rawValue: 1), renderStyleID: .init(rawValue: 1), motionRole: .kinematic), share: 0.5)
+        let second = BubbleSplitPart(result: BubbleResult(id: .init(rawValue: 4),
+            physicsMaterialID: .init(rawValue: 1), renderStyleID: .init(rawValue: 1)), share: 0.5)
+        let split = world.submit(WorldTransaction().splitBubble(.init(rawValue: 1), first: first, second: second))
+        frame = await world.advance(by: 0.25)
+        XCTAssertEqual(frame.events, [.transactionRejected(split, TransactionRejection(operationIndex: 0,
+            reason: .unsupportedMotionRole(.init(rawValue: 3), .kinematic)))])
+        XCTAssertNil(world.diagnostics.lastAdvanceIssue)
+    }
+
     func testMaterialContactTransitionsAreAcceptedAndAdvancePublishedValue() async throws {
         for parameter in [PhysicsParameter.friction, .restitution] {
             let world = try BubbleWorld(configuration: initial(policy: .remove).configuration)

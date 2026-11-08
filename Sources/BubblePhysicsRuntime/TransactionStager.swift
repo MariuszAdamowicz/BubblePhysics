@@ -35,6 +35,7 @@ package struct RuntimeObject: Equatable, Sendable {
     package var pathStopped = false
     package var pathBlocker: DriveBlockingContact?
     package var motorDrive: MotorDrive?
+    package var kinematicDrive: KinematicDrive?
     package var targetRadius: Float = 0
     package var collisionRadius: Float = 0
     package var effectiveRadius: Float = 0
@@ -225,6 +226,7 @@ private struct StagingContext {
         case .setMotorDrive(let id, let drive):
             try apply(.setMotion(id, .motorDriven))
             state.objects[id]?.motorDrive = drive
+        case .setKinematicDrive: break
         case .setGlobalForce(let force):
             try requireFinite(force, "globalForce")
             state.globalForce = force

@@ -77,3 +77,11 @@ public struct DriveFeedback: Equatable, Sendable {
         self.achievedPoint = achievedPoint; self.blockingContact = blockingContact; self.isStopped = isStopped
     }
 }
+
+/// Sterowanie bryły kinematycznej; gra podaje nowy cel transakcją przed krokiem.
+public enum KinematicDrive: Equatable, Sendable {
+    case velocity(linear: WorldPoint, angular: Float)
+    case path(PathDrive)
+    /// Pozycja i obrót osiągane w jednym kroku.
+    case target(position: WorldPoint, rotation: Float)
+}

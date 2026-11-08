@@ -31,7 +31,7 @@ package enum MotionControllers {
                 } else { object.collisionRadius = object.targetRadius }
             }
             switch object.motionRole {
-            case .static: object.velocity = .zero; object.angularVelocity = 0
+            case .static, .kinematic: object.velocity = .zero; object.angularVelocity = 0
             case .dynamic, .motorDriven:
                 var force = state.globalForce
                 for (source, field) in fields where field.filter.objectIDs?.contains(id) ?? true {

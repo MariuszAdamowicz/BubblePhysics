@@ -4,6 +4,8 @@ public enum MotionRole: Hashable, Sendable {
     case motorDriven
     case pathDriven
     case playerDriven
+    /// Nieskończona masa; ruch wyłącznie według `KinematicDrive`. Dostępna dla brył.
+    case kinematic
 }
 
 /// Polityka działa po całkowitym opuszczeniu regionu. Wrap nie tworzy kontaktów przez szew.
@@ -110,6 +112,7 @@ public struct BubbleDescriptor: Equatable, Sendable {
     public let renderStyleID: RenderStyleID
     public let mergeGroups: MergeGroupSet
     public let eventInterest: EventInterest
+    public let filter: CollisionFilter
     public let presentation: PresentationParameters
 
     public init(id: ObjectID, position: WorldPoint, velocity: WorldPoint = .zero,
@@ -117,7 +120,7 @@ public struct BubbleDescriptor: Equatable, Sendable {
                 regionExitPolicy: RegionExitPolicy = .remove, physicsMaterialID: PhysicsMaterialID,
                 renderStyleID: RenderStyleID, mergeGroups: MergeGroupSet = [],
                 eventInterest: EventInterest = [], presentation: PresentationParameters = .empty,
-                drivePolicy: BubbleDrivePolicy = .standard) throws {
+                drivePolicy: BubbleDrivePolicy = .standard, filter: CollisionFilter = .default) throws {
         try requireFinite(position, "bubble.position")
         try requireFinite(velocity, "bubble.velocity")
         try requirePositive(targetRadius, "bubble.targetRadius")
@@ -134,6 +137,7 @@ public struct BubbleDescriptor: Equatable, Sendable {
         self.renderStyleID = renderStyleID
         self.mergeGroups = mergeGroups
         self.eventInterest = eventInterest
+        self.filter = filter
         self.presentation = presentation
     }
 }
@@ -153,6 +157,7 @@ public struct PolygonDescriptor: Equatable, Sendable {
     public let physicsMaterialID: PhysicsMaterialID
     public let renderStyleID: RenderStyleID
     public let eventInterest: EventInterest
+    public let filter: CollisionFilter
     public let presentation: PresentationParameters
 
     public init(id: ObjectID, vertices: [WorldPoint], position: WorldPoint = .zero,
@@ -160,7 +165,7 @@ public struct PolygonDescriptor: Equatable, Sendable {
                 mass: Float = 1, momentOfInertia: Float = 1, motionRole: MotionRole = .static,
                 regionExitPolicy: RegionExitPolicy = .remove, physicsMaterialID: PhysicsMaterialID,
                 renderStyleID: RenderStyleID, eventInterest: EventInterest = [],
-                presentation: PresentationParameters = .empty) throws {
+                presentation: PresentationParameters = .empty, filter: CollisionFilter = .default) throws {
         self.geometry = try PolygonGeometry(vertices: vertices)
         try requireFinite(position, "polygon.position")
         try requireFinite(rotation, "polygon.rotation")
@@ -180,6 +185,7 @@ public struct PolygonDescriptor: Equatable, Sendable {
         self.physicsMaterialID = physicsMaterialID
         self.renderStyleID = renderStyleID
         self.eventInterest = eventInterest
+        self.filter = filter
         self.presentation = presentation
     }
 }

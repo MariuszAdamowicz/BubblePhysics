@@ -53,6 +53,9 @@ public enum WorldEvent: Equatable, Sendable {
     case exitedSensor(sensor: ObjectID, object: ObjectID)
     case didExitSimulationRegion(ObjectID)
     case didWrap(ObjectID)
+    /// Początek kontaktu pary; normalna od pierwszego obiektu do drugiego.
+    case contactBegan(ObjectID, ObjectID, point: WorldPoint, normal: WorldPoint, impulse: Float)
+    case contactEnded(ObjectID, ObjectID)
 }
 
 /// Stan jednej bańki albo bryły po ostatnim ukończonym kroku. Czujniki i pola sił nie mają stanu.

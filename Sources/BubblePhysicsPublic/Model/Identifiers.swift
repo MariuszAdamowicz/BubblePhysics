@@ -42,4 +42,15 @@ public struct EventInterest: OptionSet, Hashable, Sendable {
     public static let didAdd = Self(rawValue: 1 << 6)
     public static let didRemove = Self(rawValue: 1 << 7)
     public static let didReplace = Self(rawValue: 1 << 8)
+    public static let contact = Self(rawValue: 1 << 9)
+}
+
+/// Filtr kolizji: dwa obiekty kolidują tylko wtedy, gdy kategoria każdego z nich jest w masce drugiego.
+public struct CollisionFilter: Equatable, Hashable, Sendable {
+    public let category: UInt32
+    public let mask: UInt32
+    public init(category: UInt32 = 1, mask: UInt32 = .max) { self.category = category; self.mask = mask }
+    /// Domyślny filtr: kolizja ze wszystkim.
+    public static let `default` = CollisionFilter(category: 0, mask: 0)
+    public func collides(with other: CollisionFilter) -> Bool { false }
 }

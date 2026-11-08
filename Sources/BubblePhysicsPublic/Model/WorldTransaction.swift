@@ -25,11 +25,13 @@ public struct BubbleResult: Equatable, Sendable {
     public let regionExitPolicy: RegionExitPolicy
     public let mergeGroups: MergeGroupSet
     public let eventInterest: EventInterest
+    public let filter: CollisionFilter
     public let presentation: PresentationParameters
     public init(id: ObjectID, physicsMaterialID: PhysicsMaterialID, renderStyleID: RenderStyleID,
                 motionRole: MotionRole = .dynamic, regionExitPolicy: RegionExitPolicy = .remove,
                 mergeGroups: MergeGroupSet = [], eventInterest: EventInterest = [],
-                presentation: PresentationParameters = .empty) {
+                presentation: PresentationParameters = .empty, filter: CollisionFilter = .default) {
+        self.filter = filter
         self.id = id; self.physicsMaterialID = physicsMaterialID; self.renderStyleID = renderStyleID
         self.motionRole = motionRole; self.regionExitPolicy = regionExitPolicy
         self.mergeGroups = mergeGroups; self.eventInterest = eventInterest; self.presentation = presentation
@@ -54,6 +56,7 @@ public enum WorldOperation: Equatable, Sendable {
     case setMotion(ObjectID, MotionRole)
     case setPathDrive(ObjectID, PathDrive)
     case setMotorDrive(ObjectID, MotorDrive)
+    case setKinematicDrive(ObjectID, KinematicDrive)
     case setGlobalForce(WorldPoint)
     case applyImpulse(ObjectID, WorldPoint)
     case beginPlayerDrive(ObjectID, WorldPoint)
@@ -81,6 +84,7 @@ public struct WorldTransaction: Equatable, Sendable {
     public func setMotion(_ id: ObjectID, role: MotionRole) -> Self { appending(.setMotion(id, role)) }
     public func setPathDrive(_ id: ObjectID, drive: PathDrive) -> Self { appending(.setPathDrive(id, drive)) }
     public func setMotorDrive(_ id: ObjectID, drive: MotorDrive) -> Self { appending(.setMotorDrive(id, drive)) }
+    public func setKinematicDrive(_ id: ObjectID, drive: KinematicDrive) -> Self { appending(.setKinematicDrive(id, drive)) }
     public func setGlobalForce(_ force: WorldPoint) -> Self { appending(.setGlobalForce(force)) }
     public func applyImpulse(to id: ObjectID, impulse: WorldPoint) -> Self { appending(.applyImpulse(id, impulse)) }
     public func beginPlayerDrive(_ id: ObjectID, target: WorldPoint) -> Self { appending(.beginPlayerDrive(id, target)) }
