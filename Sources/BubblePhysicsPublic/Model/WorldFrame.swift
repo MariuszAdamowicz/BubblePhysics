@@ -55,6 +55,29 @@ public enum WorldEvent: Equatable, Sendable {
     case didWrap(ObjectID)
 }
 
+/// Stan jednej bańki albo bryły po ostatnim ukończonym kroku. Czujniki i pola sił nie mają stanu.
+public struct ObjectState: Equatable, Sendable {
+    public enum Kind: Equatable, Sendable {
+        /// Efektywny promień po deformacji i odbudowie; nie jest promieniem docelowym.
+        case bubble(effectiveRadius: Float)
+        case polygon
+    }
+
+    public let kind: Kind
+    public let position: WorldPoint
+    public let velocity: WorldPoint
+    public let rotation: Float
+    public let angularVelocity: Float
+    /// Osiowy prostokąt otaczający; dla bańki obejmuje cały zdeformowany kontur.
+    public let bounds: WorldRectangle
+
+    package init(kind: Kind, position: WorldPoint, velocity: WorldPoint, rotation: Float,
+                 angularVelocity: Float, bounds: WorldRectangle) {
+        self.kind = kind; self.position = position; self.velocity = velocity
+        self.rotation = rotation; self.angularVelocity = angularVelocity; self.bounds = bounds
+    }
+}
+
 /// Ostatni kompletny stan. Wyniki transakcji i zdarzenia obejmują wszystkie kroki
 /// ukończone w wywołaniu advance, które opublikowało tę klatkę.
 /// Brak nowego kroku zwraca tę samą klatkę; stepIndex pozwala uniknąć powtórnej obsługi zdarzeń.
@@ -65,12 +88,16 @@ public struct WorldFrame: Equatable, Sendable {
     public let events: [WorldEvent]
     public let eventOverflow: WorldEventOverflow
     public let driveFeedback: [DriveFeedback]
+    /// Stan każdej istniejącej bańki i bryły po ostatnim kroku.
+    public let objects: [ObjectID: ObjectState]
     package init(stepIndex: UInt64 = 0, simulationTime: Double = 0,
                  transactionReceipts: [TransactionReceipt], events: [WorldEvent],
-                 eventOverflow: WorldEventOverflow = WorldEventOverflow(), driveFeedback: [DriveFeedback] = []) {
+                 eventOverflow: WorldEventOverflow = WorldEventOverflow(), driveFeedback: [DriveFeedback] = [],
+                 objects: [ObjectID: ObjectState] = [:]) {
         self.stepIndex = stepIndex; self.simulationTime = simulationTime
         self.transactionReceipts = transactionReceipts; self.events = events
         self.eventOverflow = eventOverflow
         self.driveFeedback = driveFeedback
+        self.objects = objects
     }
 }
