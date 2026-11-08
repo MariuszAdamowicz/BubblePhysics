@@ -1,5 +1,6 @@
 import XCTest
 @testable import BubblePhysicsNativeMetal
+@testable import BubblePhysicsNativeMetalDiagnostics
 
 final class NativeMetalQualityEnvelopeTests: XCTestCase {
     // Literal limits independently derived from the approved formulas.

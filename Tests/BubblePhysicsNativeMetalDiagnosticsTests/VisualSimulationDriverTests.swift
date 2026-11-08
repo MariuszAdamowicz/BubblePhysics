@@ -2,6 +2,7 @@ import XCTest
 import Metal
 import BubblePhysicsReference
 @testable import BubblePhysicsNativeMetal
+@testable import BubblePhysicsNativeMetalDiagnostics
 
 @MainActor
 final class VisualSimulationDriverTests: XCTestCase {
@@ -103,7 +104,7 @@ private final class SuspendedVisualExecutor: NativeMetalFrameExecuting {
     var started = false
     private var continuation: CheckedContinuation<Void, Never>?
     func resume() { continuation?.resume(); continuation = nil }
-    func executeFrame(world: ReferenceWorld, scenarioStep: Int) async throws -> NativeMetalWorldFrame {
+    func executeFrame(input: NativeSolverInput, scenarioStep: Int) async throws -> NativeSolverFrame {
         started = true
         await withCheckedContinuation { continuation = $0 }
         throw NativeMetalWorldError.unavailable

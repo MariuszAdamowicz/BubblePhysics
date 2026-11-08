@@ -3,12 +3,13 @@ import Metal
 import BubblePhysicsReference
 import BubblePhysicsModel
 
-enum NativeMetalSolverError: Error {
+package enum NativeMetalSolverError: Error {
     case resourceUnavailable, allocationFailed, commandSetupFailed, commandFailed(String), invalidSnapshot, capacityOverflow
 }
 
-struct NativeMetalCommandTiming {
-    let gpuMilliseconds: Double
+package struct NativeMetalCommandTiming {
+    package let gpuMilliseconds: Double
+    package init(gpuMilliseconds: Double) { self.gpuMilliseconds = gpuMilliseconds }
 }
 
 /// Opcjonalny odczyt granic potoku używany wyłącznie przez probe diagnostyczny.
@@ -18,7 +19,7 @@ struct NativeMetalStageDiagnostics: Equatable {
 }
 
 @MainActor
-protocol NativeMetalCommandExecuting {
+package protocol NativeMetalCommandExecuting {
     // Wywoływane tylko po zakończeniu wszystkich encoderów danej klatki.
     func complete(_ command: MTLCommandBuffer) async throws -> NativeMetalCommandTiming
 }
@@ -218,7 +219,7 @@ final class NativeMetalPersistentState {
 
 /// Trwały stan GPU i solver Jacobi; publikacja świata czeka na guardy oraz CCD.
 @MainActor
-final class NativeMetalSolver: NativeMetalFrameExecuting {
+package final class NativeMetalSolver: NativeMetalFrameExecuting {
     private let device: MTLDevice
     private let queue: MTLCommandQueue
     private let predict: MTLComputePipelineState
@@ -245,12 +246,12 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
     private(set) var cachedContacts: [NativeContactCacheRecord] = []
     private(set) var candidateKeys: [NativeContactKey] = []
     private(set) var persistentState: NativeMetalPersistentState?
-    private(set) var publishedSolverFrame: NativeSolverFrame?
+    package private(set) var publishedSolverFrame: NativeSolverFrame?
     private(set) var publishedRenderHandoff: NativeMetalRenderHandoff?
     private(set) var publishedContourCPUReadbackCount = 0
     private(set) var stageDiagnostics: NativeMetalStageDiagnostics?
 
-    init(device: MTLDevice, commandExecutor: (any NativeMetalCommandExecuting)? = nil,
+    package init(device: MTLDevice, commandExecutor: (any NativeMetalCommandExecuting)? = nil,
          configuration: NativeMetalConfiguration = .default, candidateCapacity: Int? = nil,
          collectDispatchStatistics: Bool = false, collectStageDiagnostics: Bool = false) throws {
         self.device = device
@@ -268,41 +269,26 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
     }
 
     /// Rdzeń kroku: neutralne wejście, neutralny wynik. Poprzednia klatka pochodzi z trwałego stanu solvera.
-    func executeFrame(input: NativeSolverInput, scenarioStep: Int = 0,
-                      commandBuffer: MTLCommandBuffer? = nil,
-                      beforeCommit: ((NativeMetalRenderHandoff) throws -> Void)? = nil) async throws -> NativeSolverFrame {
+    package func executeFrame(input: NativeSolverInput, scenarioStep: Int) async throws -> NativeSolverFrame {
+        try await executeFrame(input: input, scenarioStep: scenarioStep, commandBuffer: nil, beforeCommit: nil)
+    }
+
+    func executeFrame(input: NativeSolverInput, scenarioStep: Int,
+                      commandBuffer: MTLCommandBuffer?,
+                      beforeCommit: ((NativeMetalRenderHandoff) throws -> Void)?) async throws -> NativeSolverFrame {
         try await executeSnapshot(.init(input: input, previous: lastSnapshot), scenarioStep: scenarioStep,
                                   commandBuffer: commandBuffer, beforeCommit: beforeCommit)
     }
 
-    // Stan przejściowy (do zadania 7): stare wejścia tłumaczą `ReferenceWorld` na `NativeSolverInput`.
-    func executeFrame(world: ReferenceWorld, scenarioStep: Int) async throws -> NativeMetalWorldFrame {
-        .init(try await executeFrame(input: .init(world: world), scenarioStep: scenarioStep))
-    }
-
-    func executePublicFrame(world: ReferenceWorld, settings: NativePublicSettings,
-                            commandBuffer: MTLCommandBuffer? = nil,
-                            beforeCommit: ((NativeMetalRenderHandoff) throws -> Void)? = nil) async throws -> NativeMetalWorldFrame {
-        .init(try await executeFrame(input: .init(world: world, publicSettings: settings), scenarioStep: 0,
-                                     commandBuffer: commandBuffer, beforeCommit: beforeCommit))
-    }
-
-    func executeFrame(snapshot: NativeMetalSnapshot, scenarioStep: Int,
-                      commandBuffer: MTLCommandBuffer? = nil,
-                      beforeCommit: ((NativeMetalRenderHandoff) throws -> Void)? = nil) async throws -> NativeMetalWorldFrame {
-        .init(try await executeSnapshot(snapshot, scenarioStep: scenarioStep,
-                                        commandBuffer: commandBuffer, beforeCommit: beforeCommit))
-    }
-
     // Runner potwierdza, że świat gry otrzymał wynik. Bez potwierdzenia zachowujemy
     // kontrakt bezpośredniego solvera: niezmienione wejście kontynuuje trwały stan GPU.
-    func acknowledgePublication() {
+    package func acknowledgePublication() {
         if let publishedSolverFrame { lastSnapshot?.sourceBubbles = publishedSolverFrame.bubbles }
     }
 
-    func executeSnapshot(_ snapshot: NativeMetalSnapshot, scenarioStep: Int,
-                         commandBuffer: MTLCommandBuffer? = nil,
-                         beforeCommit: ((NativeMetalRenderHandoff) throws -> Void)? = nil) async throws -> NativeSolverFrame {
+    package func executeSnapshot(_ snapshot: NativeMetalSnapshot, scenarioStep: Int,
+                                 commandBuffer: MTLCommandBuffer? = nil,
+                                 beforeCommit: ((NativeMetalRenderHandoff) throws -> Void)? = nil) async throws -> NativeSolverFrame {
         guard !inFlight else { throw NativeMetalWorldError.frameInFlight }
         inFlight = true
         defer { inFlight = false }

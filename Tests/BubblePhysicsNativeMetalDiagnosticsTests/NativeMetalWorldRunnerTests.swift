@@ -2,6 +2,7 @@ import XCTest
 import Metal
 import BubblePhysicsReference
 @testable import BubblePhysicsNativeMetal
+@testable import BubblePhysicsNativeMetalDiagnostics
 
 @MainActor
 final class NativeMetalWorldRunnerTests: XCTestCase {
@@ -63,19 +64,17 @@ final class NativeMetalWorldRunnerTests: XCTestCase {
 
 @MainActor
 private struct UnavailableRuntime: NativeMetalFrameExecuting {
-    func executeFrame(world: ReferenceWorld, scenarioStep: Int) async throws -> NativeMetalWorldFrame {
+    func executeFrame(input: NativeSolverInput, scenarioStep: Int) async throws -> NativeSolverFrame {
         throw NativeMetalWorldError.unavailable
     }
 }
 
 @MainActor
 private struct RejectedRuntime: NativeMetalFrameExecuting {
-    func executeFrame(world: ReferenceWorld, scenarioStep: Int) async throws -> NativeMetalWorldFrame {
-        var scratch = world
-        let report = scratch.step()
-        var bubbles = scratch.bubbles
+    func executeFrame(input: NativeSolverInput, scenarioStep: Int) async throws -> NativeSolverFrame {
+        var bubbles = input.bubbles
         bubbles[0].center.x = .nan
-        return .init(bubbles: bubbles, contacts: [], report: report,
+        return .init(bubbles: bubbles, contacts: [], report: NativeSolverReport(),
                      telemetry: .init(backend: .nativeMetal, didEncounterNonFinite: true))
     }
 }

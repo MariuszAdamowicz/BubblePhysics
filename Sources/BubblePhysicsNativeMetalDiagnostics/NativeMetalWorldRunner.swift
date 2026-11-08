@@ -1,16 +1,7 @@
 import Metal
 import BubblePhysicsModel
+import BubblePhysicsNativeMetal
 @_spi(ReferenceMetal) import BubblePhysicsReference
-
-@MainActor
-protocol NativeMetalFrameExecuting {
-    func executeFrame(world: ReferenceWorld, scenarioStep: Int) async throws -> NativeMetalWorldFrame
-    func acknowledgePublication()
-}
-
-extension NativeMetalFrameExecuting {
-    func acknowledgePublication() {}
-}
 
 struct NativeMetalWorldFrame {
     var bubbles: [ReferenceBubble]
@@ -26,16 +17,6 @@ struct NativeMetalWorldFrame {
     var regionWraps: Set<ReferenceBubbleID> = []
     var events: [WorldEvent] = []
     var eventOverflow = WorldEventOverflow()
-}
-
-enum NativeMetalWorldError: Error {
-    case unavailable, invalidFrame, frameInFlight, nonFinite, guardFailure
-}
-
-struct NativeMetalSafetyFailure: Error {
-    let reason: NativeMetalWorldError
-    let telemetry: NativeMetalFrameTelemetry
-    let profile: NativeMetalFrameProfile
 }
 
 /// Publikuje atomowo pełną klatkę GPU albo wykonuje pełny krok CPU.
@@ -73,7 +54,8 @@ public final class NativeMetalWorldRunner {
         let original = world
         do {
             // Executor otrzymuje wartość świata, nigdy referencję do publikacji.
-            let frame = try await executor.executeFrame(world: world, scenarioStep: scenarioStep)
+            let frame = ReferenceSolverInputAdapter.worldFrame(from: try await executor.executeFrame(
+                input: ReferenceSolverInputAdapter.input(from: world), scenarioStep: scenarioStep))
             profile = frame.profile
             guard !frame.telemetry.didEncounterNonFinite, !frame.report.hasNonFiniteState,
                   frame.bubbles.allSatisfy({ $0.center.isFinite && $0.previousCenter.isFinite && $0.velocity.isFinite

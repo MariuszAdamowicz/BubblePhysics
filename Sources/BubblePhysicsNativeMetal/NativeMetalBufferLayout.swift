@@ -168,7 +168,7 @@ struct NativeMetalSegmentRemap: Sendable {
 
 /// Pełne modele służą identyfikacji i readbackowi; pakowane są tylko zmiany CPU.
 /// Poprzedni snapshot musi należeć do ostatniej pomyślnie wykonanej klatki.
-struct NativeMetalSnapshot: Sendable {
+package struct NativeMetalSnapshot: Sendable {
     let configuration: NativeSolverConfiguration
     var sourceBubbles: [NativeSolverBubble]
     let sourceSegments: [NativeSolverSegment]
@@ -180,7 +180,7 @@ struct NativeMetalSnapshot: Sendable {
     let previousSegments: [NativeSolverSegment]?
     let publicSettings: NativePublicSettings?
 
-    init(input: NativeSolverInput, previous: NativeMetalSnapshot? = nil) {
+    package init(input: NativeSolverInput, previous: NativeMetalSnapshot? = nil) {
         let publicSettings = input.publicSettings
         self.publicSettings = publicSettings
         configuration = input.configuration

@@ -3,6 +3,7 @@ import Metal
 import BubblePhysicsReference
 import BubblePhysicsModel
 @testable import BubblePhysicsNativeMetal
+@testable import BubblePhysicsNativeMetalDiagnostics
 
 @MainActor
 final class NativeMetalContactCacheTests: XCTestCase {
@@ -47,12 +48,12 @@ final class NativeMetalContactCacheTests: XCTestCase {
         let world = try cacheWorld()
         let region = try WorldRectangle(min: [-100,-100], max: [100,100])
         let initial = NativePublicSettings(properties: [:], region: region)
-        _ = try await solver.executeFrame(snapshot: .init(world: world, publicSettings: initial), scenarioStep: 1)
+        _ = try await solver.executeFrame(snapshot: snapshot(world, initial), scenarioStep: 1)
         XCTAssertEqual(solver.cachedContacts.count, 2)
         var changed = initial
         changed.structuralShapes[ObjectID(rawValue: 1)] = NativeStructuralShape(origin: .zero,
             sources: [NativeStructuralSource(id: ObjectID(rawValue: 1), center: .zero, radius: 1)])
-        let frame = try await solver.executeFrame(snapshot: .init(world: world, publicSettings: changed), scenarioStep: 2)
+        let frame = try await solver.executeFrame(snapshot: snapshot(world, changed), scenarioStep: 2)
         XCTAssertEqual(solver.cachedContacts.first { $0.key == .bubblePair(1, 2) }?.age, 1)
         XCTAssertEqual(solver.cachedContacts.first { $0.key == .bubblePair(3, 4) }?.age, 2)
         XCTAssertEqual(frame.telemetry.cacheResetCount, 1)
@@ -196,4 +197,12 @@ final class NativeMetalContactCacheTests: XCTestCase {
         }
         return world
     }
+
+    /// Ścieżka publiczna gry dokłada ustawienia do neutralnego wejścia; adapter diagnostyczny ich nie zna.
+    private func snapshot(_ world: ReferenceWorld, _ settings: NativePublicSettings) -> NativeMetalSnapshot {
+        var input = ReferenceSolverInputAdapter.input(from: world)
+        input.publicSettings = settings
+        return NativeMetalSnapshot(input: input)
+    }
 }
+

@@ -204,3 +204,27 @@ package struct NativeSolverFrame {
     package var events: [WorldEvent] = []
     package var eventOverflow = WorldEventOverflow()
 }
+
+/// Szew między solverem a jego użytkownikami (runner diagnostyczny, fałszywe wykonawcy w testach).
+@MainActor
+package protocol NativeMetalFrameExecuting {
+    func executeFrame(input: NativeSolverInput, scenarioStep: Int) async throws -> NativeSolverFrame
+    func acknowledgePublication()
+}
+
+extension NativeMetalFrameExecuting {
+    package func acknowledgePublication() {}
+}
+
+package enum NativeMetalWorldError: Error {
+    case unavailable, invalidFrame, frameInFlight, nonFinite, guardFailure
+}
+
+package struct NativeMetalSafetyFailure: Error {
+    package let reason: NativeMetalWorldError
+    package let telemetry: NativeMetalFrameTelemetry
+    package let profile: NativeMetalFrameProfile
+    package init(reason: NativeMetalWorldError, telemetry: NativeMetalFrameTelemetry, profile: NativeMetalFrameProfile) {
+        self.reason = reason; self.telemetry = telemetry; self.profile = profile
+    }
+}

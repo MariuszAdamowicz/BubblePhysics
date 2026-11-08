@@ -1,7 +1,18 @@
+import Metal
+import BubblePhysicsNativeMetal
 import BubblePhysicsReference
 
-// Stan przejściowy: tłumaczenie typów diagnostycznych na neutralne wejście solvera i z powrotem.
-// Zadanie 6 przenosi je do `ReferenceSolverInputAdapter` w module diagnostycznym.
+/// Tłumaczy świat diagnostyczny (`ReferenceWorld`) na neutralne wejście solvera i wynik z powrotem na typy Reference.
+/// Tylko diagnostyka zna oba światy; produkcyjny solver nie zna typów Reference.
+enum ReferenceSolverInputAdapter {
+    static func input(from world: ReferenceWorld) -> NativeSolverInput {
+        NativeSolverInput(configuration: .init(world.configuration),
+                          bubbles: world.bubbles.map(NativeSolverBubble.init),
+                          segments: world.segments.map(NativeSolverSegment.init))
+    }
+
+    static func worldFrame(from frame: NativeSolverFrame) -> NativeMetalWorldFrame { .init(frame) }
+}
 
 extension NativeSolverBubble {
     init(_ bubble: ReferenceBubble) {
@@ -39,16 +50,9 @@ extension NativeSolverConfiguration {
     }
 }
 
-extension NativeSolverInput {
-    init(world: ReferenceWorld, publicSettings: NativePublicSettings? = nil) {
-        self.init(configuration: .init(world.configuration), bubbles: world.bubbles.map(NativeSolverBubble.init),
-                  segments: world.segments.map(NativeSolverSegment.init), publicSettings: publicSettings)
-    }
-}
-
 extension NativeMetalSnapshot {
-    init(world: ReferenceWorld, previous: NativeMetalSnapshot? = nil, publicSettings: NativePublicSettings? = nil) {
-        self.init(input: .init(world: world, publicSettings: publicSettings), previous: previous)
+    init(world: ReferenceWorld, previous: NativeMetalSnapshot? = nil) {
+        self.init(input: ReferenceSolverInputAdapter.input(from: world), previous: previous)
     }
 }
 
@@ -57,11 +61,17 @@ extension NativeMetalWorldFrame {
         func vector(_ value: SIMD2<Float>) -> ReferenceVector2 { .init(x: value.x, y: value.y) }
         func bubbleID(_ id: NativeSolverBubbleID) -> ReferenceBubbleID { .init(rawValue: id.rawValue) }
         let bubbles = frame.bubbles.map { source -> ReferenceBubble in
-            var bubble = try! ReferenceBubble(id: bubbleID(source.id), center: vector(source.center),
-                velocity: vector(source.velocity), mass: source.mass, targetRadius: source.targetRadius,
-                stiffness: source.stiffness, rotation: source.rotation, angularVelocity: source.angularVelocity)
+            // Wynik solvera może zawierać wartości nieskończone; runner ma je odrzucić, więc bez walidacji konstruktora.
+            var bubble = try! ReferenceBubble(id: bubbleID(source.id), center: .zero, mass: 1, targetRadius: 1)
+            bubble.center = vector(source.center)
             bubble.previousCenter = vector(source.previousCenter)
+            bubble.velocity = vector(source.velocity)
+            bubble.mass = source.mass
             bubble.inverseMass = source.inverseMass
+            bubble.targetRadius = source.targetRadius
+            bubble.stiffness = source.stiffness
+            bubble.rotation = source.rotation
+            bubble.angularVelocity = source.angularVelocity
             return bubble
         }
         let contacts = frame.contacts.map { contact in
@@ -99,4 +109,12 @@ extension NativeMetalWorldFrame {
 extension NativeMetalSolver {
     /// Ostatnia opublikowana klatka w typach diagnostycznych.
     var publishedFrame: NativeMetalWorldFrame? { publishedSolverFrame.map(NativeMetalWorldFrame.init) }
+
+    func executeFrame(world: ReferenceWorld, scenarioStep: Int) async throws -> NativeMetalWorldFrame {
+        .init(try await executeFrame(input: ReferenceSolverInputAdapter.input(from: world), scenarioStep: scenarioStep))
+    }
+
+    func executeFrame(snapshot: NativeMetalSnapshot, scenarioStep: Int) async throws -> NativeMetalWorldFrame {
+        .init(try await executeSnapshot(snapshot, scenarioStep: scenarioStep, commandBuffer: nil, beforeCommit: nil))
+    }
 }

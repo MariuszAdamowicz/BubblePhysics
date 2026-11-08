@@ -2,6 +2,7 @@ import XCTest
 import Metal
 import BubblePhysicsReference
 @testable import BubblePhysicsNativeMetal
+@testable import BubblePhysicsNativeMetalDiagnostics
 
 @MainActor
 final class NativeMetalBenchmarkTests: XCTestCase {
@@ -168,7 +169,7 @@ private final class ControlBatchFallbackFactory {
 
 @MainActor
 private final class NonFiniteNativeBenchmarkFrame: NativeMetalFrameExecuting {
-    func executeFrame(world: ReferenceWorld, scenarioStep: Int) async throws -> NativeMetalWorldFrame {
+    func executeFrame(input: NativeSolverInput, scenarioStep: Int) async throws -> NativeSolverFrame {
         throw NativeMetalSafetyFailure(reason: .nonFinite,
             telemetry: .init(backend: .nativeMetal, didEncounterNonFinite: true), profile: .init())
     }
@@ -178,8 +179,8 @@ private final class NonFiniteNativeBenchmarkFrame: NativeMetalFrameExecuting {
 private final class FailSecondNativeBenchmarkFrame: NativeMetalFrameExecuting {
     let solver: NativeMetalSolver
     init(solver: NativeMetalSolver) { self.solver = solver }
-    func executeFrame(world: ReferenceWorld, scenarioStep: Int) async throws -> NativeMetalWorldFrame {
+    func executeFrame(input: NativeSolverInput, scenarioStep: Int) async throws -> NativeSolverFrame {
         if scenarioStep == 1 { throw NativeMetalWorldError.unavailable }
-        return try await solver.executeFrame(world: world, scenarioStep: scenarioStep)
+        return try await solver.executeFrame(input: input, scenarioStep: scenarioStep)
     }
 }

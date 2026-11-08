@@ -2,6 +2,7 @@ import XCTest
 import Metal
 import BubblePhysicsReference
 @testable import BubblePhysicsNativeMetal
+@testable import BubblePhysicsNativeMetalDiagnostics
 
 @MainActor
 final class NativeMetalRestDampingTests: XCTestCase {

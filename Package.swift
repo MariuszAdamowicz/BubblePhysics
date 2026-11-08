@@ -13,14 +13,16 @@ let package = Package(
         // Wyłącznie narzędzia diagnostyczne; te moduły nie są API gry.
         .library(name: "BubblePhysicsBenchmarkSupport", targets: [
             "BubblePhysicsLegacy", "BubblePhysicsCore", "BubblePhysicsMetal",
-            "BubblePhysicsReference", "BubblePhysicsReferenceMetal", "BubblePhysicsNativeMetal"
+            "BubblePhysicsReference", "BubblePhysicsReferenceMetal", "BubblePhysicsNativeMetal",
+            "BubblePhysicsNativeMetalDiagnostics"
         ]),
         .executable(name: "BubblePhysicsReferenceBench", targets: ["BubblePhysicsReferenceBench"]),
         .executable(name: "BubblePhysicsPerfGuard", targets: ["BubblePhysicsPerfGuard"])
     ],
     targets: [
         .executableTarget(name: "BubblePhysicsReferenceBench",
-                          dependencies: ["BubblePhysicsReference", "BubblePhysicsReferenceMetal", "BubblePhysicsNativeMetal"],
+                          dependencies: ["BubblePhysicsReference", "BubblePhysicsReferenceMetal", "BubblePhysicsNativeMetal",
+                                         "BubblePhysicsNativeMetalDiagnostics"],
                           path: "Benchmarks/macOS/BubblePhysicsReferenceBench"),
         // Strażnik wydajności na Macu; uruchamiany `swift run -c release BubblePhysicsPerfGuard`, nie przez `swift test`.
         .executableTarget(name: "BubblePhysicsPerfGuard",
@@ -36,6 +38,9 @@ let package = Package(
         .target(name: "BubblePhysicsReference"),
         .target(name: "BubblePhysicsNativeMetal", dependencies: ["BubblePhysicsReference", "BubblePhysicsModel"],
                 resources: [.copy("Shaders/NativeGeometryKernels.metal-source"), .copy("Shaders/NativeXPBDKernels.metal-source"), .copy("Shaders/NativePostSolveKernels.metal-source"), .copy("Shaders/NativeRenderKernels.metal-source")]),
+        // Narzędzia pomiarowe i adapter `ReferenceWorld` → `NativeSolverInput`; poza modułami produkcyjnymi.
+        .target(name: "BubblePhysicsNativeMetalDiagnostics",
+                dependencies: ["BubblePhysicsNativeMetal", "BubblePhysicsReference", "BubblePhysicsModel"]),
         .target(name: "BubblePhysicsReferenceMetal", dependencies: ["BubblePhysicsReference"],
                 // Xcode processes .metal even with .copy; preserve text for runtime compilation.
                 resources: [.copy("Shaders/ReferenceNewtonPCGKernels.metal-source"), .copy("Shaders/ReferenceGeometryKernels.metal-source"), .copy("Shaders/ReferencePostSolveKernels.metal-source")]),
@@ -53,6 +58,9 @@ let package = Package(
         .testTarget(name: "BubblePhysicsReferenceTests", dependencies: ["BubblePhysicsReference"]),
         .testTarget(name: "BubblePhysicsReferenceMetalTests", dependencies: ["BubblePhysicsReferenceMetal"]),
         .testTarget(name: "BubblePhysicsNativeMetalTests", dependencies: ["BubblePhysicsNativeMetal", "BubblePhysicsRuntime"]),
+        .testTarget(name: "BubblePhysicsNativeMetalDiagnosticsTests",
+                    dependencies: ["BubblePhysicsNativeMetalDiagnostics", "BubblePhysicsNativeMetal", "BubblePhysicsReference",
+                                   "BubblePhysicsModel"]),
         .testTarget(name: "BubblePhysicsMetalTests", dependencies: ["BubblePhysicsLegacy", "BubblePhysicsMetal"])
     ]
 )

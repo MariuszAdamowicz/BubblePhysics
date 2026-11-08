@@ -3,6 +3,7 @@ import Foundation
 import Metal
 import BubblePhysicsReference
 @testable import BubblePhysicsNativeMetal
+@testable import BubblePhysicsNativeMetalDiagnostics
 
 /// Reprodukowalny profil Maca: pełny command buffer oraz izolowany, rzeczywisty kernel cache.
 /// Czasy są diagnostyką; bramka urządzeniowa pozostaje poza tym testem.
