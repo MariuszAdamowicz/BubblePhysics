@@ -1,6 +1,18 @@
 {
   "device" : "Apple M1 Pro",
   "scenes" : {
+    "mixed" : {
+      "note" : "scena mieszana po etapie 3 (200 baniek, 55 brył dynamicznych, 5 belek kinematycznych, 10 więzów, k = 128); 5 przebiegów po 30+300 klatek",
+      "p95Milliseconds" : 4.950583,
+      "recordedAt" : "2026-11-08T21:20:53Z",
+      "runs" : [
+        4.984458,
+        4.944959,
+        4.955375,
+        4.950583,
+        4.943167
+      ]
+    },
     "stress-300" : {
       "note" : "stress-300 po etapie 2 (wiersze kandydatów n·k, filtr kolizji, kontakty brył po liście kandydatów, kinematyka, zdarzenia kontaktu); 5 przebiegów po 30+300 klatek",
       "p95Milliseconds" : 3.351583,
