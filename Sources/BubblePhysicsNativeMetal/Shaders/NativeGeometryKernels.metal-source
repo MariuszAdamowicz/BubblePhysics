@@ -408,6 +408,69 @@ NativeRoundCore nativeRoundCoreOf(NativeRigidBody body, device float2 *vertices)
     return core;
 }
 
+// Wnętrze unii kawałków wypukłych. Krawędzie triangulacji nigdy nie stają się
+// powierzchnią kontaktową: punkt kontaktu pochodzi z zewnętrznego pierścienia.
+bool nativeRigidInside(float2 p, NativeRigidBody body, device float2 *vertices, device uint4 *triangles) {
+    // Koło i kapsuła: wnętrze to odległość od rdzenia nie większa niż promień.
+    if (nativeRigidIsRound(body)) {
+        NativeRoundCore core = nativeRoundCoreOf(body, vertices);
+        return distance(p, nativeClosestPoint(p, float4(core.a, core.b))) <= core.radius;
+    }
+    float2 local = nativeRotate(p - body.pose.xy, -body.pose.z);
+    for (uint i = 0; i < body.ranges.w; ++i) {
+        uint4 t = triangles[body.ranges.z + i];
+        float2 a = vertices[body.ranges.x+t.x], b = vertices[body.ranges.x+t.y], c = vertices[body.ranges.x+t.z];
+        if (nativeCross(b-a,local-a)>=0 && nativeCross(c-b,local-b)>=0 && nativeCross(a-c,local-c)>=0) return true;
+    }
+    return false;
+}
+
+
+// Wynik hit-testu jednego punktu: zwycięzca to największa para (warstwa, ObjectID); `found` 0 oznacza puste miejsce.
+// Warstwa to pole rekordu, równe 0 do etapu warstw.
+struct NativeHitTestResult { ulong identity; uint layer; uint found; };
+
+// Wątek na punkt, na buforach roboczych tego kroku. Bańka: kontur po kroku, parzystość przecięć (kontur zdeformowany,
+// nie koło nominalne). Bryła: dokładny kształt (trójkąty, koło, kapsuła). Obiekty usunięte przez region nie biorą udziału.
+// counts: liczba punktów, liczba brył, stride konturu.
+kernel void nativeHitTest(device float2 *points [[buffer(0)]],
+    device float2 *contourPoints [[buffer(1)]], device uint *contourCounts [[buffer(2)]],
+    device NativeBubble *bubbles [[buffer(3)]], device NativeRigidBody *bodies [[buffer(4)]],
+    device float2 *vertices [[buffer(5)]], device uint4 *triangles [[buffer(6)]],
+    constant NativeControl &control [[buffer(7)]], constant uint4 &counts [[buffer(8)]],
+    device NativeHitTestResult *results [[buffer(9)]], uint index [[thread_position_in_grid]]) {
+    if (index >= counts.x) return;
+    float2 query = points[index];
+    bool found = false; uint bestLayer = 0; ulong bestID = 0;
+    for (uint i = 0; i < control.counts.x; ++i) {
+        if (bubbles[i].publicFlags.w == 1) continue;
+        uint count = min(contourCounts[i], counts.z);
+        if (count < 3) continue;
+        bool inside = false;
+        for (uint k = 0, j = count - 1; k < count; j = k++) {
+            float2 a = contourPoints[i * counts.z + k], b = contourPoints[i * counts.z + j];
+            bool crosses = ((a.y > query.y) != (b.y > query.y)) &&
+                (query.x <= (b.x - a.x) * (query.y - a.y) / (b.y - a.y) + a.x);
+            inside = crosses ? !inside : inside;
+        }
+        if (!inside) continue;
+        uint layer = 0; ulong identity = ulong(bubbles[i].identity.x);
+        if (!found || layer > bestLayer || (layer == bestLayer && identity > bestID)) {
+            found = true; bestLayer = layer; bestID = identity;
+        }
+    }
+    for (uint i = 0; i < counts.y; ++i) {
+        NativeRigidBody body = bodies[i];
+        if (body.flags.z == 1 || !nativeRigidInside(query, body, vertices, triangles)) continue;
+        uint layer = 0; ulong identity = body.identity.x;
+        if (!found || layer > bestLayer || (layer == bestLayer && identity > bestID)) {
+            found = true; bestLayer = layer; bestID = identity;
+        }
+    }
+    NativeHitTestResult result = { bestID, bestLayer, found ? 1u : 0u };
+    results[index] = result;
+}
+
 // Kontakt dwóch rdzeni okrągłych: normalna od A do B, głębokość to nakładanie z promieniami (ujemna w szczelinie).
 // Gdy rdzenie się przecinają albo pokrywają, oś najmniejszego wnikania to normalna któregoś odcinka, a bez odcinków
 // (dwa punkty w tym samym miejscu) stała oś `fallback`, którą wołający kieruje od mniejszego ObjectID.

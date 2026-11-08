@@ -70,7 +70,8 @@ final class NativeMetalHitTestTests: XCTestCase {
 
     func testObjectsRemovedByTheRegionDoNotTakePart() async throws {
         // Bańka w całości poza regionem jest usuwana w tym kroku, więc jej kontur nie bierze udziału.
-        let outside = try bubble(1, at: [110, 0], radius: 2)
+        let outside = try WorldObject.bubble(BubbleDescriptor(id: id(1), position: [110, 0], targetRadius: 2,
+            physicsMaterialID: bubbleMaterial, renderStyleID: style))
         let frame = try await step([outside, bubble(2, at: [0, 0])], hitTests: [[110, 0], [0, 0]])
         XCTAssertNil(frame.objects[id(1)])
         XCTAssertEqual(frame.hitTestResults, [nil, id(2)])

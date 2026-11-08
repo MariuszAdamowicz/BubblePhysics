@@ -159,6 +159,13 @@ struct NativeMetalContourControl: Sendable {
     var shape: SIMD4<Float> // maksymalna krawędź, recovery rate, napięcie, clearance
 }
 
+/// Wynik hit-testu jednego punktu: zwycięzca to największa para (warstwa, ObjectID); `found` 0 to puste miejsce.
+struct NativeHitTestResult: Equatable, Sendable {
+    var identity: UInt64
+    var layer: UInt32
+    var found: UInt32
+}
+
 struct NativeMetalBubbleChange: Sendable {
     let index: Int
     let value: NativeMetalBubble
@@ -192,10 +199,12 @@ package struct NativeMetalSnapshot: Sendable {
     let previousBubbles: [NativeSolverBubble]?
     let previousSegments: [NativeSolverSegment]?
     let publicSettings: NativePublicSettings?
+    let hitTests: [SIMD2<Float>]
 
     package init(input: NativeSolverInput, previous: NativeMetalSnapshot? = nil) {
         let publicSettings = input.publicSettings
         self.publicSettings = publicSettings
+        hitTests = input.hitTests
         configuration = input.configuration
         sourceBubbles = input.bubbles
         sourceSegments = input.segments

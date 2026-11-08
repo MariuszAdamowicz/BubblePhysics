@@ -140,6 +140,8 @@ package struct NativeSolverInput: Sendable {
     package var segments: [NativeSolverSegment]
     /// Ustawienia ścieżki publicznej gry (własności, zdarzenia, bryły); diagnostyka zostawia `nil`.
     var publicSettings: NativePublicSettings?
+    /// Punkty hit-testu tego kroku; kernel `nativeHitTest` liczy wynik na stanie po kroku, bez odczytu konturów.
+    package var hitTests: [SIMD2<Float>] = []
 
     package init(configuration: NativeSolverConfiguration = .init(), bubbles: [NativeSolverBubble] = [],
                  segments: [NativeSolverSegment] = []) {
@@ -211,6 +213,8 @@ package struct NativeSolverFrame {
     package var contactCandidateOverflowCount = 0
     /// Największa liczba kandydatów na obiekt w tym kroku (etap 2).
     package var maximumContactCandidatesPerObject = 0
+    /// Wynik dla każdego punktu `NativeSolverInput.hitTests`, w tej samej kolejności; `nil` to puste miejsce.
+    package var hitTestResults: [ObjectID?] = []
 }
 
 /// Szew między solverem a jego użytkownikami (runner diagnostyczny, fałszywe wykonawcy w testach).

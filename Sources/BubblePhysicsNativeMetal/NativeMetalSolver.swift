@@ -526,6 +526,14 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
             avoiding: previousPolygonSensorPairs, zeroedCount: polygonPairCount, of: NativeMetalSensorPair.self, device: device))
         let previousPolygonSensorPairBuffer = previousPolygonSensorPairs ?? state.eventRecords
 
+        // Punkty i wyniki hit-testu: bufory na krok, alokowane przed utworzeniem bufora poleceń.
+        let hitTestPoints = try snapshot.hitTests.isEmpty ? state.eventRecords : eventBuffer(snapshot.hitTests)
+        let hitTestResultBuffer = try snapshot.hitTests.isEmpty ? state.eventRecords
+            : eventBuffer([NativeHitTestResult](repeating: .init(identity: 0, layer: 0, found: 0), count: snapshot.hitTests.count))
+        // Liczba punktów, liczba brył, stride konturu.
+        let hitTestCounts = try snapshot.hitTests.isEmpty ? state.eventRecords : eventBuffer([SIMD4(
+            UInt32(snapshot.hitTests.count), UInt32(rigidState.count), UInt32(state.contourStride), UInt32(0))])
+
         let descriptor = MTLCommandBufferDescriptor()
         descriptor.retainedReferences = true
         descriptor.errorOptions = .encoderExecutionStatus
@@ -923,6 +931,14 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
                 threadsPerThreadgroup: .init(width: min(pipeline.threadExecutionWidth, pipeline.maxTotalThreadsPerThreadgroup),
                                              height: 1, depth: 1))
         }
+        if !snapshot.hitTests.isEmpty {
+            // Na buforach roboczych tego kroku, po ostatnim kernelu, który zmienia kontury i pozy brył.
+            dispatch("nativeHitTest", buffers: [hitTestPoints, state.workingContourPoints, state.workingContourCounts,
+                state.workingBubbles, rigidState.count > 0 ? rigidState.bodies : state.eventRecords,
+                rigidState.count > 0 ? rigidState.vertices : state.eventRecords,
+                rigidState.count > 0 ? rigidState.triangles : state.eventRecords, state.control,
+                hitTestCounts, hitTestResultBuffer], threads: snapshot.hitTests.count)
+        }
         encoder.endEncoding()
         if let beforeCommit {
             let working = NativeMetalRenderHandoff(
@@ -1080,6 +1096,12 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
                 cacheInvalidationCount: Int(safetyResult.counts.z)),
             profile: profile, contours: contours, renderData: renderData,
             effectiveRadii: effectiveRadii, bubbleBounds: bubbleBounds, isComplete: true)
+        if !snapshot.hitTests.isEmpty {
+            let records = hitTestResultBuffer.contents().bindMemory(to: NativeHitTestResult.self, capacity: snapshot.hitTests.count)
+            frame.hitTestResults = (0..<snapshot.hitTests.count).map { index in
+                records[index].found == 0 ? nil : ObjectID(rawValue: records[index].identity)
+            }
+        }
         let overflowCounters = state.candidateOverflow.contents().load(as: SIMD4<UInt32>.self)
         frame.contactCandidateOverflowCount = Int(overflowCounters.x)
         frame.maximumContactCandidatesPerObject = Int(overflowCounters.y)
@@ -1239,7 +1261,8 @@ enum NativeMetalPipelineCache {
         "nativeCompactPolygonSensorEvents",
         "nativeCompactMissingSensorEvents",
         "nativeRigidPredict", "nativeRigidEmitCandidates", "nativeRigidContacts", "nativeRigidApplyBubbles", "nativeRigidApplyBodies", "nativeRigidGuardWalls", "nativeRigidFinish",
-        "nativeRigidResolveCCD", "nativeRigidApplyCCD", "nativeSolveJoints", "nativeApplyJointBodies", "nativeApplyJointBubbles"]
+        "nativeRigidResolveCCD", "nativeRigidApplyCCD", "nativeSolveJoints", "nativeApplyJointBodies", "nativeApplyJointBubbles",
+        "nativeHitTest"]
 
     static func pipelines(for device: MTLDevice) throws -> Compiled {
         if let cached = compiled[device.registryID] { return cached }

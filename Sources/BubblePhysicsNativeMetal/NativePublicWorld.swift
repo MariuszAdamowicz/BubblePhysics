@@ -187,7 +187,7 @@ package final class NativePublicWorld {
         })
         solverBubbles.sort { $0.id < $1.id }
         solverSegments.sort { $0.id < $1.id }
-        let input = NativeSolverInput(configuration: .init(timeStep: dt, linearDamping: 0, angularDamping: 0),
+        var input = NativeSolverInput(configuration: .init(timeStep: dt, linearDamping: 0, angularDamping: 0),
             bubbles: solverBubbles, segments: solverSegments,
             publicSettings: NativePublicSettings(properties: properties, region: region,
                 rigidPolygons: rigidPolygons, eventBufferCapacity: eventBufferCapacity,
@@ -195,6 +195,7 @@ package final class NativePublicWorld {
                     .sorted { $0.id.rawValue < $1.id.rawValue }, structuralShapes: structuralShapes,
                 staticPolygonMaterials: staticPolygonMaterials,
                 joints: joints))
+        input.hitTests = hitTests
         let frame = try await solver.executeFrame(input: input, scenarioStep: 0,
             commandBuffer: commandBuffer, beforeCommit: beforeCommit)
         for (id, object) in solver.publishedPolygons { result[id] = object }
@@ -270,7 +271,7 @@ package final class NativePublicWorld {
             contacts: contacts, events: discreteEvents, eventOverflow: WorldEventOverflow(droppedCount: dropped),
             contactCandidateOverflowCount: frame.contactCandidateOverflowCount,
             maximumContactCandidatesPerObject: frame.maximumContactCandidatesPerObject,
-            hitTestResults: hitTests.map { _ in nil })
+            hitTestResults: frame.hitTestResults)
     }
 
     /// Przejścia kontaktu pary w jednym kroku. Cache baniek i wiersze brył są już odczytane na CPU, więc początek to para

@@ -134,7 +134,11 @@ final class NativeMetalShaderABITests: XCTestCase {
                 ("geometry", MemoryLayout<NativeMetalSensorRecord>.offset(of: \.geometry)),
                 ("range", MemoryLayout<NativeMetalSensorRecord>.offset(of: \.range))]),
             Probe(name: "sensorPair", mslSize: "NativeSensorPair", swiftSize: MemoryLayout<NativeMetalSensorPair>.stride, fields: [
-                ("state", MemoryLayout<NativeMetalSensorPair>.offset(of: \.state))])
+                ("state", MemoryLayout<NativeMetalSensorPair>.offset(of: \.state))]),
+            Probe(name: "hitTestResult", mslSize: "NativeHitTestResult", swiftSize: MemoryLayout<NativeHitTestResult>.stride, fields: [
+                ("identity", MemoryLayout<NativeHitTestResult>.offset(of: \.identity)),
+                ("layer", MemoryLayout<NativeHitTestResult>.offset(of: \.layer)),
+                ("found", MemoryLayout<NativeHitTestResult>.offset(of: \.found))])
         ]
         assertMatches(probes, try measure(probes, sources: sources, device: device))
     }
