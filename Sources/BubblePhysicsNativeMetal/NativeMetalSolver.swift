@@ -961,6 +961,7 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         var contours: [NativeSolverBubbleID: [SIMD2<Float>]] = [:]
         var renderData: [SIMD4<Float>] = []
         var effectiveRadii: [NativeSolverBubbleID: Float] = [:]
+        var bubbleBounds: [NativeSolverBubbleID: SIMD4<Float>] = [:]
         var deformationCount = 0
         var maximumRelativeDeformation: Float = 0
         for index in bubbles.indices {
@@ -985,6 +986,11 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
             maximumRelativeDeformation = max(maximumRelativeDeformation, deformation)
             if readsContours { contours[bubbles[index].id] = points }
             effectiveRadii[bubbles[index].id] = effectiveRadius
+            let bounds = records[index].bounds
+            guard (0..<4).allSatisfy({ bounds[$0].isFinite }), bounds.x <= bounds.z, bounds.y <= bounds.w else {
+                throw rejectSafety(.nonFinite)
+            }
+            bubbleBounds[bubbles[index].id] = bounds
             renderData.append(packets[index].geometry)
         }
         if collectDispatchStatistics {
@@ -1019,7 +1025,7 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
                 ccdCandidateCount: Int(safetyResult.counts.x), guardCorrectionCount: Int(safetyResult.counts.y),
                 cacheInvalidationCount: Int(safetyResult.counts.z)),
             profile: profile, contours: contours, renderData: renderData,
-            effectiveRadii: effectiveRadii, isComplete: true)
+            effectiveRadii: effectiveRadii, bubbleBounds: bubbleBounds, isComplete: true)
         if snapshot.publicSettings != nil {
             let total = Int(state.eventCount.contents().load(as: UInt32.self))
             let publishedCount = min(total, requestedEventCapacity)

@@ -621,6 +621,7 @@ kernel void nativePrepareRenderData(device NativeBubble *bubbles [[buffer(0)]],
         previous = value;
     }
     float effectiveRadius = bubble.physical.z;
+    float2 boundsMin = bubble.position.xy, boundsMax = bubble.position.xy;
     for (uint sample = 0; sample < counts[index]; ++sample) {
         uint address = index * contour.counts.x + sample;
         float angle = 2 * M_PI_F * float(sample) / float(counts[index]);
@@ -628,6 +629,7 @@ kernel void nativePrepareRenderData(device NativeBubble *bubbles [[buffer(0)]],
             * bubble.physical.z * (1 - deformation[address].x);
         if (!all(isfinite(point))) nativeSafetyFailure(safety, 1);
         points[address] = point;
+        boundsMin = min(boundsMin, point); boundsMax = max(boundsMax, point);
         effectiveRadius = min(effectiveRadius, length(point - bubble.position.xy));
         maximum = max(maximum, deformation[address].x);
     }
@@ -640,6 +642,7 @@ kernel void nativePrepareRenderData(device NativeBubble *bubbles [[buffer(0)]],
         else if (edge > contour.shape.x) nativeSafetyFailure(safety, 4);
     }
     bubble.deformation = float4(maximum, effectiveRadius, 0, 0);
+    bubble.bounds = float4(boundsMin, boundsMax);
     bubbles[index] = bubble;
     NativeRenderPacket packet = {bubble.identity,
         float4(bubble.position.xy, bubble.physical.z, bubble.motion.z), bubble.deformation};
@@ -677,6 +680,7 @@ kernel void nativeApplyPublicRegion(device NativeBubble *bubbles [[buffer(0)]],
     float2 nearestWrapped = clamp(wrapped, control.region.xy, control.region.zw);
     if (length(wrapped - nearestWrapped) > b.physical.z) delta += nearestWrapped - wrapped;
     b.position += float4(delta, delta);
+    b.bounds += float4(delta, delta);
     if (!all(isfinite(b.position))) { nativeSafetyFailure(safety, 1); return; }
     b.publicFlags.w = 2;
     bubbles[index] = b;

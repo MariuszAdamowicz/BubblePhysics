@@ -231,7 +231,8 @@ public final class BubbleWorld {
                 droppedEvents += complete.eventOverflow.droppedCount
                 lastFrame = WorldFrame(stepIndex: clock.completedSteps, simulationTime: clock.simulationTime,
                     transactionReceipts: receipts, events: events,
-                    eventOverflow: WorldEventOverflow(droppedCount: droppedEvents), driveFeedback: complete.driveFeedback)
+                    eventOverflow: WorldEventOverflow(droppedCount: droppedEvents), driveFeedback: complete.driveFeedback,
+                    objects: state.publishedObjectStates())
             } catch {
                 lastAdvanceIssue = error is CancellationError ? .advanceCancelled : .stepFailed
                 break

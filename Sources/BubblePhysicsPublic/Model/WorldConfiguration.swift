@@ -25,6 +25,12 @@ public struct WorldRectangle: Equatable, Sendable {
         self.max = max
     }
 
+    /// Dla wartości, które pochodzą z solvera i są już sprawdzone (skończone, min ≤ max); bez walidacji i bez rzucania.
+    package init(uncheckedMin min: WorldPoint, max: WorldPoint) {
+        self.min = min
+        self.max = max
+    }
+
     public func contains(_ point: WorldPoint) -> Bool {
         point.x >= min.x && point.x <= max.x && point.y >= min.y && point.y <= max.y
     }

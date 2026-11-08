@@ -13,7 +13,7 @@ public final class BubblePhysicsMetalRender {
     private let vertexFunction: MTLFunction
     private let technicalFragment: MTLFunction
     /// W trybie wielokąta shader nie czyta `bubbles`, lecz walidacja Metal
-    /// wymaga bufora o pełnym ABI `RenderBubble` (144 bajtów).
+    /// wymaga bufora o pełnym ABI `RenderBubble` (160 bajtów).
     private let polygonBubblePlaceholder: MTLBuffer
     private var technicalPipelines: [MTLPixelFormat: MTLRenderPipelineState] = [:]
     private var triangulationCache: [[WorldPoint]: [Int]] = [:]

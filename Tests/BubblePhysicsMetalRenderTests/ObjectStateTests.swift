@@ -117,4 +117,52 @@ final class ObjectStateTests: XCTestCase {
         XCTAssertEqual(Set(after.objects.keys).map(\.rawValue).sorted(), [2])
         XCTAssertEqual(world.benchmarkContourCPUReadbackCount, 0)
     }
+
+    func testRotatedPolygonBoundsFollowItsRotation() async throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let world = try makeWorld(device: device)
+        world.submit(try baseTransaction().add(.polygon(try PolygonDescriptor(id: ObjectID(rawValue: 7),
+            vertices: [[-10, -10], [10, -10], [10, 10], [-10, 10]], position: [100, 100], rotation: .pi / 4,
+            motionRole: .static, physicsMaterialID: polygonMaterial, renderStyleID: style))))
+        let frame = await world.advance(by: 1.0 / 60)
+        let state = try XCTUnwrap(frame.objects[ObjectID(rawValue: 7)])
+        XCTAssertEqual(state.rotation, .pi / 4, accuracy: 1e-5)
+        XCTAssertEqual(state.bounds.min.x, 100 - 10 * Float(2).squareRoot(), accuracy: 1e-3)
+        XCTAssertEqual(state.bounds.max.y, 100 + 10 * Float(2).squareRoot(), accuracy: 1e-3)
+    }
+
+    /// Zawinięcie przesuwa kontur po obliczeniu AABB; granice muszą przesunąć się razem z konturem.
+    func testWrappedBubbleBoundsMatchItsContourAfterWrap() async throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let world = try makeWorld(device: device)
+        let id = ObjectID(rawValue: 1)
+        world.submit(try baseTransaction().add(.bubble(try BubbleDescriptor(id: id, position: [190, 100],
+            velocity: [900, 0], targetRadius: 8, regionExitPolicy: .wrap, physicsMaterialID: bubbleMaterial,
+            renderStyleID: style, eventInterest: [.didWrap]))))
+        var wrapped = false
+        var frame = WorldFrame(transactionReceipts: [], events: [])
+        for _ in 0..<20 {
+            frame = await world.advance(by: 1.0 / 60)
+            if frame.events.contains(.didWrap(id)) { wrapped = true; break }
+        }
+        XCTAssertTrue(wrapped, "bańka powinna się zawinąć")
+        let state = try XCTUnwrap(frame.objects[id])
+        let contour = try XCTUnwrap(world.debugContourSnapshot()[id])
+        XCTAssertEqual(state.bounds.min.x, contour.map(\.x).min() ?? .nan, accuracy: 1e-3)
+        XCTAssertEqual(state.bounds.max.x, contour.map(\.x).max() ?? .nan, accuracy: 1e-3)
+        XCTAssertEqual(state.bounds.min.y, contour.map(\.y).min() ?? .nan, accuracy: 1e-3)
+        XCTAssertEqual(state.bounds.max.y, contour.map(\.y).max() ?? .nan, accuracy: 1e-3)
+        XCTAssertTrue(state.bounds.contains(state.position))
+    }
+
+    func testObjectsStateSurvivesAFrameWithoutNewStepAndForSceneWithoutBodies() async throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let world = try makeWorld(device: device)
+        world.submit(try baseTransaction().add(try bubble(1, at: [60, 100], radius: 12)))
+        let first = await world.advance(by: 1.0 / 60)
+        let second = await world.advance(by: 0.001)
+        XCTAssertEqual(second.stepIndex, first.stepIndex)
+        XCTAssertEqual(second.objects, first.objects)
+        XCTAssertEqual(first.objects.count, 1)
+    }
 }

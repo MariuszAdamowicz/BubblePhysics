@@ -11,6 +11,7 @@ struct NativeMetalBubble: Equatable, Sendable {
     var material = SIMD4<Float>.zero
     var resources = SIMD2<UInt64>.zero
     var eventData = SIMD2<UInt64>.zero // interest, merge groups
+    var bounds = SIMD4<Float>.zero // AABB zdeformowanego konturu po kroku: min.xy, max.xy
 
     init(_ bubble: NativeSolverBubble) {
         identity = SIMD2(Int64(bubble.id.rawValue), 0)

@@ -11,6 +11,7 @@ struct NativeBubble {
     float4 material;
     ulong2 resources;
     ulong2 eventData;
+    float4 bounds;
 };
 struct NativeSegment {
     long2 identity; uint4 flags; float4 previous; float4 current;

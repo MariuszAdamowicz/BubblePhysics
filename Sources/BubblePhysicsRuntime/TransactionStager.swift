@@ -38,6 +38,8 @@ package struct RuntimeObject: Equatable, Sendable {
     package var targetRadius: Float = 0
     package var collisionRadius: Float = 0
     package var effectiveRadius: Float = 0
+    /// AABB bańki z ostatniego kroku solvera; `nil`, gdy krok jeszcze jej nie policzył.
+    package var bounds: WorldRectangle?
     package var capturedRadius: Float?
     package var rigidity: Float = 0
     package var presentation: PresentationParameters = .empty

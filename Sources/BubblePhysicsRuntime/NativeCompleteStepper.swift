@@ -108,6 +108,7 @@ package final class NativeCompleteStepper: CompleteStepper {
             state.objects[id]?.rotation = object.rotation
             state.objects[id]?.angularVelocity = object.angularVelocity
             state.objects[id]?.effectiveRadius = object.effectiveRadius
+            state.objects[id]?.bounds = object.bounds
             state.objects[id]?.structuralShape = nil
         }
         let feedback = MotionControllers.feedback(&state, contacts: frame.contacts)
@@ -116,6 +117,43 @@ package final class NativeCompleteStepper: CompleteStepper {
         previousBlockers = discrete.blockers
         return .init(state: state, events: discrete.events, eventOverflow: discrete.overflow,
             driveFeedback: feedback)
+    }
+}
+
+extension RuntimeState {
+    /// Stan bańek i brył po ostatnim kroku, z rekordów, bez odczytu konturów. Czujniki i pola sił nie mają stanu.
+    package func publishedObjectStates() -> [ObjectID: ObjectState] {
+        var result: [ObjectID: ObjectState] = [:]
+        result.reserveCapacity(objects.count)
+        for (id, object) in objects {
+            let kind: ObjectState.Kind
+            let bounds: WorldRectangle
+            switch object.descriptor {
+            case .bubble:
+                kind = .bubble(effectiveRadius: object.effectiveRadius)
+                let r = object.effectiveRadius
+                bounds = object.bounds ?? WorldRectangle(uncheckedMin: object.position - SIMD2(r, r),
+                                                         max: object.position + SIMD2(r, r))
+            case .polygon(let polygon):
+                kind = .polygon
+                bounds = Self.polygonBounds(polygon.geometry, position: object.position, rotation: object.rotation)
+            case .sensor, .forceField: continue
+            }
+            result[id] = ObjectState(kind: kind, position: object.position, velocity: object.velocity,
+                rotation: object.rotation, angularVelocity: object.angularVelocity, bounds: bounds)
+        }
+        return result
+    }
+
+    private static func polygonBounds(_ geometry: PolygonGeometry, position: WorldPoint,
+                                      rotation: Float) -> WorldRectangle {
+        let c = cos(rotation), s = sin(rotation)
+        var low = SIMD2<Float>(repeating: .infinity), high = SIMD2<Float>(repeating: -.infinity)
+        for vertex in geometry.vertices {
+            let point = WorldPoint(vertex.x * c - vertex.y * s, vertex.x * s + vertex.y * c) + position
+            low = pointwiseMin(low, point); high = pointwiseMax(high, point)
+        }
+        return WorldRectangle(uncheckedMin: low, max: high)
     }
 }
 

@@ -198,6 +198,8 @@ package struct NativeSolverFrame {
     package var contours: [NativeSolverBubbleID: [SIMD2<Float>]] = [:]
     package var renderData: [SIMD4<Float>] = []
     package var effectiveRadii: [NativeSolverBubbleID: Float] = [:]
+    /// AABB zdeformowanego konturu po kroku (min.xy, max.xy), liczony w kernelu; bez odczytu konturu na CPU.
+    package var bubbleBounds: [NativeSolverBubbleID: SIMD4<Float>] = [:]
     package var isComplete = false
     package var regionRemovals: Set<NativeSolverBubbleID> = []
     package var regionWraps: Set<NativeSolverBubbleID> = []

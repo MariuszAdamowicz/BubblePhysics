@@ -70,7 +70,8 @@ final class NativeMetalShaderABITests: XCTestCase {
                 ("publicFlags", MemoryLayout<NativeMetalBubble>.offset(of: \.publicFlags)),
                 ("material", MemoryLayout<NativeMetalBubble>.offset(of: \.material)),
                 ("resources", MemoryLayout<NativeMetalBubble>.offset(of: \.resources)),
-                ("eventData", MemoryLayout<NativeMetalBubble>.offset(of: \.eventData))]),
+                ("eventData", MemoryLayout<NativeMetalBubble>.offset(of: \.eventData)),
+                ("bounds", MemoryLayout<NativeMetalBubble>.offset(of: \.bounds))]),
             Probe(name: "segment", mslSize: "NativeSegment", swiftSize: MemoryLayout<NativeMetalSegment>.stride, fields: [
                 ("identity", MemoryLayout<NativeMetalSegment>.offset(of: \.identity)),
                 ("flags", MemoryLayout<NativeMetalSegment>.offset(of: \.flags)),
@@ -134,7 +135,8 @@ final class NativeMetalShaderABITests: XCTestCase {
             ("physical", MemoryLayout<NativeMetalBubble>.offset(of: \.physical)),
             ("deformation", MemoryLayout<NativeMetalBubble>.offset(of: \.deformation)),
             ("material", MemoryLayout<NativeMetalBubble>.offset(of: \.material)),
-            ("eventData", MemoryLayout<NativeMetalBubble>.offset(of: \.eventData))])]
+            ("eventData", MemoryLayout<NativeMetalBubble>.offset(of: \.eventData)),
+            ("bounds", MemoryLayout<NativeMetalBubble>.offset(of: \.bounds))])]
         assertMatches(probes, try measure(probes, sources: [try source("NativeRenderKernels")], device: device))
     }
 }

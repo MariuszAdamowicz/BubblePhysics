@@ -16,6 +16,7 @@ struct RenderBubble {
     float4 material;
     ulong2 resources;
     ulong2 eventData;
+    float4 bounds;
 };
 
 vertex ContourVertexOutput nativeContourVertex(

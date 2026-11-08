@@ -13,6 +13,8 @@ package struct NativePublicObject: Equatable, Sendable {
     package var motionRole: MotionRole
     package var collisionRadius: Float = 0
     package var effectiveRadius: Float = 0
+    /// AABB zdeformowanego konturu bańki po ostatnim kroku (z kernelu); `nil` dla brył i przed pierwszym krokiem.
+    package var bounds: WorldRectangle?
     package var rigidity: Float = 0
     package var structuralShape: NativeStructuralShape?
     package var presentation: PresentationParameters = .empty
@@ -182,6 +184,9 @@ package final class NativePublicWorld {
             result[id]?.rotation = bubble.rotation
             result[id]?.angularVelocity = bubble.angularVelocity
             result[id]?.effectiveRadius = frame.effectiveRadii[bubble.id] ?? bubble.targetRadius
+            result[id]?.bounds = frame.bubbleBounds[bubble.id].map {
+                WorldRectangle(uncheckedMin: SIMD2($0.x, $0.y), max: SIMD2($0.z, $0.w))
+            }
         }
         var contacts = solver.publishedDriveContacts
         func objectID(_ value: Int) -> ObjectID { ObjectID(rawValue: UInt64(bitPattern: Int64(value))) }
