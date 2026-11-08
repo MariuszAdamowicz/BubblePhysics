@@ -2,15 +2,15 @@
   "device" : "Apple M1 Pro",
   "scenes" : {
     "stress-300" : {
-      "note" : "stress-300 po etapie 1 (krok bez ReferenceWorld i O(n^2), stan obiektów, AABB w kernelu); 5 przebiegów po 30+300 klatek",
-      "p95Milliseconds" : 3.3885,
-      "recordedAt" : "2026-11-08T15:22:30Z",
+      "note" : "stress-300 po etapie 2 (wiersze kandydatów n·k, filtr kolizji, kontakty brył po liście kandydatów, kinematyka, zdarzenia kontaktu); 5 przebiegów po 30+300 klatek",
+      "p95Milliseconds" : 3.351583,
+      "recordedAt" : "2026-11-08T18:04:36Z",
       "runs" : [
-        3.415958,
-        3.3775,
-        3.373583,
-        3.3885,
-        3.417208
+        3.432625,
+        3.379125,
+        3.338459,
+        3.351583,
+        3.314166
       ]
     }
   }
