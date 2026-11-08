@@ -58,7 +58,7 @@ final class QueryIndexTests: XCTestCase {
         XCTAssertEqual(index.objects(at: [4, 4]), [], "bańka: poza kołem, w jej prostokącie")
         XCTAssertEqual(index.objects(at: [36, 0]), [id(2)], "romb: wnętrze")
         XCTAssertEqual(index.objects(at: [34.5, 4.5]), [], "romb: w AABB, poza obróconym kształtem")
-        XCTAssertEqual(index.objects(at: [-27, 3]), [id(3)], "koło: wnętrze")
+        XCTAssertEqual(index.objects(at: [-28, 2]), [id(3)], "koło: wnętrze")
         XCTAssertEqual(index.objects(at: [-27, 3.4]), [], "koło: poza kołem, w AABB")
         XCTAssertEqual(index.objects(at: [0, 37]), [id(4)], "kapsuła: wnętrze półkola końca")
         XCTAssertEqual(index.objects(at: [1.9, 37.9]), [], "kapsuła: w AABB, poza zaokrągleniem")

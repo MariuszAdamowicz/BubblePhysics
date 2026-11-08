@@ -44,6 +44,8 @@ public final class BubbleWorld {
     /// Stan końcowy „zawiódł”: ustawiony raz, nigdy nie czyszczony.
     private var failureReason: WorldFailureReason?
     private var lastRejectionReason: WorldRejectionReason?
+    private var queryIndexCache: QueryIndex?
+    private var queryIndexBuilds = 0
 
     public convenience init(configuration: WorldConfiguration,
                             device: MTLDevice? = MTLCreateSystemDefaultDevice()) throws {
@@ -171,13 +173,45 @@ public final class BubbleWorld {
         }
     }
 
-    // Zaślepki do zadań 39 i 41.
-    package var queryIndexBuildCount: Int { 0 }
+    // MARK: zapytania synchroniczne
+
+    /// Indeks zapytań budowany leniwie z opublikowanego stanu; każda publikacja go unieważnia, więc powstaje
+    /// najwyżej raz na publikację.
+    private func index() -> QueryIndex {
+        if let queryIndexCache { return queryIndexCache }
+        let built = QueryIndex(state: state)
+        queryIndexCache = built
+        queryIndexBuilds += 1
+        return built
+    }
+
+    /// Ile razy zbudowano indeks zapytań; szew testów „najwyżej raz na publikację”.
+    package var queryIndexBuildCount: Int { queryIndexBuilds }
+
+    /// Obiekty (bańki i bryły) zawierające punkt, rosnąco po `ObjectID`. Odpowiedź dotyczy ostatnio opublikowanego stanu.
+    /// Bryły są sprawdzane dokładnie, a bańka jako koło o efektywnym promieniu; dokładny kontur bańki daje `hitTest`.
+    /// Filtr działa jak filtr obiektu: wynik to obiekty, z którymi taki obiekt by kolidował; `nil` nie zawęża.
+    public func objects(at point: WorldPoint, filter: CollisionFilter? = nil) -> [ObjectID] {
+        index().objects(at: point, filter: filter)
+    }
+
+    /// Obiekty przecinające prostokąt, rosnąco po `ObjectID`.
+    public func objects(in rectangle: WorldRectangle, filter: CollisionFilter? = nil) -> [ObjectID] {
+        index().objects(in: rectangle, filter: filter)
+    }
+
+    /// Obiekty przecinające koło o danym środku i promieniu (nieujemnym i skończonym), rosnąco po `ObjectID`.
+    public func objects(inCircle center: WorldPoint, radius: Float, filter: CollisionFilter? = nil) -> [ObjectID] {
+        index().objects(inCircle: center, radius: radius, filter: filter)
+    }
+
+    /// Pierwsze trafienie na odcinku od `start` do `end`; `nil`, gdy odcinek niczego nie trafia albo ma wartości nieskończone.
+    public func raycast(from start: WorldPoint, to end: WorldPoint, filter: CollisionFilter? = nil) -> RaycastHit? {
+        index().raycast(from: start, to: end, filter: filter)
+    }
+
+    // Zaślepka do zadania 41.
     package var pendingHitTestCount: Int { 0 }
-    public func objects(at point: WorldPoint, filter: CollisionFilter? = nil) -> [ObjectID] { [] }
-    public func objects(in rectangle: WorldRectangle, filter: CollisionFilter? = nil) -> [ObjectID] { [] }
-    public func objects(inCircle center: WorldPoint, radius: Float, filter: CollisionFilter? = nil) -> [ObjectID] { [] }
-    public func raycast(from start: WorldPoint, to end: WorldPoint, filter: CollisionFilter? = nil) -> RaycastHit? { nil }
     public func hitTest(_ point: WorldPoint) async -> ObjectID? { nil }
 
     /// Token jest unikalny w obrębie świata. Walidacja nastąpi na granicy kroku.
@@ -279,6 +313,7 @@ public final class BubbleWorld {
                 // W czasie await można dopisać transakcje lub włączyć pauzę.
                 // Dopiero tutaj publikujemy kandydat i zdejmujemy wyłącznie jego prefiks kolejki.
                 state = complete.state
+                queryIndexCache = nil
                 pending.removeFirst(transactionCount)
                 clock.completeStep()
                 stepsInLastAdvance += 1
