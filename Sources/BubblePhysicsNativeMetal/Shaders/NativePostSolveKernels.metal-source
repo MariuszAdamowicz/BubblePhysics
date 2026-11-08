@@ -342,11 +342,13 @@ kernel void nativeCheckFinite(device NativeBubble *bubbles [[buffer(0)]],
 
 // Czy bryła przesunięta z pozy `p` do `q` przecina któryś odcinek; przy przecięciu zwraca punkt, normalną i właściciela ściany.
 bool nativeRigidSweepCrossing(NativeRigidBody b, float3 p, float3 q, device float2 *vertices,
-    device NativeSegment *segments, uint segmentCount, thread float2 &contactPoint, thread float2 &contactNormal,
-    thread long &contactOwner) {
+    device NativeSegment *segments, uint segmentCount, uint entity, device uint4 *jointRanges, device ulong *jointPartners,
+    thread float2 &contactPoint, thread float2 &contactNormal, thread long &contactOwner) {
     for(uint j=0;j<segmentCount;++j){
         NativeSegment wall=segments[j];
         if(ulong(wall.identity.y)==b.identity.x && wall.flags.y)continue;
+        // Ściana połączona więzem bez `collideConnected` jest dla tej bryły przezroczysta.
+        if(wall.flags.y && nativeJointExcluded(jointRanges,jointPartners,entity,ulong(wall.identity.y)))continue;
         if(!nativeFilterAccepts(b.filter,wall.filter))continue;
         for(uint k=0;k<b.ranges.y;++k){
             float2 v=vertices[b.ranges.x+k];
@@ -379,8 +381,10 @@ kernel void nativeRigidPredict(device NativeRigidBody *bodies [[buffer(0)]],
     device float2 *vertices [[buffer(1)]], constant uint4 &counts [[buffer(2)]],
     constant NativeControl &control [[buffer(3)]], device NativeSegment *segments [[buffer(4)]],
     device atomic_uint *safety [[buffer(5)]], device NativeRigidWall *walls [[buffer(6)]],
+    device uint4 *jointRanges [[buffer(7)]], device ulong *jointPartners [[buffer(8)]],
     uint index [[thread_position_in_grid]]) {
     if(index>=counts.x)return;
+    uint entity=counts.y+index;
     NativeRigidBody b=bodies[index];b.previous.xy=b.pose.xy;b.pose.w=b.pose.z;b.flags.z=0;
     if(b.flags.x){b.motion.xyz=0;bodies[index]=b;return;}
     float dt=control.physics.x;b.motion.xyz*=exp(-b.motion.w*dt);
@@ -399,14 +403,14 @@ kernel void nativeRigidPredict(device NativeRigidBody *bodies [[buffer(0)]],
     for(uint sample=0;sample<steps && !crossed;++sample){
         float3 p=mix(start,b.pose.xyz,float(sample)/float(steps));
         float3 q=mix(start,b.pose.xyz,float(sample+1)/float(steps));
-        crossed=nativeRigidSweepCrossing(b,p,q,vertices,segments,control.counts.y,contactPoint,contactNormal,contactOwner);
+        crossed=nativeRigidSweepCrossing(b,p,q,vertices,segments,control.counts.y,entity,jointRanges,jointPartners,contactPoint,contactNormal,contactOwner);
         if(!crossed)continue;
         // Bryła staje tuż przed ścianą, w ostatniej pozie bez przecięcia, a nie na początku kroku: zatrzymana wysoko
         // nad podłogą spadałaby resztę szczeliny w następnych krokach i kontakt znikałby i wracał (P-B-12).
         float3 last=p,hit=q;
         for(uint bisection=0;bisection<12;++bisection){
             float3 middle=0.5f*(last+hit);float2 point,normal;long owner;
-            if(nativeRigidSweepCrossing(b,p,middle,vertices,segments,control.counts.y,point,normal,owner))hit=middle;
+            if(nativeRigidSweepCrossing(b,p,middle,vertices,segments,control.counts.y,entity,jointRanges,jointPartners,point,normal,owner))hit=middle;
             else last=middle;
         }
         stopPose=last;
@@ -427,12 +431,14 @@ kernel void nativeRigidPredict(device NativeRigidBody *bodies [[buffer(0)]],
 // zapisywane; każdy work-item ma wyłączną własność swojej dynamicznej bryły.
 kernel void nativeRigidGuardWalls(device NativeRigidBody *bodies [[buffer(0)]],
     device float2 *vertices [[buffer(1)]], device uint4 *triangles [[buffer(2)]],
-    constant uint4 &counts [[buffer(3)]], uint index [[thread_position_in_grid]]) {
+    constant uint4 &counts [[buffer(3)]], device uint4 *jointRanges [[buffer(4)]], device ulong *jointPartners [[buffer(5)]],
+    uint index [[thread_position_in_grid]]) {
     if(index>=counts.x || bodies[index].flags.x || bodies[index].filter.z)return;
     NativeRigidBody b=bodies[index];
     for(uint j=0;j<counts.x;++j){
         // Statyczne koło i kapsuła nie mają obrysu z krawędzi: ich kontakty rozwiązuje nativeRigidContacts.
         if(!bodies[j].flags.x || nativeRigidIsRound(bodies[j]) || !nativeFilterAccepts(b.filter,bodies[j].filter))continue;
+        if(nativeJointExcluded(jointRanges,jointPartners,counts.y+index,bodies[j].identity.x))continue;
         NativeRigidBody wall=bodies[j];
         for(uint k=0;k<b.ranges.y;++k){
             float2 p=nativeRigidVertex(b,vertices,k);

@@ -112,6 +112,12 @@ final class NativeMetalShaderABITests: XCTestCase {
                 ("filter", MemoryLayout<NativeRigidBody>.offset(of: \.filter)),
                 ("shape", MemoryLayout<NativeRigidBody>.offset(of: \.shape)),
                 ("limits", MemoryLayout<NativeRigidBody>.offset(of: \.limits))]),
+            Probe(name: "joint", mslSize: "NativeJoint", swiftSize: MemoryLayout<NativeJointRecord>.stride, fields: [
+                ("ends", MemoryLayout<NativeJointRecord>.offset(of: \.ends)),
+                ("anchors", MemoryLayout<NativeJointRecord>.offset(of: \.anchors)),
+                ("parameters", MemoryLayout<NativeJointRecord>.offset(of: \.parameters)),
+                ("limits", MemoryLayout<NativeJointRecord>.offset(of: \.limits)),
+                ("state", MemoryLayout<NativeJointRecord>.offset(of: \.state))]),
             Probe(name: "structuralHeader", mslSize: "NativeStructuralHeader", swiftSize: MemoryLayout<NativeStructuralHeader>.stride, fields: [
                 ("origin", MemoryLayout<NativeStructuralHeader>.offset(of: \.origin))]),
             Probe(name: "structuralSource", mslSize: "NativeStructuralSource", swiftSize: MemoryLayout<NativeStructuralSourceRecord>.stride, fields: [

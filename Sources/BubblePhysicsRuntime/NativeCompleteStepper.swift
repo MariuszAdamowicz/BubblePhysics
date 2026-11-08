@@ -113,6 +113,7 @@ package final class NativeCompleteStepper: CompleteStepper {
         }
         let frame = try await native.step(objects: input, materials: state.physicsMaterials,
             styles: state.renderStyles, region: state.configuration.simulationRegion, duration: duration,
+            joints: Array(state.joints.values),
             eventBufferCapacity: state.configuration.eventBufferCapacity,
             commandBuffer: commandBuffer,
             beforeCommit: beforeCommit.map { callback in

@@ -17,7 +17,8 @@ public struct HingeLimits: Equatable, Sendable {
     }
 }
 
-/// Silnik zawiasu: dąży do docelowej prędkości kątowej ciała B względem A, nie przekraczając maksymalnego momentu.
+/// Silnik zawiasu: dąży do docelowej prędkości kątowej ciała B względem A (przy więzie ze światem ciała A względem świata),
+/// nie przekraczając maksymalnego momentu.
 public struct HingeMotor: Equatable, Sendable {
     public let targetAngularVelocity: Float
     public let maximumTorque: Float
@@ -30,7 +31,9 @@ public struct HingeMotor: Equatable, Sendable {
 
 /// Więz między ciałem A a ciałem B albo światem (`bodyB == nil`). Kotwice leżą w układach lokalnych ciał;
 /// dla świata `anchorB` jest punktem świata. Bańka (zaczepiona w środku masy) może być tylko w więzie dystansowym.
-/// Względny kąt ciał to `rotacja(B) − rotacja(A) − referenceAngle`, a dla świata rotacja B wynosi 0.
+/// Względny kąt ciał to `rotacja(B) − rotacja(A) − referenceAngle`. Przy więzie ze światem (`bodyB == nil`) świat stoi
+/// w miejscu i jest stroną odniesienia, więc kąt, zakres i prędkość silnika dotyczą ciała A względem świata:
+/// `rotacja(A) − referenceAngle`.
 public struct Joint: Equatable, Sendable {
     public enum Kind: Equatable, Sendable {
         /// `softness` to podatność XPBD (0 = sztywny dystans), `damping` tłumi prędkość względną wzdłuż więzu.

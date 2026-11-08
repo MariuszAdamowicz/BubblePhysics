@@ -238,6 +238,7 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
     private var previousPolygonSensorPairCount = 0
     var hasSensorPairHistory: Bool { previousSensorPairCount > 0 || previousPolygonSensorPairCount > 0 }
     private let rigidState: NativeRigidPolygonState
+    private let jointState: NativeJointState
     private(set) var publishedPolygons: [ObjectID: NativePublicObject] = [:]
     private(set) var publishedDriveContacts: [ObjectID: [DriveBlockingContact]] = [:]
     /// Kontakty brył ostatniego kroku z sumą normalnych Δλ (zdarzenia kontaktu w `NativePublicWorld`).
@@ -270,6 +271,7 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
          collectDispatchStatistics: Bool = false, collectStageDiagnostics: Bool = false) throws {
         self.device = device
         self.rigidState = NativeRigidPolygonState(device: device)
+        self.jointState = NativeJointState(device: device)
         self.configuration = configuration.sanitized
         self.candidateCapacity = candidateCapacity
         self.collectDispatchStatistics = collectDispatchStatistics
@@ -312,6 +314,11 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         let segmentCount = snapshot.sourceSegments.count
         try rigidState.prepare(snapshot.publicSettings?.rigidPolygons ?? [], bubbleCount: count,
             timeStep: snapshot.configuration.timeStep)
+        try jointState.prepare(snapshot.publicSettings?.joints ?? [],
+            bubbleIDs: snapshot.sourceBubbles.map { ObjectID(rawValue: UInt64(bitPattern: Int64($0.id.rawValue))) },
+            bodyIDs: (snapshot.publicSettings?.rigidPolygons ?? []).map { $0.object.descriptor.id },
+            iterations: configuration.solverIterationCount)
+        let hasJoints = jointState.count > 0
         let hasRigidBodies = snapshot.publicSettings?.rigidPolygons.contains { $0.object.motionRole != .static || $0.hasRoundCore } == true
         guard frameNumber < UInt32.max else { throw NativeMetalSolverError.invalidSnapshot }
         let nextFrame = frameNumber + 1
@@ -655,7 +662,8 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         }
         if hasRigidBodies {
             dispatch("nativeRigidPredict", buffers: [rigidState.bodies, rigidState.vertices, rigidState.control,
-                state.control, state.workingSegments, state.safetyControl, rigidState.walls], threads: rigidState.count)
+                state.control, state.workingSegments, state.safetyControl, rigidState.walls, jointState.ranges, jointState.exclusions],
+                threads: rigidState.count)
         }
         dispatchReduction("nativePrepareGrid", buffers: [state.workingBubbles, state.control, state.contactControl])
         dispatch("nativeBuildGrid", buffers: [state.workingBubbles, state.control, state.contactControl, state.grid], threads: state.bubbleCapacity)
@@ -676,7 +684,8 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
             size *= 2
         }
         dispatch("nativeEmitCandidates", buffers: [state.workingBubbles, state.control, state.contactControl,
-            state.grid, state.workingSegments, state.candidateRows, state.candidateRowCounts, state.candidateOverflow], threads: count)
+            state.grid, state.workingSegments, state.candidateRows, state.candidateRowCounts, state.candidateOverflow,
+            jointState.ranges, jointState.exclusions], threads: count)
         dispatch("nativePrepareCandidateCounts", buffers: [state.control, state.candidateRowCounts, state.scanValues], threads: count * 2)
         scan(mode: 0, maximum: max(1, count * 2))
         prepareIndirectArguments()
@@ -722,7 +731,8 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         measureResidual()
         if hasRigidBodies {
             dispatch("nativeRigidEmitCandidates", buffers: [rigidState.bodies, state.workingBubbles, inputPositions,
-                rigidState.control, rigidState.candidates, rigidState.rowCounts, state.candidateOverflow], threads: rigidState.count)
+                rigidState.control, rigidState.candidates, rigidState.rowCounts, state.candidateOverflow,
+                jointState.ranges, jointState.exclusions], threads: rigidState.count)
             // CCD bryła–bryła po wierszach kandydatów, przed pętlą: faza 1 liczy czas uderzenia, faza 2 cofa bryły.
             dispatch("nativeRigidResolveCCD", buffers: [rigidState.bodies, rigidState.vertices, rigidState.triangles,
                 rigidState.control, rigidState.candidates, rigidState.rowCounts], threads: rigidState.count)
@@ -743,7 +753,18 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
                     state.safetyControl, rigidState.candidates, rigidState.rowCounts], threads: rigidState.rowCapacity)
                 dispatch("nativeRigidApplyBodies", buffers: [rigidState.bodies, rigidState.control, rigidState.contacts,
                     rigidState.candidates, rigidState.rowCounts], threads: rigidState.count)
-                dispatch("nativeRigidGuardWalls", buffers: [rigidState.bodies, rigidState.vertices, rigidState.triangles, rigidState.control], threads: rigidState.count)
+            }
+            if hasJoints {
+                dispatch("nativeSolveJoints", buffers: [rigidState.bodies, state.workingBubbles, inputPositions,
+                    jointState.records, jointState.corrections, jointState.control, state.control], threads: jointState.count)
+                dispatch("nativeApplyJointBodies", buffers: [rigidState.bodies, jointState.corrections,
+                    jointState.references, jointState.ranges, jointState.control], threads: rigidState.count)
+                dispatch("nativeApplyJointBubbles", buffers: [state.workingBubbles, inputPositions, jointState.corrections,
+                    jointState.references, jointState.ranges, jointState.control, state.solverControl], threads: count)
+            }
+            if hasRigidBodies {
+                dispatch("nativeRigidGuardWalls", buffers: [rigidState.bodies, rigidState.vertices, rigidState.triangles, rigidState.control,
+                    jointState.ranges, jointState.exclusions], threads: rigidState.count)
                 dispatch("nativeRigidApplyBubbles", buffers: [state.workingBubbles, inputPositions, rigidState.control,
                     rigidState.contacts, state.solverControl, rigidState.candidates, rigidState.rowCounts], threads: count)
             }
@@ -1213,7 +1234,7 @@ enum NativeMetalPipelineCache {
         "nativeCompactPolygonSensorEvents",
         "nativeCompactMissingSensorEvents",
         "nativeRigidPredict", "nativeRigidEmitCandidates", "nativeRigidContacts", "nativeRigidApplyBubbles", "nativeRigidApplyBodies", "nativeRigidGuardWalls", "nativeRigidFinish",
-        "nativeRigidResolveCCD", "nativeRigidApplyCCD"]
+        "nativeRigidResolveCCD", "nativeRigidApplyCCD", "nativeSolveJoints", "nativeApplyJointBodies", "nativeApplyJointBubbles"]
 
     static func pipelines(for device: MTLDevice) throws -> Compiled {
         if let cached = compiled[device.registryID] { return cached }

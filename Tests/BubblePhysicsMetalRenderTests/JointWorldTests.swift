@@ -125,6 +125,26 @@ final class JointWorldTests: XCTestCase {
         XCTAssertEqual(try state(result.frame, 1).angularVelocity, 2, accuracy: 0.1)
     }
 
+    // P-B-24: prędkość silnika to prędkość B względem A, więc kolejność końców decyduje o kierunku obrotu ciała ruchomego.
+    func testHingeMotorDrivesSecondBodyRelativeToFirst() async throws {
+        func spin(movableIsFirst: Bool) async throws -> Float {
+            let world = try makeWorld()
+            let pivot = WorldPoint(200, 300)
+            let motor = try HingeMotor(targetAngularVelocity: 2, maximumTorque: 100_000)
+            world.submit(try B.baseTransaction()
+                .add(B.box(1, at: pivot, half: [30, 30], role: .static))
+                .add(B.box(2, at: pivot, half: [20, 4], role: .dynamic))
+                .addJoint(B.hingeJoint(1, movableIsFirst ? 2 : 1, movableIsFirst ? 1 : 2, motor: motor)))
+            let result = await B.advance(world, steps: 60)
+            healthy(world, "silnik między ciałami")
+            return try state(result.frame, 2).angularVelocity
+        }
+        let asSecond = try await spin(movableIsFirst: false)
+        let asFirst = try await spin(movableIsFirst: true)
+        XCTAssertEqual(asSecond, 2, accuracy: 0.1, "ciało ruchome jako B obraca się z prędkością docelową")
+        XCTAssertEqual(asFirst, -2, accuracy: 0.1, "ciało ruchome jako A obraca się przeciwnie")
+    }
+
     // P-B-24: z obciążeniem ponad maksymalny moment silnik nie osiąga celu; z mocniejszym silnikiem osiąga.
     func testHingeMotorUnderLoadBeyondMaximumTorqueCannotReachTarget() async throws {
         func finalVelocity(maximumTorque: Float) async throws -> Float {
@@ -147,7 +167,8 @@ final class JointWorldTests: XCTestCase {
 
     // P-B-24: spaw trzyma względną pozę dwóch brył (położenie i kąt) mimo obrotu i grawitacji.
     func testWeldKeepsRelativePose() async throws {
-        let world = try makeWorld(gravity: [0, -g])
+        // Region szeroki w dół: para spada przez 3 s i przy domyślnym regionie wypadałaby z niego tuż przed końcem testu.
+        let world = try makeWorld(gravity: [0, -g], region: WorldRectangle(min: [-5000, -5000], max: [5000, 5000]))
         world.submit(try B.baseTransaction()
             .add(B.box(1, at: [200, 300], half: [20, 5], role: .dynamic))
             .add(B.box(2, at: [240, 300], half: [20, 5], role: .dynamic))
@@ -244,6 +265,37 @@ final class JointWorldTests: XCTestCase {
         XCTAssertGreaterThan(on.events, 0, "z przełącznikiem powstaje kontakt")
     }
 
+    // MARK: Determinizm
+
+    // G10-AC5: więzy nie używają redukcji atomowych, więc ta sama scena daje bit w bit ten sam stan.
+    func testJointSceneIsBitIdenticalAcrossTwoRuns() async throws {
+        func run() async throws -> [UInt32] {
+            let world = try makeWorld(gravity: [0, -g])
+            let pivot = WorldPoint(300, 500)
+            world.submit(try B.baseTransaction()
+                .add(B.box(1, at: [200, 300], half: [20, 5], role: .dynamic))
+                .add(B.box(2, at: [240, 300], half: [20, 5], role: .dynamic))
+                .addJoint(B.weldJoint(1, 1, 2, anchorA: [20, 0], anchorB: [-20, 0]))
+                .add(B.circle(3, at: pivot + [80, 0], radius: 6))
+                .addJoint(B.distanceJoint(2, 3, nil, anchorB: pivot, length: 80))
+                .add(B.bubble(4, at: pivot + [80, -30], radius: 8))
+                .addJoint(B.distanceJoint(3, 4, 3, length: 30, softness: 0.02, damping: 1))
+                .add(B.box(5, at: [600, 200], half: [30, 3], role: .static))
+                .add(B.box(6, at: [600, 230], half: [20, 5], role: .dynamic))
+                .addJoint(B.hingeJoint(4, 6, nil, anchorA: [-20, 0], anchorB: [580, 230],
+                    motor: HingeMotor(targetAngularVelocity: 1, maximumTorque: 50_000))))
+            let result = await B.advance(world, steps: 120)
+            healthy(world, "determinizm")
+            return result.frame.objects.keys.sorted { $0.rawValue < $1.rawValue }.flatMap { id -> [UInt32] in
+                let o = result.frame.objects[id]!
+                return [o.position.x, o.position.y, o.velocity.x, o.velocity.y, o.rotation, o.angularVelocity].map(\.bitPattern)
+            }
+        }
+        let first = try await run(), second = try await run()
+        XCTAssertEqual(first.count, 36)
+        XCTAssertEqual(first, second)
+    }
+
     // MARK: Usuwanie więzów
 
     // P-B-26: scalenie baniek usuwa ich więzy, wymienia je w potwierdzeniu, a wynik nie dziedziczy więzu.
@@ -274,7 +326,8 @@ final class JointWorldTests: XCTestCase {
         world.submit(try B.baseTransaction()
             .add(B.circle(1, at: [350, 200], radius: 5, velocity: [200, 0], regionExitPolicy: .remove))
             .add(B.circle(2, at: [320, 200], radius: 5))
-            .addJoint(B.distanceJoint(1, 1, 2, length: 30)))
+            // Wiotki więz: sztywny ciągnąłby partnera za odlatującą bryłą i ten też opuściłby region.
+            .addJoint(B.distanceJoint(1, 1, 2, length: 30, softness: 1)))
         var gone = false, receiptsAfterExit = 0
         var velocities: [Float] = []
         _ = await B.advance(world, steps: 120) { _, frame in

@@ -2,6 +2,7 @@ import BubblePhysics
 @testable import BubblePhysicsRuntime
 import Metal
 import XCTest
+import simd
 
 @MainActor
 final class RegionPolicyTests: XCTestCase {
@@ -12,6 +13,38 @@ final class RegionPolicyTests: XCTestCase {
         state.objects[.init(rawValue: 1)]?.velocity = .zero
         let complete = try await stepper.completeStep(TransactionStager.stageBatch([], against: state), duration: 0.25)
         XCTAssertTrue(complete.state.objects.isEmpty)
+    }
+
+    // P-B-67: obiekt usunięty po wyjściu z regionu zabiera swoje więzy, a więzy innych ciał zostają.
+    func testRemoveDropsJointsOfRemovedObjectsOnly() throws {
+        var state = try initial(policy: .remove)
+        func joint(_ id: UInt64, _ a: UInt64, _ b: UInt64?) throws -> Joint {
+            try Joint(id: JointID(rawValue: id), bodyA: ObjectID(rawValue: a), bodyB: b.map { ObjectID(rawValue: $0) },
+                      kind: .distance(length: 1, softness: 0, damping: 0))
+        }
+        for value in [try joint(1, 1, nil), try joint(2, 1, 2), try joint(3, 2, 3), try joint(4, 3, nil)] { state.joints[value.id] = value }
+        RegionPolicy.remove([ObjectID(rawValue: 1)], from: &state)
+        XCTAssertEqual(Set(state.joints.keys), [JointID(rawValue: 3), JointID(rawValue: 4)])
+    }
+
+    // P-B-67 na kroku GPU: bańka z więzem opuszcza region, więz znika ze stanu, a partner zostaje.
+    func testStepRemovesJointOfObjectThatLeftRegion() async throws {
+        let stepper = try NativeCompleteStepper(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
+        var state = try initial(policy: .remove)
+        state = try TransactionStager.stage(WorldTransaction()
+            .add(.bubble(BubbleDescriptor(id: .init(rawValue: 2), position: [5, 8], targetRadius: 1,
+                physicsMaterialID: .init(rawValue: 1), renderStyleID: .init(rawValue: 1))))
+            // Długość równa odległości środków (10,8 – 5, 8 do rogu), więc więz niczego nie przesuwa przed wyjściem.
+            .addJoint(Joint(id: JointID(rawValue: 7), bodyA: .init(rawValue: 1), bodyB: .init(rawValue: 2),
+                            kind: .distance(length: simd_distance(WorldPoint(10.8, 10.8), WorldPoint(5, 8)),
+                                            softness: 0, damping: 0))), against: state).state
+        state.objects[.init(rawValue: 1)]?.position = [10.8, 10.8]
+        state.objects[.init(rawValue: 1)]?.velocity = .zero
+        XCTAssertEqual(state.joints.count, 1)
+        let complete = try await stepper.completeStep(TransactionStager.stageBatch([], against: state), duration: 0.25)
+        XCTAssertNil(complete.state.objects[.init(rawValue: 1)])
+        XCTAssertNotNil(complete.state.objects[.init(rawValue: 2)])
+        XCTAssertTrue(complete.state.joints.isEmpty)
     }
 
     func testWrapRetainsOvershootAcrossSeveralRegionWidths() async throws {

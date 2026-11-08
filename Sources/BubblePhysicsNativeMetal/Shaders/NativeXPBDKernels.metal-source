@@ -748,6 +748,153 @@ kernel void nativeRigidApplyBodies(device NativeRigidBody *bodies [[buffer(0)]],
     bodies[index].pose.xyz+=delta;bodies[index].motion.xyz+=velocity;
 }
 
+// Więzy. Bryły nie są ciałami XPBD, więc korekta więzu to przesunięcie pozy i zmiana prędkości (Δpoza / krok, jak w PBD)
+// dla końca więzu, a bańka dostaje przesunięcie tylko w positions[] (jej kontur odtwarza się po pętli bez zmiany kształtu).
+// Wątek na więz liczy korekty obu końców z jednego stanu; każde ciało zbiera korekty swojej listy w stałej kolejności.
+struct NativeJointEnd {
+    float2 point; float2 arm; float2 velocity;
+    float inverseMass; float inverseInertia; float angle; float omega;
+};
+
+NativeJointEnd nativeJointEnd(uint entity, float2 anchor, device NativeRigidBody *bodies, device NativeBubble *bubbles,
+                              device float4 *positions, uint bubbleCount) {
+    NativeJointEnd end;
+    end.point = anchor; end.arm = 0; end.velocity = 0; end.inverseMass = 0; end.inverseInertia = 0; end.angle = 0; end.omega = 0;
+    if (entity == 0xFFFFFFFFu) return end;
+    if (entity < bubbleCount) {
+        // Bańka jest zaczepiona w środku masy; środek bierzemy z bufora pozycji solvera, nie z rekordu.
+        end.point = positions[entity].xy; end.velocity = bubbles[entity].motion.xy; end.inverseMass = bubbles[entity].physical.y;
+        return end;
+    }
+    NativeRigidBody b = bodies[entity - bubbleCount];
+    // Kotwica leży w układzie początku geometrii; środek masy jest przesunięty o centroid (previous.zw).
+    end.arm = nativeRotate(anchor - b.previous.zw, b.pose.z);
+    end.point = b.pose.xy + end.arm; end.velocity = b.motion.xy; end.omega = b.motion.z; end.angle = b.pose.z;
+    end.inverseMass = b.physical.x; end.inverseInertia = b.physical.y;
+    return end;
+}
+
+float2 nativePerpendicular(float2 v) { return float2(-v.y, v.x); }
+
+kernel void nativeSolveJoints(device NativeRigidBody *bodies [[buffer(0)]], device NativeBubble *bubbles [[buffer(1)]],
+    device float4 *positions [[buffer(2)]], device NativeJoint *joints [[buffer(3)]],
+    device NativeRigidCorrection *corrections [[buffer(4)]], constant uint4 &counts [[buffer(5)]],
+    constant NativeControl &control [[buffer(6)]], uint index [[thread_position_in_grid]]) {
+    if (index >= counts.x) return;
+    NativeJoint joint = joints[index];
+    float dt = max(control.physics.x, 1e-6f);
+    NativeJointEnd a = nativeJointEnd(joint.ends.x, joint.anchors.xy, bodies, bubbles, positions, counts.y);
+    NativeJointEnd b = nativeJointEnd(joint.ends.y, joint.anchors.zw, bodies, bubbles, positions, counts.y);
+    float2 moveA = 0, moveB = 0, speedA = 0, speedB = 0;
+    float turnA = 0, turnB = 0, spinA = 0, spinB = 0;
+    float2 pointA = nativePerpendicular(a.arm), pointB = nativePerpendicular(b.arm);
+    uint kind = joint.ends.z;
+    if (kind == 0) {
+        float2 delta = b.point - a.point;
+        float length_ = length(delta);
+        float2 n = length_ > 1e-6f ? delta / length_ : float2(1, 0);
+        float ca = nativeCross(a.arm, n), cb = nativeCross(b.arm, n);
+        float w = a.inverseMass + b.inverseMass + a.inverseInertia * ca * ca + b.inverseInertia * cb * cb;
+        if (w > FLT_MIN) {
+            // XPBD: podatność α/dt², skumulowane λ w kroku (0 = sztywny dystans).
+            float alpha = joint.parameters.y / (dt * dt);
+            float lambda = (-(length_ - joint.parameters.x) - alpha * joint.state.x) / (w + alpha);
+            joint.state.x += lambda;
+            moveA = -n * a.inverseMass * lambda; turnA = -ca * a.inverseInertia * lambda;
+            moveB = n * b.inverseMass * lambda; turnB = cb * b.inverseInertia * lambda;
+            if (joint.parameters.z > 0) {
+                // Tłumienie prędkości względnej wzdłuż więzu, rozłożone na iteracje (łącznie exp(-d·dt) na krok).
+                float relative = dot((b.velocity + b.omega * pointB) - (a.velocity + a.omega * pointA), n);
+                float impulse = -relative * (1.0f - exp(-joint.parameters.z * dt / float(max(counts.w, 1u)))) / w;
+                speedA -= n * a.inverseMass * impulse; spinA -= ca * a.inverseInertia * impulse;
+                speedB += n * b.inverseMass * impulse; spinB += cb * b.inverseInertia * impulse;
+            }
+        }
+    } else {
+        // Zawias i spaw: dwa końce zbiegają się w punkcie (blok 2×2 efektywnej masy).
+        float weight = a.inverseMass + b.inverseMass;
+        float k11 = weight + a.inverseInertia * pointA.x * pointA.x + b.inverseInertia * pointB.x * pointB.x;
+        float k12 = a.inverseInertia * pointA.x * pointA.y + b.inverseInertia * pointB.x * pointB.y;
+        float k22 = weight + a.inverseInertia * pointA.y * pointA.y + b.inverseInertia * pointB.y * pointB.y;
+        float determinant = k11 * k22 - k12 * k12;
+        if (determinant > FLT_MIN) {
+            float2 gap = b.point - a.point;
+            float2 impulse = float2(-(k22 * gap.x - k12 * gap.y), -(-k12 * gap.x + k11 * gap.y)) / determinant;
+            moveA = -impulse * a.inverseMass; turnA = -a.inverseInertia * dot(pointA, impulse);
+            moveB = impulse * b.inverseMass; turnB = b.inverseInertia * dot(pointB, impulse);
+        }
+        float inertia = a.inverseInertia + b.inverseInertia;
+        if (inertia > FLT_MIN) {
+            // Względny kąt po korekcie punktu: obrót B − obrót A − kąt odniesienia.
+            float angle = (b.angle + turnB) - (a.angle + turnA) - joint.parameters.w;
+            float violation = 0;
+            if (kind == 2) violation = angle;
+            else if (joint.ends.w & 1u) violation = angle < joint.limits.x ? angle - joint.limits.x
+                : (angle > joint.limits.y ? angle - joint.limits.y : 0.0f);
+            if (violation != 0) {
+                float lambda = -violation / inertia;
+                turnA -= a.inverseInertia * lambda; turnB += b.inverseInertia * lambda;
+            }
+            if (kind == 1 && (joint.ends.w & 2u)) {
+                // Silnik: dąży do docelowej prędkości względnej; łączny impuls w kroku ograniczony momentem · dt.
+                float relative = (b.omega + turnB / dt) - (a.omega + turnA / dt) - joint.limits.z;
+                float limit = joint.limits.w * dt;
+                float total = clamp(joint.state.y - relative / inertia, -limit, limit);
+                float lambda = total - joint.state.y;
+                joint.state.y = total;
+                spinA -= a.inverseInertia * lambda; spinB += b.inverseInertia * lambda;
+            }
+        }
+    }
+    NativeRigidCorrection result;
+    result.first = float4(moveA, turnA, 0); result.second = float4(moveB, turnB, 0);
+    result.velocityFirst = float4(moveA / dt + speedA, turnA / dt + spinA, 0);
+    result.velocitySecond = float4(moveB / dt + speedB, turnB / dt + spinB, 0);
+    corrections[index] = result;
+    joints[index] = joint;
+}
+
+// Bryła sumuje korekty swoich więzów w kolejności listy i uśrednia je (przy kilku więzach Jacobiego nie przesterowuje).
+kernel void nativeApplyJointBodies(device NativeRigidBody *bodies [[buffer(0)]],
+    device NativeRigidCorrection *corrections [[buffer(1)]], device uint2 *references [[buffer(2)]],
+    device uint4 *ranges [[buffer(3)]], constant uint4 &counts [[buffer(4)]], uint index [[thread_position_in_grid]]) {
+    if (index >= counts.z) return;
+    uint4 range = ranges[counts.y + index];
+    if (range.y == 0) return;
+    float3 delta = 0, velocity = 0;
+    for (uint i = 0; i < range.y; ++i) {
+        uint2 reference = references[range.x + i];
+        NativeRigidCorrection c = corrections[reference.x];
+        delta += reference.y ? c.second.xyz : c.first.xyz;
+        velocity += reference.y ? c.velocitySecond.xyz : c.velocityFirst.xyz;
+    }
+    float relax = 1.0f / float(range.y);
+    bodies[index].pose.xyz += delta * relax;
+    bodies[index].motion.xyz += velocity * relax;
+}
+
+// Bańka dostaje przesunięcie tylko w positions[]; zmiana pozycji w UpdateVelocities przechodzi w prędkość, a kontur
+// powstaje po pętli z nowego środka, więc korekta więzu nie zmienia jego kształtu. Prędkość korygujemy tu bezpośrednio.
+kernel void nativeApplyJointBubbles(device NativeBubble *bubbles [[buffer(0)]], device float4 *positions [[buffer(1)]],
+    device NativeRigidCorrection *corrections [[buffer(2)]], device uint2 *references [[buffer(3)]],
+    device uint4 *ranges [[buffer(4)]], constant uint4 &counts [[buffer(5)]],
+    device NativeSolverControl &solver [[buffer(6)]], uint index [[thread_position_in_grid]]) {
+    if (index >= counts.y) return;
+    uint4 range = ranges[index];
+    if (range.y == 0) return;
+    float2 delta = 0, velocity = 0;
+    for (uint i = 0; i < range.y; ++i) {
+        uint2 reference = references[range.x + i];
+        NativeRigidCorrection c = corrections[reference.x];
+        delta += reference.y ? c.second.xy : c.first.xy;
+        velocity += reference.y ? c.velocitySecond.xy : c.velocityFirst.xy;
+    }
+    float relax = 1.0f / float(range.y);
+    positions[index].xy += delta * relax;
+    bubbles[index].motion.xy += velocity * relax;
+    solver.counts.x = 1; // korekta więzu mogła uaktywnić kontakty baniek
+}
+
 kernel void nativeUpdateVelocities(device NativeBubble *bubbles [[buffer(0)]],
     device float4 *positions [[buffer(1)]], constant NativeControl &control [[buffer(2)]],
     uint index [[thread_position_in_grid]]) {

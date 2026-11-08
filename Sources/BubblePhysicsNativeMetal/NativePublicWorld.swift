@@ -71,6 +71,7 @@ struct NativePublicSettings: Equatable, Sendable {
     var sensors: [SensorDescriptor] = []
     var structuralShapes: [ObjectID: NativeStructuralShape] = [:]
     var staticPolygonMaterials: [ObjectID: PhysicsMaterial] = [:]
+    var joints: [Joint] = []
 }
 
 /// Adapter używa trwałego solvera; pełna publikacja następuje dopiero po powodzeniu GPU.
@@ -102,7 +103,7 @@ package final class NativePublicWorld {
 
     package func step(objects: [NativePublicObject], materials: [PhysicsMaterialID: PhysicsMaterial],
                       styles: [RenderStyleID: RenderStyle], region: WorldRectangle, duration: Double,
-                      eventBufferCapacity: Int = 1024, commandBuffer: MTLCommandBuffer? = nil,
+                      joints: [Joint] = [], eventBufferCapacity: Int = 1024, commandBuffer: MTLCommandBuffer? = nil,
                       beforeCommit: ((NativeMetalRenderHandoff) throws -> Void)? = nil) async throws -> NativePublicFrame {
         let dt = Float(duration)
         guard dt.isFinite, dt > 0, Double(dt) > 0 else { throw NativeMetalSolverError.invalidSnapshot }
@@ -190,7 +191,8 @@ package final class NativePublicWorld {
                 rigidPolygons: rigidPolygons, eventBufferCapacity: eventBufferCapacity,
                 sensors: objects.compactMap { if case .sensor(let sensor) = $0.descriptor { return sensor }; return nil }
                     .sorted { $0.id.rawValue < $1.id.rawValue }, structuralShapes: structuralShapes,
-                staticPolygonMaterials: staticPolygonMaterials))
+                staticPolygonMaterials: staticPolygonMaterials,
+                joints: joints.sorted { $0.id.rawValue < $1.id.rawValue }))
         let frame = try await solver.executeFrame(input: input, scenarioStep: 0,
             commandBuffer: commandBuffer, beforeCommit: beforeCommit)
         for (id, object) in solver.publishedPolygons { result[id] = object }
