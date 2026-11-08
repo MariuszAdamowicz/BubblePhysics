@@ -304,7 +304,7 @@ kernel void nativeInvalidateSafetyCache(device NativeBubble *bubbles [[buffer(0)
     device NativeContactCache *cache [[buffer(1)]], constant NativeControl &control [[buffer(2)]],
     device NativeContactControl &contacts [[buffer(3)]], device uint *changed [[buffer(4)]],
     device atomic_uint *safety [[buffer(5)]], uint i [[thread_position_in_grid]]) {
-    if (contacts.counts.w || i >= contacts.counts.z) return;
+    if (i >= contacts.counts.z) return;
     NativeContactCache c = cache[i];
     uint a = nativeSafetyBubbleIndex(c.participants.x, bubbles, control.counts.x);
     uint b = c.metadata.x == 0 ? nativeSafetyBubbleIndex(c.participants.y, bubbles, control.counts.x) : control.counts.x;
@@ -333,7 +333,7 @@ kernel void nativeCheckFinite(device NativeBubble *bubbles [[buffer(0)]],
             || !isfinite(dot(previousEdge, previousEdge)) || !isfinite(dot(currentEdge, currentEdge)))
             nativeSafetyFailure(safety, 1);
     }
-    if (!contacts.counts.w && i < contacts.counts.z) {
+    if (i < contacts.counts.z) {
         NativeContactCache c = cache[i];
         if (!all(isfinite(c.geometry)) || !all(isfinite(c.response)) || c.response.x < 0)
             nativeSafetyFailure(safety, 1);
@@ -498,8 +498,7 @@ kernel void nativeAccumulateContactPressure(device NativeBubble *bubbles [[buffe
     device atomic_uint *safety [[buffer(13)]], device NativeStructuralHeader *structuralHeaders [[buffer(14)]],
     uint index [[thread_position_in_grid]]) {
     uint bubbleIndex = index / contour.counts.x, sample = index % contour.counts.x;
-    if (bubbleIndex >= control.counts.x || contacts.counts.w
-        || atomic_load_explicit(safety + 3, memory_order_relaxed)) return;
+    if (bubbleIndex >= control.counts.x || atomic_load_explicit(safety + 3, memory_order_relaxed)) return;
     NativeBubble bubble = bubbles[bubbleIndex];
     uint count = min(contour.counts.x, max(64u, uint(ceil((bubble.physical.z / contour.shape.x) * (4 * M_PI_F)))));
     if (sample == 0) counts[bubbleIndex] = count;
@@ -705,7 +704,7 @@ kernel void nativeApplyPublicRegion(device NativeBubble *bubbles [[buffer(0)]],
 kernel void nativeInvalidateRegionCache(device NativeBubble *bubbles [[buffer(0)]],
     device NativeContactCache *cache [[buffer(1)]], constant NativeControl &control [[buffer(2)]],
     device NativeContactControl &contacts [[buffer(3)]], uint index [[thread_position_in_grid]]) {
-    if (index >= contacts.counts.z || contacts.counts.w) return;
+    if (index >= contacts.counts.z) return;
     NativeContactCache record = cache[index];
     uint a = nativeFindBubble(bubbles, control.counts.x, record.participants.x);
     bool changed = a < control.counts.x && bubbles[a].publicFlags.w;
@@ -723,7 +722,7 @@ kernel void nativeCompactMergeEvents(device NativeBubble *bubbles [[buffer(0)]],
     device NativeContactControl &contacts [[buffer(3)]], device atomic_uint &eventCount [[buffer(4)]],
     device NativeEventRecord *events [[buffer(5)]], constant uint &capacity [[buffer(6)]],
     uint index [[thread_position_in_grid]]) {
-    if (index >= contacts.counts.z || contacts.counts.w) return;
+    if (index >= contacts.counts.z) return;
     NativeContactCache contact = cache[index];
     if (contact.metadata.x != 0 || contact.metadata.z != contacts.limits.x) return;
     uint low = 0, high = control.counts.x;

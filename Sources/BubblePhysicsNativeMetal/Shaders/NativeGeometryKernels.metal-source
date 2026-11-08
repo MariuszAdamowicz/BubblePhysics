@@ -392,7 +392,7 @@ kernel void nativeCompactCandidates(constant NativeControl &control [[buffer(0)]
     device uint *rowCounts [[buffer(3)]], device NativeCandidate *candidates [[buffer(4)]],
     device uint4 *offsets [[buffer(5)]], device atomic_uint *statistics [[buffer(6)]],
     uint index [[thread_position_in_grid]]) {
-    if (contacts.counts.w || contacts.cache.w == 0) return;
+    if (contacts.cache.w == 0) return;
     uint bubble = index / contacts.cache.w, slot = index % contacts.cache.w;
     if (bubble >= control.counts.x || slot >= rowCounts[bubble * 2] + rowCounts[bubble * 2 + 1]) return;
     uint kind = slot < rowCounts[bubble * 2] ? 0 : 1;
@@ -409,7 +409,7 @@ kernel void nativeBuildContacts(device NativeBubble *bubbles [[buffer(0)]],
     device NativeSegment *segments [[buffer(1)]], device NativeContactControl &control [[buffer(2)]],
     device NativeCandidate *candidates [[buffer(3)]], device NativeContactCache *contacts [[buffer(4)]],
     uint index [[thread_position_in_grid]]) {
-    if (control.counts.w || index >= control.counts.x) return;
+    if (index >= control.counts.x) return;
     NativeCandidate c = candidates[index]; NativeBubble a = bubbles[c.metadata.y];
     float2 normal, point; float penetration; float allowedSide = 0;
     if (c.metadata.x == 0) {

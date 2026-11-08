@@ -1,14 +1,5 @@
 import BubblePhysicsModel
 
-/// Nieuporządkowana para obiektów w kontakcie; `first` ma mniejszy `rawValue`.
-package struct ContactPair: Hashable, Sendable {
-    package let first: ObjectID
-    package let second: ObjectID
-    package init(_ a: ObjectID, _ b: ObjectID) {
-        if a.rawValue <= b.rawValue { first = a; second = b } else { first = b; second = a }
-    }
-}
-
 /// Domyka dyskretne zdarzenia powstające po odczycie ukończonego kroku.
 /// Zdarzenia kontaktu GPU i `NativePublicWorld` przychodzą w kolejności, którą ustalił skan, a `mergeContact` w kolejności
 /// atomików, więc kompaktor układa je po parze: w parze `contactBegan` przed `mergeContact`, potem `contactEnded`.
@@ -27,7 +18,7 @@ package enum EventCompactor {
         var dropped = overflow.droppedCount
         var history = previousContacts
         var selected = orderedContactEvents(events, history: &history)
-        for pair in history.sorted(by: Self.pairOrder) where removedObjects.contains(pair.first) || removedObjects.contains(pair.second) {
+        for pair in history.sorted() where removedObjects.contains(pair.first) || removedObjects.contains(pair.second) {
             if removedObjects.contains(pair.first) && removedObjects.contains(pair.second) { history.remove(pair); continue }
             if selected.count < capacity {
                 selected.append(.contactEnded(pair.first, pair.second)); history.remove(pair)
@@ -46,10 +37,6 @@ package enum EventCompactor {
         return (selected, WorldEventOverflow(droppedCount: dropped), blockers, history)
     }
 
-    private static func pairOrder(_ a: ContactPair, _ b: ContactPair) -> Bool {
-        (a.first.rawValue, a.second.rawValue) < (b.first.rawValue, b.second.rawValue)
-    }
-
     /// Zdarzenia pary układają się w slotach, które zajmowały, po (para, rodzaj); reszta zdarzeń zostaje na miejscu.
     private static func orderedContactEvents(_ events: [WorldEvent], history: inout Set<ContactPair>) -> [WorldEvent] {
         func rank(_ event: WorldEvent) -> (pair: ContactPair, kind: Int)? {
@@ -63,7 +50,7 @@ package enum EventCompactor {
         let slots = events.indices.filter { rank(events[$0]) != nil }
         let sorted = slots.map { events[$0] }.sorted { x, y in
             let l = rank(x)!, r = rank(y)!
-            return l.pair == r.pair ? l.kind < r.kind : pairOrder(l.pair, r.pair)
+            return l.pair == r.pair ? l.kind < r.kind : l.pair < r.pair
         }
         var kept: [WorldEvent] = []
         for event in sorted {

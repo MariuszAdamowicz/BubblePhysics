@@ -184,7 +184,7 @@ final class NativeMetalRigidPolygonTests: XCTestCase {
     }
 
     private func settled(_ state: NativeRigidPolygonState, _ inputs: [NativeRigidPolygonInput]) throws {
-        try state.prepare(inputs, bubbleCount: 0)
+        try state.prepare(inputs, bubbleCount: 0, timeStep: 1 / 60)
         var objects: [ObjectID: NativePublicObject] = [:]
         for value in inputs { objects[value.object.descriptor.id] = value.object }
         state.publish(objects)
@@ -194,17 +194,17 @@ final class NativeMetalRigidPolygonTests: XCTestCase {
         let state = NativeRigidPolygonState(device: try XCTUnwrap(MTLCreateSystemDefaultDevice()))
         var inputs = try (0..<6).map { try input($0) }
         try settled(state, inputs)
-        try state.prepare(inputs, bubbleCount: 0)
+        try state.prepare(inputs, bubbleCount: 0, timeStep: 1 / 60)
         XCTAssertEqual(state.bodyUploadCount, 0)
         XCTAssertEqual(state.geometryUploadCount, 0)
         try settled(state, inputs)
         inputs[4] = try input(4, x: 0.5)
-        try state.prepare(inputs, bubbleCount: 0)
+        try state.prepare(inputs, bubbleCount: 0, timeStep: 1 / 60)
         XCTAssertEqual(state.bodyUploadCount, 1)
         XCTAssertEqual(state.geometryUploadCount, 0)
         try settled(state, inputs)
         // Zmiana kolejności zmienia offsety geometrii, więc wszystkie rekordy są ponownie wysyłane.
-        try state.prepare(Array(inputs.reversed()), bubbleCount: 0)
+        try state.prepare(Array(inputs.reversed()), bubbleCount: 0, timeStep: 1 / 60)
         XCTAssertEqual(state.bodyUploadCount, 6)
         XCTAssertEqual(state.geometryUploadCount, 6)
     }
@@ -218,7 +218,7 @@ final class NativeMetalRigidPolygonTests: XCTestCase {
             var best = Double.infinity
             for _ in 0..<5 {
                 let start = DispatchTime.now().uptimeNanoseconds
-                try state.prepare(inputs, bubbleCount: 0)
+                try state.prepare(inputs, bubbleCount: 0, timeStep: 1 / 60)
                 best = min(best, Double(DispatchTime.now().uptimeNanoseconds - start) / 1e9)
                 try settled(state, inputs)
             }

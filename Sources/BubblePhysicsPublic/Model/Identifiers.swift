@@ -57,11 +57,14 @@ public struct CollisionFilter: Equatable, Hashable, Sendable {
     }
 }
 
-/// Wspólne dla baniek i brył: filtr kolizji i zainteresowania zdarzeniami.
-public struct PhysicsBodyProperties: Equatable, Hashable, Sendable {
-    public let filter: CollisionFilter
-    public let eventInterest: EventInterest
-    public init(filter: CollisionFilter = .default, eventInterest: EventInterest = []) {
-        self.filter = filter; self.eventInterest = eventInterest
+/// Nieuporządkowana para obiektów w kontakcie; `first` ma mniejszy `rawValue`.
+package struct ContactPair: Hashable, Comparable, Sendable {
+    package let first: ObjectID
+    package let second: ObjectID
+    package init(_ a: ObjectID, _ b: ObjectID) {
+        if a.rawValue <= b.rawValue { first = a; second = b } else { first = b; second = a }
+    }
+    package static func < (l: Self, r: Self) -> Bool {
+        (l.first.rawValue, l.second.rawValue) < (r.first.rawValue, r.second.rawValue)
     }
 }

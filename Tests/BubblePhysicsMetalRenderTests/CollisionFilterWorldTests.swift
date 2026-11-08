@@ -52,6 +52,40 @@ final class CollisionFilterWorldTests: XCTestCase {
         XCTAssertLessThan(try position(result.frame, 2).x, 295, "bańka z domyślnym filtrem ma zostać przed ścianą")
     }
 
+    // Ścieżka bańka–bryła (nativeRigidEmitCandidates): dynamiczna i kinematyczna bryła z domyślnym filtrem.
+    func testBubbleWithDisjointMaskPassesDynamicAndKinematicBodiesWhileDefaultBubbleIsStopped() async throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let world = try B.makeWorld(device: device)
+        world.submit(try B.baseTransaction()
+            .add(B.box(10, at: [200, 40], half: [10, 20], role: .dynamic))
+            .add(B.box(11, at: [200, 120], half: [10, 20], role: .kinematic))
+            .add(B.box(12, at: [200, 200], half: [10, 20], role: .dynamic))
+            .add(B.box(13, at: [200, 260], half: [10, 20], role: .kinematic))
+            .add(B.bubble(1, at: [100, 40], radius: 10, velocity: [80, 0], filter: onlyCategory2))
+            .add(B.bubble(2, at: [100, 120], radius: 10, velocity: [80, 0], filter: onlyCategory2))
+            .add(B.bubble(3, at: [100, 200], radius: 10, velocity: [80, 0]))
+            .add(B.bubble(4, at: [100, 260], radius: 10, velocity: [80, 0])))
+        let result = await B.advance(world, steps: 120)
+        XCTAssertGreaterThan(try position(result.frame, 1).x, 225, "bańka z rozłączną maską ma przejść przez dynamiczną bryłę")
+        XCTAssertGreaterThan(try position(result.frame, 2).x, 225, "bańka z rozłączną maską ma przejść przez kinematyczną bryłę")
+        XCTAssertLessThan(try position(result.frame, 3).x, try position(result.frame, 12).x, "domyślna bańka nie mija dynamicznej bryły")
+        XCTAssertLessThan(try position(result.frame, 4).x, 190, "domyślna bańka zostaje przed kinematyczną bryłą")
+    }
+
+    // Ścieżka bryła dynamiczna–wielokąt statyczny (nativeRigidPredict, nativeRigidGuardWalls i kandydaci brył).
+    func testDynamicBodyWithDisjointMaskPassesStaticPolygonWhileDefaultBodyIsStopped() async throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let world = try B.makeWorld(device: device)
+        world.submit(try B.baseTransaction()
+            .add(B.box(10, at: [300, 100], half: [5, 60]))
+            .add(B.box(11, at: [300, 220], half: [5, 60]))
+            .add(B.box(1, at: [200, 100], half: [10, 10], role: .dynamic, velocity: [80, 0], filter: onlyCategory2))
+            .add(B.box(2, at: [200, 220], half: [10, 10], role: .dynamic, velocity: [80, 0])))
+        let result = await B.advance(world, steps: 120)
+        XCTAssertGreaterThan(try position(result.frame, 1).x, 320, "bryła z rozłączną maską ma przejść przez statyczny wielokąt")
+        XCTAssertLessThan(try position(result.frame, 2).x, 290, "bryła z domyślnym filtrem ma zostać przed statycznym wielokątem")
+    }
+
     func testDynamicBoxesWithDisjointMasksPassThroughEachOther() async throws {
         let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
         let world = try B.makeWorld(device: device)

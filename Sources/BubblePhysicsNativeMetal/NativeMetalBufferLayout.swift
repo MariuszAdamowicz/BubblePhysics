@@ -126,8 +126,8 @@ struct NativeMetalGridEntry: Sendable {
 
 struct NativeMetalContactControl: Sendable {
     var limits: SIMD4<UInt32> // frame, expiry, capacity, previousCacheCount
-    var counts: SIMD4<UInt32> // candidates, contacts, cache, failure
-    var cache: SIMD4<UInt32> // hits, resets, invalidationCount, rowStride
+    var counts: SIMD4<UInt32> // candidates, contacts, cache, reserved
+    var cache: SIMD4<UInt32> // hits, resets, invalidationCount, k (kandydaci na obiekt)
     var thresholds: SIMD4<Float> // teleportMultiplier, ccdMultiplier, contactTolerance, separationTolerance
     var cellWidth: SIMD4<Float>
 }

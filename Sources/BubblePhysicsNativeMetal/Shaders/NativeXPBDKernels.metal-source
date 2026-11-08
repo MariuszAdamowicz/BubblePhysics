@@ -36,7 +36,7 @@ uint nativeInvalidation(NativeContactCache record, device long2 *invalidations, 
 
 uint nativeScanLength(constant NativeControl &control, device NativeContactControl &contacts, uint2 parameters) {
     uint length = parameters.x == 0 ? control.counts.x * 2
-        : (contacts.counts.w ? 0 : (parameters.x == 1 ? contacts.counts.x : contacts.limits.w + contacts.counts.y));
+        : (parameters.x == 1 ? contacts.counts.x : contacts.limits.w + contacts.counts.y);
     for (uint level = 0; level < parameters.y; ++level) length = (length + 255) / 256;
     return length;
 }
@@ -48,10 +48,10 @@ kernel void nativePrepareIndirectArguments(constant NativeControl &control [[buf
     device NativeContactControl &contacts [[buffer(1)]], device uint4 *arguments [[buffer(2)]],
     constant uint &levels [[buffer(3)]], uint index [[thread_position_in_grid]]) {
     if (index) return;
-    uint candidates = contacts.counts.w ? 0 : contacts.counts.x;
-    uint active = contacts.counts.w ? 0 : contacts.counts.y;
-    uint merged = contacts.counts.w ? 0 : contacts.limits.w + contacts.counts.y;
-    uint cache = contacts.counts.w ? 0 : contacts.counts.z;
+    uint candidates = contacts.counts.x;
+    uint active = contacts.counts.y;
+    uint merged = contacts.limits.w + contacts.counts.y;
+    uint cache = contacts.counts.z;
     uint lengths[5] = { candidates, active, merged, cache, max(1u, max(cache, max(control.counts.x, control.counts.y))) };
     for (uint i = 0; i < 5; ++i) arguments[i] = uint4(max(1u, (lengths[i] + 31) / 32), 1, 1, lengths[i]);
     for (uint mode = 1; mode <= 2; ++mode) {
@@ -98,7 +98,7 @@ kernel void nativeAddScanBlockOffsets(device uint4 *output [[buffer(0)]], device
 kernel void nativeFinishScan(device uint4 *offsets [[buffer(0)]], constant NativeControl &control [[buffer(1)]],
     device NativeContactControl &contacts [[buffer(2)]], constant uint2 &parameters [[buffer(3)]],
     device atomic_uint *overflow [[buffer(4)]], uint index [[thread_position_in_grid]]) {
-    if (index != 0 || contacts.counts.w) return;
+    if (index != 0) return;
     uint length = nativeScanLength(control, contacts, parameters);
     uint4 total = length > 0 ? offsets[length - 1] : uint4(0);
     if (parameters.x == 0) {
@@ -116,7 +116,7 @@ kernel void nativeFinishScan(device uint4 *offsets [[buffer(0)]], constant Nativ
 kernel void nativePrepareContactFlags(device NativeContactCache *contacts [[buffer(0)]],
     device NativeContactControl &control [[buffer(1)]], device uint4 *flags [[buffer(2)]],
     uint index [[thread_position_in_grid]]) {
-    if (control.counts.w || index >= control.counts.x) return;
+    if (index >= control.counts.x) return;
     // Ten etap musi zachować kandydatów w otoczce rozdzielenia, aby następny
     // etap mógł połączyć ich z historią cache'u.
     flags[index] = uint4(contacts[index].response.y > -control.thresholds.w ? 1 : 0, 0, 0, 0);
@@ -125,7 +125,7 @@ kernel void nativePrepareContactFlags(device NativeContactCache *contacts [[buff
 kernel void nativeCompactActiveContacts(device NativeContactCache *contacts [[buffer(0)]],
     device NativeContactCache *active [[buffer(1)]], device NativeContactControl &control [[buffer(2)]],
     device uint4 *offsets [[buffer(3)]], uint index [[thread_position_in_grid]]) {
-    if (control.counts.w || index >= control.counts.x || contacts[index].response.y <= -control.thresholds.w) return;
+    if (index >= control.counts.x || contacts[index].response.y <= -control.thresholds.w) return;
     active[offsets[index].x - 1] = contacts[index];
 }
 
@@ -149,7 +149,7 @@ kernel void nativeMatchContactCache(device NativeContactCache *previous [[buffer
     device NativeBubble *bubbles [[buffer(5)]], device NativeSegment *segments [[buffer(6)]],
     constant NativeControl &control [[buffer(7)]], device uint4 *flags [[buffer(8)]],
     device atomic_uint *statistics [[buffer(9)]], uint index [[thread_position_in_grid]]) {
-    if (contacts.counts.w || index >= contacts.counts.y) return;
+    if (index >= contacts.counts.y) return;
     NativeContactCache result = current[index];
     uint old = nativeCacheLowerBound(previous, contacts.limits.w, result);
     uint hit = 0, reset = 0;
@@ -175,7 +175,7 @@ kernel void nativeRetainContactCache(device NativeContactCache *previous [[buffe
     device NativeBubble *bubbles [[buffer(5)]], device NativeSegment *segments [[buffer(6)]],
     constant NativeControl &control [[buffer(7)]], device uint4 *flags [[buffer(8)]],
     device atomic_uint *statistics [[buffer(9)]], uint index [[thread_position_in_grid]]) {
-    if (contacts.counts.w || index >= contacts.limits.w) return;
+    if (index >= contacts.limits.w) return;
     NativeContactCache record = previous[index];
     uint location = nativeCacheLowerBound(current, contacts.counts.y, record);
     bool same = location < contacts.counts.y && nativeCacheSame(current[location], record);
@@ -192,7 +192,7 @@ kernel void nativeCompactContactCache(device NativeContactCache *merged [[buffer
     device NativeContactCache *output [[buffer(1)]], device NativeContactControl &contacts [[buffer(2)]],
     device uint4 *flags [[buffer(3)]], device uint4 *offsets [[buffer(4)]],
     device atomic_uint *statistics [[buffer(5)]], uint index [[thread_position_in_grid]]) {
-    if (contacts.counts.w || index >= contacts.limits.w + contacts.counts.y || !flags[index].x) return;
+    if (index >= contacts.limits.w + contacts.counts.y || !flags[index].x) return;
     // Rekordy ponad pojemność cache odpadają od końca klucza (licznik w nativeFinishScan).
     if (offsets[index].x > contacts.limits.z) return;
     output[offsets[index].x - 1] = merged[index];
@@ -241,7 +241,7 @@ kernel void nativeEmitAdjacency(device NativeBubble *bubbles [[buffer(0)]],
     device uint4 *adjacency [[buffer(5)]], device uint4 *endpoints [[buffer(6)]],
     device atomic_uint *statistics [[buffer(7)]], device atomic_uint *degrees [[buffer(8)]],
     device atomic_uint *overflow [[buffer(9)]], uint index [[thread_position_in_grid]]) {
-    if (contacts.counts.w || index >= contacts.counts.z) return;
+    if (index >= contacts.counts.z) return;
     NativeContactCache record = cache[index];
     uint a = nativeFindBubble(bubbles, control.counts.x, record.participants.x);
     uint b = record.metadata.x == 0 ? nativeFindBubble(bubbles, control.counts.x, record.participants.y)
@@ -270,7 +270,7 @@ kernel void nativeBuildAdjacency(constant NativeControl &control [[buffer(0)]],
     uint index [[thread_position_in_grid]]) {
     if (index >= control.counts.x) return;
     uint limit = contacts.cache.w;
-    uint demanded = contacts.counts.w ? 0 : degrees[index];
+    uint demanded = degrees[index];
     uint degree = min(demanded, limit);
     device uint4 *row = adjacency + index * limit;
     for (uint i = 1; i < degree; ++i) {
@@ -292,7 +292,7 @@ kernel void nativePrepareSolverContacts(device NativeBubble *bubbles [[buffer(0)
     constant NativeControl &control [[buffer(3)]], device NativeContactControl &contacts [[buffer(4)]],
     device uint4 *endpoints [[buffer(5)]], device uint *degrees [[buffer(6)]],
     uint index [[thread_position_in_grid]]) {
-    if (contacts.counts.w || index >= contacts.counts.z) return;
+    if (index >= contacts.counts.z) return;
     NativeContactCache record = cache[index];
     uint a = endpoints[index].x, b = endpoints[index].y;
     if (record.metadata.z == contacts.limits.x) {
@@ -359,7 +359,7 @@ kernel void nativeUpdateContactMultipliers(device NativeBubble *bubbles [[buffer
     device NativeContactControl &contacts [[buffer(5)]], device NativeSolverControl &solver [[buffer(6)]],
     device uint4 *endpoints [[buffer(7)]], device uint *degrees [[buffer(8)]],
     device float4 *corrections [[buffer(9)]], uint index [[thread_position_in_grid]]) {
-    if (contacts.counts.w || index >= contacts.counts.z || !endpoints[index].w) return;
+    if (index >= contacts.counts.z || !endpoints[index].w) return;
     if (!solver.counts.x) { corrections[index] = 0; return; }
     uint4 edge = endpoints[index]; NativeContactCache record = cache[index];
     float4 geometry = nativeReadConstraint(bubbles, segments, positions, edge.x, edge.y, edge.z, record.geometry.xy);
@@ -383,7 +383,7 @@ kernel void nativeSolveJacobi(device NativeBubble *bubbles [[buffer(0)]],
     device float4 *residuals [[buffer(9)]], uint index [[thread_position_in_grid]]) {
     if (index >= control.counts.x) return;
     float2 correction = 0;
-    if (solver.counts.x && !contacts.counts.w) {
+    if (solver.counts.x) {
         for (uint j = 0; j < degrees[index]; ++j) {
             uint4 edge = adjacency[index * contacts.cache.w + j];
             correction += (edge.w ? 1 : -1) * corrections[edge.x].xy * bubbles[index].physical.y;
@@ -450,7 +450,7 @@ kernel void nativeFinalizeSolverContacts(device NativeBubble *bubbles [[buffer(0
     device NativeSegment *segments [[buffer(1)]], device NativeContactCache *cache [[buffer(2)]],
     device float4 *positions [[buffer(3)]], device NativeContactControl &contacts [[buffer(4)]],
     device uint4 *endpoints [[buffer(5)]], uint index [[thread_position_in_grid]]) {
-    if (contacts.counts.w || index >= contacts.counts.z || !endpoints[index].w) return;
+    if (index >= contacts.counts.z || !endpoints[index].w) return;
     uint4 edge = endpoints[index]; NativeContactCache record = cache[index];
     float4 geometry = nativeReadConstraint(bubbles, segments, positions, edge.x, edge.y, edge.z, record.geometry.xy);
     record.geometry.xy = geometry.xy;
@@ -584,6 +584,8 @@ kernel void nativeRigidContacts(device NativeRigidBody *bodies [[buffer(0)]],
     } else {
         uint ai=candidate.metadata.y,bi=candidate.metadata.z;
         NativeRigidBody a=bodies[ai],b=bodies[bi];
+        // Kandydat bryła–bryła zawsze niesie ai<bi, więc ai>=bi jest tylko zabezpieczeniem, a nie deduplikacją:
+        // para jest rozwiązywana w wierszach obu ciał celowo (determinizm bez atomików).
         if(ai>=bi || (nativeRigidImmovable(a)&&nativeRigidImmovable(b))){corrections[index]=result;return;}
         float2 start=a.previous.xy-b.previous.xy,end=a.pose.xy-b.pose.xy,travel=end-start;
         float travelSquared=dot(travel,travel);
@@ -699,7 +701,7 @@ kernel void nativeDampContactNormalMotion(device NativeBubble *bubbles [[buffer(
     constant NativeControl &control [[buffer(3)]], device NativeContactControl &contacts [[buffer(4)]],
     device uint4 *adjacency [[buffer(5)]], device uint *degrees [[buffer(6)]],
     uint index [[thread_position_in_grid]]) {
-    if (index >= control.counts.x || contacts.counts.w) return;
+    if (index >= control.counts.x) return;
     NativeBubble bubble = bubbles[index];
     float factor = clamp(1.0f - exp(-2.0f * control.contactDamping.x * control.physics.x), 0.0f, 1.0f);
     for (uint j = 0; j < degrees[index]; ++j) {

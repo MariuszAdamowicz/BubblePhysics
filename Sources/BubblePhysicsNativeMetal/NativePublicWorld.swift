@@ -71,14 +71,6 @@ struct NativePublicSettings: Equatable, Sendable {
     var staticPolygonMaterials: [ObjectID: PhysicsMaterial] = [:]
 }
 
-/// Nieuporządkowana para obiektów w kontakcie; `first` ma mniejszy `rawValue`.
-struct ContactPairKey: Hashable, Comparable {
-    let first: UInt64
-    let second: UInt64
-    init(_ a: ObjectID, _ b: ObjectID) { (first, second) = a.rawValue <= b.rawValue ? (a.rawValue, b.rawValue) : (b.rawValue, a.rawValue) }
-    static func < (l: Self, r: Self) -> Bool { (l.first, l.second) < (r.first, r.second) }
-}
-
 /// Adapter używa trwałego solvera; pełna publikacja następuje dopiero po powodzeniu GPU.
 @MainActor
 package final class NativePublicWorld {
@@ -87,7 +79,11 @@ package final class NativePublicWorld {
     private var nextSegmentID = 1
     private var publishedProfile: NativeMetalFrameProfile?
     /// Pary z zainteresowaniem kontaktem, które stykały się po ostatnim opublikowanym kroku.
-    private var contactHistory: Set<ContactPairKey> = []
+    /// Podział odpowiedzialności za `contactEnded` przy znikającym obiekcie: tu koniec powstaje z samego braku pary w
+    /// kontaktach kroku (obiekt zniknął przed krokiem GPU albo w nim); `EventCompactor` ma własną historię i
+    /// `removedObjects`, które domykają obiekty znikające dopiero po kroku (np. polityka regionu) i czyszczą historię
+    /// w kroku bez GPU. Zduplikowany koniec odfiltrowuje historia kompaktora, bo koniec bez pary w historii jest pomijany.
+    private var contactHistory: Set<ContactPair> = []
 
     package init(device: MTLDevice, configuration: NativeMetalConfiguration = .default) throws {
         solver = try NativeMetalSolver(device: device, configuration: configuration)
@@ -273,15 +269,15 @@ package final class NativePublicWorld {
     /// a impuls sumą mnożników podzieloną przez krok.
     private func contactTransitions(bubbleContacts: [NativeSolverContact], segmentOwners: [Int: ObjectID],
                                     rigidContacts: [NativeRigidPolygonState.ContactRecord], interested: Set<ObjectID>,
-                                    duration: Double) -> (events: [WorldEvent], pairs: Set<ContactPairKey>) {
+                                    duration: Double) -> (events: [WorldEvent], pairs: Set<ContactPair>) {
         guard !interested.isEmpty || !contactHistory.isEmpty else { return ([], []) }
         struct Sum { var point = SIMD2<Float>.zero, weight: Float = 0, normal = SIMD2<Float>.zero, impulse: Float = 0 }
-        var sums: [ContactPairKey: Sum] = [:]
+        var sums: [ContactPair: Sum] = [:]
         func add(_ first: ObjectID, _ second: ObjectID, point: WorldPoint, normalFromFirst: WorldPoint,
                  weight: Float, impulse: Float) {
             guard interested.contains(first) || interested.contains(second) else { return }
-            let key = ContactPairKey(first, second)
-            let normal = key.first == first.rawValue ? normalFromFirst : -normalFromFirst
+            let key = ContactPair(first, second)
+            let normal = key.first == first ? normalFromFirst : -normalFromFirst
             var sum = sums[key, default: Sum()]
             sum.point += point * weight; sum.weight += weight; sum.normal += normal; sum.impulse += impulse
             sums[key] = sum
@@ -292,6 +288,9 @@ package final class NativePublicWorld {
             let first = objectID(contact.bubbleA.rawValue)
             guard let second = contact.bubbleB.map({ objectID($0.rawValue) }) ?? contact.segment.flatMap({ segmentOwners[$0] })
             else { continue }
+            // Cache trzyma też pary w szczelinie do `separationTolerance`, a po rozwiązaniu `penetration` to nieujemna
+            // reszta wnikania, więc styk to reszta wnikania albo aktywny mnożnik, a nie samo trafienie w cache.
+            guard contact.penetration > 0 || contact.accumulatedCompression > 0 else { continue }
             // Normalna w cache: bańka–bańka od A do B, bańka–odcinek od odcinka do bańki A.
             add(first, second, point: contact.pointQ, normalFromFirst: contact.bubbleB == nil ? -contact.normal : contact.normal,
                 weight: max(contact.penetration, 0) + 1e-4, impulse: contact.accumulatedCompression / step)
@@ -305,11 +304,11 @@ package final class NativePublicWorld {
         for key in sums.keys.sorted() where !contactHistory.contains(key) {
             let sum = sums[key]!
             let length = sum.normal.euclideanLength
-            events.append(.contactBegan(ObjectID(rawValue: key.first), ObjectID(rawValue: key.second),
+            events.append(.contactBegan(key.first, key.second,
                 point: sum.point / sum.weight, normal: length > 0 ? sum.normal / length : .zero, impulse: sum.impulse))
         }
         for key in contactHistory.sorted() where !current.contains(key) {
-            events.append(.contactEnded(ObjectID(rawValue: key.first), ObjectID(rawValue: key.second)))
+            events.append(.contactEnded(key.first, key.second))
         }
         return (events, current)
     }

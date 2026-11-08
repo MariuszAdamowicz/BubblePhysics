@@ -92,6 +92,15 @@ public struct RangeGeometry: Equatable, Sendable {
     }
 }
 
+/// Wspólne dla baniek i brył: filtr kolizji i zainteresowania zdarzeniami.
+public struct PhysicsBodyProperties: Equatable, Hashable, Sendable {
+    public let filter: CollisionFilter
+    public let eventInterest: EventInterest
+    public init(filter: CollisionFilter = .default, eventInterest: EventInterest = []) {
+        self.filter = filter; self.eventInterest = eventInterest
+    }
+}
+
 /// nil oznacza wszystkie obiekty, pusty zbiór nie wybiera żadnego obiektu.
 /// Pola sił dodatkowo respektują role dynamic i motorDriven, niezależnie od filtra.
 public struct ObjectFilter: Equatable, Sendable {

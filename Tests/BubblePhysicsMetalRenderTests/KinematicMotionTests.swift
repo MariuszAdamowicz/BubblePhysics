@@ -87,21 +87,23 @@ final class KinematicMotionTests: XCTestCase {
         XCTAssertGreaterThan(try state(result.frame, 2).position.y, 55, "bryła ma leżeć na platformie")
     }
 
-    // P-B-19: kinematyczna nie koliduje ze statyczną ani z inną kinematyczną.
+    // P-B-19: kinematyczna nie koliduje ze statyczną ani z inną kinematyczną, więc nie daje też contactBegan.
     func testKinematicBoxesPassThroughStaticAndOtherKinematicBodies() async throws {
         let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
         let world = try B.makeWorld(device: device)
         world.submit(try B.baseTransaction()
-            .add(B.box(1, at: [50, 100], half: [10, 10], role: .kinematic))
+            .add(B.box(1, at: [50, 100], half: [10, 10], role: .kinematic, interest: .contact))
             .setKinematicDrive(ObjectID(rawValue: 1), drive: .velocity(linear: [40, 0], angular: 0))
-            .add(B.box(2, at: [100, 100], half: [5, 60], role: .static))
-            .add(B.box(3, at: [200, 100], half: [10, 10], role: .kinematic))
+            .add(B.box(2, at: [100, 100], half: [5, 60], role: .static, interest: .contact))
+            .add(B.box(3, at: [200, 100], half: [10, 10], role: .kinematic, interest: .contact))
             .setKinematicDrive(ObjectID(rawValue: 3), drive: .velocity(linear: [-40, 0], angular: 0)))
         let result = await B.advance(world, steps: 150)
         let time = Float(result.frame.simulationTime)
         XCTAssertEqual(try state(result.frame, 1).position.x, 50 + 40 * time, accuracy: trackTolerance)
         XCTAssertEqual(try state(result.frame, 3).position.x, 200 - 40 * time, accuracy: trackTolerance)
         XCTAssertEqual(try state(result.frame, 2).position, [100, 100])
+        XCTAssertTrue(B.began(result.events).isEmpty, "pary kinematyczna–statyczna i kinematyczna–kinematyczna nie mają kontaktu")
+        XCTAssertTrue(B.ended(result.events).isEmpty)
     }
 
     // P-B-19: pathDriven wobec kinematycznej zachowuje się jak dynamiczna: zablokowana nieruchomą ścianą kinematyczną.

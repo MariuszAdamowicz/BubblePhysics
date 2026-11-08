@@ -121,7 +121,7 @@ final class NativeRigidPolygonState {
         return value
     }
 
-    func prepare(_ inputs: [NativeRigidPolygonInput], bubbleCount: Int, timeStep: Float = 1 / 60) throws {
+    func prepare(_ inputs: [NativeRigidPolygonInput], bubbleCount: Int, timeStep: Float) throws {
         current = inputs; count = inputs.count
         let limit = NativeMetalSolver.candidateLimitPerObject
         let total = UInt64(count) * UInt64(limit)

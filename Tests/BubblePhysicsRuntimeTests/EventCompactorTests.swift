@@ -24,9 +24,9 @@ final class EventCompactorTests: XCTestCase {
 
     // MARK: - Zdarzenia kontaktu (etap 2, P-B-13..15)
 
-    private func state(bubbles ids: [UInt64], interest: EventInterest = .contact) throws -> RuntimeState {
+    private func state(bubbles ids: [UInt64], interest: EventInterest = .contact, capacity: Int = 1024) throws -> RuntimeState {
         var state = RuntimeState(configuration: try WorldConfiguration(
-            simulationRegion: WorldRectangle(min: [-10, -10], max: [10, 10])))
+            simulationRegion: WorldRectangle(min: [-10, -10], max: [10, 10]), eventBufferCapacity: capacity))
         for id in ids {
             state.objects[ObjectID(rawValue: id)] = RuntimeObject(.bubble(try BubbleDescriptor(
                 id: ObjectID(rawValue: id), position: .zero, targetRadius: 1,
@@ -97,5 +97,27 @@ final class EventCompactorTests: XCTestCase {
         let result = finish([.contactEnded(id(1), id(2))], state: state, previous: [pair(1, 2)], removed: [id(2)])
         XCTAssertEqual(result.events, [.contactEnded(id(1), id(2))])
         XCTAssertTrue(result.contacts.isEmpty)
+    }
+
+    // P-B-15: koniec, który nie mieści się w buforze, zostaje w historii i wychodzi w następnym kroku.
+    func testEndThatDoesNotFitTheEventBufferStaysInHistoryAndIsEmittedNextStep() throws {
+        let state = try state(bubbles: [1, 3], capacity: 1)   // obiektów 2 i 4 już nie ma
+        let first = finish([], state: state, previous: [pair(1, 2), pair(3, 4)], removed: [id(2), id(4)])
+        XCTAssertEqual(first.events, [.contactEnded(id(1), id(2))], "w buforze o pojemności 1 mieści się jeden koniec")
+        XCTAssertEqual(first.dropped, 1)
+        XCTAssertEqual(first.contacts, [pair(3, 4)], "koniec, który się nie zmieścił, zostaje w historii")
+        let second = finish([], state: state, previous: first.contacts, removed: [id(4)])
+        XCTAssertEqual(second.events, [.contactEnded(id(3), id(4))])
+        XCTAssertTrue(second.contacts.isEmpty)
+    }
+
+    func testEndForRemovedObjectDoesNotFitWhenGPUEventsFillTheBuffer() throws {
+        let state = try state(bubbles: [1, 5, 6], capacity: 1)   // obiektu 2 już nie ma
+        let first = finish([began(5, 6)], state: state, previous: [pair(1, 2)], removed: [id(2)])
+        XCTAssertEqual(first.events, [began(5, 6)])
+        XCTAssertEqual(first.contacts, [pair(1, 2), pair(5, 6)])
+        let second = finish([], state: state, previous: first.contacts, removed: [id(2)])
+        XCTAssertEqual(second.events, [.contactEnded(id(1), id(2))])
+        XCTAssertEqual(second.contacts, [pair(5, 6)])
     }
 }
