@@ -113,6 +113,7 @@ public struct BubbleDescriptor: Equatable, Sendable {
     public let mergeGroups: MergeGroupSet
     public let eventInterest: EventInterest
     public let filter: CollisionFilter
+    public var properties: PhysicsBodyProperties { PhysicsBodyProperties(filter: filter, eventInterest: eventInterest) }
     public let presentation: PresentationParameters
 
     public init(id: ObjectID, position: WorldPoint, velocity: WorldPoint = .zero,
@@ -158,6 +159,7 @@ public struct PolygonDescriptor: Equatable, Sendable {
     public let renderStyleID: RenderStyleID
     public let eventInterest: EventInterest
     public let filter: CollisionFilter
+    public var properties: PhysicsBodyProperties { PhysicsBodyProperties(filter: filter, eventInterest: eventInterest) }
     public let presentation: PresentationParameters
 
     public init(id: ObjectID, vertices: [WorldPoint], position: WorldPoint = .zero,

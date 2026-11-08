@@ -51,6 +51,17 @@ public struct CollisionFilter: Equatable, Hashable, Sendable {
     public let mask: UInt32
     public init(category: UInt32 = 1, mask: UInt32 = .max) { self.category = category; self.mask = mask }
     /// Domyślny filtr: kolizja ze wszystkim.
-    public static let `default` = CollisionFilter(category: 0, mask: 0)
-    public func collides(with other: CollisionFilter) -> Bool { false }
+    public static let `default` = CollisionFilter()
+    public func collides(with other: CollisionFilter) -> Bool {
+        category & other.mask != 0 && other.category & mask != 0
+    }
+}
+
+/// Wspólne dla baniek i brył: filtr kolizji i zainteresowania zdarzeniami.
+public struct PhysicsBodyProperties: Equatable, Hashable, Sendable {
+    public let filter: CollisionFilter
+    public let eventInterest: EventInterest
+    public init(filter: CollisionFilter = .default, eventInterest: EventInterest = []) {
+        self.filter = filter; self.eventInterest = eventInterest
+    }
 }

@@ -217,6 +217,7 @@ private struct StagingContext {
             }
             if role != .pathDriven { existing.pathDrive = nil; existing.pathBlocker = nil; existing.pathStopped = false }
             if role != .motorDriven { existing.motorDrive = nil }
+            if role != .kinematic { existing.kinematicDrive = nil }
             try validate(existing)
             state.objects[id] = existing
         case .setPathDrive(let id, let drive):
@@ -226,7 +227,11 @@ private struct StagingContext {
         case .setMotorDrive(let id, let drive):
             try apply(.setMotion(id, .motorDriven))
             state.objects[id]?.motorDrive = drive
-        case .setKinematicDrive: break
+        case .setKinematicDrive(let id, let drive):
+            var existing = try object(id)
+            guard existing.motionRole == .kinematic else { throw TransactionRejectionReason.incompatibleMotionRole(id) }
+            existing.kinematicDrive = drive
+            state.objects[id] = existing
         case .setGlobalForce(let force):
             try requireFinite(force, "globalForce")
             state.globalForce = force
@@ -328,6 +333,9 @@ private struct StagingContext {
         guard state.renderStyles[object.style] != nil else { throw TransactionRejectionReason.renderStyleNotFound(object.style) }
         switch object.descriptor {
         case .bubble(let value):
+            guard object.motionRole != .kinematic else {
+                throw TransactionRejectionReason.unsupportedMotionRole(value.id, .kinematic)
+            }
             // Rola runtime może różnić się od roli przy dodaniu deskryptora.
             if object.motionRole == .static {
                 var maximumRadius = object.targetRadius
@@ -397,7 +405,7 @@ private struct StagingContext {
             targetRadius: radius, mass: mass, motionRole: result.motionRole,
             regionExitPolicy: result.regionExitPolicy, physicsMaterialID: result.physicsMaterialID,
             renderStyleID: result.renderStyleID, mergeGroups: result.mergeGroups,
-            eventInterest: result.eventInterest, presentation: result.presentation))
+            eventInterest: result.eventInterest, presentation: result.presentation, filter: result.filter))
     }
     mutating func merge(_ sources: [ObjectID], result: BubbleResult) throws {
         guard sources.count >= 2, Set(sources).count == sources.count else { throw TransactionRejectionReason.invalidStructuralOperation }
