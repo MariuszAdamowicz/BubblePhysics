@@ -44,6 +44,13 @@ public final class BubbleWorld {
     /// Stan końcowy „zawiódł”: ustawiony raz, nigdy nie czyszczony.
     private var failureReason: WorldFailureReason?
     private var lastRejectionReason: WorldRejectionReason?
+    private struct PendingHitTest {
+        let id: UInt64
+        let point: WorldPoint
+        let continuation: CheckedContinuation<ObjectID?, Never>
+    }
+    private var pendingHitTests: [PendingHitTest] = []
+    private var nextHitTestID: UInt64 = 1
     private var queryIndexCache: QueryIndex?
     private var queryIndexBuilds = 0
 
@@ -210,9 +217,49 @@ public final class BubbleWorld {
         index().raycast(from: start, to: end, filter: filter)
     }
 
-    // Zaślepka do zadania 41.
-    package var pendingHitTestCount: Int { 0 }
-    public func hitTest(_ point: WorldPoint) async -> ObjectID? { nil }
+    // MARK: hit-test asynchroniczny
+
+    /// Liczba zapytań `hitTest` czekających na krok; szew testów.
+    package var pendingHitTestCount: Int { pendingHitTests.count }
+
+    /// Dokładny hit-test punktu: zdeformowane kontury baniek i dokładne kształty brył, policzony na GPU na stanie
+    /// następnego ukończonego kroku (obiekt usunięty przed tym krokiem nie bierze udziału). Zwraca najwyżej jeden
+    /// obiekt: przy nakładaniu wygrywa najwyższa warstwa, a przy tej samej warstwie największy `ObjectID`.
+    /// W pauzie zapytanie czeka na wznowienie; przy odrzuconym kroku lub klatce czeka na następny krok.
+    /// Punkt nieskończony, stan „zawiódł” i anulowanie zadania dają `nil` od razu. Zawieszone wywołanie trzyma świat
+    /// przy życiu do publikacji kroku albo anulowania, więc gra porzucająca świat anuluje swoje zadanie.
+    public func hitTest(_ point: WorldPoint) async -> ObjectID? {
+        guard point.x.isFinite, point.y.isFinite, failureReason == nil, !Task.isCancelled else { return nil }
+        let id = nextHitTestID
+        nextHitTestID += 1
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<ObjectID?, Never>) in
+                pendingHitTests.append(PendingHitTest(id: id, point: point, continuation: continuation))
+            }
+        } onCancel: {
+            // Obsługa anulowania działa poza MainActor; słaba referencja nie przedłuża życia świata.
+            Task { @MainActor [weak self] in self?.cancelHitTest(id) }
+        }
+    }
+
+    private func cancelHitTest(_ id: UInt64) {
+        guard let index = pendingHitTests.firstIndex(where: { $0.id == id }) else { return }
+        pendingHitTests.remove(at: index).continuation.resume(returning: nil)
+    }
+
+    /// Wznawia zapytania przekazane krokowi; zapytania anulowane w międzyczasie już ich nie ma, a późniejsze zostają.
+    private func resolveHitTests(_ handled: [PendingHitTest], with results: [ObjectID?]) {
+        for (position, entry) in handled.enumerated() {
+            guard let index = pendingHitTests.firstIndex(where: { $0.id == entry.id }) else { continue }
+            pendingHitTests.remove(at: index).continuation.resume(returning: position < results.count ? results[position] : nil)
+        }
+    }
+
+    private func dropHitTests() {
+        let dropped = pendingHitTests
+        pendingHitTests.removeAll()
+        for entry in dropped { entry.continuation.resume(returning: nil) }
+    }
 
     /// Token jest unikalny w obrębie świata. Walidacja nastąpi na granicy kroku.
     @discardableResult
@@ -285,6 +332,8 @@ public final class BubbleWorld {
                 break
             }
             let transactionCount = pending.count
+            // Punkty przekazane temu krokowi; zapytania złożone w czasie kroku czekają na następny.
+            let hitTestBatch = pendingHitTests
             let batch = TransactionStager.stageBatch(pending, against: state, validate: stepper.validate)
             do {
                 let beforeCommit: ((NativeMetalRenderHandoff?, RuntimeState) throws -> Void)? = encode.map { encode in
@@ -294,7 +343,7 @@ public final class BubbleWorld {
                         try encode()
                     }
                 }
-                let complete = try await stepper.completeStep(batch, duration: clock.fixedTimeStep, hitTests: [],
+                let complete = try await stepper.completeStep(batch, duration: clock.fixedTimeStep, hitTests: hitTestBatch.map(\.point),
                     commandBuffer: commandBuffer, beforeCommit: beforeCommit)
                 // Scena bez ciał nie uruchamia solvera, ale bufor wywołującego
                 // nadal musi zawierać ukończony render przed publikacją kroku.
@@ -327,6 +376,7 @@ public final class BubbleWorld {
                     eventOverflow: WorldEventOverflow(droppedCount: droppedEvents), driveFeedback: complete.driveFeedback,
                     objects: state.publishedObjectStates())
                 stepper.didPublish(complete)
+                resolveHitTests(hitTestBatch, with: complete.hitTestResults)
             } catch {
                 switch Self.outcome(of: error) {
                 case .cancelled:
@@ -340,6 +390,7 @@ public final class BubbleWorld {
                 case .failed(let reason):
                     failureReason = reason
                     pending.removeAll()
+                    dropHitTests()
                     lastAdvanceIssue = .worldFailed
                 }
                 break stepLoop

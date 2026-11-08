@@ -81,7 +81,8 @@ package final class NativeCompleteStepper: CompleteStepper {
     package func completeStep(_ batch: StagedTransactionBatch, duration: Double, hitTests: [WorldPoint],
                               commandBuffer: MTLCommandBuffer?,
                               beforeCommit: ((NativeMetalRenderHandoff?, RuntimeState) throws -> Void)?) async throws -> CompletedRuntimeStep {
-        try await performStep(batch, duration: duration, commandBuffer: commandBuffer, beforeCommit: beforeCommit)
+        try await performStep(batch, duration: duration, hitTests: hitTests, commandBuffer: commandBuffer,
+                              beforeCommit: beforeCommit)
     }
 
     package func didPublish(_ step: CompletedRuntimeStep) {
@@ -91,7 +92,7 @@ package final class NativeCompleteStepper: CompleteStepper {
         self.candidateHistory = nil
     }
 
-    private func performStep(_ batch: StagedTransactionBatch, duration: Double,
+    private func performStep(_ batch: StagedTransactionBatch, duration: Double, hitTests: [WorldPoint],
                              commandBuffer: MTLCommandBuffer?,
                              beforeCommit: ((NativeMetalRenderHandoff?, RuntimeState) throws -> Void)?) async throws -> CompletedRuntimeStep {
         candidateHistory = nil
@@ -102,12 +103,14 @@ package final class NativeCompleteStepper: CompleteStepper {
         // opublikować exit i wyczyścić poprzednie pary sensora.
         guard state.objects.values.contains(where: { $0.mass != nil }) || native?.hasSensorPairHistory == true else {
             // Bez kroku GPU pary usuniętych obiektów i tak dostają koniec kontaktu.
-            guard !previousContacts.isEmpty else { return .init(state: state) }
+            // Bez bańki i bryły nie ma czego trafić: każdy punkt hit-testu daje puste miejsce.
+            let noHits = [ObjectID?](repeating: nil, count: hitTests.count)
+            guard !previousContacts.isEmpty else { return .init(state: state, hitTestResults: noHits) }
             let discrete = EventCompactor.finish([], overflow: WorldEventOverflow(), feedback: [], state: state,
                 previousBlockers: previousBlockers, previousContacts: previousContacts,
                 removedObjects: removedContactObjects(in: state))
             candidateHistory = (previousBlockers, discrete.contacts)
-            return .init(state: state, events: discrete.events, eventOverflow: discrete.overflow)
+            return .init(state: state, events: discrete.events, eventOverflow: discrete.overflow, hitTestResults: noHits)
         }
         guard let native else { throw NativeRuntimeError.deviceUnavailable }
         let input = state.objects.values.map { object in
@@ -122,7 +125,7 @@ package final class NativeCompleteStepper: CompleteStepper {
         }
         let frame = try await native.step(objects: input, materials: state.physicsMaterials,
             styles: state.renderStyles, region: state.configuration.simulationRegion, duration: duration,
-            joints: Array(state.joints.values),
+            joints: Array(state.joints.values), hitTests: hitTests,
             eventBufferCapacity: state.configuration.eventBufferCapacity,
             commandBuffer: commandBuffer,
             beforeCommit: beforeCommit.map { callback in
@@ -146,7 +149,8 @@ package final class NativeCompleteStepper: CompleteStepper {
         candidateHistory = (discrete.blockers, discrete.contacts)
         return .init(state: state, events: discrete.events, eventOverflow: discrete.overflow,
             driveFeedback: feedback, contactCandidateOverflowCount: frame.contactCandidateOverflowCount,
-            maximumContactCandidatesPerObject: frame.maximumContactCandidatesPerObject)
+            maximumContactCandidatesPerObject: frame.maximumContactCandidatesPerObject,
+            hitTestResults: frame.hitTestResults)
     }
 }
 
