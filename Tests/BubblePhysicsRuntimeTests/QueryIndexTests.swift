@@ -66,6 +66,22 @@ final class QueryIndexTests: XCTestCase {
         XCTAssertEqual(index.objects(at: [0, -60]), [], "puste miejsce")
     }
 
+    // P-B-29: wielokąt, którego środek ciężkości leży daleko od początku układu lokalnego (kształt L). Pozycja bryły to
+    // początek geometrii lokalnej, nie środek masy, więc rozbieżność konwencji z solverem przesunęłaby odpowiedzi.
+    func testPointQueryUsesLocalOriginNotCentroidOfAsymmetricPolygon() throws {
+        let l = RigidShape.polygon(try PolygonGeometry(vertices: [[0, 0], [10, 0], [10, 2], [2, 2], [2, 10], [0, 10]]))
+        for (rotation, inArm, inOtherArm, notchCorner, centroid): (Float, WorldPoint, WorldPoint, WorldPoint, WorldPoint) in [
+            (0, [58, 51], [51, 58], [58, 58], [53.2, 53.2]),
+            // Obrót o π/2: lokalny (x, y) trafia do (50 − y, 50 + x).
+            (.pi / 2, [49, 58], [42, 51], [42, 58], [46.8, 53.2])] {
+            let index = try scene(extra: [rigid(5, shape: l, at: [50, 50], rotation: rotation)])
+            XCTAssertEqual(index.objects(at: inArm), [id(5)], "rotacja \(rotation): wnętrze poziomego ramienia")
+            XCTAssertEqual(index.objects(at: inOtherArm), [id(5)], "rotacja \(rotation): wnętrze drugiego ramienia")
+            XCTAssertEqual(index.objects(at: notchCorner), [], "rotacja \(rotation): wcięcie L w jego AABB")
+            XCTAssertEqual(index.objects(at: centroid), [], "rotacja \(rotation): środek masy leży poza kształtem")
+        }
+    }
+
     func testPointQueryUsesEffectiveRadiusOfBubble() throws {
         let index = try scene { state in state.objects[self.id(1)]?.effectiveRadius = 2 }
         XCTAssertEqual(index.objects(at: [1.5, 0]), [id(1)])

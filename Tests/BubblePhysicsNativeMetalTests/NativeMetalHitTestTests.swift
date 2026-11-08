@@ -77,6 +77,16 @@ final class NativeMetalHitTestTests: XCTestCase {
         XCTAssertEqual(frame.hitTestResults, [nil, id(2)])
     }
 
+    func testRigidBodyRemovedByTheRegionDoesNotTakePart() async throws {
+        // Dynamiczna bryła w całości poza regionem jest usuwana w tym kroku (`flags.z == 1`), więc nie bierze udziału.
+        let box = try PolygonGeometry(vertices: [[-5, -5], [5, -5], [5, 5], [-5, 5]])
+        let outside = try WorldObject.rigidBody(RigidBodyDescriptor(id: id(1), shape: .polygon(box), position: [150, 0],
+            motionRole: .dynamic, physicsMaterialID: rigidMaterial, renderStyleID: style))
+        let frame = try await step([outside, rigid(2, .polygon(box), at: [0, 0])], hitTests: [[150, 0], [0, 0]])
+        XCTAssertNil(frame.objects[id(1)])
+        XCTAssertEqual(frame.hitTestResults, [nil, id(2)])
+    }
+
     func testRepeatedStepsAnswerEachTimeFromTheirOwnState() async throws {
         let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         let objects = [try bubble(1, at: [0, 0])]

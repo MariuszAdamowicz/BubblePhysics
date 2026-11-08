@@ -9,8 +9,8 @@ import Metal
 package protocol CompleteStepper: AnyObject {
     func validate(_ change: StagedWorldChange) throws
     /// Jedna metoda kroku. Z buforem poleceń stepper koduje krok GPU i woła `beforeCommit` przed zatwierdzeniem
-    /// (`handoff` jest nil, gdy kroku GPU nie ma); bez bufora tylko liczy krok. `hitTests` są punktami
-    /// oczekujących zapytań .
+    /// (`handoff` jest nil, gdy kroku GPU nie ma); bez bufora tylko liczy krok. `hitTests` to punkty
+    /// oczekujących zapytań `hitTest`, na które krok ma odpowiedzieć.
     func completeStep(_ batch: StagedTransactionBatch, duration: Double, hitTests: [WorldPoint],
                       commandBuffer: MTLCommandBuffer?,
                       beforeCommit: ((NativeMetalRenderHandoff?, RuntimeState) throws -> Void)?) async throws -> CompletedRuntimeStep

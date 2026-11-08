@@ -225,6 +225,7 @@ public final class BubbleWorld {
     /// Dokładny hit-test punktu: zdeformowane kontury baniek i dokładne kształty brył, policzony na GPU na stanie
     /// następnego ukończonego kroku (obiekt usunięty przed tym krokiem nie bierze udziału). Zwraca najwyżej jeden
     /// obiekt: przy nakładaniu wygrywa najwyższa warstwa, a przy tej samej warstwie największy `ObjectID`.
+    /// Warstwy pojawią się w slice 5; do tego czasu każdy obiekt leży w warstwie 0, więc rozstrzyga `ObjectID`.
     /// W pauzie zapytanie czeka na wznowienie; przy odrzuconym kroku lub klatce czeka na następny krok.
     /// Punkt nieskończony, stan „zawiódł” i anulowanie zadania dają `nil` od razu. Zawieszone wywołanie trzyma świat
     /// przy życiu do publikacji kroku albo anulowania, więc gra porzucająca świat anuluje swoje zadanie.

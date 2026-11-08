@@ -48,17 +48,30 @@ final class HitTestTests: XCTestCase {
         XCTAssertEqual(world.pendingHitTestCount, 0)
     }
 
-    // P-B-31: wgłębienie deformacji. Bańka dociśnięta do ściany ma spłaszczony kontur, więc punkt z jej koła nominalnego,
-    // który leży już we wnętrzu ściany, należy do ściany (id 10), a nie do bańki (id 20, większy od ściany).
+    // P-B-31: wgłębienie deformacji. Deformowalna bańka dociśnięta do ściany ma spłaszczony kontur, więc punkt z jej koła
+    // nominalnego, który leży już poza konturem, nie należy do bańki (id 20, wygrałaby jako największy `ObjectID`).
     func testDeformationRecessIsOutsideTheBubbleContour() async throws {
         let region = try WorldRectangle(min: [-10, -10], max: [10, 10])
         let world = try B.makeWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()), region: region)
+        // Materiał bez deformowalności daje bańkę sztywną, bez wgłębienia; tu bańka musi być deformowalna.
         world.submit(try B.baseTransaction()
+            .updatePhysicsMaterial(B.bubbleMaterial, material: PhysicsMaterial(kind: .bubble, deformability: 1))
             .add(B.box(10, at: [1, 0], half: [1, 10]))
             .add(B.bubble(20, at: [-0.6, 0], radius: 1)))
-        _ = await world.advance(by: B.step)
-        let results = await hitTests(world, [[0.05, 0], [-0.5, 0], [-3, 0]])
-        XCTAssertEqual(results, [id(10), id(20), nil])
+        let frame = await world.advance(by: B.step)
+        // Warunek wstępny: punkt wgłębienia leży w kole nominalnym (promień 1), a poza konturem spłaszczonej bańki.
+        // Efektywny promień jest najmniejszą odległością konturu, więc koło o tym promieniu leży w całości w konturze
+        // i nie może zawierać wgłębienia; punkt leży poza nim, a `objects(at:)` (koło efektywne) też go nie obejmuje.
+        let bubble = try XCTUnwrap(frame.objects[id(20)])
+        guard case .bubble(let effectiveRadius) = bubble.kind else { return XCTFail("obiekt 20 nie jest bańką") }
+        let recess = WorldPoint(-0.1, 0)
+        let offset = recess - bubble.position
+        let distance = (offset * offset).sum().squareRoot()
+        XCTAssertLessThan(distance, 1, "punkt wgłębienia leży w kole nominalnym (promień 1)")
+        XCTAssertGreaterThan(distance, effectiveRadius, "punkt wgłębienia leży poza kołem efektywnego promienia")
+        XCTAssertLessThan(bubble.bounds.max.x, recess.x, "kontur spłaszczonej bańki nie sięga punktu wgłębienia")
+        let results = await hitTests(world, [recess, [-0.5, 0], [0.05, 0], [-3, 0]])
+        XCTAssertEqual(results, [nil, id(20), id(10), nil])
         XCTAssertEqual(world.benchmarkContourCPUReadbackCount, 0)
     }
 
@@ -195,8 +208,8 @@ final class HitTestTests: XCTestCase {
         XCTAssertNil(weakWorld, "po anulowaniu nic nie trzyma świata")
     }
 
-    // P-B-33 (rozstrzygnięcie na publikacji): zapytanie złożone w czasie kroku czeka na następny krok.
-    func testRequestAddedDuringAStepIsAnsweredByTheNextStep() async throws {
+    // P-B-33 (rozstrzygnięcie na publikacji): zapytanie złożone w czasie kroku jest odpowiedziane najpóźniej następnym krokiem.
+    func testRequestAddedDuringAStepIsAnsweredNoLaterThanTheNextStep() async throws {
         let world = try makeWorld()
         try await settle(world, WorldTransaction().add(B.bubble(7, at: [100, 100], radius: 20, role: .static)))
         let first = Task { @MainActor in await world.hitTest([100, 100]) }

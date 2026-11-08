@@ -362,6 +362,48 @@ final class NativeMetalSafetyTests: XCTestCase {
         }
     }
 
+    // P-B-57: gałąź GPU jądra `nativeCheckFinite`. Test uruchamia samo jądro na przygotowanym cache (po zakończonej
+    // klatce), więc sprawdza bit w buforze bezpieczeństwa, a nie odczyt CPU po zakończeniu bufora poleceń.
+    func testGPUCheckFiniteSetsInvalidFrameBitForNegativeContactMultiplier() async throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let solver = try NativeMetalSolver(device: device)
+        var world = try makeWorld(x: -0.5)
+        world.addSegment(wall())
+        _ = try await solver.executeFrame(world: world, scenarioStep: 1)
+        let state = try XCTUnwrap(solver.persistentState)
+        let cacheCount = state.contactControl.contents().load(as: NativeMetalContactControl.self).counts.z
+        XCTAssertGreaterThan(cacheCount, 0, "świat z zakładką musi zostawić rekord w cache")
+        let pipeline = try XCTUnwrap(NativeMetalPipelineCache.pipelines(for: device).stages["nativeCheckFinite"])
+        let queue = try XCTUnwrap(device.makeCommandQueue())
+
+        func checkBits(multiplier: Float) throws -> UInt32 {
+            let records = state.workingCache.contents().bindMemory(to: NativeContactCacheRecord.self, capacity: 1)
+            records[0].lambda = multiplier
+            state.safetyControl.contents().storeBytes(of: NativeMetalSafetyControl(counts: .zero),
+                                                      as: NativeMetalSafetyControl.self)
+            let command = try XCTUnwrap(queue.makeCommandBuffer())
+            let encoder = try XCTUnwrap(command.makeComputeCommandEncoder())
+            encoder.setComputePipelineState(pipeline)
+            for (index, buffer) in [state.workingBubbles, state.workingSegments, state.workingCache, state.control,
+                                    state.contactControl, state.solverControl, state.safetyControl].enumerated() {
+                encoder.setBuffer(buffer, offset: 0, index: index)
+            }
+            encoder.dispatchThreadgroups(.init(width: 1, height: 1, depth: 1),
+                                         threadsPerThreadgroup: .init(width: 32, height: 1, depth: 1))
+            encoder.endEncoding()
+            command.commit()
+            command.waitUntilCompleted()
+            return state.safetyControl.contents().load(as: NativeMetalSafetyControl.self).counts.w
+        }
+
+        let negative = try checkBits(multiplier: -1)
+        XCTAssertNotEqual(negative & 4, 0, "skończony ujemny mnożnik to bit invalidFrame")
+        XCTAssertEqual(negative & 1, 0, "skończony ujemny mnożnik to nie bit nonFinite")
+        let nonFinite = try checkBits(multiplier: .nan)
+        XCTAssertNotEqual(nonFinite & 1, 0, "NaN to bit nonFinite")
+        XCTAssertEqual(try checkBits(multiplier: 0.5), 0, "poprawny mnożnik nie ustawia bitów")
+    }
+
     func testCCDThresholdUsesConfiguredMultiplierAndRadius() async throws {
         var world = try makeWorld(x: -4, vx: 10)
         world.addSegment(wall())

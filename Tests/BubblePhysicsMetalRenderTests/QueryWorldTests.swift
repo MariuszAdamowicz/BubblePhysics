@@ -42,6 +42,29 @@ final class QueryWorldTests: XCTestCase {
         XCTAssertEqual(world.objects(inCircle: [450, 100], radius: 0.1), [], "pusty środek między kołem a kapsułą")
     }
 
+    // P-B-29: kształt L o środku ciężkości daleko od początku lokalnego. Synchroniczne zapytanie (QueryIndex) i dokładny
+    // hit-test na GPU muszą się zgadzać co do pozycji bryły, więc rozbieżność konwencji pozy by tu wyszła.
+    func testAsymmetricPolygonAnswersTheSameInQueriesAndInHitTest() async throws {
+        let world = try B.makeWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
+        let l = try RigidBodyDescriptor(id: ObjectID(rawValue: 5),
+            vertices: [[0, 0], [10, 0], [10, 2], [2, 2], [2, 10], [0, 10]], position: [300, 100], rotation: .pi / 2,
+            motionRole: .static, physicsMaterialID: B.polygonMaterial, renderStyleID: B.style)
+        world.submit(try B.baseTransaction().add(.rigidBody(l)))
+        _ = await B.advance(world, steps: 2)
+        // Obrót o π/2: lokalny (x, y) trafia do (300 − y, 100 + x).
+        let points: [(WorldPoint, ObjectID?)] = [
+            ([299, 108], ObjectID(rawValue: 5)), ([292, 101], ObjectID(rawValue: 5)),
+            ([292, 108], nil), ([296.8, 103.2], nil), ([320, 100], nil)]
+        let tasks = points.map { point, _ in Task { @MainActor in await world.hitTest(point) } }
+        for _ in 0..<1000 where world.pendingHitTestCount != points.count { await Task.yield() }
+        _ = await world.advance(by: B.step)
+        for ((point, expected), task) in zip(points, tasks) {
+            XCTAssertEqual(world.objects(at: point), expected.map { [$0] } ?? [], "objects(at: \(point))")
+            let hit = await task.value
+            XCTAssertEqual(hit, expected, "hitTest(\(point))")
+        }
+    }
+
     func testRaycastFindsFirstHitAndFilterNarrowsIt() async throws {
         let (world, _) = try await makeScene(circleFilter: CollisionFilter(category: 2, mask: .max))
         let hit = try XCTUnwrap(world.raycast(from: [350, 100], to: [600, 100]))
