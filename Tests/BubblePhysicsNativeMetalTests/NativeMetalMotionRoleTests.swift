@@ -26,7 +26,7 @@ final class NativeMetalMotionRoleTests: XCTestCase {
         let staged = TransactionStager.stageBatch([PendingTransaction(token: .init(rawValue: 1), transaction: commands)],
             against: state, validate: stepper.validate)
         XCTAssertTrue(staged.frame.events.isEmpty)
-        return try await stepper.completeStep(staged, duration: 1.0/60)
+        return try await stepper.completePublishedStep(staged, duration: 1.0/60)
     }
 
     func testBlockedPlayerDriveReportsAchievedPointAndBlockerWithoutTeleporting() async throws {

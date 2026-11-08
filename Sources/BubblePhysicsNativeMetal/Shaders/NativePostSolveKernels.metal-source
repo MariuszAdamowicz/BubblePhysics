@@ -335,8 +335,9 @@ kernel void nativeCheckFinite(device NativeBubble *bubbles [[buffer(0)]],
     }
     if (i < contacts.counts.z) {
         NativeContactCache c = cache[i];
-        if (!all(isfinite(c.geometry)) || !all(isfinite(c.response)) || c.response.x < 0)
-            nativeSafetyFailure(safety, 1);
+        if (!all(isfinite(c.geometry)) || !all(isfinite(c.response))) nativeSafetyFailure(safety, 1);
+        // Skończony ujemny mnożnik to wartość poza zakresem: bit 4 (`.invalidFrame`), nie bit 1 (`.nonFinite`).
+        else if (c.response.x < 0) nativeSafetyFailure(safety, 4);
     }
 }
 

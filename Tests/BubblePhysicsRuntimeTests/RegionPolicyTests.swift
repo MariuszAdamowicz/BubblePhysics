@@ -11,7 +11,7 @@ final class RegionPolicyTests: XCTestCase {
         var state = try initial(policy: .remove)
         state.objects[.init(rawValue: 1)]?.position = [10.8, 10.8]
         state.objects[.init(rawValue: 1)]?.velocity = .zero
-        let complete = try await stepper.completeStep(TransactionStager.stageBatch([], against: state), duration: 0.25)
+        let complete = try await stepper.completePublishedStep(TransactionStager.stageBatch([], against: state), duration: 0.25)
         XCTAssertTrue(complete.state.objects.isEmpty)
     }
 
@@ -41,7 +41,7 @@ final class RegionPolicyTests: XCTestCase {
         state.objects[.init(rawValue: 1)]?.position = [10.8, 10.8]
         state.objects[.init(rawValue: 1)]?.velocity = .zero
         XCTAssertEqual(state.joints.count, 1)
-        let complete = try await stepper.completeStep(TransactionStager.stageBatch([], against: state), duration: 0.25)
+        let complete = try await stepper.completePublishedStep(TransactionStager.stageBatch([], against: state), duration: 0.25)
         XCTAssertNil(complete.state.objects[.init(rawValue: 1)])
         XCTAssertNotNil(complete.state.objects[.init(rawValue: 2)])
         XCTAssertTrue(complete.state.joints.isEmpty)
@@ -52,7 +52,7 @@ final class RegionPolicyTests: XCTestCase {
         var state = try initial(policy: .wrap)
         state.objects[.init(rawValue: 1)]?.position = [-25, 5]
         state.objects[.init(rawValue: 1)]?.velocity = [-4, 0]
-        let complete = try await stepper.completeStep(TransactionStager.stageBatch([], against: state), duration: 0.25)
+        let complete = try await stepper.completePublishedStep(TransactionStager.stageBatch([], against: state), duration: 0.25)
         let object = try XCTUnwrap(complete.state.objects[.init(rawValue: 1)])
         XCTAssertEqual(object.position, [10, 5])
         XCTAssertEqual(object.previousPosition, [11, 5])
@@ -64,12 +64,12 @@ final class RegionPolicyTests: XCTestCase {
         var state = try initial(policy: .wrap)
         state.objects[.init(rawValue: 1)]?.position = [10.8, 10.8]
         state.objects[.init(rawValue: 1)]?.velocity = .zero
-        state = try await stepper.completeStep(TransactionStager.stageBatch([], against: state), duration: 0.25).state
+        state = try await stepper.completePublishedStep(TransactionStager.stageBatch([], against: state), duration: 0.25).state
         let wrapped = try XCTUnwrap(state.objects[.init(rawValue: 1)])
         let dx = max(0, max(-wrapped.position.x, wrapped.position.x - 10))
         let dy = max(0, max(-wrapped.position.y, wrapped.position.y - 10))
         XCTAssertLessThanOrEqual(sqrt(dx * dx + dy * dy), 1)
-        state = try await stepper.completeStep(TransactionStager.stageBatch([], against: state), duration: 0.25).state
+        state = try await stepper.completePublishedStep(TransactionStager.stageBatch([], against: state), duration: 0.25).state
         let next = try XCTUnwrap(state.objects[.init(rawValue: 1)])
         XCTAssertEqual(next.position.x, wrapped.position.x, accuracy: 0.0001)
         XCTAssertEqual(next.position.y, wrapped.position.y, accuracy: 0.0001)
@@ -106,7 +106,7 @@ final class RegionPolicyTests: XCTestCase {
             let stepper = try NativeCompleteStepper(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
             let pending = PendingTransaction(token: .init(rawValue: 1), transaction:
                 WorldTransaction().updatePhysicsMaterial(.init(rawValue: 1), material: material))
-            let complete = try await stepper.completeStep(TransactionStager.stageBatch([pending], against: initial(policy: .remove)), duration: 0.25)
+            let complete = try await stepper.completePublishedStep(TransactionStager.stageBatch([pending], against: initial(policy: .remove)), duration: 0.25)
             XCTAssertEqual(complete.state.physicsMaterials[.init(rawValue: 1)], material)
         }
     }
@@ -174,7 +174,7 @@ final class RegionPolicyTests: XCTestCase {
                 .updatePhysicsMaterial(.init(rawValue: 1), material: PhysicsMaterial(kind: .bubble))
                 .startTransition(ParameterTransition(target: .physicsMaterial(.init(rawValue: 1), parameter),
                     value: .scalar(0.5), duration: 1))
-            let complete = try await stepper.completeStep(TransactionStager.stageBatch([
+            let complete = try await stepper.completePublishedStep(TransactionStager.stageBatch([
                 .init(token: .init(rawValue: 1), transaction: transaction)
             ], against: initial(policy: .remove)), duration: 0.25)
             let material = try XCTUnwrap(complete.state.physicsMaterials[.init(rawValue: 1)])
@@ -187,10 +187,10 @@ final class RegionPolicyTests: XCTestCase {
         var state = try initial(policy: .remove)
         state.transitions[.bubbleRadius(.init(rawValue: 1))] = ParameterTransition(
             target: .bubbleRadius(.init(rawValue: 1)), value: .scalar(0.5), duration: 10)
-        state = try await stepper.completeStep(TransactionStager.stageBatch([], against: state), duration: 0.25).state
+        state = try await stepper.completePublishedStep(TransactionStager.stageBatch([], against: state), duration: 0.25).state
         XCTAssertEqual(try XCTUnwrap(state.objects[.init(rawValue: 1)]).position.x, 10, accuracy: 0.0001)
         // Po drugim kroku x=11, promień=0.975: cały collider opuścił region.
-        state = try await stepper.completeStep(TransactionStager.stageBatch([], against: state), duration: 0.25).state
+        state = try await stepper.completePublishedStep(TransactionStager.stageBatch([], against: state), duration: 0.25).state
         XCTAssertNil(state.objects[.init(rawValue: 1)])
         XCTAssertTrue(state.transitions.isEmpty)
         XCTAssertTrue(state.transitionProgress.isEmpty)
@@ -203,10 +203,10 @@ final class RegionPolicyTests: XCTestCase {
         let other = try BubbleDescriptor(id: .init(rawValue: 2), position: [0.25, 5], targetRadius: 1,
             physicsMaterialID: .init(rawValue: 1), renderStyleID: .init(rawValue: 1))
         state = try TransactionStager.stage(WorldTransaction().add(.bubble(other)), against: state).state
-        state = try await stepper.completeStep(TransactionStager.stageBatch([], against: state), duration: 0.25).state
+        state = try await stepper.completePublishedStep(TransactionStager.stageBatch([], against: state), duration: 0.25).state
         XCTAssertEqual(try XCTUnwrap(state.objects[other.id]).position.x, 0.25, accuracy: 0.0001)
         for _ in 0..<2 {
-            state = try await stepper.completeStep(TransactionStager.stageBatch([], against: state), duration: 0.25).state
+            state = try await stepper.completePublishedStep(TransactionStager.stageBatch([], against: state), duration: 0.25).state
         }
         let wrapped = try XCTUnwrap(state.objects[.init(rawValue: 1)])
         XCTAssertEqual(wrapped.position.x, 0, accuracy: 0.0001)

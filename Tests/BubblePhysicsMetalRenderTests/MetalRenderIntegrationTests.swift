@@ -165,7 +165,79 @@ final class MetalRenderIntegrationTests: XCTestCase {
         XCTAssertEqual(result, first)
         XCTAssertEqual(command.status, .notEnqueued)
         XCTAssertEqual(world.debugContourSnapshot(), previousContour)
-        XCTAssertEqual(world.diagnostics.lastAdvanceIssue, .stepFailed)
+        XCTAssertEqual(world.diagnostics.lastAdvanceIssue, .frameRejected)
+        XCTAssertEqual(world.diagnostics.lastRejectionReason, .frameEncoding)
+        XCTAssertNil(world.diagnostics.failureReason, "błąd gry nie kończy świata")
+    }
+
+    private typealias B = SceneBuilders
+
+    /// Bańka z zainteresowaniem kontaktem na statycznej podłodze pod grawitacją; styk zaczyna się w ciągu kilkudziesięciu kroków.
+    private func settlingWorld(device: MTLDevice) throws -> BubbleWorld {
+        let world = try B.makeWorld(device: device, gravity: [0, -400])
+        world.submit(try B.baseTransaction().add(B.box(100, at: [300, 5], half: [300, 5]))
+            .add(B.bubble(1, at: [150, 18.3], interest: .contact)))
+        return world
+    }
+
+    /// Krok z buforem aplikacji; `closure` nie wypisuje nic do bufora, bo solver koduje do niego tylko obliczenia.
+    private func advance(_ world: BubbleWorld, _ queue: MTLCommandQueue,
+                         _ closure: @escaping () throws -> Void = {}) async throws -> (WorldFrame, MTLCommandBuffer) {
+        let command = try XCTUnwrap(queue.makeCommandBuffer())
+        return (await world.advance(by: B.step, commandBuffer: command, encodeRender: closure), command)
+    }
+
+    // P-B-58, G9-AC2: klatka odrzucona przez rzucające domknięcie nic nie zmienia w stanie świata ani steppera, więc
+    // ponowienie daje dokładnie te same klatki i zdarzenia co świat bliźniaczy bez odrzuceń. Ścieżka z krokiem GPU.
+    func testRejectedFrameRetryGivesSameEvents() async throws {
+        struct GameError: Error {}
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let queue = try XCTUnwrap(device.makeCommandQueue())
+        let clean = try settlingWorld(device: device), retried = try settlingWorld(device: device)
+        var cleanEvents: [WorldEvent] = [], retriedEvents: [WorldEvent] = []
+        for index in 0..<45 {
+            let (expected, _) = try await advance(clean, queue)
+            let previous = retried.diagnostics
+            let (rejected, command) = try await advance(retried, queue) { throw GameError() }
+            XCTAssertEqual(command.status, .notEnqueued, "krok \(index)")
+            XCTAssertEqual(rejected.stepIndex, UInt64(index), "odrzucona klatka zostawia poprzednią")
+            XCTAssertEqual(retried.diagnostics.lastAdvanceIssue, .frameRejected)
+            XCTAssertEqual(retried.diagnostics.pendingTransactionCount, previous.pendingTransactionCount)
+            let (actual, _) = try await advance(retried, queue)
+            XCTAssertEqual(actual.stepIndex, expected.stepIndex)
+            XCTAssertEqual(actual.events, expected.events, "krok \(index): ponowienie daje te same zdarzenia")
+            XCTAssertEqual(actual.objects, expected.objects, "krok \(index)")
+            cleanEvents += expected.events; retriedEvents += actual.events
+        }
+        XCTAssertEqual(retriedEvents, cleanEvents)
+        XCTAssertEqual(B.began(cleanEvents).count, 1, "scena ma dać contactBegan, inaczej test nic nie dowodzi")
+        XCTAssertNil(retried.diagnostics.failureReason)
+    }
+
+    // P-B-58: to samo w gałęzi bez kroku GPU: po usunięciu obu ciał kolejny krok nie ma masy, więc solver nie biegnie, a
+    // render kodowany jest w świecie. Odrzucona klatka nie zmienia historii kontaktów steppera.
+    func testRejectedFrameRetryWithoutGPUStepGivesSameEvents() async throws {
+        struct GameError: Error {}
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let queue = try XCTUnwrap(device.makeCommandQueue())
+        let clean = try settlingWorld(device: device), retried = try settlingWorld(device: device)
+        for world in [clean, retried] {
+            for _ in 0..<45 { _ = try await advance(world, queue) }
+            world.submit(WorldTransaction().remove(ObjectID(rawValue: 1)).remove(ObjectID(rawValue: 100)))
+        }
+        let (expected, _) = try await advance(clean, queue)
+        let (rejected, command) = try await advance(retried, queue) { throw GameError() }
+        XCTAssertEqual(command.status, .notEnqueued)
+        XCTAssertEqual(rejected.stepIndex, 45)
+        XCTAssertEqual(retried.diagnostics.lastAdvanceIssue, .frameRejected)
+        XCTAssertEqual(retried.diagnostics.pendingTransactionCount, 1)
+        let (actual, retry) = try await advance(retried, queue)
+        XCTAssertEqual(retry.status, .completed)
+        XCTAssertEqual(actual.stepIndex, 46)
+        XCTAssertEqual(actual.events, expected.events)
+        XCTAssertEqual(actual.objects, expected.objects)
+        XCTAssertTrue(actual.objects.isEmpty)
+        XCTAssertNil(retried.diagnostics.failureReason)
     }
 
     func testEmptyWorldAlsoCompletesCallerCommandBuffer() async throws {

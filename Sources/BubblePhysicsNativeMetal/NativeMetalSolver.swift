@@ -977,8 +977,10 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         let completedCache = Array(UnsafeBufferPointer(start: cacheRecords, count: Int(contactResult.counts.z)))
         guard completedCache.allSatisfy({ $0.geometry.x.isFinite && $0.geometry.y.isFinite
             && $0.geometry.z.isFinite && $0.geometry.w.isFinite && $0.lambda.isFinite
-            && $0.lambda >= 0 && $0.response.y.isFinite }), solverResult.physics.z.isFinite
+            && $0.response.y.isFinite }), solverResult.physics.z.isFinite
         else { throw rejectSafety(.nonFinite) }
+        // Skończony ujemny mnożnik to wartość poza zakresem, nie NaN ani ∞: odrzuca tylko krok.
+        guard completedCache.allSatisfy({ $0.lambda >= 0 }) else { throw rejectSafety(.invalidFrame) }
         let candidateRecords = state.candidates.contents().bindMemory(to: NativeMetalCandidate.self, capacity: state.contactCapacity)
         let completedCandidates = Array(UnsafeBufferPointer(start: candidateRecords, count: Int(contactResult.counts.x))).map(\.key)
         let contacts = completedCache.filter { $0.lastSeenFrame == nextFrame }.map { record in
@@ -1027,18 +1029,21 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
                 (points[(point + 1) % points.count] - points[point]).euclideanLength <= contourConfiguration.maxContourSegmentLength
             }) else { throw rejectSafety(.invalidFrame) }
             let deformation = packets[index].deformation.x
-            guard deformation.isFinite, deformation >= 0, deformation <= 1 else { throw rejectSafety(.nonFinite) }
+            // NaN i ±∞ kończą świat (`.nonFinite`); skończona wartość poza zakresem odrzuca tylko krok (`.invalidFrame`).
+            guard deformation.isFinite else { throw rejectSafety(.nonFinite) }
+            guard deformation >= 0, deformation <= 1 else { throw rejectSafety(.invalidFrame) }
             let effectiveRadius = packets[index].deformation.y
-            guard effectiveRadius.isFinite, effectiveRadius >= 0,
-                  effectiveRadius <= bubbles[index].targetRadius else { throw rejectSafety(.nonFinite) }
+            guard effectiveRadius.isFinite else { throw rejectSafety(.nonFinite) }
+            guard effectiveRadius >= 0, effectiveRadius <= bubbles[index].targetRadius else {
+                throw rejectSafety(.invalidFrame)
+            }
             if deformation * bubbles[index].targetRadius > contourConfiguration.positionTolerance { deformationCount += 1 }
             maximumRelativeDeformation = max(maximumRelativeDeformation, deformation)
             if readsContours { contours[bubbles[index].id] = points }
             effectiveRadii[bubbles[index].id] = effectiveRadius
             let bounds = records[index].bounds
-            guard (0..<4).allSatisfy({ bounds[$0].isFinite }), bounds.x <= bounds.z, bounds.y <= bounds.w else {
-                throw rejectSafety(.nonFinite)
-            }
+            guard (0..<4).allSatisfy({ bounds[$0].isFinite }) else { throw rejectSafety(.nonFinite) }
+            guard bounds.x <= bounds.z, bounds.y <= bounds.w else { throw rejectSafety(.invalidFrame) }
             bubbleBounds[bubbles[index].id] = bounds
             renderData.append(packets[index].geometry)
         }

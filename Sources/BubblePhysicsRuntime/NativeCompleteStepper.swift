@@ -8,9 +8,14 @@ package final class NativeCompleteStepper: CompleteStepper {
     private var previousBlockers: [ObjectID: ObjectID] = [:]
     /// Pary z dostarczonym `contactBegan` i bez dostarczonego `contactEnded` (zdarzenia kontaktu, etap 2).
     private var previousContacts: Set<ContactPair> = []
+    /// Historia policzona w ostatnim kroku; wchodzi do `previousBlockers` i `previousContacts` dopiero w `didPublish`,
+    /// więc krok lub klatka odrzucone przez świat zostawiają stepper bez zmian.
+    private var candidateHistory: (blockers: [ObjectID: ObjectID], contacts: Set<ContactPair>)?
     package init(device: MTLDevice?, configuration: NativeMetalConfiguration = .default) throws {
         native = try device.map { try NativePublicWorld(device: $0, configuration: configuration) }
     }
+    /// Pary z dostarczonym `contactBegan` po ostatnio opublikowanym kroku; szew testów `didPublish`.
+    package var publishedContactPairs: Set<ContactPair> { previousContacts }
     package var publishedRenderHandoff: NativeMetalRenderHandoff? { native?.publishedRenderHandoff }
     package var publishedTelemetry: NativeMetalFrameTelemetry? { native?.publishedTelemetry }
     package var publishedContourCPUReadbackCount: Int { native?.publishedContourCPUReadbackCount ?? 0 }
@@ -73,19 +78,23 @@ package final class NativeCompleteStepper: CompleteStepper {
         return removed
     }
 
-    package func completeStep(_ batch: StagedTransactionBatch, duration: Double) async throws -> CompletedRuntimeStep {
-        try await performStep(batch, duration: duration, commandBuffer: nil, beforeCommit: nil)
+    package func completeStep(_ batch: StagedTransactionBatch, duration: Double, hitTests: [WorldPoint],
+                              commandBuffer: MTLCommandBuffer?,
+                              beforeCommit: ((NativeMetalRenderHandoff?, RuntimeState) throws -> Void)?) async throws -> CompletedRuntimeStep {
+        try await performStep(batch, duration: duration, commandBuffer: commandBuffer, beforeCommit: beforeCommit)
     }
 
-    package func completeStep(_ batch: StagedTransactionBatch, duration: Double,
-                              commandBuffer: MTLCommandBuffer,
-                              beforeCommit: @escaping (NativeMetalRenderHandoff, RuntimeState) throws -> Void) async throws -> CompletedRuntimeStep {
-        try await performStep(batch, duration: duration, commandBuffer: commandBuffer, beforeCommit: beforeCommit)
+    package func didPublish(_ step: CompletedRuntimeStep) {
+        guard let candidateHistory else { return }
+        previousBlockers = candidateHistory.blockers
+        previousContacts = candidateHistory.contacts
+        self.candidateHistory = nil
     }
 
     private func performStep(_ batch: StagedTransactionBatch, duration: Double,
                              commandBuffer: MTLCommandBuffer?,
-                             beforeCommit: ((NativeMetalRenderHandoff, RuntimeState) throws -> Void)?) async throws -> CompletedRuntimeStep {
+                             beforeCommit: ((NativeMetalRenderHandoff?, RuntimeState) throws -> Void)?) async throws -> CompletedRuntimeStep {
+        candidateHistory = nil
         var state = batch.state
         try MotionControllers.prepare(&state, duration: duration)
         let renderPreparedState = state
@@ -97,7 +106,7 @@ package final class NativeCompleteStepper: CompleteStepper {
             let discrete = EventCompactor.finish([], overflow: WorldEventOverflow(), feedback: [], state: state,
                 previousBlockers: previousBlockers, previousContacts: previousContacts,
                 removedObjects: removedContactObjects(in: state))
-            previousContacts = discrete.contacts
+            candidateHistory = (previousBlockers, discrete.contacts)
             return .init(state: state, events: discrete.events, eventOverflow: discrete.overflow)
         }
         guard let native else { throw NativeRuntimeError.deviceUnavailable }
@@ -134,8 +143,7 @@ package final class NativeCompleteStepper: CompleteStepper {
         let discrete = EventCompactor.finish(frame.events, overflow: frame.eventOverflow,
             feedback: feedback, state: state, previousBlockers: previousBlockers,
             previousContacts: previousContacts, removedObjects: removedContactObjects(in: state))
-        previousBlockers = discrete.blockers
-        previousContacts = discrete.contacts
+        candidateHistory = (discrete.blockers, discrete.contacts)
         return .init(state: state, events: discrete.events, eventOverflow: discrete.overflow,
             driveFeedback: feedback, contactCandidateOverflowCount: frame.contactCandidateOverflowCount,
             maximumContactCandidatesPerObject: frame.maximumContactCandidatesPerObject)

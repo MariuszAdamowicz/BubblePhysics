@@ -51,9 +51,9 @@ let rendered = await world.advance(by: 1.0 / 60, commandBuffer: commandBuffer) {
 
 ## Zachowanie w czasie działania, o którym warto wiedzieć
 
-- Czas płynie stałymi krokami. `advance(by:commandBuffer:encodeRender:)` wykonuje najwyżej jeden krok na command buffer; reszta czasu zostaje w `world.diagnostics.backlogSeconds`.
-- Gdy krok GPU się nie powiedzie, `advance` zwraca ostatnią kompletną klatkę, ustawia `lastAdvanceIssue = .stepFailed` i zachowuje kolejkę transakcji na następne wywołanie. Ścieżka gry nie ma fallbacku CPU.
-- Stan obiektów (pozycja, prędkość, obrót) nie ma jeszcze publicznego odczytu; renderer czyta go bezpośrednio z buforów GPU, a `DriveFeedback` podaje osiągnięty punkt obiektów sterowanych.
+- Czas płynie stałymi krokami. `advance(by:commandBuffer:encodeRender:)` wykonuje najwyżej jeden krok na command buffer; reszta czasu zostaje w `world.diagnostics.backlogSeconds`. Zaległy czas ma górny limit `WorldConfiguration.maximumBacklog` (domyślnie 0,25 s): nadmiar jest odrzucany, a jego sumę podaje `world.diagnostics.discardedBacklogSeconds`.
+- Błąd w kroku ma trzy skutki. Błąd wykonania bufora na GPU albo wartości nieskończone (NaN, ±∞) przełączają świat w stan końcowy „zawiódł” (`diagnostics.failureReason`): kolejka transakcji jest porzucana, a `advance` i `submit` nic nie robią i zwracają ostatnią klatkę (`lastAdvanceIssue = .worldFailed`); dalej prowadzi tylko nowy `BubbleWorld`. Błąd zgłoszony przez domknięcie `encodeRender` albo kodowanie renderu odrzuca tylko klatkę (`lastAdvanceIssue = .frameRejected`): krok nie jest publikowany, poprzednia klatka zostaje, kolejka czeka na następne `advance`. Inne błędy solvera (naruszenie strażnika, niepoprawna klatka, wartość skończona poza zakresem) odrzucają krok (`lastAdvanceIssue = .stepFailed`, powód w `diagnostics.lastRejectionReason`) i też zachowują kolejkę. Ścieżka gry nie ma fallbacku CPU.
+- Stan obiektów (pozycja, prędkość, obrót, AABB) czyta się z `WorldFrame.objects` bez odczytu z GPU; renderer czyta kontury bezpośrednio z buforów GPU, a `DriveFeedback` podaje osiągnięty punkt obiektów sterowanych.
 - `debugContourSnapshot()` kopiuje kontury na CPU i służy wyłącznie do debugowania.
 
 ## Testy

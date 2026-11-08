@@ -41,6 +41,9 @@ public final class BubbleWorld {
     private var contactCandidateOverflow = 0
     private var maximumContactCandidatesPerObject = 0
     private var pendingRenderState: BubbleWorldRenderState?
+    /// Stan końcowy „zawiódł”: ustawiony raz, nigdy nie czyszczony.
+    private var failureReason: WorldFailureReason?
+    private var lastRejectionReason: WorldRejectionReason?
 
     public convenience init(configuration: WorldConfiguration,
                             device: MTLDevice? = MTLCreateSystemDefaultDevice()) throws {
@@ -80,7 +83,8 @@ public final class BubbleWorld {
             isPaused: isPaused, isAdvancing: isAdvancing, lastAdvanceIssue: lastAdvanceIssue,
             eventOverflow: lastFrame.eventOverflow,
             contactCandidateOverflow: contactCandidateOverflow,
-            maximumContactCandidatesPerObject: maximumContactCandidatesPerObject)
+            maximumContactCandidatesPerObject: maximumContactCandidatesPerObject,
+            failureReason: failureReason, lastRejectionReason: lastRejectionReason)
     }
 
     /// Stały limit k kandydatów kontaktu na obiekt, wspólny dla wszystkich rodzajów par.
@@ -172,6 +176,8 @@ public final class BubbleWorld {
     public func submit(_ transaction: WorldTransaction) -> TransactionToken {
         let token = TransactionToken(rawValue: nextToken)
         nextToken += 1
+        // W stanie „zawiódł” token jest unikalny, ale żadna klatka go nie potwierdzi.
+        guard failureReason == nil else { return token }
         pending.append(PendingTransaction(token: token, transaction: transaction))
         return token
     }
@@ -205,6 +211,11 @@ public final class BubbleWorld {
         }
         stepsInLastAdvance = 0
         lastAdvanceIssue = nil
+        // Stan końcowy wygrywa z pauzą i z krokiem.
+        guard failureReason == nil else {
+            lastAdvanceIssue = .worldFailed
+            return lastFrame
+        }
         guard seconds.isFinite, seconds >= 0 else {
             lastAdvanceIssue = .invalidTimeDelta
             return lastFrame
@@ -216,11 +227,16 @@ public final class BubbleWorld {
         }
         isAdvancing = true
         defer { isAdvancing = false; clock.finishAdvance() }
+        // Każdy błąd domknięcia gry wychodzi z kroku jako `GameRenderError`, więc nie da się go pomylić z błędem solvera,
+        // także wtedy, gdy sam jest typem błędu solvera.
+        let encode: (() throws -> Void)? = encodeRender.map { game in
+            { do { try game() } catch { throw GameRenderError(underlying: error) } }
+        }
         var receipts: [TransactionReceipt] = []
         var events: [WorldEvent] = []
         var droppedEvents = 0
         let stepLimit = commandBuffer == nil ? clock.maximumStepsPerAdvance : 1
-        while !isPaused && clock.canStep && stepsInLastAdvance < stepLimit {
+        stepLoop: while !isPaused && clock.canStep && stepsInLastAdvance < stepLimit {
             guard !Task.isCancelled else {
                 lastAdvanceIssue = .advanceCancelled
                 break
@@ -228,24 +244,21 @@ public final class BubbleWorld {
             let transactionCount = pending.count
             let batch = TransactionStager.stageBatch(pending, against: state, validate: stepper.validate)
             do {
-                let complete: CompletedRuntimeStep
-                if let commandBuffer, let encodeRender,
-                   let native = stepper as? NativeCompleteStepper {
-                    complete = try await native.completeStep(batch, duration: clock.fixedTimeStep,
-                        commandBuffer: commandBuffer) { [self] handoff, prepared in
+                let beforeCommit: ((NativeMetalRenderHandoff?, RuntimeState) throws -> Void)? = encode.map { encode in
+                    { [self] handoff, prepared in
                         pendingRenderState = makeRenderState(handoff, from: prepared)
                         defer { pendingRenderState = nil }
-                        try encodeRender()
+                        try encode()
                     }
-                } else {
-                    complete = try await stepper.completeStep(batch, duration: clock.fixedTimeStep)
                 }
+                let complete = try await stepper.completeStep(batch, duration: clock.fixedTimeStep, hitTests: [],
+                    commandBuffer: commandBuffer, beforeCommit: beforeCommit)
                 // Scena bez ciał nie uruchamia solvera, ale bufor wywołującego
                 // nadal musi zawierać ukończony render przed publikacją kroku.
-                if let commandBuffer, let encodeRender, commandBuffer.status == .notEnqueued {
+                if let commandBuffer, let encode, commandBuffer.status == .notEnqueued {
                     pendingRenderState = makeRenderState(nil, from: complete.state)
                     defer { pendingRenderState = nil }
-                    try encodeRender()
+                    try encode()
                     try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
                         commandBuffer.addCompletedHandler { completed in
                             if completed.status == .completed { continuation.resume() }
@@ -269,13 +282,64 @@ public final class BubbleWorld {
                     transactionReceipts: receipts, events: events,
                     eventOverflow: WorldEventOverflow(droppedCount: droppedEvents), driveFeedback: complete.driveFeedback,
                     objects: state.publishedObjectStates())
+                stepper.didPublish(complete)
             } catch {
-                lastAdvanceIssue = error is CancellationError ? .advanceCancelled : .stepFailed
-                break
+                switch Self.outcome(of: error) {
+                case .cancelled:
+                    lastAdvanceIssue = .advanceCancelled
+                case .frameRejected:
+                    lastAdvanceIssue = .frameRejected
+                    lastRejectionReason = .frameEncoding
+                case .stepRejected(let reason):
+                    lastAdvanceIssue = .stepFailed
+                    lastRejectionReason = reason
+                case .failed(let reason):
+                    failureReason = reason
+                    pending.removeAll()
+                    lastAdvanceIssue = .worldFailed
+                }
+                break stepLoop
             }
         }
         return lastFrame
     }
+
+    private enum StepOutcome {
+        case cancelled, frameRejected
+        case stepRejected(WorldRejectionReason)
+        case failed(WorldFailureReason)
+    }
+
+    /// Skutek błędu kroku: tylko błąd wykonania GPU i NaN/±∞ kończą świat; błąd gry odrzuca klatkę;
+    /// reszta błędów solvera odrzuca krok (kolejka czeka, powód w diagnostyce).
+    private static func outcome(of error: Error) -> StepOutcome {
+        if error is CancellationError { return .cancelled }
+        if error is GameRenderError { return .frameRejected }
+        if error is WorldRenderCommandError { return .failed(.commandExecutionFailed) }
+        if let failure = error as? NativeMetalSafetyFailure { return outcome(of: failure.reason) }
+        if let reason = error as? NativeMetalWorldError { return outcome(of: reason) }
+        if let solver = error as? NativeMetalSolverError {
+            switch solver {
+            case .commandFailed: return .failed(.commandExecutionFailed)
+            case .invalidSnapshot: return .stepRejected(.invalidSnapshot)
+            default: return .stepRejected(.unexpected)
+            }
+        }
+        return .stepRejected(.unexpected)
+    }
+
+    private static func outcome(of reason: NativeMetalWorldError) -> StepOutcome {
+        switch reason {
+        case .nonFinite: return .failed(.nonFiniteValues)
+        case .guardFailure: return .stepRejected(.solverGuard)
+        case .invalidFrame: return .stepRejected(.invalidFrame)
+        case .frameInFlight: return .stepRejected(.frameInFlight)
+        case .unavailable: return .stepRejected(.unexpected)
+        }
+    }
 }
+
+/// Błąd zgłoszony przez domknięcie `encodeRender` gry albo przez kodowanie renderu.
+private struct GameRenderError: Error { let underlying: Error }
 
 private enum WorldRenderCommandError: Error { case failed }

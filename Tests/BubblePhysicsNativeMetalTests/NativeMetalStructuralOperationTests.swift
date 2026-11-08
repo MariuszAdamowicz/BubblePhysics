@@ -24,7 +24,7 @@ final class NativeMetalStructuralOperationTests: XCTestCase {
         let batch = TransactionStager.stageBatch([.init(token: .init(rawValue: 1), transaction: tx)], against: state,
             validate: stepper.validate)
         XCTAssertTrue(batch.frame.events.isEmpty)
-        return try await stepper.completeStep(batch, duration: 1.0/60).state
+        return try await stepper.completePublishedStep(batch, duration: 1.0/60).state
     }
 
     // Utrata aktualnego promienia lub start dwóch pełnych kół w tym samym punkcie łamie ten kontrakt.

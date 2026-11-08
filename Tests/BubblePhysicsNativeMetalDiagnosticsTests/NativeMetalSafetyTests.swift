@@ -278,6 +278,90 @@ final class NativeMetalSafetyTests: XCTestCase {
         XCTAssertNotEqual(state.safetyControl.contents().load(as: NativeMetalSafetyControl.self).counts.w & 1, 0)
     }
 
+    // P-B-72, P-B-57: skończona wartość poza zakresem to `.invalidFrame` (krok odrzucony, świat żyje), a tylko NaN i ±∞
+    // to `.nonFinite` (stan końcowy „zawiódł”). Wartości psuje wykonawca po zakończeniu bufora, tuż przed odczytem na CPU.
+    private func assertCorruptedFrameIsRejected(
+        as expected: String, world makeWorld: () throws -> ReferenceWorld,
+        corrupt: @escaping (NativeMetalPersistentState) -> Void,
+        file: StaticString = #filePath, line: UInt = #line) async throws {
+        let executor = SafetyCorruptingCommandExecutor()
+        let solver = try NativeMetalSolver(device: XCTUnwrap(MTLCreateSystemDefaultDevice()), commandExecutor: executor)
+        let world = try makeWorld()
+        _ = try await solver.executeFrame(world: world, scenarioStep: 1)
+        let state = try XCTUnwrap(solver.persistentState, file: file, line: line)
+        let published = state.publishedBubbles
+        executor.corrupt = { corrupt(state) }
+        do {
+            _ = try await solver.executeFrame(world: world, scenarioStep: 2)
+            XCTFail("Uszkodzona klatka musi zostać odrzucona", file: file, line: line)
+        } catch let failure as NativeMetalSafetyFailure {
+            XCTAssertEqual(String(describing: failure.reason), expected, file: file, line: line)
+        }
+        XCTAssertTrue(state.publishedBubbles === published, "odrzucona klatka nie jest publikowana", file: file, line: line)
+    }
+
+    private func corruptPacket(_ state: NativeMetalPersistentState, _ change: (inout NativeMetalRenderPacket) -> Void) {
+        let packets = state.renderPackets.contents().bindMemory(to: NativeMetalRenderPacket.self, capacity: 1)
+        change(&packets[0])
+    }
+
+    private func corruptBubble(_ state: NativeMetalPersistentState, _ change: (inout NativeMetalBubble) -> Void) {
+        let bubbles = state.workingBubbles.contents().bindMemory(to: NativeMetalBubble.self, capacity: 1)
+        change(&bubbles[0])
+    }
+
+    func testFiniteEffectiveRadiusAboveTargetIsInvalidFrame() async throws {
+        try await assertCorruptedFrameIsRejected(as: "invalidFrame", world: { try makeWorld(x: -4) }) {
+            self.corruptPacket($0) { $0.deformation.y = 5 }
+        }
+    }
+
+    func testNaNEffectiveRadiusIsNonFinite() async throws {
+        try await assertCorruptedFrameIsRejected(as: "nonFinite", world: { try makeWorld(x: -4) }) {
+            self.corruptPacket($0) { $0.deformation.y = .nan }
+        }
+    }
+
+    func testFiniteDeformationOutsideUnitRangeIsInvalidFrame() async throws {
+        for value: Float in [2, -0.5] {
+            try await assertCorruptedFrameIsRejected(as: "invalidFrame", world: { try makeWorld(x: -4) }) {
+                self.corruptPacket($0) { $0.deformation.x = value }
+            }
+        }
+    }
+
+    func testInfiniteDeformationIsNonFinite() async throws {
+        try await assertCorruptedFrameIsRejected(as: "nonFinite", world: { try makeWorld(x: -4) }) {
+            self.corruptPacket($0) { $0.deformation.x = .infinity }
+        }
+    }
+
+    func testFiniteInvertedBoundsAreInvalidFrame() async throws {
+        try await assertCorruptedFrameIsRejected(as: "invalidFrame", world: { try makeWorld(x: -4) }) {
+            self.corruptBubble($0) { $0.bounds = SIMD4(1, 1, -1, -1) }
+        }
+    }
+
+    func testNonFiniteBoundsAreNonFinite() async throws {
+        try await assertCorruptedFrameIsRejected(as: "nonFinite", world: { try makeWorld(x: -4) }) {
+            self.corruptBubble($0) { $0.bounds = SIMD4(.nan, 1, 2, 2) }
+        }
+    }
+
+    func testNegativeContactMultiplierIsInvalidFrameAndNaNMultiplierIsNonFinite() async throws {
+        func overlapping() throws -> ReferenceWorld {
+            var world = try makeWorld(x: -0.5)
+            world.addSegment(wall())
+            return world
+        }
+        for (value, expected) in [(Float(-1), "invalidFrame"), (Float.nan, "nonFinite")] {
+            try await assertCorruptedFrameIsRejected(as: expected, world: overlapping) { state in
+                let records = state.workingCache.contents().bindMemory(to: NativeContactCacheRecord.self, capacity: 1)
+                records[0].lambda = value
+            }
+        }
+    }
+
     func testCCDThresholdUsesConfiguredMultiplierAndRadius() async throws {
         var world = try makeWorld(x: -4, vx: 10)
         world.addSegment(wall())
