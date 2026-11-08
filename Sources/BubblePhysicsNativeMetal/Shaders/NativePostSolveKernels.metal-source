@@ -429,7 +429,8 @@ kernel void nativeRigidGuardWalls(device NativeRigidBody *bodies [[buffer(0)]],
     if(index>=counts.x || bodies[index].flags.x || bodies[index].filter.z)return;
     NativeRigidBody b=bodies[index];
     for(uint j=0;j<counts.x;++j){
-        if(!bodies[j].flags.x || !nativeFilterAccepts(b.filter,bodies[j].filter))continue;
+        // Statyczne koło i kapsuła nie mają obrysu z krawędzi: ich kontakty rozwiązuje nativeRigidContacts.
+        if(!bodies[j].flags.x || nativeRigidIsRound(bodies[j]) || !nativeFilterAccepts(b.filter,bodies[j].filter))continue;
         NativeRigidBody wall=bodies[j];
         for(uint k=0;k<b.ranges.y;++k){
             float2 p=nativeRigidVertex(b,vertices,k);
@@ -477,6 +478,8 @@ kernel void nativeRigidFinish(device NativeRigidBody *bodies [[buffer(0)]],
     if(b.flags.x)return;
     float2 low=float2(INFINITY),high=float2(-INFINITY);
     for(uint i=0;i<b.ranges.y;++i){float2 v=nativeRigidVertex(b,vertices,i);low=min(low,v);high=max(high,v);}
+    // Rdzeń koła i kapsuły powiększony o promień kształtu (0 dla wielokąta).
+    low-=b.shape.y;high+=b.shape.y;
     float2 shift=0,size=control.region.zw-control.region.xy;
     bool outside=high.x<control.region.x||high.y<control.region.y||low.x>control.region.z||low.y>control.region.w;
     if(outside){
@@ -843,10 +846,31 @@ bool nativeSegmentsCross(float2 a, float2 b, float2 c, float2 d) {
     return ((p <= 0 && q >= 0) || (p >= 0 && q <= 0)) &&
            ((r <= 0 && s >= 0) || (r >= 0 && s <= 0));
 }
+// Koło i kapsuła: rdzeń z promieniem kontra okrągły albo wielokątny zasięg sensora.
+bool nativeRoundOverlapsSensor(NativeRigidBody body, device float2 *bodyVertices,
+    NativeSensorRecord sensor, device float2 *sensorVertices) {
+    float2 a = nativeRigidVertex(body, bodyVertices, 0);
+    float2 b = body.ranges.y > 1 ? nativeRigidVertex(body, bodyVertices, 1) : a;
+    float radius = body.shape.y;
+    uint sensorCount = sensor.range.y;
+    if (!sensorCount) {
+        float reach = radius + sensor.geometry.w;
+        return nativePointSegmentDistanceSquared(sensor.geometry.xy, a, b) <= reach * reach;
+    }
+    if (nativePointInPolygon(a, sensorVertices, sensor.range.x, sensorCount, sensor.geometry.xy, sensor.geometry.z)) return true;
+    for (uint j = 0; j < sensorCount; ++j) {
+        float2 c = sensor.geometry.xy + nativeRotate(sensorVertices[sensor.range.x+j], sensor.geometry.z);
+        float2 d = sensor.geometry.xy + nativeRotate(sensorVertices[sensor.range.x+(j+1)%sensorCount], sensor.geometry.z);
+        float2 pa, pb;
+        if (nativeSegmentDistance(a, b, c, d, pa, pb) <= radius) return true;
+    }
+    return false;
+}
 bool nativeRigidOverlapsSensor(NativeRigidBody body, device float2 *bodyVertices,
     NativeSensorRecord sensor, device float2 *sensorVertices) {
     uint bodyCount = body.ranges.y, sensorCount = sensor.range.y;
     if (!bodyCount) return false;
+    if (nativeRigidIsRound(body)) return nativeRoundOverlapsSensor(body, bodyVertices, sensor, sensorVertices);
     if (!sensorCount && nativePointInPolygon(sensor.geometry.xy, bodyVertices,
         body.ranges.x, bodyCount, body.pose.xy, body.pose.z)) return true;
     for (uint i = 0; i < bodyCount; ++i) {

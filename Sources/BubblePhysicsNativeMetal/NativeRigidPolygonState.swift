@@ -7,6 +7,13 @@ struct NativeRigidPolygonInput: Equatable, Sendable {
     var damping: Float
     var friction: Float
     var restitution: Float
+
+    /// Koło i kapsuła (rdzeń z promieniem): także statyczne uczestniczą w kontaktach z bańkami w solverze brył,
+    /// bo statyczny wielokąt dla baniek to odcinki, a one nie mają odcinków.
+    var hasRoundCore: Bool {
+        if case .rigidBody(let body) = object.descriptor, case .polygon = body.shape { return false }
+        return true
+    }
 }
 
 // Prywatny ABI Swift/MSL. Pozycja publiczna jest początkiem lokalnej geometrii;
@@ -20,13 +27,42 @@ struct NativeRigidBody: Equatable {
     var ranges: SIMD4<UInt32> // vertex offset/count, convex triangle offset/count
     var flags: SIMD4<UInt32> // static, wrap, region result, restitution
     var filter: SIMD4<UInt32> // kategoria, maska, kinematyczna, reserved
+    /// Rdzeń z promieniem: rodzaj (0 wielokąt, 1 koło, 2 kapsuła), promień, półdługość osi, reserved.
+    /// Koło ma jeden wierzchołek rdzenia, kapsuła dwa (oś lokalnego X); wielokąt ma promień 0 i trójkąty.
+    var shape: SIMD4<Float>
+    /// Limity prędkości z materiału: liniowa, kątowa (0 = bez limitu), reserved ×2.
+    var limits: SIMD4<Float>
 }
 
 struct NativeRigidGeometry {
     let vertices: [SIMD2<Float>]
     let triangles: [SIMD4<UInt32>]
     let centroid: SIMD2<Float>
+    /// Promień okręgu otaczającego całą bryłę (rdzeń razem z promieniem kształtu).
     let radius: Float
+    /// 0 wielokąt, 1 koło, 2 kapsuła.
+    let kind: UInt32
+    /// Promień kształtu wokół rdzenia (0 dla wielokąta) i półdługość osi kapsuły.
+    let coreRadius: Float
+    let halfLength: Float
+
+    private init(vertices: [SIMD2<Float>], radius: Float, kind: UInt32, coreRadius: Float, halfLength: Float) {
+        self.vertices = vertices; triangles = []; centroid = .zero
+        self.radius = radius; self.kind = kind; self.coreRadius = coreRadius; self.halfLength = halfLength
+    }
+
+    init(_ shape: RigidShape) throws {
+        switch shape {
+        case .polygon(let geometry): self = try NativeRigidGeometry(geometry)
+        case .circle(let radius):
+            guard radius.isFinite, radius > 0 else { throw NativeMetalSolverError.invalidSnapshot }
+            self = NativeRigidGeometry(vertices: [.zero], radius: radius, kind: 1, coreRadius: radius, halfLength: 0)
+        case .capsule(let halfLength, let radius):
+            guard radius.isFinite, radius > 0, halfLength.isFinite, halfLength > 0 else { throw NativeMetalSolverError.invalidSnapshot }
+            self = NativeRigidGeometry(vertices: [SIMD2(-halfLength, 0), SIMD2(halfLength, 0)], radius: halfLength + radius,
+                                       kind: 2, coreRadius: radius, halfLength: halfLength)
+        }
+    }
 
     init(_ geometry: PolygonGeometry) throws {
         var points = geometry.vertices.map { SIMD2<Double>(Double($0.x), Double($0.y)) }
@@ -70,6 +106,7 @@ struct NativeRigidGeometry {
         vertices = points.map { SIMD2(Float($0.x - center.x), Float($0.y - center.y)) }
         triangles = pieces
         radius = vertices.map { sqrt($0.x * $0.x + $0.y * $0.y) }.max() ?? 0
+        kind = 0; coreRadius = 0; halfLength = 0
         guard centroid.x.isFinite, centroid.y.isFinite, radius.isFinite, radius > 0 else { throw NativeMetalSolverError.invalidSnapshot }
     }
 }
@@ -81,8 +118,8 @@ final class NativeRigidPolygonState {
     private let device: MTLDevice
     private var buffers: [String: MTLBuffer] = [:]
     private var publishedInputs: [NativeRigidPolygonInput] = []
-    private var publishedGeometry: [(ObjectID, PolygonGeometry)] = []
-    private var geometryCache: [ObjectID: (PolygonGeometry, NativeRigidGeometry)] = [:]
+    private var publishedGeometry: [(ObjectID, RigidShape)] = []
+    private var geometryCache: [ObjectID: (RigidShape, NativeRigidGeometry)] = [:]
     private var current: [NativeRigidPolygonInput] = []
     private var records: [NativeRigidBody] = []
     private var changes: [Int] = []
@@ -140,16 +177,16 @@ final class NativeRigidPolygonState {
         records = []; changes = []; remaps = []
         var vertices: [SIMD2<Float>] = [], triangles: [SIMD4<UInt32>] = []
         let old = Dictionary(uniqueKeysWithValues: publishedInputs.enumerated().map { ($0.element.object.descriptor.id, ($0.offset, $0.element)) })
-        var newGeometry: [(ObjectID, PolygonGeometry)] = []
+        var newGeometry: [(ObjectID, RigidShape)] = []
         // Kolejność identyfikatorów zgodna z ostatnią publikacją od początku listy do bieżącego indeksu; liczona narastająco, O(k).
         var orderMatchesPublished = true
         for (index, input) in inputs.enumerated() {
             let o = input.object
-            guard case .rigidBody(let p) = o.descriptor, case .polygon(let polygonGeometry) = p.shape else { throw NativeMetalSolverError.invalidSnapshot }
+            guard case .rigidBody(let p) = o.descriptor else { throw NativeMetalSolverError.invalidSnapshot }
             let geometry: NativeRigidGeometry
-            if let cached = geometryCache[p.id], cached.0 == polygonGeometry { geometry = cached.1 }
-            else { geometry = try NativeRigidGeometry(polygonGeometry); geometryCache[p.id] = (polygonGeometry, geometry) }
-            newGeometry.append((p.id, polygonGeometry))
+            if let cached = geometryCache[p.id], cached.0 == p.shape { geometry = cached.1 }
+            else { geometry = try NativeRigidGeometry(p.shape); geometryCache[p.id] = (p.shape, geometry) }
+            newGeometry.append((p.id, p.shape))
             orderMatchesPublished = orderMatchesPublished && index < publishedGeometry.count
                 && publishedGeometry[index].0 == p.id
             let c = cos(o.rotation), s = sin(o.rotation), center = geometry.centroid
@@ -174,7 +211,9 @@ final class NativeRigidPolygonState {
                                 geometry.radius, input.friction),
                 ranges: SIMD4(UInt32(vertices.count), UInt32(geometry.vertices.count), UInt32(triangles.count), UInt32(geometry.triangles.count)),
                 flags: SIMD4(isStatic ? 1 : 0, p.regionExitPolicy == .wrap ? 1 : 0, 0, input.restitution.bitPattern),
-                filter: NativeMetalFilter.pack(p.filter, kinematic: isKinematic))
+                filter: NativeMetalFilter.pack(p.filter, kinematic: isKinematic),
+                shape: SIMD4(Float(geometry.kind), geometry.coreRadius, geometry.halfLength, 0),
+                limits: .zero)
             guard record.physical.x.isFinite, record.physical.y.isFinite else { throw NativeMetalSolverError.invalidSnapshot }
             records.append(record)
             vertices += geometry.vertices
@@ -246,7 +285,7 @@ final class NativeRigidPolygonState {
 
     func publish(_ objects: [ObjectID: NativePublicObject]) {
         publishedInputs = current.map { var input = $0; input.object = objects[input.object.descriptor.id]!; return input }
-        publishedGeometry = current.compactMap { if case .rigidBody(let p) = $0.object.descriptor, case .polygon(let geometry) = p.shape { return (p.id, geometry) }; return nil }
+        publishedGeometry = current.compactMap { if case .rigidBody(let p) = $0.object.descriptor { return (p.id, p.shape) }; return nil }
         let old = buffers["published"]!; buffers["published"] = bodies; buffers["working"] = old
         let oldVertices = buffers["publishedVertices"]!; buffers["publishedVertices"] = vertices; buffers["vertices"] = oldVertices
         let oldTriangles = buffers["publishedTriangles"]!; buffers["publishedTriangles"] = triangles; buffers["triangles"] = oldTriangles

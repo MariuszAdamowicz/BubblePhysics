@@ -109,7 +109,9 @@ final class NativeMetalShaderABITests: XCTestCase {
                 ("physical", MemoryLayout<NativeRigidBody>.offset(of: \.physical)),
                 ("ranges", MemoryLayout<NativeRigidBody>.offset(of: \.ranges)),
                 ("flags", MemoryLayout<NativeRigidBody>.offset(of: \.flags)),
-                ("filter", MemoryLayout<NativeRigidBody>.offset(of: \.filter))]),
+                ("filter", MemoryLayout<NativeRigidBody>.offset(of: \.filter)),
+                ("shape", MemoryLayout<NativeRigidBody>.offset(of: \.shape)),
+                ("limits", MemoryLayout<NativeRigidBody>.offset(of: \.limits))]),
             Probe(name: "structuralHeader", mslSize: "NativeStructuralHeader", swiftSize: MemoryLayout<NativeStructuralHeader>.stride, fields: [
                 ("origin", MemoryLayout<NativeStructuralHeader>.offset(of: \.origin))]),
             Probe(name: "structuralSource", mslSize: "NativeStructuralSource", swiftSize: MemoryLayout<NativeStructuralSourceRecord>.stride, fields: [

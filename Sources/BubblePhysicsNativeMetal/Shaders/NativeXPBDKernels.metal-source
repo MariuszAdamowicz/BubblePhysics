@@ -468,6 +468,11 @@ kernel void nativeFinalizeSolverContacts(device NativeBubble *bubbles [[buffer(0
 // Wnętrze unii kawałków wypukłych. Krawędzie triangulacji nigdy nie stają się
 // powierzchnią kontaktową: punkt kontaktu pochodzi z zewnętrznego pierścienia.
 bool nativeRigidInside(float2 p, NativeRigidBody body, device float2 *vertices, device uint4 *triangles) {
+    // Koło i kapsuła: wnętrze to odległość od rdzenia nie większa niż promień.
+    if (nativeRigidIsRound(body)) {
+        NativeRoundCore core = nativeRoundCoreOf(body, vertices);
+        return distance(p, nativeClosestPoint(p, float4(core.a, core.b))) <= core.radius;
+    }
     float2 local = nativeRotate(p - body.pose.xy, -body.pose.z);
     for (uint i = 0; i < body.ranges.w; ++i) {
         uint4 t = triangles[body.ranges.z + i];
@@ -502,6 +507,79 @@ bool nativeTriangleContact(thread float2 *a, thread float2 *b, thread float2 &no
     return true;
 }
 
+// Rdzeń okrągły R wobec wielokąta P (unia trójkątów, obrys to krawędzie pierścienia). Normalna od R do P.
+// Rdzeń na zewnątrz: odległość do obrysu minus promień. Koniec rdzenia we wnętrzu: oś to normalna najbliższej krawędzi
+// obrysu (najkrótsza droga na zewnątrz), głębokość to odległość do niej plus promień; trójkąty podziału są wewnętrzne
+// i nigdy nie dają normalnej. Rdzeń przecinający obrys bez końca we wnętrzu idzie od środka rdzenia do środka wielokąta.
+bool nativeRoundPolygonContact(NativeRoundCore R, NativeRigidBody P, device float2 *vertices, device uint4 *triangles,
+                               thread float2 &normal, thread float &depth, thread float2 &point) {
+    uint count = P.ranges.y;
+    float insideDepth = -1; float2 insideOutward = 0, insidePoint = 0;
+    for (uint k = 0; k < (any(R.b != R.a) ? 2u : 1u); ++k) {
+        float2 endpoint = k == 0 ? R.a : R.b;
+        if (!nativeRigidInside(endpoint, P, vertices, triangles)) continue;
+        float nearest = INFINITY; float2 nearestPoint = 0, nearestOutward = 0;
+        for (uint e = 0; e < count; ++e) {
+            float2 p = nativeRigidVertex(P, vertices, e), q = nativeRigidVertex(P, vertices, (e + 1) % count);
+            float2 closest = nativeClosestPoint(endpoint, float4(p, q));
+            float d = distance(endpoint, closest);
+            if (d < nearest) {
+                nearest = d; nearestPoint = closest;
+                float2 edge = q - p; float size = length(edge);
+                nearestOutward = size > FLT_MIN ? float2(edge.y, -edge.x) / size : float2(0, 1);
+            }
+        }
+        if (nearest > insideDepth) { insideDepth = nearest; insidePoint = nearestPoint; insideOutward = nearestOutward; }
+    }
+    if (insideDepth >= 0) {
+        normal = -insideOutward; depth = R.radius + insideDepth; point = insidePoint;
+        return true;
+    }
+    float best = INFINITY; float2 pc = 0, pe = 0;
+    for (uint e = 0; e < count; ++e) {
+        float2 p = nativeRigidVertex(P, vertices, e), q = nativeRigidVertex(P, vertices, (e + 1) % count);
+        float2 ca, ce;
+        float d = nativeSegmentDistance(R.a, R.b, p, q, ca, ce);
+        if (d < best) { best = d; pc = ca; pe = ce; }
+    }
+    if (best > 1e-4f) {
+        normal = (pe - pc) / best; depth = R.radius - best; point = pe;
+        return true;
+    }
+    float2 toCenter = P.pose.xy - 0.5f * (R.a + R.b); float size = length(toCenter);
+    normal = size > FLT_MIN ? toCenter / size : float2(1, 0);
+    depth = R.radius; point = pe;
+    return true;
+}
+
+// Kontakt pary brył (normalna od a do b, głębokość, punkt). Wielokąt–wielokąt: SAT trójkątów, wybierany najgłębszy
+// kawałek. Pozostałe pary to rdzeń z promieniem: odległość rdzeni minus promienie, a przy przecięciu oś najmniejszego
+// wnikania. Wspólne dla kontaktów i CCD. `false` oznacza brak nakładania się kształtów.
+bool nativeRigidPairContact(NativeRigidBody a, NativeRigidBody b, device float2 *vertices, device uint4 *triangles,
+                            thread float2 &n, thread float &depth, thread float2 &point) {
+    bool aRound = nativeRigidIsRound(a), bRound = nativeRigidIsRound(b);
+    if (aRound && bRound) {
+        // Ciała w parze są posortowane po ObjectID (a przed b), więc stała oś (1, 0) idzie od mniejszego ObjectID.
+        return nativeRoundContact(nativeRoundCoreOf(a, vertices), nativeRoundCoreOf(b, vertices), float2(1, 0), n, depth, point);
+    }
+    if (aRound != bRound) {
+        NativeRigidBody round = aRound ? a : b, polygon = aRound ? b : a;
+        float2 normal;
+        if (!nativeRoundPolygonContact(nativeRoundCoreOf(round, vertices), polygon, vertices, triangles, normal, depth, point)) return false;
+        n = aRound ? normal : -normal;
+        return true;
+    }
+    bool found = false;
+    for (uint i = 0; i < a.ranges.w; ++i) for (uint j = 0; j < b.ranges.w; ++j) {
+        uint4 ta = triangles[a.ranges.z + i], tb = triangles[b.ranges.z + j];
+        float2 av[3] = {nativeRigidVertex(a, vertices, ta.x), nativeRigidVertex(a, vertices, ta.y), nativeRigidVertex(a, vertices, ta.z)};
+        float2 bv[3] = {nativeRigidVertex(b, vertices, tb.x), nativeRigidVertex(b, vertices, tb.y), nativeRigidVertex(b, vertices, tb.z)};
+        float2 normal, p; float d;
+        if (nativeTriangleContact(av, bv, normal, d, p) && (!found || d > depth)) { found = true; depth = d; n = normal; point = p; }
+    }
+    return found;
+}
+
 // Wiersze kandydatów z nativeRigidEmitCandidates: wątek (bryła, miejsce w wierszu) liczy jeden kontakt.
 // Wzory korekty bez zmian względem slotów par; zmienia się tylko skąd bierze się para.
 kernel void nativeRigidContacts(device NativeRigidBody *bodies [[buffer(0)]],
@@ -522,12 +600,19 @@ kernel void nativeRigidContacts(device NativeRigidBody *bodies [[buffer(0)]],
     if(candidate.metadata.x==2) {
         uint ai=candidate.metadata.y,bi=candidate.metadata.z;
         NativeBubble a=bubbles[ai];NativeRigidBody b=bodies[bi];
-        // Statyczne polygony pozostają w istniejącym solverze segmentów.
-        if(b.flags.x){corrections[index]=result;return;}
+        bool round=nativeRigidIsRound(b);
+        // Statyczne polygony pozostają w istniejącym solverze segmentów; statyczne koło i kapsuła nie mają odcinków.
+        if(b.flags.x && !round){corrections[index]=result;return;}
         float2 center=positions[ai].xy;
         float2 bubbleLow=min(center,a.position.zw)-a.physical.z,bubbleHigh=max(center,a.position.zw)+a.physical.z;
         float2 bodyLow=min(b.pose.xy,b.previous.xy)-b.physical.z,bodyHigh=max(b.pose.xy,b.previous.xy)+b.physical.z;
         if(any(bubbleHigh<bodyLow)||any(bodyHigh<bubbleLow)){corrections[index]=result;return;}
+        if(round){
+            // Bańka to dysk o promieniu docelowym; rdzeń bryły z promieniem kształtu. Para bańka–bryła w stałym porządku ID.
+            NativeRoundCore bubbleCore;bubbleCore.a=center;bubbleCore.b=center;bubbleCore.radius=a.physical.z;
+            float2 fallback=ulong(a.identity.x)<b.identity.x ? float2(1,0) : float2(-1,0);
+            if(!nativeRoundContact(bubbleCore,nativeRoundCoreOf(b,vertices),fallback,n,depth,point)){corrections[index]=result;return;}
+        } else {
         float best=INFINITY;float2 outward=0;
         for(uint i=0;i<b.ranges.y;++i){
             float2 p=nativeRigidVertex(b,vertices,i),q=nativeRigidVertex(b,vertices,(i+1)%b.ranges.y);
@@ -578,6 +663,7 @@ kernel void nativeRigidContacts(device NativeRigidBody *bodies [[buffer(0)]],
                 if(possible){atomic_fetch_or_explicit(safety+3,2u,memory_order_relaxed);break;}
             }
         }
+        }
         wa=a.physical.y;wb=b.physical.x;ib=b.physical.y;rb=point-b.pose.xy;
         va=a.motion.xy;vb=b.motion.xy;spinB=b.motion.z;
         frictionA=a.material.w;frictionB=b.physical.w;restitutionA=as_type<float>(uint(a.resources.x));restitutionB=as_type<float>(b.flags.w);
@@ -592,19 +678,15 @@ kernel void nativeRigidContacts(device NativeRigidBody *bodies [[buffer(0)]],
         float t=travelSquared>FLT_MIN ? clamp(-dot(start,travel)/travelSquared,0.0f,1.0f) : 0.0f;
         float radius=a.physical.z+b.physical.z,radiusSquared=radius*radius;
         float2 closest=start+t*travel;
-        bool sweptPair=t>0 && t<1 && dot(closest,closest)<=radiusSquared;
+        // Para z kołem lub kapsułą nie ma dawnej ścieżki odrzucania klatki; tunelowanie obsługuje CCD (nativeRigidResolveCCD).
+        bool sweptPair=!(nativeRigidIsRound(a)||nativeRigidIsRound(b)) && t>0 && t<1 && dot(closest,closest)<=radiusSquared;
         if(dot(end,end)>radiusSquared){
             if(sweptPair)atomic_fetch_or_explicit(safety+3,2u,memory_order_relaxed);
             corrections[index]=result;return;
         }
-        bool found=false;
-        for(uint i=0;i<a.ranges.w;++i)for(uint j=0;j<b.ranges.w;++j){
-            uint4 ta=triangles[a.ranges.z+i],tb=triangles[b.ranges.z+j];
-            float2 av[3]={nativeRigidVertex(a,vertices,ta.x),nativeRigidVertex(a,vertices,ta.y),nativeRigidVertex(a,vertices,ta.z)};
-            float2 bv[3]={nativeRigidVertex(b,vertices,tb.x),nativeRigidVertex(b,vertices,tb.y),nativeRigidVertex(b,vertices,tb.z)};
-            float2 normal,p;float d;
-            if(nativeTriangleContact(av,bv,normal,d,p) && (!found || d>depth)){found=true;depth=d;n=normal;point=p;}
-        }
+        float2 pairNormal,pairPoint;float pairDepth;
+        bool found=nativeRigidPairContact(a,b,vertices,triangles,pairNormal,pairDepth,pairPoint);
+        if(found){depth=pairDepth;n=pairNormal;point=pairPoint;}
         if(!found){
             if(sweptPair)atomic_fetch_or_explicit(safety+3,2u,memory_order_relaxed);
             corrections[index]=result;return;

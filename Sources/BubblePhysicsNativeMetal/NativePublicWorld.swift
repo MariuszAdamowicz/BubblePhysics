@@ -140,14 +140,14 @@ package final class NativePublicWorld {
                 styleID = b.renderStyleID; local = object.presentation
             case .rigidBody(let p):
                 guard let material = materials[p.physicsMaterialID] else { throw NativeMetalSolverError.invalidSnapshot }
-                // Koło i kapsuła przechodzą staging, a solver dostaje je w zadaniu 27.
-                guard case .polygon(let geometry) = p.shape else { throw NativeMetalSolverError.invalidSnapshot }
                 rigidPolygons.append(.init(object: object, damping: material.damping,
                     friction: material.friction, restitution: material.restitution))
                 styleID = p.renderStyleID; local = object.presentation
                 // Statyczne krawędzie zachowują dotychczasowy cache i guardy baniek.
                 // Bryły dynamiczne trafiają wyłącznie do obustronnego solvera brył.
                 if object.motionRole != .static { break }
+                // Statyczne koło i kapsuła nie mają odcinków: bańki widzą je w solverze brył.
+                guard case .polygon(let geometry) = p.shape else { break }
                 let entry: (geometry: PolygonGeometry, position: WorldPoint, rotation: Float, segments: [NativeSolverSegment])
                 if let cached = polygons[p.id], cached.geometry == geometry,
                    cached.position == object.position, cached.rotation == object.rotation { entry = cached }

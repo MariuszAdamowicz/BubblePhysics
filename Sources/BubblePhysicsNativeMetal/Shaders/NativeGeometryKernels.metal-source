@@ -31,6 +31,8 @@ struct NativeRigidBody {
     ulong2 identity; float4 pose; float4 previous; float4 motion; float4 physical;
     uint4 ranges; uint4 flags;
     uint4 filter; // kategoria, maska, kinematyczna (1), reserved
+    float4 shape; // rodzaj rdzenia (0 wielokąt, 1 koło, 2 kapsuła), promień, półdługość, reserved
+    float4 limits; // maksymalna prędkość liniowa i kątowa (0 = bez limitu), reserved, reserved
 };
 struct NativeRigidCorrection { float4 first; float4 second; float4 velocityFirst; float4 velocitySecond; };
 // Ostatni kontakt bryły ze ścianą, zatrzymany przez sweep w nativeRigidPredict; para (bryła, właściciel ściany).
@@ -125,6 +127,8 @@ float2 nativeRotate(float2 p, float angle) {
 float2 nativeRigidVertex(NativeRigidBody body, device float2 *vertices, uint i) {
     return body.pose.xy + nativeRotate(vertices[body.ranges.x + i], body.pose.z);
 }
+// Koło i kapsuła to rdzeń z promieniem (punkt albo odcinek); wielokąt ma promień 0 i trójkąty.
+bool nativeRigidIsRound(NativeRigidBody body) { return body.shape.x > 0.5f; }
 
 void nativeCountWork(device atomic_uint *statistics, uint slot) {
     if (atomic_load_explicit(statistics + 4, memory_order_relaxed))
@@ -285,7 +289,8 @@ kernel void nativeRigidEmitCandidates(device NativeRigidBody *bodies [[buffer(0)
     NativeRigidBody b = bodies[index];
     device NativeCandidate *row = rows + index * limit;
     uint count = 0, dropped = 0;
-    if (!b.flags.x) {
+    // Statyczny wielokąt dla baniek to odcinki; statyczne koło i kapsuła nie mają odcinków, więc bańki łapie solver brył.
+    if (!b.flags.x || nativeRigidIsRound(b)) {
         float2 bodyLow = min(b.pose.xy, b.previous.xy) - b.physical.z;
         float2 bodyHigh = max(b.pose.xy, b.previous.xy) + b.physical.z;
         for (uint ai = 0; ai < counts.y; ++ai) {
@@ -333,6 +338,77 @@ float2 nativeClosestPoint(float2 p, float4 endpoints) {
     float2 edge = endpoints.zw - endpoints.xy;
     float square = dot(edge, edge);
     return endpoints.xy + edge * (square > FLT_MIN ? clamp(dot(p - endpoints.xy, edge) / square, 0.0f, 1.0f) : 0);
+}
+
+// Odległość między odcinkami [a,b] i [c,d] (punkt to odcinek zdegenerowany) wraz z najbliższymi punktami;
+// przecinające się odcinki mają odległość 0 i wspólny punkt przecięcia.
+float nativeSegmentDistance(float2 a, float2 b, float2 c, float2 d, thread float2 &pa, thread float2 &pb) {
+    float2 r = b - a, s = d - c;
+    float denominator = nativeCross(r, s);
+    if (abs(denominator) > 1e-12f) {
+        float2 qp = c - a;
+        float t = nativeCross(qp, s) / denominator, u = nativeCross(qp, r) / denominator;
+        if (t >= 0 && t <= 1 && u >= 0 && u <= 1) { pa = a + t * r; pb = pa; return 0; }
+    }
+    float best = INFINITY;
+    float2 cp = nativeClosestPoint(a, float4(c, d)); float distanceValue = distance(a, cp);
+    if (distanceValue < best) { best = distanceValue; pa = a; pb = cp; }
+    cp = nativeClosestPoint(b, float4(c, d)); distanceValue = distance(b, cp);
+    if (distanceValue < best) { best = distanceValue; pa = b; pb = cp; }
+    cp = nativeClosestPoint(c, float4(a, b)); distanceValue = distance(c, cp);
+    if (distanceValue < best) { best = distanceValue; pa = cp; pb = c; }
+    cp = nativeClosestPoint(d, float4(a, b)); distanceValue = distance(d, cp);
+    if (distanceValue < best) { best = distanceValue; pa = cp; pb = d; }
+    return best;
+}
+
+// Rdzeń koła (punkt) albo kapsuły (odcinek) w świecie, z promieniem kształtu; `a` = `b` dla punktu.
+struct NativeRoundCore { float2 a; float2 b; float radius; };
+
+NativeRoundCore nativeRoundCoreOf(NativeRigidBody body, device float2 *vertices) {
+    NativeRoundCore core;
+    core.a = nativeRigidVertex(body, vertices, 0);
+    core.b = body.ranges.y > 1 ? nativeRigidVertex(body, vertices, 1) : core.a;
+    core.radius = body.shape.y;
+    return core;
+}
+
+// Kontakt dwóch rdzeni okrągłych: normalna od A do B, głębokość to nakładanie z promieniami (ujemna w szczelinie).
+// Gdy rdzenie się przecinają albo pokrywają, oś najmniejszego wnikania to normalna któregoś odcinka, a bez odcinków
+// (dwa punkty w tym samym miejscu) stała oś `fallback`, którą wołający kieruje od mniejszego ObjectID.
+bool nativeRoundContact(NativeRoundCore A, NativeRoundCore B, float2 fallback,
+                        thread float2 &normal, thread float &depth, thread float2 &point) {
+    float2 pa, pb;
+    float separation = nativeSegmentDistance(A.a, A.b, B.a, B.b, pa, pb);
+    if (separation > 1e-4f) {
+        normal = (pb - pa) / separation;
+        depth = A.radius + B.radius - separation;
+        point = 0.5f * ((pa + normal * A.radius) + (pb - normal * B.radius));
+        return true;
+    }
+    float2 axes[2]; uint axisCount = 0;
+    float2 ea = A.b - A.a, eb = B.b - B.a;
+    float la = length(ea), lb = length(eb);
+    if (la > 1e-6f) axes[axisCount++] = float2(-ea.y, ea.x) / la;
+    if (lb > 1e-6f) axes[axisCount++] = float2(-eb.y, eb.x) / lb;
+    float2 axis = fallback; float overlap = 0, orientation = 1;
+    float best = INFINITY;
+    for (uint i = 0; i < axisCount; ++i) {
+        float2 candidate = axes[i];
+        float amin = min(dot(A.a, candidate), dot(A.b, candidate)), amax = max(dot(A.a, candidate), dot(A.b, candidate));
+        float bmin = min(dot(B.a, candidate), dot(B.b, candidate)), bmax = max(dot(B.a, candidate), dot(B.b, candidate));
+        float plus = amax - bmin, minus = bmax - amin;
+        float value = min(plus, minus);
+        if (value < best) {
+            best = value; axis = candidate; overlap = value;
+            if (abs(plus - minus) < 1e-6f) orientation = dot(candidate, fallback) >= 0 ? 1.0f : -1.0f;
+            else orientation = plus < minus ? 1.0f : -1.0f;
+        }
+    }
+    normal = orientation * axis;
+    depth = overlap + A.radius + B.radius;
+    point = 0.5f * (pa + pb);
+    return true;
 }
 
 // Przejście środka przez liniowo poruszający się odcinek: signed area jest
