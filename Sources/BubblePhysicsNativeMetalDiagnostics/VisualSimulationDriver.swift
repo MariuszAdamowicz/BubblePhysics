@@ -133,7 +133,7 @@ public final class VisualSimulationDriver {
             let snapshot = ReferenceVisualSnapshot(bubbles: world.bubbles, contours: contours,
                 triangleVertices: vertices, contacts: world.contacts.contacts, lastReport: report,
                 simulationTime: simulationTime, stepsExecuted: steps, valuesByBubbleID: scene.valuesByBubbleID)
-            frame = .init(snapshot: snapshot, selectedBackend: backend, actualBackend: native.telemetry.backend,
+            frame = .init(snapshot: snapshot, selectedBackend: backend, actualBackend: native.telemetry.backend == .nativeMetal ? .nativeMetal : .cpu,
                 fallbackReason: native.telemetry.fallbackReason, gpuMilliseconds: native.telemetry.gpuMilliseconds,
                 containmentCount: containment.maximumConsecutiveFrames,
                 hasNonFiniteState: report.hasNonFiniteState || native.telemetry.didEncounterNonFinite)

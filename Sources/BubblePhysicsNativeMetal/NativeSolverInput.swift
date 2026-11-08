@@ -1,7 +1,7 @@
 import Foundation
 import BubblePhysicsModel
 
-// Neutralna granica solvera: wejście i wynik kroku bez typów diagnostycznego `BubblePhysicsReference`.
+// Neutralna granica solvera: wejście i wynik kroku bez typów modułu diagnostycznego.
 // Od niej zależy wydajność kroku, adapter diagnostyczny i każdy późniejszy kernel.
 
 package struct NativeSolverBubbleID: Hashable, Comparable, Sendable {

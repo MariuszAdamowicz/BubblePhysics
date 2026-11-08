@@ -1,6 +1,5 @@
 import Foundation
 import Metal
-import BubblePhysicsReference
 import BubblePhysicsModel
 
 package enum NativeMetalSolverError: Error {

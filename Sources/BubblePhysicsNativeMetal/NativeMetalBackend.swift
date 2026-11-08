@@ -1,5 +1,3 @@
-@_exported import BubblePhysicsReference
-
 public struct NativeMetalConfiguration: Equatable, Sendable {
     public var solverIterationCount: Int
     /// Zero oznacza twardy kontakt PBD; wartość dodatnia włącza compliance XPBD.
@@ -33,8 +31,14 @@ public struct NativeMetalConfiguration: Equatable, Sendable {
     }
 }
 
+/// Który wykonawca opublikował klatkę. Neutralny odpowiednik typu diagnostycznego.
+public enum NativeMetalFrameBackend: String, Equatable, Sendable {
+    case cpu
+    case nativeMetal = "native-metal"
+}
+
 public struct NativeMetalFrameTelemetry: Equatable, Sendable {
-    public let backend: ReferenceSimulationBackend
+    public let backend: NativeMetalFrameBackend
     public let commandBufferCount: Int
     public let encoderCount: Int
     public let cacheHitCount: Int
@@ -48,7 +52,7 @@ public struct NativeMetalFrameTelemetry: Equatable, Sendable {
     public let fallbackReason: String?
     public let gpuMilliseconds: Double
 
-    public init(backend: ReferenceSimulationBackend = .cpu, commandBufferCount: Int = 0,
+    public init(backend: NativeMetalFrameBackend = .cpu, commandBufferCount: Int = 0,
                 encoderCount: Int = 0, cacheHitCount: Int = 0, cacheResetCount: Int = 0,
                 contactCount: Int = 0, didEncounterNonFinite: Bool = false,
                 fallbackReason: String? = nil, gpuMilliseconds: Double = 0,

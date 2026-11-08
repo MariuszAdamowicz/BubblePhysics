@@ -222,7 +222,7 @@ extension NativeMetalWorldRunner {
             renderPreparationMilliseconds: Self.milliseconds(contourEnd.duration(to: end)),
             fullFrameMilliseconds: Self.milliseconds(start.duration(to: end)),
             contourPointCount: prepared.reduce(0) { $0 + $1.contour.count }, preparedBubbles: prepared,
-            backend: telemetry.backend, fallbackReason: telemetry.fallbackReason,
+            backend: telemetry.backend == .nativeMetal ? .nativeMetal : .cpu, fallbackReason: telemetry.fallbackReason,
             gpuTelemetry: .init(completedCommandBuffersMilliseconds: succeeded ? telemetry.gpuMilliseconds : nil,
                 contactCount: telemetry.contactCount, profile: succeeded ? neutralProfile : nil,
                 native: succeeded ? .init(cacheHits: telemetry.cacheHitCount, cacheResets: telemetry.cacheResetCount,
