@@ -50,6 +50,8 @@ package struct NativePublicFrame {
     package var eventOverflow = WorldEventOverflow()
     package var contactCandidateOverflowCount = 0
     package var maximumContactCandidatesPerObject = 0
+    /// Wynik dla każdego punktu hit-testu, w kolejności punktów; `nil` oznacza puste miejsce.
+    package var hitTestResults: [ObjectID?] = []
 }
 
 struct NativePublicProperties: Equatable, Sendable {
@@ -103,7 +105,7 @@ package final class NativePublicWorld {
 
     package func step(objects: [NativePublicObject], materials: [PhysicsMaterialID: PhysicsMaterial],
                       styles: [RenderStyleID: RenderStyle], region: WorldRectangle, duration: Double,
-                      joints: [Joint] = [], eventBufferCapacity: Int = 1024, commandBuffer: MTLCommandBuffer? = nil,
+                      joints: [Joint] = [], hitTests: [WorldPoint] = [], eventBufferCapacity: Int = 1024, commandBuffer: MTLCommandBuffer? = nil,
                       beforeCommit: ((NativeMetalRenderHandoff) throws -> Void)? = nil) async throws -> NativePublicFrame {
         let dt = Float(duration)
         guard dt.isFinite, dt > 0, Double(dt) > 0 else { throw NativeMetalSolverError.invalidSnapshot }
@@ -267,7 +269,8 @@ package final class NativePublicWorld {
         return NativePublicFrame(objects: result, presentation: presentation, profile: frame.profile,
             contacts: contacts, events: discreteEvents, eventOverflow: WorldEventOverflow(droppedCount: dropped),
             contactCandidateOverflowCount: frame.contactCandidateOverflowCount,
-            maximumContactCandidatesPerObject: frame.maximumContactCandidatesPerObject)
+            maximumContactCandidatesPerObject: frame.maximumContactCandidatesPerObject,
+            hitTestResults: hitTests.map { _ in nil })
     }
 
     /// Przejścia kontaktu pary w jednym kroku. Cache baniek i wiersze brył są już odczytane na CPU, więc początek to para

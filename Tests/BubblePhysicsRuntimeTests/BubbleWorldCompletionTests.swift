@@ -300,6 +300,142 @@ final class BubbleWorldCompletionTests: XCTestCase {
         XCTAssertTrue(stepper.publishedContactPairs.isEmpty, "didPublish bez nowego kroku nic nie zmienia")
     }
 
+    // MARK: hit-test (P-B-31, P-B-33)
+
+    private func waitForPending(_ world: BubbleWorld, _ count: Int, file: StaticString = #filePath, line: UInt = #line) async {
+        for _ in 0..<1000 where world.pendingHitTestCount != count { await Task.yield() }
+        XCTAssertEqual(world.pendingHitTestCount, count, file: file, line: line)
+    }
+
+    // Punkty oczekujących zapytań trafiają do metody kroku w kolejności zgłoszenia, a wyniki wracają do właściwych zapytań.
+    func testHitTestsReachTheStepInOrderAndResumeWithTheirOwnResults() async throws {
+        let stepper = HitTestStepper(results: [ObjectID(rawValue: 5), nil, ObjectID(rawValue: 7)])
+        let world = try world(stepper: stepper)
+        let first = Task { @MainActor in await world.hitTest([1, 1]) }
+        await waitForPending(world, 1)
+        let second = Task { @MainActor in await world.hitTest([2, 2]) }
+        await waitForPending(world, 2)
+        let third = Task { @MainActor in await world.hitTest([3, 3]) }
+        await waitForPending(world, 3)
+        _ = await world.advance(by: 0.125)
+        let results = [await first.value, await second.value, await third.value]
+        XCTAssertEqual(stepper.receivedHitTests, [[[1, 1], [2, 2], [3, 3]]])
+        XCTAssertEqual(results, [ObjectID(rawValue: 5), nil, ObjectID(rawValue: 7)])
+        XCTAssertEqual(world.pendingHitTestCount, 0)
+    }
+
+    // Stepper bez wyników (stary kontrakt) oznacza puste miejsce dla każdego punktu; zapytanie się kończy.
+    func testMissingStepResultsMeanNilForEveryPoint() async throws {
+        let world = try world(stepper: HitTestStepper(results: []))
+        let task = Task { @MainActor in await world.hitTest([1, 1]) }
+        await waitForPending(world, 1)
+        _ = await world.advance(by: 0.125)
+        let result = await task.value
+        XCTAssertNil(result)
+        XCTAssertEqual(world.pendingHitTestCount, 0)
+    }
+
+    // Krok odrzucony przez solver i klatka odrzucona przez grę zostawiają zapytania w kolejce; ponowny krok dostaje te same punkty.
+    func testRejectedStepAndRejectedFrameKeepHitTestsWaiting() async throws {
+        let queue = try XCTUnwrap(MTLCreateSystemDefaultDevice()?.makeCommandQueue())
+        let stepper = HitTestStepper(results: [ObjectID(rawValue: 5)],
+            script: [.fail(safety(.guardFailure)), .encodeThenCommit, .encodeThenCommit])
+        let world = try world(stepper: stepper)
+        let task = Task { @MainActor in await world.hitTest([4, 4]) }
+        await waitForPending(world, 1)
+        _ = await world.advance(by: 0.125)
+        XCTAssertEqual(world.diagnostics.lastAdvanceIssue, .stepFailed)
+        XCTAssertEqual(world.pendingHitTestCount, 1, "krok odrzucony")
+        struct GameError: Error {}
+        _ = await world.advance(by: 0, commandBuffer: try XCTUnwrap(queue.makeCommandBuffer())) { throw GameError() }
+        XCTAssertEqual(world.diagnostics.lastAdvanceIssue, .frameRejected)
+        XCTAssertEqual(world.pendingHitTestCount, 1, "klatka odrzucona")
+        _ = await world.advance(by: 0, commandBuffer: try XCTUnwrap(queue.makeCommandBuffer())) {}
+        let result = await task.value
+        XCTAssertEqual(result, ObjectID(rawValue: 5))
+        XCTAssertEqual(stepper.receivedHitTests, [[[4, 4]], [[4, 4]], [[4, 4]]])
+    }
+
+    // P-B-33: w pauzie zapytanie czeka; po wznowieniu dostaje wynik pierwszego kroku.
+    func testHitTestWaitsInPauseAndResumesWithTheFirstStepAfterResume() async throws {
+        let stepper = HitTestStepper(results: [ObjectID(rawValue: 5)])
+        let world = try world(stepper: stepper)
+        world.pause()
+        var finished = false
+        let task = Task { @MainActor () -> ObjectID? in
+            let result = await world.hitTest([1, 1])
+            finished = true
+            return result
+        }
+        await waitForPending(world, 1)
+        _ = await world.advance(by: 1)
+        for _ in 0..<50 { await Task.yield() }
+        XCTAssertFalse(finished)
+        XCTAssertTrue(stepper.receivedHitTests.isEmpty)
+        world.resume()
+        _ = await world.advance(by: 0.125)
+        let result = await task.value
+        XCTAssertEqual(result, ObjectID(rawValue: 5))
+    }
+
+    // P-B-55, P-B-33: stan „zawiódł” porzuca oczekujące zapytania (nil), a kolejne wracają od razu.
+    func testFailedStateAnswersPendingAndLaterHitTestsWithNilImmediately() async throws {
+        let stepper = HitTestStepper(results: [ObjectID(rawValue: 5)],
+            script: [.fail(NativeMetalSolverError.commandFailed("GPU"))])
+        let world = try world(stepper: stepper)
+        let pending = Task { @MainActor in await world.hitTest([1, 1]) }
+        await waitForPending(world, 1)
+        _ = await world.advance(by: 0.125)
+        XCTAssertNotNil(world.diagnostics.failureReason)
+        let pendingResult = await pending.value
+        XCTAssertNil(pendingResult)
+        XCTAssertEqual(world.pendingHitTestCount, 0)
+        let later = await world.hitTest([2, 2])
+        XCTAssertNil(later)
+        XCTAssertEqual(world.pendingHitTestCount, 0)
+        XCTAssertEqual(stepper.receivedHitTests.count, 1, "po „zawiódł” stepper nie jest wołany")
+    }
+
+    // P-B-33: zapytanie złożone w czasie kroku nie dostaje wyniku tego kroku, bo jego punkt nie trafił do solvera.
+    func testHitTestAddedWhileAStepIsInFlightWaitsForTheNextStep() async throws {
+        let stepper = HitTestStepper(results: [ObjectID(rawValue: 5)], suspendFirstStep: true)
+        let world = try world(stepper: stepper)
+        let first = Task { @MainActor in await world.hitTest([1, 1]) }
+        await waitForPending(world, 1)
+        let started = expectation(description: "step started")
+        stepper.didStart = { started.fulfill() }
+        let advancing = Task { @MainActor in await world.advance(by: 0.125) }
+        await fulfillment(of: [started], timeout: 2)
+        let late = Task { @MainActor in await world.hitTest([9, 9]) }
+        await waitForPending(world, 2)
+        stepper.release()
+        _ = await advancing.value
+        let firstResult = await first.value
+        XCTAssertEqual(firstResult, ObjectID(rawValue: 5))
+        XCTAssertEqual(world.pendingHitTestCount, 1, "późne zapytanie czeka")
+        _ = await world.advance(by: 0.125)
+        let lateResult = await late.value
+        XCTAssertEqual(lateResult, ObjectID(rawValue: 5))
+        XCTAssertEqual(stepper.receivedHitTests, [[[1, 1]], [[9, 9]]])
+    }
+
+    // P-B-33: anulowane zapytanie nie trafia do kroku, a pozostałe tak.
+    func testCancelledHitTestIsRemovedBeforeTheStep() async throws {
+        let stepper = HitTestStepper(results: [ObjectID(rawValue: 5)])
+        let world = try world(stepper: stepper)
+        let cancelled = Task { @MainActor in await world.hitTest([1, 1]) }
+        let kept = Task { @MainActor in await world.hitTest([2, 2]) }
+        await waitForPending(world, 2)
+        cancelled.cancel()
+        let cancelledResult = await cancelled.value
+        XCTAssertNil(cancelledResult)
+        XCTAssertEqual(world.pendingHitTestCount, 1)
+        _ = await world.advance(by: 0.125)
+        let keptResult = await kept.value
+        XCTAssertEqual(keptResult, ObjectID(rawValue: 5))
+        XCTAssertEqual(stepper.receivedHitTests, [[[2, 2]]])
+    }
+
     func testCancelledAdvancePreservesPendingWorkForNextCall() async throws {
         let world = try world(stepper: FailingStepper(failureCall: nil))
         let token = world.submit(WorldTransaction())
@@ -408,3 +544,47 @@ private final class ScriptedCandidateStepper: CompleteStepper {
 }
 
 private enum ScriptedFailure: Error { case failed }
+
+/// Scenariusz kroku z zapisem punktów hit-testu; wyniki to odpowiedź na każdy krok (skrócona lub dopełniona nil do liczby punktów
+/// tylko wtedy, gdy podano wyniki).
+@MainActor
+private final class HitTestStepper: CompleteStepper {
+    enum Behavior { case complete, fail(Error), encodeThenCommit }
+    private let results: [ObjectID?]
+    private let script: [Behavior]
+    private var suspendFirstStep: Bool
+    var didStart: (() -> Void)?
+    private var continuation: CheckedContinuation<Void, Never>?
+    private(set) var receivedHitTests: [[WorldPoint]] = []
+    init(results: [ObjectID?], script: [Behavior] = [.complete], suspendFirstStep: Bool = false) {
+        self.results = results; self.script = script; self.suspendFirstStep = suspendFirstStep
+    }
+    func release() { continuation?.resume(); continuation = nil }
+    func completeStep(_ batch: StagedTransactionBatch, duration: Double, hitTests: [WorldPoint],
+                      commandBuffer: MTLCommandBuffer?,
+                      beforeCommit: ((NativeMetalRenderHandoff?, RuntimeState) throws -> Void)?) async throws -> CompletedRuntimeStep {
+        let call = receivedHitTests.count
+        receivedHitTests.append(hitTests)
+        if suspendFirstStep {
+            suspendFirstStep = false
+            await withCheckedContinuation { continuation in
+                self.continuation = continuation
+                didStart?()
+            }
+        }
+        switch script[min(call, script.count - 1)] {
+        case .complete: break
+        case .fail(let error): throw error
+        case .encodeThenCommit:
+            try beforeCommit?(nil, batch.state)
+            if let commandBuffer {
+                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                    commandBuffer.addCompletedHandler { _ in continuation.resume() }
+                    commandBuffer.commit()
+                }
+            }
+        }
+        let answers = results.isEmpty ? [] : hitTests.indices.map { results[min($0, results.count - 1)] }
+        return CompletedRuntimeStep(state: batch.state, hitTestResults: answers)
+    }
+}

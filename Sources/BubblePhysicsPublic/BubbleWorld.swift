@@ -171,6 +171,15 @@ public final class BubbleWorld {
         }
     }
 
+    // Zaślepki do zadań 39 i 41.
+    package var queryIndexBuildCount: Int { 0 }
+    package var pendingHitTestCount: Int { 0 }
+    public func objects(at point: WorldPoint, filter: CollisionFilter? = nil) -> [ObjectID] { [] }
+    public func objects(in rectangle: WorldRectangle, filter: CollisionFilter? = nil) -> [ObjectID] { [] }
+    public func objects(inCircle center: WorldPoint, radius: Float, filter: CollisionFilter? = nil) -> [ObjectID] { [] }
+    public func raycast(from start: WorldPoint, to end: WorldPoint, filter: CollisionFilter? = nil) -> RaycastHit? { nil }
+    public func hitTest(_ point: WorldPoint) async -> ObjectID? { nil }
+
     /// Token jest unikalny w obrębie świata. Walidacja nastąpi na granicy kroku.
     @discardableResult
     public func submit(_ transaction: WorldTransaction) -> TransactionToken {

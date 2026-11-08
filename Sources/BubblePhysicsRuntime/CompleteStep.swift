@@ -10,7 +10,7 @@ package protocol CompleteStepper: AnyObject {
     func validate(_ change: StagedWorldChange) throws
     /// Jedna metoda kroku. Z buforem poleceń stepper koduje krok GPU i woła `beforeCommit` przed zatwierdzeniem
     /// (`handoff` jest nil, gdy kroku GPU nie ma); bez bufora tylko liczy krok. `hitTests` są punktami
-    /// oczekujących zapytań (puste do zadania 41).
+    /// oczekujących zapytań .
     func completeStep(_ batch: StagedTransactionBatch, duration: Double, hitTests: [WorldPoint],
                       commandBuffer: MTLCommandBuffer?,
                       beforeCommit: ((NativeMetalRenderHandoff?, RuntimeState) throws -> Void)?) async throws -> CompletedRuntimeStep
@@ -38,9 +38,14 @@ package struct CompletedRuntimeStep {
     package let contactCandidateOverflowCount: Int
     /// Największa liczba kandydatów na obiekt w tym kroku (etap 2).
     package let maximumContactCandidatesPerObject: Int
+    /// Wynik hit-testu dla każdego punktu z `hitTests` kroku, w tej samej kolejności; `nil` to puste miejsce.
+    /// Pusta tablica (stepper bez zapytań) oznacza `nil` dla każdego punktu.
+    package let hitTestResults: [ObjectID?]
     package init(state: RuntimeState, events: [WorldEvent] = [],
                  eventOverflow: WorldEventOverflow = WorldEventOverflow(), driveFeedback: [DriveFeedback] = [],
-                 contactCandidateOverflowCount: Int = 0, maximumContactCandidatesPerObject: Int = 0) {
+                 contactCandidateOverflowCount: Int = 0, maximumContactCandidatesPerObject: Int = 0,
+                 hitTestResults: [ObjectID?] = []) {
+        self.hitTestResults = hitTestResults
         self.state = state; self.events = events
         self.eventOverflow = eventOverflow
         self.driveFeedback = driveFeedback
