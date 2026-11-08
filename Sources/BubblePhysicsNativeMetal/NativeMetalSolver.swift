@@ -377,10 +377,12 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         let previousBubbles = Dictionary(uniqueKeysWithValues: (lastSnapshot?.sourceBubbles ?? []).map { ($0.id, $0) })
         let previousSegments = Dictionary(uniqueKeysWithValues: (lastSnapshot?.sourceSegments ?? []).map { ($0.id, $0) })
         var invalidationRecords: [SIMD2<Int64>] = []
+        var teleportedBubbles: Set<Int64> = []
         for bubble in snapshot.sourceBubbles {
             if let previous = previousBubbles[bubble.id],
                (bubble.center - previous.center).euclideanLength > configuration.teleportDistanceMultiplier * bubble.targetRadius {
                 invalidationRecords.append(SIMD2(Int64(bubble.id.rawValue), 0))
+                teleportedBubbles.insert(Int64(bubble.id.rawValue))
             }
         }
         for segment in snapshot.sourceSegments {
@@ -391,7 +393,7 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         if let structuralShapes = snapshot.publicSettings?.structuralShapes {
             for id in structuralShapes.keys.sorted(by: { $0.rawValue < $1.rawValue }) {
                 let value = Int64(bitPattern: id.rawValue)
-                if !invalidationRecords.contains(where: { $0.x == value && $0.y == 0 }) {
+                if teleportedBubbles.insert(value).inserted {
                     invalidationRecords.append(SIMD2(value, 0))
                 }
             }

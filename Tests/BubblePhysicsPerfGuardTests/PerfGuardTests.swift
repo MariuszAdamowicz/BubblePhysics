@@ -104,6 +104,68 @@ final class PerfGuardTests: XCTestCase {
         XCTAssertNil(defaults.recordScene)
     }
 
+    // P-B-7: skalowanie CPU przygotowania i publikacji kroku, 600 wobec 300 obiektów.
+    func testScalingWithinTwoAndAHalfPasses() {
+        let result = PerfGuard.evaluateScaling(small: 2.0, large: 5.0)
+        XCTAssertTrue(result.passed)
+        XCTAssertEqual(result.ratio, 2.5, accuracy: 1e-9)
+        XCTAssertTrue(result.text.hasPrefix("scaling 600/300:"))
+    }
+
+    func testScalingOverTwoAndAHalfFails() {
+        let result = PerfGuard.evaluateScaling(small: 2.0, large: 5.2)
+        XCTAssertFalse(result.passed)
+        XCTAssertTrue(result.text.hasPrefix("scaling 600/300:"))
+        XCTAssertTrue(result.text.contains("FAIL"))
+    }
+
+    func testScalingWithNonFiniteOrZeroMeasurementFails() {
+        XCTAssertFalse(PerfGuard.evaluateScaling(small: 0, large: 1).passed)
+        XCTAssertFalse(PerfGuard.evaluateScaling(small: 1, large: .infinity).passed)
+        XCTAssertFalse(PerfGuard.evaluateScaling(small: .nan, large: 1).passed)
+    }
+
+    func testScalingUsesMedianOfRunsForBothSizes() async throws {
+        var calls: [Int] = []
+        let small = [1.0, 1.1, 30.0, 0.9, 1.0], large = [2.0, 2.1, 2.2, 90.0, 1.9]
+        var indexes = [300: 0, 600: 0]
+        let result = try await PerfGuard.checkScaling(runs: 5) { count in
+            calls.append(count)
+            defer { indexes[count, default: 0] += 1 }
+            return (count == 300 ? small : large)[indexes[count] ?? 0]
+        }
+        XCTAssertEqual(calls.filter { $0 == 300 }.count, 5)
+        XCTAssertEqual(calls.filter { $0 == 600 }.count, 5)
+        XCTAssertEqual(result.small, 1.0, accuracy: 1e-9)
+        XCTAssertEqual(result.large, 2.1, accuracy: 1e-9)
+        XCTAssertTrue(result.passed)
+    }
+
+    func testReportFailsAndPrintsScalingLineWhenScalingFails() async throws {
+        let report = try await PerfGuard.check(scenes: ["stress-300"], baseline: baseline(8.0), device: device,
+            runs: 5, measure: { _ in 8.0 }, scalingMeasure: { count in count == 300 ? 1.0 : 4.0 })
+        XCTAssertFalse(report.passed)
+        XCTAssertTrue(report.text.contains("scaling 600/300:"))
+        let ok = try await PerfGuard.check(scenes: ["stress-300"], baseline: baseline(8.0), device: device,
+            runs: 5, measure: { _ in 8.0 }, scalingMeasure: { count in count == 300 ? 1.0 : 2.0 })
+        XCTAssertTrue(ok.passed)
+        XCTAssertTrue(ok.text.contains("scaling 600/300:"))
+    }
+
+    func testInjectedSlowdownDoesNotChangeScalingRatio() async throws {
+        let report = try await PerfGuard.check(scenes: ["stress-300"], baseline: baseline(8.0), device: device,
+            runs: 5, injectedSlowdown: 0.2, measure: { _ in 6.0 },
+            scalingMeasure: { count in count == 300 ? 1.0 : 2.0 })
+        XCTAssertEqual(report.scaling?.ratio ?? 0, 2.0, accuracy: 1e-9)
+    }
+
+    /// Okablowanie skalowania na prawdziwej scenie: krótki przebieg daje skończone, dodatnie czasy CPU.
+    func testHostCPUMeasurementForBubbleCountIsPositiveAndFinite() async throws {
+        let gpu = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let value = try await PerfGuard.measureHostCPU(device: gpu, bubbleCount: 300, warmupFrames: 2, measuredFrames: 5)
+        XCTAssertTrue(value.isFinite && value > 0)
+    }
+
     /// Okablowanie na prawdziwej scenie: krótki przebieg stress-300 daje skończone, dodatnie p95.
     func testStress300MeasurementReturnsPositiveFiniteP95() async throws {
         let gpu = try XCTUnwrap(MTLCreateSystemDefaultDevice())

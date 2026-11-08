@@ -127,6 +127,8 @@ final class NativeRigidPolygonState {
         var vertices: [SIMD2<Float>] = [], triangles: [SIMD4<UInt32>] = []
         let old = Dictionary(uniqueKeysWithValues: publishedInputs.enumerated().map { ($0.element.object.descriptor.id, ($0.offset, $0.element)) })
         var newGeometry: [(ObjectID, PolygonGeometry)] = []
+        // Kolejność identyfikatorów zgodna z ostatnią publikacją od początku listy do bieżącego indeksu; liczona narastająco, O(k).
+        var orderMatchesPublished = true
         for (index, input) in inputs.enumerated() {
             let o = input.object
             guard case .polygon(let p) = o.descriptor else { throw NativeMetalSolverError.invalidSnapshot }
@@ -134,6 +136,8 @@ final class NativeRigidPolygonState {
             if let cached = geometryCache[p.id], cached.0 == p.geometry { geometry = cached.1 }
             else { geometry = try NativeRigidGeometry(p.geometry); geometryCache[p.id] = (p.geometry, geometry) }
             newGeometry.append((p.id, p.geometry))
+            orderMatchesPublished = orderMatchesPublished && index < publishedGeometry.count
+                && publishedGeometry[index].0 == p.id
             let c = cos(o.rotation), s = sin(o.rotation), center = geometry.centroid
             let offset = SIMD2(center.x * c - center.y * s, center.x * s + center.y * c)
             let isStatic = o.motionRole == .static
@@ -149,8 +153,7 @@ final class NativeRigidPolygonState {
             records.append(record)
             vertices += geometry.vertices
             triangles += geometry.triangles
-            if let (previousIndex, previousInput) = old[p.id], previousInput == input,
-               newGeometry.prefix(index + 1).map({ $0.0 }) == publishedGeometry.prefix(index + 1).map({ $0.0 }) {
+            if let (previousIndex, previousInput) = old[p.id], previousInput == input, orderMatchesPublished {
                 remaps.append((previousIndex, index))
             } else { changes.append(index) }
         }

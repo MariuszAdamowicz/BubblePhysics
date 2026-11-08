@@ -172,4 +172,60 @@ final class NativeMetalRigidPolygonTests: XCTestCase {
             XCTAssertEqual(failure.reason, .guardFailure)
         }
     }
+
+    // P-B-7: prepare nie może porównywać prefiksów list przy każdym ciele (O(k²)).
+    private func input(_ index: Int, x: Float = 0) throws -> NativeRigidPolygonInput {
+        let id = ObjectID(rawValue: UInt64(1000 + index))
+        let object = NativePublicObject(descriptor: .polygon(try PolygonDescriptor(id: id,
+            vertices: [[0,0],[1,0],[1,1],[0,1]], position: [Float(index) * 3 + x, 0],
+            mass: 2, momentOfInertia: 2, motionRole: .static,
+            physicsMaterialID: .init(rawValue: 2), renderStyleID: .init(rawValue: 1))))
+        return NativeRigidPolygonInput(object: object, damping: 0, friction: 0.5, restitution: 0.1)
+    }
+
+    private func settled(_ state: NativeRigidPolygonState, _ inputs: [NativeRigidPolygonInput]) throws {
+        try state.prepare(inputs, bubbleCount: 0)
+        var objects: [ObjectID: NativePublicObject] = [:]
+        for value in inputs { objects[value.object.descriptor.id] = value.object }
+        state.publish(objects)
+    }
+
+    func testPrepareUploadsOnlyChangedBodiesAndReusesUnchangedOnes() throws {
+        let state = NativeRigidPolygonState(device: try XCTUnwrap(MTLCreateSystemDefaultDevice()))
+        var inputs = try (0..<6).map { try input($0) }
+        try settled(state, inputs)
+        try state.prepare(inputs, bubbleCount: 0)
+        XCTAssertEqual(state.bodyUploadCount, 0)
+        XCTAssertEqual(state.geometryUploadCount, 0)
+        try settled(state, inputs)
+        inputs[4] = try input(4, x: 0.5)
+        try state.prepare(inputs, bubbleCount: 0)
+        XCTAssertEqual(state.bodyUploadCount, 1)
+        XCTAssertEqual(state.geometryUploadCount, 0)
+        try settled(state, inputs)
+        // Zmiana kolejności zmienia offsety geometrii, więc wszystkie rekordy są ponownie wysyłane.
+        try state.prepare(Array(inputs.reversed()), bubbleCount: 0)
+        XCTAssertEqual(state.bodyUploadCount, 6)
+        XCTAssertEqual(state.geometryUploadCount, 6)
+    }
+
+    func testPrepareCostGrowsLinearlyWithBodyCount() throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        func steadyStateSeconds(_ count: Int) throws -> Double {
+            let state = NativeRigidPolygonState(device: device)
+            let inputs = try (0..<count).map { try input($0) }
+            try settled(state, inputs)
+            var best = Double.infinity
+            for _ in 0..<5 {
+                let start = DispatchTime.now().uptimeNanoseconds
+                try state.prepare(inputs, bubbleCount: 0)
+                best = min(best, Double(DispatchTime.now().uptimeNanoseconds - start) / 1e9)
+                try settled(state, inputs)
+            }
+            return best
+        }
+        let small = try steadyStateSeconds(500), large = try steadyStateSeconds(2000)
+        // Czterokrotnie więcej ciał: liniowo około 4×, kwadratowo około 16×.
+        XCTAssertLessThan(large / small, 8, "small=\(small)s large=\(large)s")
+    }
 }

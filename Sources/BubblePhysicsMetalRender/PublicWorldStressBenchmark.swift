@@ -65,16 +65,18 @@ public enum PublicWorldStressBenchmark {
         try await run(device: device, warmupFrames: 30, measuredFrames: 300, progress: progress)
     }
 
-    package static func run(device: MTLDevice, warmupFrames: Int, measuredFrames: Int,
+    package static func run(device: MTLDevice, bubbleCount: Int = Stress300Scene.defaultBubbleCount,
+                            warmupFrames: Int, measuredFrames: Int,
                             progress: @escaping @MainActor (Int, Int) -> Void) async throws
         -> PublicWorldStressReport {
-        let configuration = try Stress300Scene.configuration()
+        let height = Stress300Scene.regionHeight(bubbleCount: bubbleCount)
+        let configuration = try Stress300Scene.configuration(bubbleCount: bubbleCount)
         let world = try BubbleWorld.makeBenchmarkWorld(configuration: configuration,
             device: device, solverIterationLimit: 4)
         let renderer = try BubblePhysicsMetalRender(device: device)
-        world.submit(try Stress300Scene.initialTransaction())
+        world.submit(try Stress300Scene.initialTransaction(bubbleCount: bubbleCount))
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm,
-            width: 375, height: 700, mipmapped: false)
+            width: 375, height: Int(height.rounded(.up)), mipmapped: false)
         descriptor.usage = .renderTarget
         descriptor.storageMode = .private
         guard let texture = device.makeTexture(descriptor: descriptor),
@@ -102,7 +104,7 @@ public enum PublicWorldStressBenchmark {
             guard let command = queue.makeCommandBuffer() else { throw StressBenchmarkError.metalUnavailable }
             let start = DispatchTime.now().uptimeNanoseconds
             let frame = await world.advance(by: 1.0 / 60, commandBuffer: command) {
-                try renderer.encode(world: world, viewport: Viewport(center: [187.5, 350], size: [375, 700]),
+                try renderer.encode(world: world, viewport: Viewport(center: [187.5, height / 2], size: [375, height]),
                     commandBuffer: command, renderPassDescriptor: pass)
             }
             let elapsed = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
@@ -148,14 +150,25 @@ public enum PublicWorldStressBenchmark {
 }
 
 /// Scena stress-300: 300 baniek, 4 ściany i kinematyczny trójkąt. Wspólna dla benchmarku, strażnika i testów.
+/// `bubbleCount` skaluje scenę przy stałej gęstości (15 kolumn, region rośnie wzdłuż osi y), np. 600 dla skalowania.
 package enum Stress300Scene {
-    package static func configuration() throws -> WorldConfiguration {
+    package static let defaultBubbleCount = 300
+    private static let columns = 15
+
+    /// Wysokość regionu: 700 dla 300 baniek (20 wierszy po 33,5 i 15 marginesu z obu stron).
+    package static func regionHeight(bubbleCount: Int) -> Float {
+        Float((bubbleCount + columns - 1) / columns) * 33.5 + 30
+    }
+
+    package static func configuration(bubbleCount: Int = defaultBubbleCount) throws -> WorldConfiguration {
         try WorldConfiguration(
-            simulationRegion: WorldRectangle(min: [0, 0], max: [375, 700]), fixedTimeStep: 1.0 / 60)
+            simulationRegion: WorldRectangle(min: [0, 0], max: [375, regionHeight(bubbleCount: bubbleCount)]),
+            fixedTimeStep: 1.0 / 60)
     }
 
     /// Materiały, 300 baniek, ściany i trójkąt w pozycji początkowej.
-    package static func initialTransaction() throws -> WorldTransaction {
+    package static func initialTransaction(bubbleCount: Int = defaultBubbleCount) throws -> WorldTransaction {
+        let height = regionHeight(bubbleCount: bubbleCount)
         let materialID = PhysicsMaterialID(rawValue: 1)
         let polygonMaterialID = PhysicsMaterialID(rawValue: 2)
         let styleID = RenderStyleID(rawValue: 1)
@@ -165,10 +178,10 @@ package enum Stress300Scene {
             .updateRenderStyle(styleID, style: try RenderStyle())
         var random = StressLCG(seed: 0x2B_60_F5)
         let horizontalSpacing: Float = 345 / 15
-        let verticalSpacing: Float = 670 / 20
+        let verticalSpacing: Float = 33.5
         let baseRadius = min(horizontalSpacing, verticalSpacing) * 0.54
-        for index in 0..<300 {
-            let column = index % 15, row = index / 15
+        for index in 0..<bubbleCount {
+            let column = index % columns, row = index / columns
             let jitterX = (random.nextUnit() - 0.5) * horizontalSpacing * 0.12
             let jitterY = (random.nextUnit() - 0.5) * verticalSpacing * 0.12
             let radius = baseRadius * (0.78 + random.nextUnit() * 0.44)
@@ -180,10 +193,10 @@ package enum Stress300Scene {
                 physicsMaterialID: materialID, renderStyleID: styleID)))
         }
         let walls: [[WorldPoint]] = [
-            [[0,0], [1,0], [1,700], [0,700]],
-            [[374,0], [375,0], [375,700], [374,700]],
+            [[0,0], [1,0], [1,height], [0,height]],
+            [[374,0], [375,0], [375,height], [374,height]],
             [[0,0], [375,0], [375,1], [0,1]],
-            [[0,699], [375,699], [375,700], [0,700]]
+            [[0,height - 1], [375,height - 1], [375,height], [0,height]]
         ]
         for (index, vertices) in walls.enumerated() {
             transaction = transaction.add(.polygon(try PolygonDescriptor(

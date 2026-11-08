@@ -46,11 +46,29 @@ struct PerfGuardSceneResult: Equatable {
     let detail: String
 }
 
+/// Skalowanie CPU przygotowania i publikacji kroku: czas dla 600 obiektów podzielony przez czas dla 300 (G12-AC1).
+struct PerfGuardScalingResult: Equatable {
+    let small: Double
+    let large: Double
+    let ratio: Double
+    let passed: Bool
+    var text: String {
+        let verdict = passed ? "PASS" : "FAIL"
+        guard ratio.isFinite else {
+            return "scaling 600/300: \(verdict) pomiar nie jest skończony ani dodatni (300: \(small) ms, 600: \(large) ms)"
+        }
+        return "scaling 600/300: \(String(format: "%.2f", ratio)) (limit \(String(format: "%.2f", PerfGuard.scalingLimit))) \(verdict); CPU poza GPU p95 300: \(String(format: "%.4f", small)) ms, 600: \(String(format: "%.4f", large)) ms"
+    }
+}
+
 struct PerfGuardReport {
     let results: [PerfGuardSceneResult]
-    var passed: Bool { results.allSatisfy(\.passed) }
+    var scaling: PerfGuardScalingResult?
+    var passed: Bool { results.allSatisfy(\.passed) && scaling?.passed != false }
     var text: String {
-        results.map { "\($0.passed ? "PASS" : "FAIL") \($0.scene): \($0.detail)" }.joined(separator: "\n")
+        var lines = results.map { "\($0.passed ? "PASS" : "FAIL") \($0.scene): \($0.detail)" }
+        if let scaling { lines.append(scaling.text) }
+        return lines.joined(separator: "\n")
     }
 }
 
@@ -112,6 +130,10 @@ enum PerfGuard {
     static let scenes = ["stress-300"]
     /// Dopuszczalne pogorszenie względem punktu odniesienia (G12-AC3).
     static let regressionTolerance = 0.10
+    /// Liczby obiektów porównywane przy skalowaniu CPU.
+    static let scalingSizes = (small: 300, large: 600)
+    /// Największy dopuszczalny stosunek czasu CPU dla 600 do czasu dla 300 obiektów (G12-AC1).
+    static let scalingLimit = 2.5
 
     static func median(_ values: [Double]) -> Double {
         let sorted = values.sorted()
@@ -125,14 +147,36 @@ enum PerfGuard {
     @MainActor
     static func check(scenes: [String], baseline: PerfGuardBaseline?, device: String, runs: Int,
                       injectedSlowdown: Double = 0,
-                      measure: @MainActor (String) async throws -> Double) async throws -> PerfGuardReport {
+                      measure: @MainActor (String) async throws -> Double,
+                      scalingMeasure: (@MainActor (Int) async throws -> Double)? = nil) async throws -> PerfGuardReport {
         var results: [PerfGuardSceneResult] = []
         for scene in scenes {
             var samples: [Double] = []
             for _ in 0..<runs { samples.append(try await measure(scene) * (1 + injectedSlowdown)) }
             results.append(evaluate(scene: scene, runs: samples, baseline: baseline, device: device))
         }
-        return PerfGuardReport(results: results)
+        let scaling = try await scalingMeasure.asyncMap { try await checkScaling(runs: runs, measure: $0) }
+        return PerfGuardReport(results: results, scaling: scaling)
+    }
+
+    /// Mierzy czas CPU kroku dla 300 i dla 600 obiektów `runs` razy; wynik to stosunek median.
+    @MainActor
+    static func checkScaling(runs: Int,
+                             measure: @MainActor (Int) async throws -> Double) async throws -> PerfGuardScalingResult {
+        var small: [Double] = [], large: [Double] = []
+        for _ in 0..<runs {
+            small.append(try await measure(scalingSizes.small))
+            large.append(try await measure(scalingSizes.large))
+        }
+        return evaluateScaling(small: median(small), large: median(large))
+    }
+
+    static func evaluateScaling(small: Double, large: Double) -> PerfGuardScalingResult {
+        guard small.isFinite, large.isFinite, small > 0, large > 0 else {
+            return PerfGuardScalingResult(small: small, large: large, ratio: .nan, passed: false)
+        }
+        let ratio = large / small
+        return PerfGuardScalingResult(small: small, large: large, ratio: ratio, passed: ratio <= scalingLimit + 1e-9)
     }
 
     static func evaluate(scene: String, runs: [Double], baseline: PerfGuardBaseline?,
@@ -170,6 +214,19 @@ enum PerfGuard {
         return report.p95Milliseconds
     }
 
+    /// Jeden przebieg sceny o `bubbleCount` bańkach; zwraca p95 czasu klatki po stronie CPU (poza czasem GPU),
+    /// czyli przygotowania wejścia, kodowania i publikacji kroku.
+    @MainActor
+    static func measureHostCPU(device: MTLDevice, bubbleCount: Int, warmupFrames: Int,
+                               measuredFrames: Int) async throws -> Double {
+        let report = try await PublicWorldStressBenchmark.run(device: device, bubbleCount: bubbleCount,
+            warmupFrames: warmupFrames, measuredFrames: measuredFrames, progress: { _, _ in })
+        guard report.safetyPassed else {
+            throw PerfGuardError.unsafeRun("\(bubbleCount) baniek: nieudane klatki=\(report.failedFrames), wartości nieskończone=\(report.nonFiniteFrames), odczyty konturów=\(report.contourCPUReadbacks)")
+        }
+        return report.hostNonGPUP95Milliseconds
+    }
+
     @MainActor
     static func measure(scene: String, device: MTLDevice, options: PerfGuardOptions) async throws -> Double {
         switch scene {
@@ -201,9 +258,12 @@ enum PerfGuard {
                 return 0
             }
             let report = try await check(scenes: scenes, baseline: existing, device: device.name,
-                runs: options.runs, injectedSlowdown: options.injectedSlowdown) { scene in
-                try await measure(scene: scene, device: device, options: options)
-            }
+                runs: options.runs, injectedSlowdown: options.injectedSlowdown,
+                measure: { scene in try await measure(scene: scene, device: device, options: options) },
+                scalingMeasure: { count in
+                    try await measureHostCPU(device: device, bubbleCount: count,
+                        warmupFrames: options.warmupFrames, measuredFrames: options.measuredFrames)
+                })
             print(report.text)
             return report.passed ? 0 : 1
         } catch {
@@ -215,3 +275,12 @@ enum PerfGuard {
 }
 
 enum PerfGuardError: Error { case unsafeRun(String) }
+
+private extension Optional {
+    func asyncMap<T>(_ transform: (Wrapped) async throws -> T) async rethrows -> T? {
+        switch self {
+        case .some(let value): return try await transform(value)
+        case .none: return nil
+        }
+    }
+}
