@@ -52,6 +52,7 @@ final class RigidCCDTests: XCTestCase {
         XCTAssertNil(world.diagnostics.lastAdvanceIssue, "klatka nie może się nie udać")
         XCTAssertGreaterThan(worstGap, 4 - 0.5, "środki nie mogą się minąć ani zejść bliżej niż grubość")
         XCTAssertEqual(B.began(events).filter { B.isPair($0.a, $0.b, 1, 2) }.count, 1)
+        XCTAssertTrue(B.ended(events).filter { B.isPair($0.0, $0.1, 1, 2) }.isEmpty, "trwały styk nie daje contactEnded")
         let a = try XCTUnwrap(result.frame.objects[ObjectID(rawValue: 1)]), b = try XCTUnwrap(result.frame.objects[ObjectID(rawValue: 2)])
         XCTAssertLessThan(a.position.x, b.position.x)
     }

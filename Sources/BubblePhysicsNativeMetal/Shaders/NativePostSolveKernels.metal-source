@@ -388,8 +388,8 @@ kernel void nativeRigidPredict(device NativeRigidBody *bodies [[buffer(0)]],
     NativeRigidBody b=bodies[index];b.previous.xy=b.pose.xy;b.pose.w=b.pose.z;b.flags.z=0;
     if(b.flags.x){b.motion.xyz=0;bodies[index]=b;return;}
     float dt=control.physics.x;b.motion.xyz*=exp(-b.motion.w*dt);
-    // Limity prędkości z materiału; kinematyczna ma narzucony tor i limitu nie dotyczy.
-    if(!b.filter.z){b.motion.xy=nativeClampLinearSpeed(b.motion.xy,b.limits.x);b.motion.z=nativeClampAngularSpeed(b.motion.z,b.limits.y);}
+    // Limity prędkości z materiału dotyczą każdej bryły, także kinematycznej: napęd szybszy niż limit jest przycinany.
+    b.motion.xy=nativeClampLinearSpeed(b.motion.xy,b.limits.x);b.motion.z=nativeClampAngularSpeed(b.motion.z,b.limits.y);
     float3 start=b.pose.xyz;b.pose.xyz+=b.motion.xyz*dt;
     if(!all(isfinite(b.pose)) || !all(isfinite(b.motion))) { nativeSafetyFailure(safety,1);bodies[index]=b;return; }
     // Kinematyczna bryła jedzie po zadanym torze: nie tłumi, nie zatrzymuje jej ściana ani żadne sąsiednie ciało.
@@ -464,6 +464,13 @@ kernel void nativeRigidGuardWalls(device NativeRigidBody *bodies [[buffer(0)]],
                 if(d<nearest){nearest=d;normal=out;depth=max(0.0f,-dot(p-closest,out));}
             }
             if(isfinite(nearest) && depth>0){
+                // Okrągła bryła, której rdzeń już na początku kroku przecinał ścianę, wychodzi z niej kontaktem; ten strażnik
+                // cofałby koniec rdzenia wchodzący w ścianę jak tunelowanie i blokował rozdzielenie. Sprawdzane dopiero
+                // wtedy, gdy strażnik miałby działać (rzadko), żeby nie kosztować każdej pary.
+                if(nativeRigidIsRound(b)){
+                    NativeRigidBody old=b;old.pose.xy=b.previous.xy;old.pose.z=b.pose.w;
+                    if(nativeRoundCoreCrossesPolygon(nativeRoundCoreOf(old,vertices),wall,vertices,triangles))break;
+                }
                 b.pose.xy+=normal*(depth+1e-5f);
                 float2 r=p-b.pose.xy;float lever=nativeCross(r,normal);
                 float speed=dot(b.motion.xy,normal)+b.motion.z*lever;
@@ -484,7 +491,7 @@ kernel void nativeRigidFinish(device NativeRigidBody *bodies [[buffer(0)]],
     NativeRigidBody b=bodies[index];
     if(!all(isfinite(b.pose))||!all(isfinite(b.previous))||!all(isfinite(b.motion))){nativeSafetyFailure(safety,1);return;}
     if(b.flags.x)return;
-    if(!b.filter.z){b.motion.xy=nativeClampLinearSpeed(b.motion.xy,b.limits.x);b.motion.z=nativeClampAngularSpeed(b.motion.z,b.limits.y);}
+    b.motion.xy=nativeClampLinearSpeed(b.motion.xy,b.limits.x);b.motion.z=nativeClampAngularSpeed(b.motion.z,b.limits.y);
     float2 low=float2(INFINITY),high=float2(-INFINITY);
     for(uint i=0;i<b.ranges.y;++i){float2 v=nativeRigidVertex(b,vertices,i);low=min(low,v);high=max(high,v);}
     // Rdzeń koła i kapsuły powiększony o promień kształtu (0 dla wielokąta).

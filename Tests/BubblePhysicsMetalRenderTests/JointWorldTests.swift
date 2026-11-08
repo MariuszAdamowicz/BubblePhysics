@@ -232,7 +232,7 @@ final class JointWorldTests: XCTestCase {
 
     // P-B-66: nakładające się ciała połączone więzem domyślnie nie kolidują; z `collideConnected` się rozpychają.
     func testConnectedBodiesDoNotCollideUnlessEnabled() async throws {
-        func run(collide: Bool) async throws -> (hinge: Float, mixed: Float, bubbles: Float, events: Int) {
+        func run(collide: Bool) async throws -> (hinge: Float, mixed: Float, bubbles: Float, events: Int, hingeEvents: Int, hingeTurn: Float) {
             let world = try makeWorld()
             world.submit(try B.baseTransaction()
                 // Dwie bryły na zawiasie.
@@ -247,22 +247,32 @@ final class JointWorldTests: XCTestCase {
                 .add(B.bubble(5, at: [800, 200], radius: 8))
                 .add(B.bubble(6, at: [804, 200], radius: 8))
                 .addJoint(B.distanceJoint(3, 5, 6, length: 4, softness: 0.1, collideConnected: collide)))
-            var events = 0
-            let result = await B.advance(world, steps: 90) { _, frame in events += B.began(frame.events).count }
+            var events = 0, hingeEvents = 0
+            let result = await B.advance(world, steps: 90) { _, frame in
+                events += B.began(frame.events).count
+                hingeEvents += B.began(frame.events).filter { B.isPair($0.a, $0.b, 1, 2) }.count
+            }
             healthy(world, "collideConnected=\(collide)")
             let s = { (id: UInt64) in try self.state(result.frame, id) }
             return (simd_distance(try s(1).position, try s(2).position), simd_distance(try s(3).position, try s(4).position),
-                    simd_distance(try s(5).position, try s(6).position), events)
+                    simd_distance(try s(5).position, try s(6).position), events, hingeEvents,
+                    abs(try s(1).rotation) + abs(try s(2).rotation))
         }
         let off = try await run(collide: false)
         XCTAssertEqual(off.hinge, 20, accuracy: 1.5, "zawias: ciała się nie rozpychają")
         XCTAssertEqual(off.mixed, 5, accuracy: 1.0, "bańka–bryła: odległość z więzu")
         XCTAssertEqual(off.bubbles, 4, accuracy: 1.0, "bańka–bańka: odległość z więzu")
         XCTAssertEqual(off.events, 0, "bez kolizji nie ma kontaktu")
+        XCTAssertEqual(off.hingeEvents, 0, "zawias bez kolizji: brak kontaktu między ciałami")
+        XCTAssertEqual(off.hingeTurn, 0, accuracy: 0.05, "zawias bez kolizji: ciała zostają w miejscu")
         let on = try await run(collide: true)
         XCTAssertGreaterThan(on.mixed, 12, "bańka–bryła rozepchnięte")
         XCTAssertGreaterThan(on.bubbles, 10, "bańka–bańka rozepchnięte")
         XCTAssertGreaterThan(on.events, 0, "z przełącznikiem powstaje kontakt")
+        // Kotwice zawiasu leżą w obu bryłach, więc nakładanie nie znika; kontakt między nimi jednak działa i je obraca.
+        XCTAssertGreaterThan(on.hingeEvents, 0, "zawias: kontakt rigid–rigid z przełącznikiem")
+        XCTAssertGreaterThan(on.hingeTurn, 0.5, "zawias: kontakt rozpycha ciała (obracają się wokół osi)")
+        XCTAssertEqual(on.hinge, 20, accuracy: 1.5, "zawias nadal trzyma kotwice")
     }
 
     // MARK: Determinizm

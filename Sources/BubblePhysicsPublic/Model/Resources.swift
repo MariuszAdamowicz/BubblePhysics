@@ -12,7 +12,7 @@ public struct PhysicsMaterial: Equatable, Sendable {
     public let damping: Float
     public let friction: Float
     public let restitution: Float
-    /// Górne granice prędkości; `nil` oznacza brak limitu. Dotyczą każdego obiektu z tym materiałem.
+    /// Górne granice prędkości; `nil` oznacza brak limitu. Dotyczą każdego obiektu z tym materiałem, także kinematycznego: napęd szybszy niż limit jest przycinany do limitu.
     public let maximumLinearSpeed: Float?
     public let maximumAngularSpeed: Float?
 

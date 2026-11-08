@@ -61,6 +61,7 @@ final class NativeJointState {
         var rows: [NativeJointRecord] = []
         var lists = [[SIMD2<UInt32>]](repeating: [], count: entityCount)
         var partners = [[UInt64]](repeating: [], count: entityCount)
+        // Jedyne sortowanie więzów po JointID: kolejność wierszy musi być deterministyczna niezależnie od wywołującego.
         for joint in joints.sorted(by: { $0.id.rawValue < $1.id.rawValue }) {
             guard let first = entity[joint.bodyA] else { continue }
             var ends = (first, joint.bodyB.flatMap { entity[$0] } ?? NativeJointRecord.worldEnd)

@@ -508,16 +508,18 @@ bool nativeTriangleContact(thread float2 *a, thread float2 *b, thread float2 &no
 }
 
 // Rdzeń okrągły R wobec wielokąta P (unia trójkątów, obrys to krawędzie pierścienia). Normalna od R do P.
-// Rdzeń na zewnątrz: odległość do obrysu minus promień. Koniec rdzenia we wnętrzu: oś to normalna najbliższej krawędzi
+// Rdzeń na zewnątrz: odległość do obrysu minus promień. Oba końce rdzenia we wnętrzu: oś to normalna najbliższej krawędzi
 // obrysu (najkrótsza droga na zewnątrz), głębokość to odległość do niej plus promień; trójkąty podziału są wewnętrzne
-// i nigdy nie dają normalnej. Rdzeń przecinający obrys bez końca we wnętrzu idzie od środka rdzenia do środka wielokąta.
+// i nigdy nie dają normalnej. Rdzeń przecinający obrys (żaden lub jeden koniec we wnętrzu): najmniejsze wnikanie po normalnych krawędzi obrysu.
 bool nativeRoundPolygonContact(NativeRoundCore R, NativeRigidBody P, device float2 *vertices, device uint4 *triangles,
                                thread float2 &normal, thread float &depth, thread float2 &point) {
     uint count = P.ranges.y;
     float insideDepth = -1; float2 insideOutward = 0, insidePoint = 0;
-    for (uint k = 0; k < (any(R.b != R.a) ? 2u : 1u); ++k) {
+    uint endpoints = any(R.b != R.a) ? 2u : 1u, insideEndpoints = 0;
+    for (uint k = 0; k < endpoints; ++k) {
         float2 endpoint = k == 0 ? R.a : R.b;
         if (!nativeRigidInside(endpoint, P, vertices, triangles)) continue;
+        ++insideEndpoints;
         float nearest = INFINITY; float2 nearestPoint = 0, nearestOutward = 0;
         for (uint e = 0; e < count; ++e) {
             float2 p = nativeRigidVertex(P, vertices, e), q = nativeRigidVertex(P, vertices, (e + 1) % count);
@@ -531,7 +533,9 @@ bool nativeRoundPolygonContact(NativeRoundCore R, NativeRigidBody P, device floa
         }
         if (nearest > insideDepth) { insideDepth = nearest; insidePoint = nearestPoint; insideOutward = nearestOutward; }
     }
-    if (insideDepth >= 0) {
+    // Oba końce we wnętrzu: wyjście najkrótszą drogą najgłębszego końca. Tylko jeden koniec we wnętrzu to przecięcie obrysu
+    // i idzie ścieżką SAT poniżej (najbliższa krawędź jednego końca bywa krawędzią, przez którą wyjście wymaga cofnięcia drugiego).
+    if (insideEndpoints == endpoints) {
         normal = -insideOutward; depth = R.radius + insideDepth; point = insidePoint;
         return true;
     }
@@ -546,10 +550,33 @@ bool nativeRoundPolygonContact(NativeRoundCore R, NativeRigidBody P, device floa
         normal = (pe - pc) / best; depth = R.radius - best; point = pe;
         return true;
     }
-    float2 toCenter = P.pose.xy - 0.5f * (R.a + R.b); float size = length(toCenter);
-    normal = size > FLT_MIN ? toCenter / size : float2(1, 0);
-    depth = R.radius; point = pe;
+    // Rdzeń przecina obrys, a żaden jego koniec nie leży we wnętrzu: SAT obrysu wobec odcinka rdzenia. Dla każdej krawędzi
+    // obrysu głębokość to przesunięcie rdzenia o jej zewnętrzną normalną, po którym rdzeń z promieniem leży już poza jej
+    // prostą; wybieramy najmniejsze. Kierunek od środka rdzenia do środka wielokąta był styczny dla przecięć poza środkiem.
+    float minimum = INFINITY; float2 minimumOutward = float2(0, 1), minimumPoint = pe;
+    for (uint e = 0; e < count; ++e) {
+        float2 p = nativeRigidVertex(P, vertices, e), q = nativeRigidVertex(P, vertices, (e + 1) % count);
+        float2 edge = q - p; float size = length(edge);
+        if (size <= FLT_MIN) continue;
+        float2 outward = float2(edge.y, -edge.x) / size;
+        float da = dot(R.a - p, outward), db = dot(R.b - p, outward);
+        float d = R.radius - min(da, db);
+        if (d < minimum) { minimum = d; minimumOutward = outward; minimumPoint = (da <= db ? R.a : R.b) - outward * min(da, db); }
+    }
+    normal = -minimumOutward; depth = isfinite(minimum) ? minimum : R.radius; point = minimumPoint;
     return true;
+}
+
+// Czy rdzeń okrągły przecina obrys wielokąta albo leży w jego wnętrzu (sam promień kształtu się nie liczy).
+// Bryła, która tak zaczęła krok, jest już „przez” ścianę: wychodzi kontaktem, a nie odrzuceniem ruchu jako tunelowania.
+bool nativeRoundCoreCrossesPolygon(NativeRoundCore R, NativeRigidBody P, device float2 *vertices, device uint4 *triangles) {
+    if (nativeRigidInside(R.a, P, vertices, triangles) || nativeRigidInside(R.b, P, vertices, triangles)) return true;
+    for (uint e = 0; e < P.ranges.y; ++e) {
+        float2 p = nativeRigidVertex(P, vertices, e), q = nativeRigidVertex(P, vertices, (e + 1) % P.ranges.y);
+        float2 ca, ce;
+        if (nativeSegmentDistance(R.a, R.b, p, q, ca, ce) <= 1e-4f) return true;
+    }
+    return false;
 }
 
 // Kontakt pary brył (normalna od a do b, głębokość, punkt). Wielokąt–wielokąt: SAT trójkątów, wybierany najgłębszy
@@ -613,56 +640,57 @@ kernel void nativeRigidContacts(device NativeRigidBody *bodies [[buffer(0)]],
             float2 fallback=ulong(a.identity.x)<b.identity.x ? float2(1,0) : float2(-1,0);
             if(!nativeRoundContact(bubbleCore,nativeRoundCoreOf(b,vertices),fallback,n,depth,point)){corrections[index]=result;return;}
         } else {
-        float best=INFINITY;float2 outward=0;
-        for(uint i=0;i<b.ranges.y;++i){
-            float2 p=nativeRigidVertex(b,vertices,i),q=nativeRigidVertex(b,vertices,(i+1)%b.ranges.y);
-            float2 candidate=nativeClosestPoint(center,float4(p,q));float d=distance(center,candidate);
-            if(d<best){best=d;point=candidate;float2 edge=q-p;outward=normalize(float2(edge.y,-edge.x));}
-        }
-        bool inside=nativeRigidInside(center,b,vertices,triangles);
-        n=inside ? -outward : (best>1e-7f ? (point-center)/best : -outward);
-        depth=a.physical.z+(inside ? best : -best);
-        NativeRigidBody old=b;old.pose.xy=b.previous.xy;old.pose.z=b.pose.w;
-        if(!nativeRigidInside(a.position.zw,old,vertices,triangles)) {
-            float sweepDistance=INFINITY;
+            // Wielokąt: najbliższa krawędź obrysu, sweep obrotu i odrzucenie klatki przy możliwym tunelu (bez zmian).
+            float best=INFINITY;float2 outward=0;
             for(uint i=0;i<b.ranges.y;++i){
-                NativeSegment edge;
-                edge.previous=float4(nativeRigidVertex(old,vertices,i),nativeRigidVertex(old,vertices,(i+1)%b.ranges.y));
-                edge.current=float4(nativeRigidVertex(b,vertices,i),nativeRigidVertex(b,vertices,(i+1)%b.ranges.y));
-                float2 previousEdge=edge.previous.zw-edge.previous.xy;
-                float2 oldOut=normalize(float2(previousEdge.y,-previousEdge.x));
-                if(dot(a.position.zw-edge.previous.xy,oldOut)<0)continue;
-                if(!nativeCenterCrossing(a.position.zw,center,edge))continue;
-                float d=distance(a.position.zw,nativeClosestPoint(a.position.zw,edge.previous));
-                if(d>=sweepDistance)continue;
-                sweepDistance=d;float2 direction=edge.current.zw-edge.current.xy;
-                float2 out=normalize(float2(direction.y,-direction.x));
-                point=nativeClosestPoint(center,edge.current);n=-out;
-                depth=a.physical.z-dot(center-point,out);
+                float2 p=nativeRigidVertex(b,vertices,i),q=nativeRigidVertex(b,vertices,(i+1)%b.ranges.y);
+                float2 candidate=nativeClosestPoint(center,float4(p,q));float d=distance(center,candidate);
+                if(d<best){best=d;point=candidate;float2 edge=q-p;outward=normalize(float2(edge.y,-edge.x));}
             }
-        }
-        // Końcowe krawędzie nie opisują łuku obrotu. Jeśli pominięty sweep
-        // mógł dotknąć bańki, odrzucamy całą klatkę zamiast publikować tunel.
-        float angle=abs(b.pose.z-b.pose.w);
-        if(depth < -0.001f && angle > 0) {
-            uint steps=max(1u,uint(ceil(angle/0.05f)));
-            float2 travel=center-a.position.zw,bodyTravel=b.pose.xy-b.previous.xy;
-            float margin=(length(travel)+length(bodyTravel)+b.physical.z*angle)/(2.0f*float(steps))+1e-4f;
-            for(uint sample=0;sample<=steps;++sample) {
-                float t=float(sample)/float(steps);
-                float2 centerAt=mix(a.position.zw,center,t);
-                NativeRigidBody poseAt=b;
-                poseAt.pose.xy=mix(b.previous.xy,b.pose.xy,t);
-                poseAt.pose.z=mix(b.pose.w,b.pose.z,t);
-                bool possible=nativeRigidInside(centerAt,poseAt,vertices,triangles);
-                for(uint i=0;i<b.ranges.y && !possible;++i) {
-                    float2 p=nativeRigidVertex(poseAt,vertices,i);
-                    float2 q=nativeRigidVertex(poseAt,vertices,(i+1)%b.ranges.y);
-                    possible=distance(centerAt,nativeClosestPoint(centerAt,float4(p,q)))<=a.physical.z+margin;
+            bool inside=nativeRigidInside(center,b,vertices,triangles);
+            n=inside ? -outward : (best>1e-7f ? (point-center)/best : -outward);
+            depth=a.physical.z+(inside ? best : -best);
+            NativeRigidBody old=b;old.pose.xy=b.previous.xy;old.pose.z=b.pose.w;
+            if(!nativeRigidInside(a.position.zw,old,vertices,triangles)) {
+                float sweepDistance=INFINITY;
+                for(uint i=0;i<b.ranges.y;++i){
+                    NativeSegment edge;
+                    edge.previous=float4(nativeRigidVertex(old,vertices,i),nativeRigidVertex(old,vertices,(i+1)%b.ranges.y));
+                    edge.current=float4(nativeRigidVertex(b,vertices,i),nativeRigidVertex(b,vertices,(i+1)%b.ranges.y));
+                    float2 previousEdge=edge.previous.zw-edge.previous.xy;
+                    float2 oldOut=normalize(float2(previousEdge.y,-previousEdge.x));
+                    if(dot(a.position.zw-edge.previous.xy,oldOut)<0)continue;
+                    if(!nativeCenterCrossing(a.position.zw,center,edge))continue;
+                    float d=distance(a.position.zw,nativeClosestPoint(a.position.zw,edge.previous));
+                    if(d>=sweepDistance)continue;
+                    sweepDistance=d;float2 direction=edge.current.zw-edge.current.xy;
+                    float2 out=normalize(float2(direction.y,-direction.x));
+                    point=nativeClosestPoint(center,edge.current);n=-out;
+                    depth=a.physical.z-dot(center-point,out);
                 }
-                if(possible){atomic_fetch_or_explicit(safety+3,2u,memory_order_relaxed);break;}
             }
-        }
+            // Końcowe krawędzie nie opisują łuku obrotu. Jeśli pominięty sweep
+            // mógł dotknąć bańki, odrzucamy całą klatkę zamiast publikować tunel.
+            float angle=abs(b.pose.z-b.pose.w);
+            if(depth < -0.001f && angle > 0) {
+                uint steps=max(1u,uint(ceil(angle/0.05f)));
+                float2 travel=center-a.position.zw,bodyTravel=b.pose.xy-b.previous.xy;
+                float margin=(length(travel)+length(bodyTravel)+b.physical.z*angle)/(2.0f*float(steps))+1e-4f;
+                for(uint sample=0;sample<=steps;++sample) {
+                    float t=float(sample)/float(steps);
+                    float2 centerAt=mix(a.position.zw,center,t);
+                    NativeRigidBody poseAt=b;
+                    poseAt.pose.xy=mix(b.previous.xy,b.pose.xy,t);
+                    poseAt.pose.z=mix(b.pose.w,b.pose.z,t);
+                    bool possible=nativeRigidInside(centerAt,poseAt,vertices,triangles);
+                    for(uint i=0;i<b.ranges.y && !possible;++i) {
+                        float2 p=nativeRigidVertex(poseAt,vertices,i);
+                        float2 q=nativeRigidVertex(poseAt,vertices,(i+1)%b.ranges.y);
+                        possible=distance(centerAt,nativeClosestPoint(centerAt,float4(p,q)))<=a.physical.z+margin;
+                    }
+                    if(possible){atomic_fetch_or_explicit(safety+3,2u,memory_order_relaxed);break;}
+                }
+            }
         }
         wa=a.physical.y;wb=b.physical.x;ib=b.physical.y;rb=point-b.pose.xy;
         va=a.motion.xy;vb=b.motion.xy;spinB=b.motion.z;
@@ -892,7 +920,8 @@ kernel void nativeApplyJointBubbles(device NativeBubble *bubbles [[buffer(0)]], 
     float relax = 1.0f / float(range.y);
     positions[index].xy += delta * relax;
     bubbles[index].motion.xy += velocity * relax;
-    solver.counts.x = 1; // korekta więzu mogła uaktywnić kontakty baniek
+    // Korekta więzu mogła uaktywnić kontakty baniek. Wiele wątków zapisuje tę samą wartość, więc zapis jest atomowy.
+    atomic_store_explicit((device atomic_uint *)&solver.counts, 1u, memory_order_relaxed); // counts.x to pierwszy element
 }
 
 kernel void nativeUpdateVelocities(device NativeBubble *bubbles [[buffer(0)]],

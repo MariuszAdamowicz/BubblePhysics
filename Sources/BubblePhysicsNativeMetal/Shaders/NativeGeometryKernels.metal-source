@@ -32,7 +32,7 @@ struct NativeRigidBody {
     uint4 ranges; uint4 flags;
     uint4 filter; // kategoria, maska, kinematyczna (1), reserved
     float4 shape; // rodzaj rdzenia (0 wielokąt, 1 koło, 2 kapsuła), promień, półdługość, reserved
-    float4 limits; // maksymalna prędkość liniowa i kątowa (0 = bez limitu), reserved, reserved
+    float4 limits; // maksymalna prędkość liniowa i kątowa (0 = bez limitu), znacznik TOI CCD (1 + t, 0 = brak; nativeRigidResolveCCD ustawia, nativeRigidApplyCCD zeruje), reserved
 };
 // Więz: końce to indeksy obiektów (bańki, potem bryły; 0xFFFFFFFF = punkt świata), rodzaj 0 dystans, 1 zawias, 2 spaw.
 struct NativeJoint {

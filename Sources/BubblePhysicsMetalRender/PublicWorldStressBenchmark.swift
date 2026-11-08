@@ -295,8 +295,9 @@ package enum MixedScene {
     private static let bodySpacing: Float = 345 / 11
     private static let bodyRowY: [Float] = [450, 500, 550, 600, 650]
     private static let barY: [Float] = [210, 260, 310, 360, 410]
-    private static let barSpeed: Float = 120
-    private static let barHalfPeriod = 100
+    /// Poniżej limitu materiału (90); półokres 150 kroków daje ten sam przejazd (200) co dawne 120 przez 100 kroków.
+    private static let barSpeed: Float = 80
+    private static let barHalfPeriod = 150
 
     package static func configuration() throws -> WorldConfiguration {
         try WorldConfiguration(simulationRegion: WorldRectangle(min: [0, 0], max: [375, regionHeight]),

@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import simd
 import BubblePhysicsModel
 
 struct NativeRigidPolygonInput: Equatable, Sendable {
@@ -33,7 +34,8 @@ struct NativeRigidBody: Equatable {
     /// Rdzeń z promieniem: rodzaj (0 wielokąt, 1 koło, 2 kapsuła), promień, półdługość osi, reserved.
     /// Koło ma jeden wierzchołek rdzenia, kapsuła dwa (oś lokalnego X); wielokąt ma promień 0 i trójkąty.
     var shape: SIMD4<Float>
-    /// Limity prędkości z materiału: liniowa, kątowa (0 = bez limitu), reserved ×2.
+    /// Limity prędkości z materiału: liniowa, kątowa (0 = bez limitu); `z` to znacznik czasu uderzenia (TOI) CCD: `1 + t`,
+    /// 0 = brak; `nativeRigidResolveCCD` go ustawia, a `nativeRigidApplyCCD` zużywa i zeruje w tym samym kroku; `w` zarezerwowane.
     var limits: SIMD4<Float>
 }
 
@@ -275,9 +277,17 @@ final class NativeRigidPolygonState {
             object.position = SIMD2(body.pose.x, body.pose.y) - offset(body.pose.z)
             object.previousPosition = SIMD2(body.previous.x, body.previous.y) - offset(body.pose.w)
             object.rotation = body.pose.z
-            // Kinematyczna zachowuje narzuconą prędkość (początku geometrii); solver ją tylko wykonał.
             if object.motionRole != .kinematic {
                 object.velocity = SIMD2(body.motion.x, body.motion.y); object.angularVelocity = body.motion.z
+            } else {
+                // Kinematyczna zachowuje narzuconą prędkość (początku geometrii), ale solver przyciął ją do limitów materiału
+                // (G11-AC5), więc publikowana prędkość nie może ich przekraczać.
+                let limits = current[i]
+                let speed = simd_length(object.velocity)
+                if limits.maximumLinearSpeed > 0, speed > limits.maximumLinearSpeed { object.velocity *= limits.maximumLinearSpeed / speed }
+                if limits.maximumAngularSpeed > 0 {
+                    object.angularVelocity = max(-limits.maximumAngularSpeed, min(limits.maximumAngularSpeed, object.angularVelocity))
+                }
             }
             result[object.descriptor.id] = object
             if body.flags.z == 1 { removed.insert(object.descriptor.id) }

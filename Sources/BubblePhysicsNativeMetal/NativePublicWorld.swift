@@ -192,7 +192,7 @@ package final class NativePublicWorld {
                 sensors: objects.compactMap { if case .sensor(let sensor) = $0.descriptor { return sensor }; return nil }
                     .sorted { $0.id.rawValue < $1.id.rawValue }, structuralShapes: structuralShapes,
                 staticPolygonMaterials: staticPolygonMaterials,
-                joints: joints.sorted { $0.id.rawValue < $1.id.rawValue }))
+                joints: joints))
         let frame = try await solver.executeFrame(input: input, scenarioStep: 0,
             commandBuffer: commandBuffer, beforeCommit: beforeCommit)
         for (id, object) in solver.publishedPolygons { result[id] = object }
