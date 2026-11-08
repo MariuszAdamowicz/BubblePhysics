@@ -6,6 +6,8 @@ import Metal
 package final class NativeCompleteStepper: CompleteStepper {
     private let native: NativePublicWorld?
     private var previousBlockers: [ObjectID: ObjectID] = [:]
+    /// Pary z dostarczonym `contactBegan` i bez dostarczonego `contactEnded` (zdarzenia kontaktu, etap 2).
+    private var previousContacts: Set<ContactPair> = []
     package init(device: MTLDevice?, configuration: NativeMetalConfiguration = .default) throws {
         native = try device.map { try NativePublicWorld(device: $0, configuration: configuration) }
     }
@@ -61,6 +63,16 @@ package final class NativeCompleteStepper: CompleteStepper {
         }
     }
 
+    /// Uczestnicy historii kontaktów, których nie ma już w stanie: usunięci, scaleni, podzieleni albo poza regionem.
+    private func removedContactObjects(in state: RuntimeState) -> Set<ObjectID> {
+        var removed = Set<ObjectID>()
+        for pair in previousContacts {
+            if state.objects[pair.first] == nil { removed.insert(pair.first) }
+            if state.objects[pair.second] == nil { removed.insert(pair.second) }
+        }
+        return removed
+    }
+
     package func completeStep(_ batch: StagedTransactionBatch, duration: Double) async throws -> CompletedRuntimeStep {
         try await performStep(batch, duration: duration, commandBuffer: nil, beforeCommit: nil)
     }
@@ -80,7 +92,13 @@ package final class NativeCompleteStepper: CompleteStepper {
         // Po usunięciu ostatniego ciała potrzebna jest jedna klatka GPU, aby
         // opublikować exit i wyczyścić poprzednie pary sensora.
         guard state.objects.values.contains(where: { $0.mass != nil }) || native?.hasSensorPairHistory == true else {
-            return .init(state: state)
+            // Bez kroku GPU pary usuniętych obiektów i tak dostają koniec kontaktu.
+            guard !previousContacts.isEmpty else { return .init(state: state) }
+            let discrete = EventCompactor.finish([], overflow: WorldEventOverflow(), feedback: [], state: state,
+                previousBlockers: previousBlockers, previousContacts: previousContacts,
+                removedObjects: removedContactObjects(in: state))
+            previousContacts = discrete.contacts
+            return .init(state: state, events: discrete.events, eventOverflow: discrete.overflow)
         }
         guard let native else { throw NativeRuntimeError.deviceUnavailable }
         let input = state.objects.values.map { object in
@@ -113,8 +131,10 @@ package final class NativeCompleteStepper: CompleteStepper {
         }
         let feedback = MotionControllers.feedback(&state, contacts: frame.contacts)
         let discrete = EventCompactor.finish(frame.events, overflow: frame.eventOverflow,
-            feedback: feedback, state: state, previousBlockers: previousBlockers)
+            feedback: feedback, state: state, previousBlockers: previousBlockers,
+            previousContacts: previousContacts, removedObjects: removedContactObjects(in: state))
         previousBlockers = discrete.blockers
+        previousContacts = discrete.contacts
         return .init(state: state, events: discrete.events, eventOverflow: discrete.overflow,
             driveFeedback: feedback, contactCandidateOverflowCount: frame.contactCandidateOverflowCount,
             maximumContactCandidatesPerObject: frame.maximumContactCandidatesPerObject)
