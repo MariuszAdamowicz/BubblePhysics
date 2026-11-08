@@ -156,7 +156,8 @@ final class NativeMetalRigidPolygonTests: XCTestCase {
         }
     }
 
-    // Dwie bryły mogą minąć się między końcami kroku bez overlapu końcowych AABB.
+    // P-B-27: dwie bryły mogą minąć się między końcami kroku bez overlapu końcowych AABB. CCD bryła–bryła ma je zatrzymać
+    // bez błędu klatki: dawniej `guardFailure` uchodził za sukces, teraz krok musi się udać i bryły muszą zostać po swoich stronach.
     func testFastDynamicPolygonsCannotSwapPositionsWithoutContact() async throws {
         let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         let left = try polygon(position: [-3,0], velocity: [360,0])
@@ -164,13 +165,10 @@ final class NativeMetalRigidPolygonTests: XCTestCase {
             vertices: [[-1,-1],[1,-1],[1,1],[-1,1]], position: [3,0], velocity: [-360,0],
             mass: 2, momentOfInertia: 2, motionRole: .dynamic,
             physicsMaterialID: .init(rawValue: 2), renderStyleID: .init(rawValue: 1))))
-        do {
-            let frame = try await step(world, [left, right])
-            XCTAssertLessThan(try XCTUnwrap(frame.objects[polygonID]).position.x,
-                              try XCTUnwrap(frame.objects[.init(rawValue: 3)]).position.x)
-        } catch let failure as NativeMetalSafetyFailure {
-            XCTAssertEqual(failure.reason, .guardFailure)
-        }
+        let frame = try await step(world, [left, right])
+        let a = try XCTUnwrap(frame.objects[polygonID]), b = try XCTUnwrap(frame.objects[.init(rawValue: 3)])
+        XCTAssertLessThan(a.position.x, b.position.x)
+        XCTAssertGreaterThanOrEqual(b.position.x - a.position.x, 2 - 0.05, "bryły (po 2 szerokości) nie mogą się przenikać")
     }
 
     // P-B-7: prepare nie może porównywać prefiksów list przy każdym ciele (O(k²)).

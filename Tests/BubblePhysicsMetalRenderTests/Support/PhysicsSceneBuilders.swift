@@ -26,20 +26,63 @@ enum SceneBuilders {
 
     static func bubble(_ id: UInt64, at position: WorldPoint, radius: Float = 8, velocity: WorldPoint = .zero,
                        filter: CollisionFilter = .default, interest: EventInterest = [],
-                       mergeGroups: MergeGroupSet = []) throws -> WorldObject {
+                       mergeGroups: MergeGroupSet = [], role: MotionRole = .dynamic) throws -> WorldObject {
         .bubble(try BubbleDescriptor(id: ObjectID(rawValue: id), position: position, velocity: velocity,
-            targetRadius: radius, physicsMaterialID: bubbleMaterial, renderStyleID: style, mergeGroups: mergeGroups,
+            targetRadius: radius, motionRole: role, physicsMaterialID: bubbleMaterial, renderStyleID: style, mergeGroups: mergeGroups,
             eventInterest: interest, filter: filter))
     }
 
     static func box(_ id: UInt64, at center: WorldPoint, half: WorldPoint, role: MotionRole = .static,
                     velocity: WorldPoint = .zero, filter: CollisionFilter = .default,
-                    interest: EventInterest = []) throws -> WorldObject {
+                    interest: EventInterest = [], materialID: PhysicsMaterialID? = nil) throws -> WorldObject {
         let width = 2 * half.x, height = 2 * half.y
         return .rigidBody(try RigidBodyDescriptor(id: ObjectID(rawValue: id),
             vertices: [[-half.x, -half.y], [half.x, -half.y], [half.x, half.y], [-half.x, half.y]], position: center,
             velocity: velocity, mass: 1, momentOfInertia: (width * width + height * height) / 12, motionRole: role,
-            physicsMaterialID: polygonMaterial, renderStyleID: style, eventInterest: interest, filter: filter))
+            physicsMaterialID: materialID ?? polygonMaterial, renderStyleID: style, eventInterest: interest, filter: filter))
+    }
+
+    static func circle(_ id: UInt64, at center: WorldPoint, radius: Float, role: MotionRole = .dynamic,
+                       velocity: WorldPoint = .zero, angularVelocity: Float = 0, mass: Float = 1,
+                       filter: CollisionFilter = .default, interest: EventInterest = [],
+                       materialID: PhysicsMaterialID? = nil,
+                       regionExitPolicy: RegionExitPolicy = .remove) throws -> WorldObject {
+        .rigidBody(try RigidBodyDescriptor(id: ObjectID(rawValue: id), shape: .circle(radius: radius), position: center,
+            velocity: velocity, angularVelocity: angularVelocity, mass: mass, motionRole: role,
+            regionExitPolicy: regionExitPolicy, physicsMaterialID: materialID ?? polygonMaterial,
+            renderStyleID: style, eventInterest: interest, filter: filter))
+    }
+
+    /// Kapsuła o osi wzdłuż lokalnej osi X.
+    static func capsule(_ id: UInt64, at center: WorldPoint, halfLength: Float, radius: Float, rotation: Float = 0,
+                        role: MotionRole = .dynamic, velocity: WorldPoint = .zero, angularVelocity: Float = 0,
+                        mass: Float = 1, filter: CollisionFilter = .default, interest: EventInterest = [],
+                        materialID: PhysicsMaterialID? = nil) throws -> WorldObject {
+        .rigidBody(try RigidBodyDescriptor(id: ObjectID(rawValue: id), shape: .capsule(halfLength: halfLength, radius: radius),
+            position: center, rotation: rotation, velocity: velocity, angularVelocity: angularVelocity, mass: mass,
+            motionRole: role, physicsMaterialID: materialID ?? polygonMaterial, renderStyleID: style,
+            eventInterest: interest, filter: filter))
+    }
+
+    static func distanceJoint(_ id: UInt64, _ a: UInt64, _ b: UInt64? = nil, anchorA: WorldPoint = .zero,
+                              anchorB: WorldPoint = .zero, length: Float, softness: Float = 0, damping: Float = 0,
+                              collideConnected: Bool = false) throws -> Joint {
+        try Joint(id: JointID(rawValue: id), bodyA: ObjectID(rawValue: a), bodyB: b.map { ObjectID(rawValue: $0) },
+                  anchorA: anchorA, anchorB: anchorB, kind: .distance(length: length, softness: softness, damping: damping),
+                  collideConnected: collideConnected)
+    }
+
+    static func hingeJoint(_ id: UInt64, _ a: UInt64, _ b: UInt64? = nil, anchorA: WorldPoint = .zero,
+                           anchorB: WorldPoint = .zero, limits: HingeLimits? = nil, motor: HingeMotor? = nil,
+                           collideConnected: Bool = false) throws -> Joint {
+        try Joint(id: JointID(rawValue: id), bodyA: ObjectID(rawValue: a), bodyB: b.map { ObjectID(rawValue: $0) },
+                  anchorA: anchorA, anchorB: anchorB, kind: .hinge(limits: limits, motor: motor),
+                  collideConnected: collideConnected)
+    }
+
+    static func weldJoint(_ id: UInt64, _ a: UInt64, _ b: UInt64, anchorA: WorldPoint, anchorB: WorldPoint) throws -> Joint {
+        try Joint(id: JointID(rawValue: id), bodyA: ObjectID(rawValue: a), bodyB: ObjectID(rawValue: b),
+                  anchorA: anchorA, anchorB: anchorB, kind: .weld)
     }
 
     /// Wykonuje `count` kroków i zwraca ostatnią klatkę oraz wszystkie zdarzenia i potwierdzenia po kolei.
