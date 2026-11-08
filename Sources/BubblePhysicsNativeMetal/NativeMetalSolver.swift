@@ -308,7 +308,8 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         let encodingStart = DispatchTime.now().uptimeNanoseconds
         let count = snapshot.sourceBubbles.count
         let segmentCount = snapshot.sourceSegments.count
-        try rigidState.prepare(snapshot.publicSettings?.rigidPolygons ?? [], bubbleCount: count)
+        try rigidState.prepare(snapshot.publicSettings?.rigidPolygons ?? [], bubbleCount: count,
+            timeStep: snapshot.configuration.timeStep)
         let hasRigidBodies = snapshot.publicSettings?.rigidPolygons.contains { $0.object.motionRole != .static } == true
         guard frameNumber < UInt32.max else { throw NativeMetalSolverError.invalidSnapshot }
         let nextFrame = frameNumber + 1

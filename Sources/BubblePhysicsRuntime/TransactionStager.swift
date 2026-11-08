@@ -36,6 +36,8 @@ package struct RuntimeObject: Equatable, Sendable {
     package var pathBlocker: DriveBlockingContact?
     package var motorDrive: MotorDrive?
     package var kinematicDrive: KinematicDrive?
+    /// Poza kinematycznej (x, y, obrót) liczona w podwójnej precyzji, żeby błąd `Float` nie narastał z krokami toru.
+    package var kinematicExactPose: SIMD3<Double>?
     package var targetRadius: Float = 0
     package var collisionRadius: Float = 0
     package var effectiveRadius: Float = 0
@@ -231,6 +233,8 @@ private struct StagingContext {
             var existing = try object(id)
             guard existing.motionRole == .kinematic else { throw TransactionRejectionReason.incompatibleMotionRole(id) }
             existing.kinematicDrive = drive
+            existing.pathIndex = 0
+            existing.kinematicExactPose = nil
             state.objects[id] = existing
         case .setGlobalForce(let force):
             try requireFinite(force, "globalForce")

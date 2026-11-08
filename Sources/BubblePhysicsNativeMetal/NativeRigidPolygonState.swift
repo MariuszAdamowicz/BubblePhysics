@@ -121,7 +121,7 @@ final class NativeRigidPolygonState {
         return value
     }
 
-    func prepare(_ inputs: [NativeRigidPolygonInput], bubbleCount: Int) throws {
+    func prepare(_ inputs: [NativeRigidPolygonInput], bubbleCount: Int, timeStep: Float = 1 / 60) throws {
         current = inputs; count = inputs.count
         let limit = NativeMetalSolver.candidateLimitPerObject
         let total = UInt64(count) * UInt64(limit)
@@ -155,20 +155,32 @@ final class NativeRigidPolygonState {
             let c = cos(o.rotation), s = sin(o.rotation), center = geometry.centroid
             let offset = SIMD2(center.x * c - center.y * s, center.x * s + center.y * c)
             let isStatic = o.motionRole == .static
+            // Kinematyczna: odwrotna masa i bezwładność 0, narzucona prędkość bez tłumienia. Prędkość z `KinematicDrive`
+            // dotyczy początku geometrii, więc prędkość środka masy wynika z przesunięcia środka po obrocie o ω·dt.
+            let isKinematic = o.motionRole == .kinematic
+            var velocity = isStatic ? SIMD2<Float>.zero : o.velocity
+            if isKinematic {
+                let step = o.angularVelocity * timeStep, next = o.rotation + step
+                let c2 = cos(next), s2 = sin(next)
+                let rotated = SIMD2(center.x * c2 - center.y * s2, center.x * s2 + center.y * c2)
+                velocity += (rotated - offset) / timeStep
+            }
             let record = NativeRigidBody(identity: SIMD2(p.id.rawValue, 0),
                 pose: SIMD4(o.position.x + offset.x, o.position.y + offset.y, o.rotation, o.rotation),
                 previous: SIMD4(o.previousPosition.x + offset.x, o.previousPosition.y + offset.y, center.x, center.y),
-                motion: SIMD4(isStatic ? 0 : o.velocity.x, isStatic ? 0 : o.velocity.y, isStatic ? 0 : o.angularVelocity, input.damping),
+                motion: SIMD4(velocity.x, velocity.y, isStatic ? 0 : o.angularVelocity, isKinematic ? 0 : input.damping),
                 // Kontakt miesza tarcie przez średnią geometryczną i sprężystość przez max.
-                physical: SIMD4(isStatic ? 0 : 1 / p.mass, isStatic ? 0 : 1 / p.momentOfInertia, geometry.radius, input.friction),
+                physical: SIMD4(isStatic || isKinematic ? 0 : 1 / p.mass, isStatic || isKinematic ? 0 : 1 / p.momentOfInertia,
+                                geometry.radius, input.friction),
                 ranges: SIMD4(UInt32(vertices.count), UInt32(geometry.vertices.count), UInt32(triangles.count), UInt32(geometry.triangles.count)),
                 flags: SIMD4(isStatic ? 1 : 0, p.regionExitPolicy == .wrap ? 1 : 0, 0, input.restitution.bitPattern),
-                filter: NativeMetalFilter.pack(p.filter))
+                filter: NativeMetalFilter.pack(p.filter, kinematic: isKinematic))
             guard record.physical.x.isFinite, record.physical.y.isFinite else { throw NativeMetalSolverError.invalidSnapshot }
             records.append(record)
             vertices += geometry.vertices
             triangles += geometry.triangles
-            if let (previousIndex, previousInput) = old[p.id], previousInput == input, orderMatchesPublished {
+            // Rekord kinematycznej zależy od obrotu w tym kroku (prędkość środka masy), więc zawsze idzie z CPU.
+            if !isKinematic, let (previousIndex, previousInput) = old[p.id], previousInput == input, orderMatchesPublished {
                 remaps.append((previousIndex, index))
             } else { changes.append(index) }
         }
@@ -220,7 +232,11 @@ final class NativeRigidPolygonState {
             func offset(_ a: Float) -> SIMD2<Float> { SIMD2(center.x * cos(a) - center.y * sin(a), center.x * sin(a) + center.y * cos(a)) }
             object.position = SIMD2(body.pose.x, body.pose.y) - offset(body.pose.z)
             object.previousPosition = SIMD2(body.previous.x, body.previous.y) - offset(body.pose.w)
-            object.rotation = body.pose.z; object.velocity = SIMD2(body.motion.x, body.motion.y); object.angularVelocity = body.motion.z
+            object.rotation = body.pose.z
+            // Kinematyczna zachowuje narzuconą prędkość (początku geometrii); solver ją tylko wykonał.
+            if object.motionRole != .kinematic {
+                object.velocity = SIMD2(body.motion.x, body.motion.y); object.angularVelocity = body.motion.z
+            }
             result[object.descriptor.id] = object
             if body.flags.z == 1 { removed.insert(object.descriptor.id) }
             if body.flags.z == 2 { wrapped.insert(object.descriptor.id) }

@@ -31,7 +31,8 @@ package enum MotionControllers {
                 } else { object.collisionRadius = object.targetRadius }
             }
             switch object.motionRole {
-            case .static, .kinematic: object.velocity = .zero; object.angularVelocity = 0
+            case .static: object.velocity = .zero; object.angularVelocity = 0
+            case .kinematic: applyKinematicDrive(&object, duration: duration)
             case .dynamic, .motorDriven:
                 var force = state.globalForce
                 for (source, field) in fields where field.filter.objectIDs?.contains(id) ?? true {
@@ -65,6 +66,38 @@ package enum MotionControllers {
             try requireFinite(object.velocity, "motion.velocity")
             try requireFinite(object.angularVelocity, "motion.angularVelocity")
             state.objects[id] = object
+        }
+    }
+
+    /// Narzucona prędkość kinematycznej bryły: ruch zawsze wynika z `KinematicDrive`, nigdy z sił ani kontaktów.
+    /// `.target` osiąga pozę w jednym kroku (prędkość = odległość / dt); `.path` jedzie jak `pathDriven`, ale bez blokady.
+    /// `.velocity` liczy pozę w `Double` i podaje solverowi prędkość doprowadzającą `Float` dokładnie do tej pozy;
+    /// samo `pozycja += v·dt` w `Float` dawało dryf rzędu 1e-4 po kilkuset krokach.
+    private static func applyKinematicDrive(_ object: inout RuntimeObject, duration: Double) {
+        let dt = Float(duration)
+        object.velocity = .zero; object.angularVelocity = 0
+        switch object.kinematicDrive {
+        case nil: break
+        case .velocity(let linear, let angular)?:
+            var exact = object.kinematicExactPose ?? SIMD3(Double(object.position.x), Double(object.position.y), Double(object.rotation))
+            // Pozę opublikowaną inaczej niż przez ten tor (wrap regionu, replace) przyjmujemy jako nowy początek.
+            if Float(exact.x) != object.position.x || Float(exact.y) != object.position.y || Float(exact.z) != object.rotation {
+                exact = SIMD3(Double(object.position.x), Double(object.position.y), Double(object.rotation))
+            }
+            exact += SIMD3(Double(linear.x), Double(linear.y), Double(angular)) * duration
+            object.kinematicExactPose = exact
+            object.velocity = (WorldPoint(Float(exact.x), Float(exact.y)) - object.position) / dt
+            object.angularVelocity = (Float(exact.z) - object.rotation) / dt
+        case .path(let path)?:
+            guard !path.points.isEmpty else { break }
+            object.pathIndex = min(object.pathIndex, path.points.count - 1)
+            while object.pathIndex < path.points.count - 1 && length(path.points[object.pathIndex] - object.position) <= 0.0001 {
+                object.pathIndex += 1
+            }
+            object.velocity = velocity(to: path.points[object.pathIndex], from: object.position, speed: path.speed, dt: dt)
+        case .target(let position, let rotation)?:
+            object.velocity = (position - object.position) / dt
+            object.angularVelocity = (rotation - object.rotation) / dt
         }
     }
 
