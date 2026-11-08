@@ -11,6 +11,8 @@ package final class NativeMetalRenderHandoff {
     package let bubbleIDs: [ObjectID]
     package var bubbleCount: Int { bubbleIDs.count }
     package let contourStride: Int
+    /// Rozmiar jednego rekordu `RenderBubble` w ABI shadera renderu (ten sam układ co `NativeBubble`).
+    package static let bubbleRecordByteCount = MemoryLayout<NativeMetalBubble>.stride
 
     init(points: MTLBuffer, counts: MTLBuffer, bubbles: MTLBuffer,
          bubbleIDs: [ObjectID], contourStride: Int) {
@@ -21,7 +23,11 @@ package final class NativeMetalRenderHandoff {
         self.contourStride = contourStride
     }
 
+    private static var compiledFunctions: [UInt64: (vertex: MTLFunction, fragment: MTLFunction)] = [:]
+
+    /// Kompiluje shadery renderu raz na urządzenie; kolejne renderery używają tych samych funkcji.
     package static func makeFunctions(device: MTLDevice) throws -> (vertex: MTLFunction, fragment: MTLFunction) {
+        if let cached = compiledFunctions[device.registryID] { return cached }
         guard let url = Bundle.module.url(forResource: "NativeRenderKernels", withExtension: "metal-source") else {
             throw NativeRenderError.resourceUnavailable
         }
@@ -31,6 +37,7 @@ package final class NativeMetalRenderHandoff {
               let fragment = library.makeFunction(name: "nativeTechnicalFragment") else {
             throw NativeRenderError.resourceUnavailable
         }
+        compiledFunctions[device.registryID] = (vertex, fragment)
         return (vertex, fragment)
     }
 

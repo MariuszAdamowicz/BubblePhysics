@@ -17,7 +17,7 @@ kontakt ze ścianami i kinematycznym trójkątem.
 ## Procedura na urządzeniu
 
 1. Otworzyć `BubblePhysicsBench.xcodeproj` w Xcode 26.6 i wybrać
-   `iPhone (Mariusz)`.
+   podłączony fizyczny iPhone.
 2. Uruchomić scenę `Radial` i obserwować ją nieprzerwanie co najmniej 60 sekund.
 3. Włączyć `Punkty`, aby sprawdzić uporządkowanie czujników powierzchni.
 4. Zatrzymać i wznowić trójkąt przełącznikiem `Pauza △`, następnie użyć `Reset`.

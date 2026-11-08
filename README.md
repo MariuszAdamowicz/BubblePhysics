@@ -1,64 +1,92 @@
 # BubblePhysics
 
-`BubblePhysics` is a Swift package for experiments with deformable 2D bubbles. The original point/spring CPU and Metal implementations remain in the repository as experimental history; they are not the current correctness model.
+`BubblePhysics` to pakiet Swift z silnikiem fizycznym GPU dla deformowalnych baniek 2D, sztywnych wielokątów, sensorów i pól sił. Działa na iOS 16+ i macOS 13+ (GPU Apple z Metal).
 
-## Reference solver
+## Produkty
 
-`BubblePhysicsReference` is the correctness-oriented CPU implementation of the new contact-envelope model. A bubble has one massive centre, an expected radius and directional indentations produced by persistent contacts. Broad phase, CCD and equilibrium use centres and directional support radii; the adaptive visual contour is generated only after a solved step.
+| Produkt | Przeznaczenie |
+|---|---|
+| `BubblePhysics` | API gry: `BubbleWorld`, `WorldTransaction`, `WorldFrame`, typy modelu i diagnostyka. |
+| `BubblePhysicsMetalRender` | Renderuje opublikowaną klatkę świata bezpośrednio z buforów GPU do command buffera aplikacji. |
+| `BubblePhysicsBenchmarkSupport` | Wyłącznie moduły diagnostyczne (solvery referencyjne, historyczne eksperymenty). Nie są częścią API gry. |
+| `BubblePhysicsReferenceBench` | Runner benchmarków dla macOS z linii poleceń. |
 
-The deterministic benchmark runner supports named geometry cases plus filled boards of 40, 300 and 1000 bubbles. For example:
+Produkty dla gry działają na backendzie `native-metal` (trwały stan na GPU, trwały cache kontaktów, solver XPBD/PBD Jacobi). Referencyjny solver CPU (`BubblePhysicsReference`) jest wyrocznią poprawności dla testów i benchmarków; nie jest fallbackiem `BubbleWorld` w czasie działania.
+
+## Szybki start
 
 ```swift
-let report = try ReferenceBenchmarkRunner.measure(
-    scenario: .filled(count: 300, broadPhase: .sweepAndPrune),
-    warmupSteps: 30,
-    measuredSteps: 300
-)
+import BubblePhysics
+import BubblePhysicsMetalRender
+import Metal
+
+let configuration = try WorldConfiguration(
+    simulationRegion: WorldRectangle(min: [0, 0], max: [375, 700]),
+    fixedTimeStep: 1.0 / 60)
+let world = try BubbleWorld(configuration: configuration)
+
+let material = PhysicsMaterialID(rawValue: 1)
+let style = RenderStyleID(rawValue: 1)
+world.submit(WorldTransaction()
+    .updatePhysicsMaterial(material, material: try PhysicsMaterial(kind: .bubble))
+    .updateRenderStyle(style, style: try RenderStyle())
+    .add(.bubble(try BubbleDescriptor(id: ObjectID(rawValue: 1), position: [187, 350],
+                                      targetRadius: 20, mass: 8,
+                                      physicsMaterialID: material, renderStyleID: style))))
+
+// Sam krok fizyki:
+let frame = await world.advance(by: 1.0 / 60)
+for event in frame.events { /* merge, wejście/wyjście z sensora, wyjście z regionu, ... */ }
+
+// Fizyka i render w jednym command bufferze:
+let renderer = try BubblePhysicsMetalRender(device: device)
+let rendered = await world.advance(by: 1.0 / 60, commandBuffer: commandBuffer) {
+    try renderer.encode(world: world, viewport: Viewport(center: [187.5, 350], size: [375, 700]),
+                        commandBuffer: commandBuffer, renderPassDescriptor: passDescriptor)
+}
+// Drawable prezentuj tylko wtedy, gdy `world.diagnostics.lastAdvanceIssue == nil`.
 ```
 
-`ReferenceBenchmarkReport` contains p50/p95 for the complete step and its prediction, broad-phase, contact and solver phases, together with candidate/contact/TOI counts, maximum penetration, iteration-limit events, side corrections and non-finite-state detection. Use `.aabbTree` with the same seed to compare spatial indices on identical input. CPU timings are a diagnostic correctness baseline, not the iPhone acceptance threshold.
+`BubbleWorld` jest `@MainActor`. Każda zmiana świata przechodzi przez atomową `WorldTransaction` (dodanie/usunięcie/zamiana obiektów, materiały i style, role ruchu, napędy ścieżki/silnika/gracza, siła globalna, impulsy, przejścia parametrów, łączenie i dzielenie baniek, zamiana wielokątów). Każda `WorldFrame` zawiera potwierdzenia transakcji, zdarzenia opt-in, informację o przepełnieniu zdarzeń i feedback napędów.
 
-Nowy `BubblePhysicsReferenceMetal` implementuje referencyjny backend GPU na iOS 16+. CPU pozostaje domyślnym backendem, wyrocznią jakości i fallbackiem całej klatki. Testy pipeline'ów na macOS służą wyłącznie diagnostyce; publiczny wybór Metal poza iOS raportuje `unsupportedRuntime` i wykonuje CPU.
+## Zachowanie w czasie działania, o którym warto wiedzieć
 
-`native-metal` jest niezależnym, produkcyjnie kandydackim backendem GPU-native: przechowuje stan na GPU, używa trwałego cache kontaktów, XPBD/PBD Jacobi oraz jednego command bufferu i dwóch encoderów na normalną klatkę. Jest dostępny na iOS 16+ i macOS 13+; CPU nadal dostarcza sceny, kontrolę jakości i fallback całej klatki. Fizyczna bramka iPhone'a X z 2026-10-14 jest opisana w `docs/benchmarks/native-metal-bubble-solver-2026-10-14.md`.
+- Czas płynie stałymi krokami. `advance(by:commandBuffer:encodeRender:)` wykonuje najwyżej jeden krok na command buffer; reszta czasu zostaje w `world.diagnostics.backlogSeconds`.
+- Gdy krok GPU się nie powiedzie, `advance` zwraca ostatnią kompletną klatkę, ustawia `lastAdvanceIssue = .stepFailed` i zachowuje kolejkę transakcji na następne wywołanie. Ścieżka gry nie ma fallbacku CPU.
+- Stan obiektów (pozycja, prędkość, obrót) nie ma jeszcze publicznego odczytu; renderer czyta go bezpośrednio z buforów GPU, a `DriveFeedback` podaje osiągnięty punkt obiektów sterowanych.
+- `debugContourSnapshot()` kopiuje kontury na CPU i służy wyłącznie do debugowania.
 
-## Benchmark scenario
-
-The legacy `BenchmarkScenario.iPhoneX` creates a deterministic board of 300 bubbles for the 375 × 812 point iPhone X canvas. The number of boundary points is derived only from `WorldConfiguration.maxBoundarySegmentLength`; the package does not impose a maximum node count.
-
-Use `MetalBenchmarkReport.measure(scenario: .iPhoneX, steps: 300)` in an iOS host to collect GPU step-time p50/p95 and separate shape, contact and interaction timings. The report also includes particle, candidate-pair and contact counts plus overflow and non-finite-state flags. `BenchmarkReport` remains available as the CPU reference measurement.
-
-Acceptance on a physical iPhone X remains p95 ≤ 16.67 ms for the complete interactive frame, with zero buffer overflows and zero non-finite coordinates. The visual prototype keeps simulation buffers persistent and encodes physics, interaction and rendering into one caller-owned command buffer per frame.
-
-The committed XCTest scenario verifies construction and determinism. It is not a device-performance verdict: that requires a signed iOS host installed on the phone.
-
-Host jest w `Benchmarks/iOS/BubblePhysicsBench`. Otwórz `BubblePhysicsBench.xcodeproj` w Xcode 26.6 i wybierz podłączony iPhone. Zakładka `CPU` zawiera benchmark zbieżności z wyborem `CPU reference` / `GPU reference`; pozostałe zakładki udostępniają historyczne eksperymenty. Checklistę CPU opisuje `docs/benchmarks/iphone-x-reference-solver.md`.
-
-### Benchmark zbieżności na urządzeniu
-
-Przed instalacją sprawdź niepodpisany build hosta w Release:
+## Testy
 
 ```bash
-DEVELOPER_DIR=/Applications/Xcode-26.6.app/Contents/Developer \
+swift build --build-tests
+swift test
+```
+
+Testy Metal działają na macOS z lokalnym GPU. Źródła shaderów są dołączone jako pliki `.metal-source` i kompilowane w czasie działania, raz na `MTLDevice`. `NativeMetalShaderABITests` sprawdza, czy rekordy buforów w Swift odpowiadają układowi struktur wygenerowanemu przez kompilator Metal.
+
+## Benchmark na urządzeniu
+
+Aplikacja hosta iOS jest w `Benchmarks/iOS/BubblePhysicsBench` i ma jeden ekran, który uruchamia `PublicWorldStressBenchmark`: 300 baniek, cztery ściany i poruszający się trójkąt, renderowane przez `BubblePhysicsMetalRender` w tym samym command bufferze co krok fizyki.
+
+1. Skopiuj `Benchmarks/iOS/BubblePhysicsBench/Signing.local.xcconfig.example` do `Signing.local.xcconfig` (ignorowany przez git) i ustaw swój `DEVELOPMENT_TEAM` oraz bundle identifier.
+2. Otwórz `BubblePhysicsBench.xcodeproj`, wybierz fizyczny iPhone i uruchom konfigurację Release.
+3. Użyj „Kopiuj raport” i zapisz surowy wynik w `docs/benchmarks/`.
+
+Build kontrolny bez podpisu:
+
+```bash
 xcodebuild -project Benchmarks/iOS/BubblePhysicsBench/BubblePhysicsBench.xcodeproj \
   -scheme BubblePhysicsBench -configuration Release -destination 'generic/platform=iOS' \
   CODE_SIGNING_ALLOWED=NO build
 ```
 
-Przed instalacją sprawdź też zasoby gotowej aplikacji:
+Bramka akceptacji to p95 pełnej klatki nie większe niż `PublicWorldStressBenchmark.p95GateMilliseconds` (10.4568 ms) na iPhonie X, przy zerze nieudanych klatek, zerze klatek `non-finite` i bez readbacku konturów na CPU. Raport wypisuje tę wartość jako `p95_gate_ms`. Jedyny dotychczasowy pomiar urządzeniowy (2026-10-14, `docs/benchmarks/native-metal-bubble-solver-2026-10-14.md`) wykonano na wcześniejszej ścieżce `NativeMetalBenchmarkRunner`; ścieżka gry `BubbleWorld` + renderer nie była jeszcze mierzona na urządzeniu.
 
-```bash
-sh Benchmarks/iOS/BubblePhysicsBench/verify-reference-metal-resources.sh /ścieżka/do/BubblePhysicsBench.app
-```
+## Układ repozytorium
 
-Backend referencyjny kompiluje źródła Metal podczas uruchomienia. Trzy pliki `.metal-source` muszą być obecne w pakiecie aplikacji; samo `default.metallib` nie wystarcza. Skrypt sprawdza ich obecność i zgodność z repozytorium.
-
-Uruchom aplikację w Release na fizycznym iPhonie. Dla backendu `native-metal` wykonaj najpierw smoke `stress-300`, limit 4, a potem pełną macierz `4/8/12/16` dla obu scen przy domyślnych 30 klatkach rozgrzewki i 300 mierzonych. Każdy pomiar kwalifikuje się wyłącznie przy zerze fallbacków, containment i `non-finite` oraz przy `native_quality_envelope=pass`.
-
-Raport zachowuje dotychczasowe kolumny czasu i jakości oraz dopisuje `backend cpu_frames metal_frames fallbacks warmup_fallbacks gpu_measurement`. Liczniki CPU/GPU i fallbacków obejmują także rozgrzewkę. Każdy fallback, również tylko podczas rozgrzewki, daje `gpu_measurement=ineligible`; powody są wypisane pod tabelą. `eligible` oznacza wyłącznie kompletny przebieg GPU bez fallbacku i bez `non-finite`, przygotowany do porównania urządzeniowego — nie zatwierdzenie bramki. Pusty przebieg nie jest kwalifikowany.
-
-`full_p95_ms` obejmuje aktualizację sceny, upload, oczekiwanie CPU+GPU, retry, readback, walidację i przygotowanie klatki. Dla udanej klatki Metal `solver_p95_ms` pochodzi z sumy czasów ukończonych command bufferów wszystkich etapów (obejmuje również geometrię i generowanie konturów); przy fallbacku zachowuje czas solvera CPU. `contour_p95_ms` mierzy pobranie gotowych konturów, a `render_p95_ms` pakowanie danych na CPU. Te kolumny nie dowodzą kosztu samego Newton/PCG ani konturów na GPU. Pełna klatka pozostaje porównywalną miarą bramki.
-
-Dodatkowe wiersze GPU oddzielają `gpu_completed` (p50/p95/max sumy ukończonych command bufferów tylko udanych mierzonych klatek Metal) od `cpu_fallback` (czas całej mierzonej klatki fallbacku, łącznie z nieudaną próbą GPU). Brak prób jest oznaczony `unavailable`, a rozgrzewka nie trafia do tych percentyli. `gpu_work` podaje maksima total solve, w tym tentative, kontaktów i grup CCD z ukończonych mierzonych klatek GPU. `gpu_first_failure` i `gpu_fatal_failure` zachowują etap, pierwotny krok, klasyfikację i powód, także po fatalnym błędzie rozgrzewki. Fatalny błąd odcina kolejne submissiony w danym przebiegu; następny przebieg tworzy nowego runnera. Raport mieszany pozostaje `ineligible` niezależnie od dobrego czasu części udanych prób.
-
-Zapisz rzeczywiste raporty obu scen w `docs/benchmarks/native-metal-bubble-solver-iphone-YYYY-MM-DD.txt` oraz analizę w `docs/benchmarks/native-metal-bubble-solver-YYYY-MM-DD.md`. Porównaj każdy limit z CPU baseline'em: penetrację, containment, `non-finite`, powtarzalny hash oraz pełną klatkę. Robocza bramka limitu 4 to `stress-300 full_p95_ms <= 10 ms`; wyniki z iPhone'a X z 2026-10-14 osiągnęły 10.4568 ms p95 i CEO zaakceptował to odchylenie 4.6% przy pełnym przejściu jakości. Limity 8/12/16 pozostają porównaniem, bez adaptacji iteracji.
+- `Sources/BubblePhysicsPublic`, `Sources/BubblePhysicsRuntime`, `Sources/BubblePhysicsNativeMetal`, `Sources/BubblePhysicsMetalRender` — ścieżka produkcyjna.
+- `Sources/BubblePhysicsReference` — referencyjny solver CPU i deterministyczne scenariusze benchmarków.
+- `Sources/BubblePhysicsReferenceMetal` — referencyjny solver Newton/PCG na GPU (diagnostyczny).
+- `Sources/BubblePhysics` (`BubblePhysicsLegacy`), `Sources/BubblePhysicsCore`, `Sources/BubblePhysicsMetal` — historyczne eksperymenty zachowane do porównań.
+- `docs/benchmarks` — pomiary na urządzeniu i Macu; `docs/superpowers` — specyfikacje i plany implementacji.
