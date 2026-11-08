@@ -337,7 +337,7 @@ kernel void nativeCheckFinite(device NativeBubble *bubbles [[buffer(0)]],
 kernel void nativeRigidPredict(device NativeRigidBody *bodies [[buffer(0)]],
     device float2 *vertices [[buffer(1)]], constant uint4 &counts [[buffer(2)]],
     constant NativeControl &control [[buffer(3)]], device NativeSegment *segments [[buffer(4)]],
-    device atomic_uint *safety [[buffer(5)]], device NativeRigidCorrection *corrections [[buffer(6)]],
+    device atomic_uint *safety [[buffer(5)]], device NativeRigidWall *walls [[buffer(6)]],
     uint index [[thread_position_in_grid]]) {
     if(index>=counts.x)return;
     NativeRigidBody b=bodies[index];b.previous.xy=b.pose.xy;b.pose.w=b.pose.z;b.flags.z=0;
@@ -384,10 +384,7 @@ kernel void nativeRigidPredict(device NativeRigidBody *bodies [[buffer(0)]],
     if(crossed){
         b.pose.xyz=start;b.motion.xyz=0;
         for(uint j=0;j<counts.x;++j)if(j!=index && bodies[j].flags.x && bodies[j].identity.x==ulong(contactOwner)){
-            uint slot=counts.x*counts.y+min(index,j)*counts.x+max(index,j);
-            float2 pairNormal=index<j ? -contactNormal : contactNormal;
-            corrections[slot].first.w=pairNormal.x;corrections[slot].second.w=pairNormal.y;
-            corrections[slot].velocityFirst.w=contactPoint.x;corrections[slot].velocitySecond.w=contactPoint.y;
+            walls[index]=NativeRigidWall{long2(long(b.identity.x),long(contactOwner)),float4(contactNormal,contactPoint)};
             break;
         }
     }

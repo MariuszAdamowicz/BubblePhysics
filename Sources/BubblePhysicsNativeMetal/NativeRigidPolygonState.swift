@@ -92,14 +92,20 @@ final class NativeRigidPolygonState {
     private(set) var bodyUploadCount = 0
     private(set) var geometryUploadCount = 0
     private(set) var count = 0
-    private(set) var contactCount = 0
+    /// Pojemność wierszy kandydatów: bryły × k.
+    private(set) var rowCapacity = 0
     var bodies: MTLBuffer { buffers["working"]! }
     var vertices: MTLBuffer { buffers["vertices"]! }
     var triangles: MTLBuffer { buffers["triangles"]! }
     var contacts: MTLBuffer { buffers["contacts"]! }
+    var candidates: MTLBuffer { buffers["candidates"]! }
+    var rowCounts: MTLBuffer { buffers["rowCounts"]! }
+    var walls: MTLBuffer { buffers["walls"]! }
     var control: MTLBuffer { buffers["control"]! }
-    /// Bajty pamięci kontaktów brył (dziś sloty P·n + P²).
-    var contactMemoryBytes: Int { buffers["contacts"]?.length ?? 0 }
+    /// Bajty pamięci kontaktów brył: wiersze kandydatów z korektami i ściany (O(P·k), niezależnie od liczby baniek).
+    var contactMemoryBytes: Int {
+        ["contacts", "candidates", "rowCounts", "walls"].reduce(0) { $0 + (buffers[$1]?.length ?? 0) }
+    }
 
     init(device: MTLDevice) { self.device = device }
 
@@ -116,15 +122,20 @@ final class NativeRigidPolygonState {
 
     func prepare(_ inputs: [NativeRigidPolygonInput], bubbleCount: Int) throws {
         current = inputs; count = inputs.count
-        let total = UInt64(count) * UInt64(bubbleCount) + UInt64(count) * UInt64(count)
+        let limit = NativeMetalSolver.candidateLimitPerObject
+        let total = UInt64(count) * UInt64(limit)
         guard total <= UInt64(UInt32.max) else { throw NativeMetalSolverError.capacityOverflow }
-        contactCount = Int(total)
+        rowCapacity = Int(total)
         _ = try buffer("published", count: count, stride: MemoryLayout<NativeRigidBody>.stride)
         _ = try buffer("working", count: count, stride: MemoryLayout<NativeRigidBody>.stride)
         let updates = try buffer("updates", count: count, stride: MemoryLayout<NativeRigidBody>.stride)
-        _ = try buffer("contacts", count: contactCount, stride: 64)
+        // Wiersz bryły: klucz pary (NativeCandidate, 32 B) i korekta (NativeRigidCorrection, 64 B) na tym samym miejscu.
+        _ = try buffer("contacts", count: rowCapacity, stride: 64)
+        _ = try buffer("candidates", count: rowCapacity, stride: 32)
+        _ = try buffer("rowCounts", count: count, stride: MemoryLayout<SIMD2<UInt32>>.stride)
+        _ = try buffer("walls", count: count, stride: 32)
         let control = try buffer("control", count: 1, stride: 16)
-        control.contents().storeBytes(of: SIMD4(UInt32(count), UInt32(bubbleCount), UInt32(contactCount), 0), as: SIMD4<UInt32>.self)
+        control.contents().storeBytes(of: SIMD4(UInt32(count), UInt32(bubbleCount), UInt32(limit), 0), as: SIMD4<UInt32>.self)
         records = []; changes = []; remaps = []
         var vertices: [SIMD2<Float>] = [], triangles: [SIMD4<UInt32>] = []
         let old = Dictionary(uniqueKeysWithValues: publishedInputs.enumerated().map { ($0.element.object.descriptor.id, ($0.offset, $0.element)) })
@@ -179,6 +190,7 @@ final class NativeRigidPolygonState {
     func encodeInputs(_ encoder: MTLBlitCommandEncoder) {
         // Feedback obejmuje kontakty napotkane w tym kroku, także po rozdzieleniu brył.
         encoder.fill(buffer: contacts, range: 0..<contacts.length, value: 0)
+        encoder.fill(buffer: walls, range: 0..<walls.length, value: 0)
         let stride = MemoryLayout<NativeRigidBody>.stride
         if copyPublishedGeometry {
             if vertexCount > 0 {
@@ -223,23 +235,46 @@ final class NativeRigidPolygonState {
         geometryCache = geometryCache.filter { objects[$0.key] != nil }
     }
 
-    /// Geometria ostatniej iteracji GPU; nie przelicza kontaktów na CPU.
-    func driveContacts(bubbleIDs: [ObjectID]) -> [ObjectID: [DriveBlockingContact]] {
-        let values = contacts.contents().bindMemory(to: SIMD4<Float>.self, capacity: contactCount * 4)
+    /// Geometria ostatniej iteracji GPU; nie przelicza kontaktów na CPU. Para trafia do wyniku raz: bańka–bryła z wiersza
+    /// bryły, bryła–bryła z wiersza bryły o mniejszym indeksie, a kontakt ze ścianą z sondy `nativeRigidPredict` tylko
+    /// wtedy, gdy wiersze nie mają dla tej pary kontaktu.
+    func driveContacts() -> [ObjectID: [DriveBlockingContact]] {
+        let limit = NativeMetalSolver.candidateLimitPerObject
+        let counts = rowCounts.contents().bindMemory(to: SIMD2<UInt32>.self, capacity: max(1, count))
+        let keys = candidates.contents(), wallRecords = walls.contents()
+        let values = contacts.contents().bindMemory(to: SIMD4<Float>.self, capacity: max(1, rowCapacity) * 4)
         var result: [ObjectID: [DriveBlockingContact]] = [:]
-        for index in 0..<contactCount {
-            let normal = WorldPoint(values[index*4].w, values[index*4+1].w)
-            guard normal.x != 0 || normal.y != 0 else { continue }
-            let point = WorldPoint(values[index*4+2].w, values[index*4+3].w)
-            let first: ObjectID, second: ObjectID
-            if index < count * bubbleIDs.count {
-                first = bubbleIDs[index / count]; second = current[index % count].object.descriptor.id
-            } else {
-                let slot = index - count * bubbleIDs.count
-                first = current[slot / count].object.descriptor.id; second = current[slot % count].object.descriptor.id
-            }
+        var emittedBodyPairs = Set<SIMD2<UInt64>>()
+        func append(_ first: ObjectID, _ second: ObjectID, point: WorldPoint, normal: WorldPoint) {
             result[first, default: []].append(.init(objectID: second, point: point, normal: -normal))
             result[second, default: []].append(.init(objectID: first, point: point, normal: normal))
+        }
+        for body in 0..<count {
+            for slot in 0..<Int(counts[body].x) {
+                let index = body * limit + slot
+                let kind = keys.load(fromByteOffset: index * 32 + 16, as: UInt32.self)
+                if kind == 3, Int(keys.load(fromByteOffset: index * 32 + 20, as: UInt32.self)) != body { continue }
+                let normal = WorldPoint(values[index * 4].w, values[index * 4 + 1].w)
+                guard normal.x != 0 || normal.y != 0 else { continue }
+                let point = WorldPoint(values[index * 4 + 2].w, values[index * 4 + 3].w)
+                let first = ObjectID(rawValue: UInt64(bitPattern: keys.load(fromByteOffset: index * 32, as: Int64.self)))
+                let second = ObjectID(rawValue: UInt64(bitPattern: keys.load(fromByteOffset: index * 32 + 8, as: Int64.self)))
+                if kind == 3 { emittedBodyPairs.insert(SIMD2(first.rawValue, second.rawValue)) }
+                append(first, second, point: point, normal: normal)
+            }
+        }
+        let position = Dictionary(uniqueKeysWithValues: current.enumerated().map { ($0.element.object.descriptor.id, $0.offset) })
+        for body in 0..<count {
+            let geometry = wallRecords.load(fromByteOffset: body * 32 + 16, as: SIMD4<Float>.self)
+            guard geometry.x != 0 || geometry.y != 0 else { continue }
+            let id = current[body].object.descriptor.id
+            let owner = ObjectID(rawValue: UInt64(bitPattern: wallRecords.load(fromByteOffset: body * 32 + 8, as: Int64.self)))
+            guard let other = position[owner] else { continue }
+            // Normalna pary jest liczona od bryły o mniejszym indeksie.
+            let first = body < other ? id : owner, second = body < other ? owner : id
+            guard emittedBodyPairs.insert(SIMD2(first.rawValue, second.rawValue)).inserted else { continue }
+            let wallNormal = WorldPoint(geometry.x, geometry.y)
+            append(first, second, point: WorldPoint(geometry.z, geometry.w), normal: body < other ? -wallNormal : wallNormal)
         }
         return result
     }

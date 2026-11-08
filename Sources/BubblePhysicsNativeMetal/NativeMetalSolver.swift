@@ -652,7 +652,7 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         }
         if hasRigidBodies {
             dispatch("nativeRigidPredict", buffers: [rigidState.bodies, rigidState.vertices, rigidState.control,
-                state.control, state.workingSegments, state.safetyControl, rigidState.contacts], threads: rigidState.count)
+                state.control, state.workingSegments, state.safetyControl, rigidState.walls], threads: rigidState.count)
         }
         dispatchReduction("nativePrepareGrid", buffers: [state.workingBubbles, state.control, state.contactControl])
         dispatch("nativeBuildGrid", buffers: [state.workingBubbles, state.control, state.contactControl, state.grid], threads: state.bubbleCapacity)
@@ -717,6 +717,10 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         }
         // Pomiar przed korekcją pozwala warm-startowi zakończyć się bez dodatkowej iteracji.
         measureResidual()
+        if hasRigidBodies {
+            dispatch("nativeRigidEmitCandidates", buffers: [rigidState.bodies, state.workingBubbles, inputPositions,
+                rigidState.control, rigidState.candidates, rigidState.rowCounts, state.candidateOverflow], threads: rigidState.count)
+        }
         for _ in 0..<configuration.solverIterationCount {
             dispatchContacts("nativeUpdateContactMultipliers", buffers: [state.workingBubbles, state.workingSegments,
                 state.workingCache, inputPositions, state.control, state.contactControl, state.solverControl,
@@ -729,11 +733,12 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
             if hasRigidBodies {
                 dispatch("nativeRigidContacts", buffers: [rigidState.bodies, rigidState.vertices, rigidState.triangles,
                     state.workingBubbles, inputPositions, rigidState.control, rigidState.contacts,
-                    state.safetyControl], threads: rigidState.contactCount)
-                dispatch("nativeRigidApplyBodies", buffers: [rigidState.bodies, rigidState.control, rigidState.contacts], threads: rigidState.count)
+                    state.safetyControl, rigidState.candidates, rigidState.rowCounts], threads: rigidState.rowCapacity)
+                dispatch("nativeRigidApplyBodies", buffers: [rigidState.bodies, rigidState.control, rigidState.contacts,
+                    rigidState.candidates, rigidState.rowCounts], threads: rigidState.count)
                 dispatch("nativeRigidGuardWalls", buffers: [rigidState.bodies, rigidState.vertices, rigidState.triangles, rigidState.control], threads: rigidState.count)
                 dispatch("nativeRigidApplyBubbles", buffers: [state.workingBubbles, inputPositions, rigidState.control,
-                    rigidState.contacts, state.solverControl], threads: count)
+                    rigidState.contacts, state.solverControl, rigidState.candidates, rigidState.rowCounts], threads: count)
             }
         }
         if let diagnosticPostSolver = state.diagnosticPostSolverPositions {
@@ -1064,9 +1069,7 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         frame.regionRemovals = Set(bubbles.indices.compactMap { records[$0].publicFlags.w == 1 ? bubbles[$0].id : nil })
         frame.regionWraps = Set(bubbles.indices.compactMap { records[$0].publicFlags.w == 2 ? bubbles[$0].id : nil })
         let rigidResult = try rigidState.completed()
-        let driveContacts = hasRigidBodies ? rigidState.driveContacts(bubbleIDs: bubbles.map {
-            ObjectID(rawValue: UInt64(bitPattern: Int64($0.id.rawValue)))
-        }) : [:]
+        let driveContacts = hasRigidBodies ? rigidState.driveContacts() : [:]
         // Synchroniczna publikacja dopiero po pomyślnym wykonaniu i readbacku.
         rigidState.publish(rigidResult.objects)
         publishedPolygons = rigidResult.objects
@@ -1200,7 +1203,7 @@ enum NativeMetalPipelineCache {
         "nativeCompactSensorEvents",
         "nativeCompactPolygonSensorEvents",
         "nativeCompactMissingSensorEvents",
-        "nativeRigidPredict", "nativeRigidContacts", "nativeRigidApplyBubbles", "nativeRigidApplyBodies", "nativeRigidGuardWalls", "nativeRigidFinish"]
+        "nativeRigidPredict", "nativeRigidEmitCandidates", "nativeRigidContacts", "nativeRigidApplyBubbles", "nativeRigidApplyBodies", "nativeRigidGuardWalls", "nativeRigidFinish"]
 
     static func pipelines(for device: MTLDevice) throws -> Compiled {
         if let cached = compiled[device.registryID] { return cached }

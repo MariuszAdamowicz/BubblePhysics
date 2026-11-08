@@ -55,4 +55,34 @@ final class RigidContactMemoryTests: XCTestCase {
         let total = try await measure(bodies: 120).total
         XCTAssertLessThanOrEqual(total, (300 + 120) * limit * 2048)
     }
+
+    // Wiersz bryły ma stałe k: bryła pod ponad k bańkami zwiększa licznik, a klatka jest opublikowana i skończona.
+    func testRigidRowOverflowRaisesCounterAndKeepsFrameFinite() async throws {
+        let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
+        var objects: [NativePublicObject] = []
+        // Bańki tuż poza bryłą (pierścień w odległości 23 od środka), ale w jej zasięgu sprawdzanym przez kandydatów.
+        let count = limit + 12, perSide = count / 4
+        for index in 0..<count {
+            let side = index / perSide, u = Float(index % perSide) / Float(perSide) * 46 - 23
+            let offsets: [WorldPoint] = [[u, -23], [23, u], [-u, 23], [-23, -u]]
+            objects.append(NativePublicObject(descriptor: .bubble(try BubbleDescriptor(id: ObjectID(rawValue: UInt64(index + 1)),
+                position: [100 + offsets[min(side, 3)].x, 100 + offsets[min(side, 3)].y], targetRadius: 1,
+                physicsMaterialID: bubbleMaterial, renderStyleID: style))))
+        }
+        objects.append(NativePublicObject(descriptor: .polygon(try PolygonDescriptor(id: ObjectID(rawValue: 10_000),
+            vertices: [[-20, -20], [20, -20], [20, 20], [-20, 20]], position: [100, 100], motionRole: .dynamic,
+            physicsMaterialID: polygonMaterial, renderStyleID: style))))
+        var frame = try await world.step(objects: objects,
+            materials: [bubbleMaterial: try PhysicsMaterial(kind: .bubble), polygonMaterial: try PhysicsMaterial(kind: .polygon)],
+            styles: [style: try RenderStyle()], region: WorldRectangle(min: [-200, -200], max: [400, 400]), duration: 1.0 / 60)
+        XCTAssertGreaterThan(frame.contactCandidateOverflowCount, 0)
+        XCTAssertGreaterThanOrEqual(frame.maximumContactCandidatesPerObject, limit)
+        frame = try await world.step(objects: Array(frame.objects.values),
+            materials: [bubbleMaterial: try PhysicsMaterial(kind: .bubble), polygonMaterial: try PhysicsMaterial(kind: .polygon)],
+            styles: [style: try RenderStyle()], region: WorldRectangle(min: [-200, -200], max: [400, 400]), duration: 1.0 / 60)
+        XCTAssertEqual(frame.objects.count, limit + 13)
+        for object in frame.objects.values {
+            XCTAssertTrue(object.position.x.isFinite && object.position.y.isFinite)
+        }
+    }
 }

@@ -502,21 +502,25 @@ bool nativeTriangleContact(thread float2 *a, thread float2 *b, thread float2 &no
     return true;
 }
 
+// Wiersze kandydatów z nativeRigidEmitCandidates: wątek (bryła, miejsce w wierszu) liczy jeden kontakt.
+// Wzory korekty bez zmian względem slotów par; zmienia się tylko skąd bierze się para.
 kernel void nativeRigidContacts(device NativeRigidBody *bodies [[buffer(0)]],
     device float2 *vertices [[buffer(1)]], device uint4 *triangles [[buffer(2)]],
     device NativeBubble *bubbles [[buffer(3)]], device float4 *positions [[buffer(4)]],
     constant uint4 &counts [[buffer(5)]], device NativeRigidCorrection *corrections [[buffer(6)]],
-    device atomic_uint *safety [[buffer(7)]],
+    device atomic_uint *safety [[buffer(7)]], device NativeCandidate *rows [[buffer(8)]],
+    device uint2 *rowCounts [[buffer(9)]],
     uint index [[thread_position_in_grid]]) {
-    if(index>=counts.z)return;
+    uint owner=index/counts.z,slot=index%counts.z;
+    if(owner>=counts.x||slot>=rowCounts[owner].x)return;
+    NativeCandidate candidate=rows[index];
     NativeRigidCorrection previous=corrections[index];
     NativeRigidCorrection result={float4(0,0,0,previous.first.w),float4(0,0,0,previous.second.w),
         float4(0,0,0,previous.velocityFirst.w),float4(0,0,0,previous.velocitySecond.w)};
-    uint bubblePairs=counts.x*counts.y;
     float2 n=0,point=0,va=0,vb=0,ra=0,rb=0;
     float wa=0,wb=0,ia=0,ib=0,depth=0,spinA=0,spinB=0,frictionA=0,frictionB=0,restitutionA=0,restitutionB=0;
-    if(index<bubblePairs) {
-        uint ai=index/counts.x,bi=index%counts.x;
+    if(candidate.metadata.x==2) {
+        uint ai=candidate.metadata.y,bi=candidate.metadata.z;
         NativeBubble a=bubbles[ai];NativeRigidBody b=bodies[bi];
         // Statyczne polygony pozostają w istniejącym solverze segmentów.
         if(b.flags.x){corrections[index]=result;return;}
@@ -578,7 +582,7 @@ kernel void nativeRigidContacts(device NativeRigidBody *bodies [[buffer(0)]],
         va=a.motion.xy;vb=b.motion.xy;spinB=b.motion.z;
         frictionA=a.material.w;frictionB=b.physical.w;restitutionA=as_type<float>(uint(a.resources.x));restitutionB=as_type<float>(b.flags.w);
     } else {
-        uint slot=index-bubblePairs,ai=slot/counts.x,bi=slot%counts.x;
+        uint ai=candidate.metadata.y,bi=candidate.metadata.z;
         NativeRigidBody a=bodies[ai],b=bodies[bi];
         if(ai>=bi || (a.flags.x&&b.flags.x)){corrections[index]=result;return;}
         float2 start=a.previous.xy-b.previous.xy,end=a.pose.xy-b.pose.xy,travel=end-start;
@@ -627,27 +631,42 @@ kernel void nativeRigidContacts(device NativeRigidBody *bodies [[buffer(0)]],
     corrections[index]=result;
 }
 
+// Korekty bryłowe sumuje wątek właściciela w kolejności wiersza (klucz pary), więc wynik nie zależy od planowania.
+// Bańka nie ma własnego wiersza: jej wpisy leżą w sekcjach rodzaju 2 wierszy brył, posortowanych po identyfikatorze.
 kernel void nativeRigidApplyBubbles(device NativeBubble *bubbles [[buffer(0)]],
     device float4 *positions [[buffer(1)]], constant uint4 &counts [[buffer(2)]],
     device NativeRigidCorrection *corrections [[buffer(3)]], device NativeSolverControl &solver [[buffer(4)]],
+    device NativeCandidate *rows [[buffer(5)]], device uint2 *rowCounts [[buffer(6)]],
     uint index [[thread_position_in_grid]]) {
     if(index>=counts.y)return;
+    long identity=bubbles[index].identity.x;
     float2 delta=0,velocity=0;
-    for(uint j=0;j<counts.x;++j){NativeRigidCorrection c=corrections[index*counts.x+j];delta+=c.first.xy;velocity+=c.velocityFirst.xy;}
+    for(uint j=0;j<counts.x;++j){
+        uint low=0,high=rowCounts[j].y;
+        while(low<high){
+            uint mid=low+(high-low)/2;
+            if(rows[j*counts.z+mid].participants.x<identity)low=mid+1;else high=mid;
+        }
+        if(low<rowCounts[j].y && rows[j*counts.z+low].participants.x==identity){
+            NativeRigidCorrection c=corrections[j*counts.z+low];delta+=c.first.xy;velocity+=c.velocityFirst.xy;
+        }
+    }
     positions[index].xy+=delta;bubbles[index].position.xy+=delta;bubbles[index].motion.xy+=velocity;
     if(index==0)solver.counts.x=1; // kontakty brył mogą reaktywować kontakty baniek
 }
 
 kernel void nativeRigidApplyBodies(device NativeRigidBody *bodies [[buffer(0)]],
     constant uint4 &counts [[buffer(1)]], device NativeRigidCorrection *corrections [[buffer(2)]],
+    device NativeCandidate *rows [[buffer(3)]], device uint2 *rowCounts [[buffer(4)]],
     uint index [[thread_position_in_grid]]) {
     if(index>=counts.x)return;
     float3 delta=0,velocity=0;
-    for(uint j=0;j<counts.y;++j){NativeRigidCorrection c=corrections[j*counts.x+index];delta+=c.second.xyz;velocity+=c.velocitySecond.xyz;}
-    uint start=counts.x*counts.y;
-    for(uint j=0;j<counts.x;++j){
-        NativeRigidCorrection c=corrections[start+min(j,index)*counts.x+max(j,index)];
-        delta+=j<index?c.second.xyz:c.first.xyz;velocity+=j<index?c.velocitySecond.xyz:c.velocityFirst.xyz;
+    for(uint slot=0;slot<rowCounts[index].x;++slot){
+        uint at=index*counts.z+slot;
+        NativeCandidate candidate=rows[at];NativeRigidCorrection c=corrections[at];
+        // Bryła jest drugim uczestnikiem pary z bańką i mniejszym albo większym indeksem w parze brył.
+        bool first=candidate.metadata.x==3 && candidate.metadata.y==index;
+        delta+=first?c.first.xyz:c.second.xyz;velocity+=first?c.velocityFirst.xyz:c.velocitySecond.xyz;
     }
     bodies[index].pose.xyz+=delta;bodies[index].motion.xyz+=velocity;
 }
