@@ -23,4 +23,26 @@ final class ContactCandidateMarginTests: XCTestCase {
         XCTAssertLessThanOrEqual(maximum * 2, BubbleWorld.contactCandidateLimit,
             "zmierzone maksimum \(maximum) bez dwukrotnego zapasu względem k = \(BubbleWorld.contactCandidateLimit)")
     }
+
+    /// P-B-63: scena mieszana (200 baniek, 60 brył, 10 więzów, 5 kinematycznych) ma wiersze kandydatów brył,
+    /// których stress-300 nie ma; zapas k musi wystarczyć także tutaj.
+    func testMixedSceneKeepsCandidateLimitWithAtLeastTwofoldMargin() async throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let world = try BubbleWorld.makeBenchmarkWorld(configuration: try MixedScene.configuration(),
+            device: device, solverIterationLimit: 4)
+        world.submit(try MixedScene.initialTransaction())
+        var maximum = 0
+        var frame = WorldFrame(transactionReceipts: [], events: [])
+        for index in 0..<300 {
+            if let transaction = try MixedScene.stepTransaction(step: index) { world.submit(transaction) }
+            frame = await world.advance(by: 1.0 / 60)
+            XCTAssertNil(world.diagnostics.lastAdvanceIssue, "krok \(index + 1): klatka się nie udała")
+            maximum = max(maximum, world.diagnostics.maximumContactCandidatesPerObject)
+            XCTAssertEqual(world.diagnostics.contactCandidateOverflow, 0, "krok \(index + 1): limit k przekroczony")
+        }
+        XCTAssertEqual(frame.objects.count, 264, "200 baniek, 60 brył i 4 ściany")
+        XCTAssertGreaterThan(maximum, 0, "scena mieszana ma kontakty, więc diagnostyka musi raportować kandydatów")
+        XCTAssertLessThanOrEqual(maximum * 2, BubbleWorld.contactCandidateLimit,
+            "zmierzone maksimum \(maximum) bez dwukrotnego zapasu względem k = \(BubbleWorld.contactCandidateLimit)")
+    }
 }

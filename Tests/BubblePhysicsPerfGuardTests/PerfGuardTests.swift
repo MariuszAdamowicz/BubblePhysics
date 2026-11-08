@@ -19,6 +19,12 @@ final class PerfGuardTests: XCTestCase {
             runs: 5, injectedSlowdown: slowdown, measure: measure)
     }
 
+    // P-B-65: strażnik zna scenę mieszaną i potrafi ją zmierzyć.
+    func testGuardKnowsStressAndMixedScenes() {
+        XCTAssertEqual(PerfGuard.scenes, ["stress-300", "mixed"])
+        XCTAssertNoThrow(try PerfGuardOptions.parse(["--record", "mixed"]))
+    }
+
     func testMedianOfFiveIgnoresSingleOutlierRun() {
         XCTAssertEqual(PerfGuard.median([8, 100, 8, 9, 7]), 8)
         XCTAssertEqual(PerfGuard.median([5, 1, 3]), 3)

@@ -228,6 +228,18 @@ package enum Stress300Scene {
     }
 }
 
+/// Scena mieszana (zaślepka zadania 31): 200 baniek, 60 brył, 10 więzów, 5 kinematycznych. Właściwa scena w zadaniu 32.
+package enum MixedScene {
+    package static func configuration() throws -> WorldConfiguration {
+        try WorldConfiguration(simulationRegion: WorldRectangle(min: [0, 0], max: [375, 700]), fixedTimeStep: 1.0 / 60)
+    }
+
+    package static func initialTransaction() throws -> WorldTransaction { WorldTransaction() }
+
+    /// Transakcja kroku `step` (numer od 0) albo `nil`, gdy nic się nie zmienia.
+    package static func stepTransaction(step: Int) throws -> WorldTransaction? { nil }
+}
+
 private enum StressBenchmarkError: Error { case metalUnavailable }
 
 private struct StressLCG {

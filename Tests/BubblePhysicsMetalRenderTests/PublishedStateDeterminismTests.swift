@@ -25,15 +25,8 @@ final class PublishedStateDeterminismTests: XCTestCase {
         }
     }
 
-    private func run(steps: Int, device: MTLDevice) async throws -> Run {
-        let world = try BubbleWorld.makeBenchmarkWorld(configuration: try Stress300Scene.configuration(),
-            device: device, solverIterationLimit: 4)
-        world.submit(try Stress300Scene.initialTransaction())
-        var frame = WorldFrame(transactionReceipts: [], events: [])
-        for index in 0..<steps {
-            if index > 0 { world.submit(try Stress300Scene.triangleReplacement(step: index)) }
-            frame = await world.advance(by: 1.0 / 60)
-        }
+    /// Hash bitów stanu wszystkich obiektów klatki, posortowanych po `ObjectID`.
+    private func hashObjects(_ frame: WorldFrame) -> UInt64 {
         var objectHash: UInt64 = 0xCBF2_9CE4_8422_2325
         for id in frame.objects.keys.sorted(by: { $0.rawValue < $1.rawValue }) {
             guard let object = frame.objects[id] else { continue }
@@ -50,6 +43,19 @@ final class PublishedStateDeterminismTests: XCTestCase {
                    object.bounds.min.x, object.bounds.min.y, object.bounds.max.x, object.bounds.max.y]
                     .map(\.bitPattern), into: &objectHash)
         }
+        return objectHash
+    }
+
+    private func run(steps: Int, device: MTLDevice) async throws -> Run {
+        let world = try BubbleWorld.makeBenchmarkWorld(configuration: try Stress300Scene.configuration(),
+            device: device, solverIterationLimit: 4)
+        world.submit(try Stress300Scene.initialTransaction())
+        var frame = WorldFrame(transactionReceipts: [], events: [])
+        for index in 0..<steps {
+            if index > 0 { world.submit(try Stress300Scene.triangleReplacement(step: index)) }
+            frame = await world.advance(by: 1.0 / 60)
+        }
+        let objectHash = hashObjects(frame)
         var hash: UInt64 = 0xCBF2_9CE4_8422_2325
         let contours = world.debugContourSnapshot()
         for id in contours.keys.sorted(by: { $0.rawValue < $1.rawValue }) {
@@ -161,5 +167,60 @@ final class PublishedStateDeterminismTests: XCTestCase {
         for index in 0..<step {
             XCTAssertEqual(first.hashes[index], second.hashes[index], "stan po kroku \(index + 1) różni się, a przepełnienia jeszcze nie było")
         }
+    }
+
+    // MARK: - Scena mieszana (P-B-65, G10-AC5)
+
+    private struct MixedRun {
+        var hashes: [UInt64] = []
+        var overflow: [Int] = []
+        var frame = WorldFrame(transactionReceipts: [], events: [])
+    }
+
+    private func mixedRun(steps: Int, device: MTLDevice) async throws -> MixedRun {
+        let world = try BubbleWorld.makeBenchmarkWorld(configuration: try MixedScene.configuration(),
+            device: device, solverIterationLimit: 4)
+        world.submit(try MixedScene.initialTransaction())
+        var run = MixedRun()
+        for index in 0..<steps {
+            if let transaction = try MixedScene.stepTransaction(step: index) { world.submit(transaction) }
+            run.frame = await world.advance(by: 1.0 / 60)
+            run.hashes.append(hashObjects(run.frame))
+            run.overflow.append(world.diagnostics.contactCandidateOverflow)
+        }
+        return run
+    }
+
+    /// Dwa przebiegi sceny mieszanej po 300 kroków dają identyczny stan obiektów w każdym kroku aż do pierwszego
+    /// wzrostu licznika przepełnienia; od niego porównanie jest zwolnione (P-B-64). Bez przepełnienia porównuje się wszystko.
+    func testMixedScenePublishedStateIsIdenticalAcrossTwoRunsOf300Steps() async throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let first = try await mixedRun(steps: 300, device: device)
+        let second = try await mixedRun(steps: 300, device: device)
+        XCTAssertEqual(first.frame.stepIndex, 300)
+        XCTAssertEqual(second.frame.stepIndex, 300)
+        // 200 baniek, 60 brył (55 dynamicznych i 5 kinematycznych belek) i 4 ściany.
+        XCTAssertEqual(first.frame.objects.count, 264)
+        XCTAssertEqual(second.frame.objects.count, 264)
+        var circles = 0, capsules = 0, polygons = 0, bubbles = 0
+        for object in first.frame.objects.values {
+            switch object.kind {
+            case .bubble: bubbles += 1
+            case .circle: circles += 1
+            case .capsule: capsules += 1
+            case .polygon: polygons += 1
+            }
+        }
+        XCTAssertEqual(bubbles, 200)
+        XCTAssertGreaterThan(circles, 0)
+        XCTAssertGreaterThan(capsules, 0)
+        XCTAssertGreaterThan(polygons, 4 + 5, "ściany, belki i wielokąty dynamiczne")
+        let overflowStep = [firstOverflowStep(first.overflow), firstOverflowStep(second.overflow)].compactMap { $0 }.min()
+        let compared = overflowStep ?? 300
+        for index in 0..<compared {
+            XCTAssertEqual(first.hashes[index], second.hashes[index],
+                "stan sceny mieszanej po kroku \(index + 1) różni się, a przepełnienia jeszcze nie było")
+        }
+        XCTAssertNotEqual(first.hashes[0], first.hashes[299], "scena mieszana musi się ruszać")
     }
 }
