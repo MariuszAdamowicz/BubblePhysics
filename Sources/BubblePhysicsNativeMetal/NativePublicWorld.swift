@@ -71,6 +71,14 @@ struct NativePublicSettings: Equatable, Sendable {
     var staticPolygonMaterials: [ObjectID: PhysicsMaterial] = [:]
 }
 
+/// Nieuporządkowana para obiektów w kontakcie; `first` ma mniejszy `rawValue`.
+struct ContactPairKey: Hashable, Comparable {
+    let first: UInt64
+    let second: UInt64
+    init(_ a: ObjectID, _ b: ObjectID) { (first, second) = a.rawValue <= b.rawValue ? (a.rawValue, b.rawValue) : (b.rawValue, a.rawValue) }
+    static func < (l: Self, r: Self) -> Bool { (l.first, l.second) < (r.first, r.second) }
+}
+
 /// Adapter używa trwałego solvera; pełna publikacja następuje dopiero po powodzeniu GPU.
 @MainActor
 package final class NativePublicWorld {
@@ -78,6 +86,8 @@ package final class NativePublicWorld {
     private var polygons: [ObjectID: (geometry: PolygonGeometry, position: WorldPoint, rotation: Float, segments: [NativeSolverSegment])] = [:]
     private var nextSegmentID = 1
     private var publishedProfile: NativeMetalFrameProfile?
+    /// Pary z zainteresowaniem kontaktem, które stykały się po ostatnim opublikowanym kroku.
+    private var contactHistory: Set<ContactPairKey> = []
 
     package init(device: MTLDevice, configuration: NativeMetalConfiguration = .default) throws {
         solver = try NativeMetalSolver(device: device, configuration: configuration)
@@ -232,7 +242,20 @@ package final class NativePublicWorld {
                 append(.didWrap(descriptor.id))
             }
         }
+        let interested = Set(objects.compactMap { object -> ObjectID? in
+            let interest: EventInterest
+            switch object.descriptor {
+            case .bubble(let b): interest = b.eventInterest
+            case .polygon(let p): interest = p.eventInterest
+            default: return nil
+            }
+            return interest.contains(.contact) ? object.descriptor.id : nil
+        })
+        let transitions = contactTransitions(bubbleContacts: frame.contacts, segmentOwners: segmentOwners,
+            rigidContacts: solver.publishedRigidContacts, interested: interested, duration: Double(dt))
+        for event in transitions.events { append(event) }
         solver.acknowledgePublication()
+        contactHistory = transitions.pairs
         polygons = candidatePolygons
         nextSegmentID = candidateNextSegmentID
         publishedProfile = frame.profile
@@ -240,5 +263,54 @@ package final class NativePublicWorld {
             contacts: contacts, events: discreteEvents, eventOverflow: WorldEventOverflow(droppedCount: dropped),
             contactCandidateOverflowCount: frame.contactCandidateOverflowCount,
             maximumContactCandidatesPerObject: frame.maximumContactCandidatesPerObject)
+    }
+
+    /// Przejścia kontaktu pary w jednym kroku. Cache baniek i wiersze brył są już odczytane na CPU, więc początek to para
+    /// bez kontaktu w poprzednim kroku, a koniec to para z poprzedniego kroku bez kontaktu teraz (w tym z usuniętym
+    /// obiektem). Bez atomików i bez słownika w kolejności wyjścia: pary idą posortowane po kluczu, a sumy w kolejności
+    /// rekordów, więc wynik jest deterministyczny. Para wchodzi do historii tylko z zainteresowaniem kontaktem.
+    /// Punkt jest średnią ważoną wnikaniem, normalna znormalizowaną sumą (od mniejszego `ObjectID` do większego),
+    /// a impuls sumą mnożników podzieloną przez krok.
+    private func contactTransitions(bubbleContacts: [NativeSolverContact], segmentOwners: [Int: ObjectID],
+                                    rigidContacts: [NativeRigidPolygonState.ContactRecord], interested: Set<ObjectID>,
+                                    duration: Double) -> (events: [WorldEvent], pairs: Set<ContactPairKey>) {
+        guard !interested.isEmpty || !contactHistory.isEmpty else { return ([], []) }
+        struct Sum { var point = SIMD2<Float>.zero, weight: Float = 0, normal = SIMD2<Float>.zero, impulse: Float = 0 }
+        var sums: [ContactPairKey: Sum] = [:]
+        func add(_ first: ObjectID, _ second: ObjectID, point: WorldPoint, normalFromFirst: WorldPoint,
+                 weight: Float, impulse: Float) {
+            guard interested.contains(first) || interested.contains(second) else { return }
+            let key = ContactPairKey(first, second)
+            let normal = key.first == first.rawValue ? normalFromFirst : -normalFromFirst
+            var sum = sums[key, default: Sum()]
+            sum.point += point * weight; sum.weight += weight; sum.normal += normal; sum.impulse += impulse
+            sums[key] = sum
+        }
+        func objectID(_ value: Int) -> ObjectID { ObjectID(rawValue: UInt64(bitPattern: Int64(value))) }
+        let step = Float(duration)
+        for contact in bubbleContacts {
+            let first = objectID(contact.bubbleA.rawValue)
+            guard let second = contact.bubbleB.map({ objectID($0.rawValue) }) ?? contact.segment.flatMap({ segmentOwners[$0] })
+            else { continue }
+            // Normalna w cache: bańka–bańka od A do B, bańka–odcinek od odcinka do bańki A.
+            add(first, second, point: contact.pointQ, normalFromFirst: contact.bubbleB == nil ? -contact.normal : contact.normal,
+                weight: max(contact.penetration, 0) + 1e-4, impulse: contact.accumulatedCompression / step)
+        }
+        for record in rigidContacts {
+            add(record.first, record.second, point: record.point, normalFromFirst: record.normal,
+                weight: 1, impulse: record.impulseSum / step)
+        }
+        let current = Set(sums.keys)
+        var events: [WorldEvent] = []
+        for key in sums.keys.sorted() where !contactHistory.contains(key) {
+            let sum = sums[key]!
+            let length = sum.normal.euclideanLength
+            events.append(.contactBegan(ObjectID(rawValue: key.first), ObjectID(rawValue: key.second),
+                point: sum.point / sum.weight, normal: length > 0 ? sum.normal / length : .zero, impulse: sum.impulse))
+        }
+        for key in contactHistory.sorted() where !current.contains(key) {
+            events.append(.contactEnded(ObjectID(rawValue: key.first), ObjectID(rawValue: key.second)))
+        }
+        return (events, current)
     }
 }

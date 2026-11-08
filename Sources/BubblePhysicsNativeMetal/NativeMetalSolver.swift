@@ -240,6 +240,8 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
     private let rigidState: NativeRigidPolygonState
     private(set) var publishedPolygons: [ObjectID: NativePublicObject] = [:]
     private(set) var publishedDriveContacts: [ObjectID: [DriveBlockingContact]] = [:]
+    /// Kontakty brył ostatniego kroku z sumą normalnych Δλ (zdarzenia kontaktu w `NativePublicWorld`).
+    private(set) var publishedRigidContacts: [NativeRigidPolygonState.ContactRecord] = []
     private(set) var removedPolygons: Set<ObjectID> = []
     private(set) var wrappedPolygons: Set<ObjectID> = []
     private(set) var cachedContacts: [NativeContactCacheRecord] = []
@@ -1070,11 +1072,13 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         frame.regionRemovals = Set(bubbles.indices.compactMap { records[$0].publicFlags.w == 1 ? bubbles[$0].id : nil })
         frame.regionWraps = Set(bubbles.indices.compactMap { records[$0].publicFlags.w == 2 ? bubbles[$0].id : nil })
         let rigidResult = try rigidState.completed()
-        let driveContacts = hasRigidBodies ? rigidState.driveContacts() : [:]
+        let rigidContacts = hasRigidBodies ? rigidState.contactRecords() : []
+        let driveContacts = NativeRigidPolygonState.driveContacts(of: rigidContacts)
         // Synchroniczna publikacja dopiero po pomyślnym wykonaniu i readbacku.
         rigidState.publish(rigidResult.objects)
         publishedPolygons = rigidResult.objects
         publishedDriveContacts = driveContacts
+        publishedRigidContacts = rigidContacts
         removedPolygons = rigidResult.removed
         wrappedPolygons = rigidResult.wrapped
         state.publish()

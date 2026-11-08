@@ -614,6 +614,8 @@ kernel void nativeRigidContacts(device NativeRigidBody *bodies [[buffer(0)]],
     float ca=nativeCross(ra,n),cb=nativeCross(rb,n),denom=wa+wb+ia*ca*ca+ib*cb*cb;
     if(depth < -0.001f || denom<=FLT_MIN){corrections[index]=result;return;}
     float lambda=max(0.0f,depth)/denom*0.5f;
+    // Suma normalnych Δλ z iteracji (impuls zdarzenia kontaktu); wiersz należy do tego wątku, więc bez atomików.
+    rows[index].metadata.w=as_type<uint>(as_type<float>(rows[index].metadata.w)+lambda);
     // Nieużywane lane'y w przenoszą geometrię ciągłego feedbacku bez drugiego solve/readbacku.
     result.first=float4(-n*wa*lambda,-ca*ia*lambda,n.x);
     result.second=float4(n*wb*lambda,cb*ib*lambda,n.y);

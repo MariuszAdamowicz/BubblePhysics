@@ -391,9 +391,11 @@ kernel void nativeRigidPredict(device NativeRigidBody *bodies [[buffer(0)]],
         }
     }
     if(crossed){
+        float closing=max(0.0f,-dot(b.motion.xy,contactNormal));
+        float stopped=b.physical.x>0 ? closing/b.physical.x*dt : 0.0f;
         b.pose.xyz=start;b.motion.xyz=0;
         for(uint j=0;j<counts.x;++j)if(j!=index && bodies[j].flags.x && bodies[j].identity.x==ulong(contactOwner)){
-            walls[index]=NativeRigidWall{long2(long(b.identity.x),long(contactOwner)),float4(contactNormal,contactPoint)};
+            walls[index]=NativeRigidWall{long2(long(b.identity.x),long(contactOwner)),float4(contactNormal,contactPoint),float4(stopped,0,0,0)};
             break;
         }
     }

@@ -134,7 +134,7 @@ final class NativeRigidPolygonState {
         _ = try buffer("contacts", count: rowCapacity, stride: 64)
         _ = try buffer("candidates", count: rowCapacity, stride: 32)
         _ = try buffer("rowCounts", count: count, stride: MemoryLayout<SIMD2<UInt32>>.stride)
-        _ = try buffer("walls", count: count, stride: 32)
+        _ = try buffer("walls", count: count, stride: 48)
         let control = try buffer("control", count: 1, stride: 16)
         control.contents().storeBytes(of: SIMD4(UInt32(count), UInt32(bubbleCount), UInt32(limit), 0), as: SIMD4<UInt32>.self)
         records = []; changes = []; remaps = []
@@ -253,20 +253,25 @@ final class NativeRigidPolygonState {
         geometryCache = geometryCache.filter { objects[$0.key] != nil }
     }
 
+    /// Kontakt pary z bryłą w ostatnim kroku: normalna od `first` do `second`, suma normalnych Δλ z iteracji.
+    struct ContactRecord {
+        var first: ObjectID
+        var second: ObjectID
+        var point: WorldPoint
+        var normal: WorldPoint
+        var impulseSum: Float
+    }
+
     /// Geometria ostatniej iteracji GPU; nie przelicza kontaktów na CPU. Para trafia do wyniku raz: bańka–bryła z wiersza
     /// bryły, bryła–bryła z wiersza bryły o mniejszym indeksie, a kontakt ze ścianą z sondy `nativeRigidPredict` tylko
-    /// wtedy, gdy wiersze nie mają dla tej pary kontaktu.
-    func driveContacts() -> [ObjectID: [DriveBlockingContact]] {
+    /// wtedy, gdy wiersze nie mają dla tej pary kontaktu (jego odpowiednikiem sumy Δλ jest pęd zatrzymany przez sweep razy krok).
+    func contactRecords() -> [ContactRecord] {
         let limit = NativeMetalSolver.candidateLimitPerObject
         let counts = rowCounts.contents().bindMemory(to: SIMD2<UInt32>.self, capacity: max(1, count))
         let keys = candidates.contents(), wallRecords = walls.contents()
         let values = contacts.contents().bindMemory(to: SIMD4<Float>.self, capacity: max(1, rowCapacity) * 4)
-        var result: [ObjectID: [DriveBlockingContact]] = [:]
+        var result: [ContactRecord] = []
         var emittedBodyPairs = Set<SIMD2<UInt64>>()
-        func append(_ first: ObjectID, _ second: ObjectID, point: WorldPoint, normal: WorldPoint) {
-            result[first, default: []].append(.init(objectID: second, point: point, normal: -normal))
-            result[second, default: []].append(.init(objectID: first, point: point, normal: normal))
-        }
         for body in 0..<count {
             for slot in 0..<Int(counts[body].x) {
                 let index = body * limit + slot
@@ -278,21 +283,34 @@ final class NativeRigidPolygonState {
                 let first = ObjectID(rawValue: UInt64(bitPattern: keys.load(fromByteOffset: index * 32, as: Int64.self)))
                 let second = ObjectID(rawValue: UInt64(bitPattern: keys.load(fromByteOffset: index * 32 + 8, as: Int64.self)))
                 if kind == 3 { emittedBodyPairs.insert(SIMD2(first.rawValue, second.rawValue)) }
-                append(first, second, point: point, normal: normal)
+                let impulse = Float(bitPattern: keys.load(fromByteOffset: index * 32 + 28, as: UInt32.self))
+                result.append(.init(first: first, second: second, point: point, normal: normal, impulseSum: impulse))
             }
         }
         let position = Dictionary(uniqueKeysWithValues: current.enumerated().map { ($0.element.object.descriptor.id, $0.offset) })
         for body in 0..<count {
-            let geometry = wallRecords.load(fromByteOffset: body * 32 + 16, as: SIMD4<Float>.self)
+            let geometry = wallRecords.load(fromByteOffset: body * 48 + 16, as: SIMD4<Float>.self)
             guard geometry.x != 0 || geometry.y != 0 else { continue }
             let id = current[body].object.descriptor.id
-            let owner = ObjectID(rawValue: UInt64(bitPattern: wallRecords.load(fromByteOffset: body * 32 + 8, as: Int64.self)))
+            let owner = ObjectID(rawValue: UInt64(bitPattern: wallRecords.load(fromByteOffset: body * 48 + 8, as: Int64.self)))
             guard let other = position[owner] else { continue }
             // Normalna pary jest liczona od bryły o mniejszym indeksie.
             let first = body < other ? id : owner, second = body < other ? owner : id
             guard emittedBodyPairs.insert(SIMD2(first.rawValue, second.rawValue)).inserted else { continue }
             let wallNormal = WorldPoint(geometry.x, geometry.y)
-            append(first, second, point: WorldPoint(geometry.z, geometry.w), normal: body < other ? -wallNormal : wallNormal)
+            let stopped = wallRecords.load(fromByteOffset: body * 48 + 32, as: Float.self)
+            result.append(.init(first: first, second: second, point: WorldPoint(geometry.z, geometry.w),
+                                normal: body < other ? -wallNormal : wallNormal, impulseSum: stopped))
+        }
+        return result
+    }
+
+    /// Kontakty dla `MotionControllers`: normalna każdego obiektu wskazuje od partnera do niego.
+    static func driveContacts(of records: [ContactRecord]) -> [ObjectID: [DriveBlockingContact]] {
+        var result: [ObjectID: [DriveBlockingContact]] = [:]
+        for record in records {
+            result[record.first, default: []].append(.init(objectID: record.second, point: record.point, normal: -record.normal))
+            result[record.second, default: []].append(.init(objectID: record.first, point: record.point, normal: record.normal))
         }
         return result
     }

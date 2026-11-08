@@ -34,7 +34,8 @@ struct NativeRigidBody {
 };
 struct NativeRigidCorrection { float4 first; float4 second; float4 velocityFirst; float4 velocitySecond; };
 // Ostatni kontakt bryły ze ścianą, zatrzymany przez sweep w nativeRigidPredict; para (bryła, właściciel ściany).
-struct NativeRigidWall { long2 participants; float4 geometry; };
+// `extra.x` to normalny pęd zatrzymany przez sweep (masa · prędkość zbliżania) razy krok, czyli w skali sumy Δλ.
+struct NativeRigidWall { long2 participants; float4 geometry; float4 extra; };
 struct NativeStructuralHeader { uint4 range; float4 origin; };
 struct NativeStructuralSource { ulong2 identity; float4 geometry; uint4 clips; };
 struct NativeStructuralContourControl { uint4 counts; float4 shape; };
@@ -273,6 +274,7 @@ kernel void nativeEmitCandidates(device NativeBubble *bubbles [[buffer(0)]],
 // (rodzaj 2 = bańka–bryła, rodzaj 3 = bryła–bryła; para brył trafia do wierszy obu brył z tą samą kolejnością a < b).
 // Testy zasięgu to dokładnie te z nativeRigidContacts, poszerzone o zapas, bo wiersze powstają raz na krok,
 // a poza listą nie ma już par, które kernel kontaktów sprawdzałby w każdej iteracji.
+// `metadata.w` to bity float: suma normalnych Δλ z iteracji (zeruje ją ten kernel, dopisuje nativeRigidContacts).
 kernel void nativeRigidEmitCandidates(device NativeRigidBody *bodies [[buffer(0)]],
     device NativeBubble *bubbles [[buffer(1)]], device float4 *positions [[buffer(2)]],
     constant uint4 &counts [[buffer(3)]], device NativeCandidate *rows [[buffer(4)]],
@@ -293,7 +295,7 @@ kernel void nativeRigidEmitCandidates(device NativeRigidBody *bodies [[buffer(0)
             float reach = 1.5f * a.physical.z;
             float2 bubbleLow = min(center, a.position.zw) - reach, bubbleHigh = max(center, a.position.zw) + reach;
             if (any(bubbleHigh < bodyLow) || any(bodyHigh < bubbleLow)) continue;
-            NativeCandidate candidate = { long2(a.identity.x, long(b.identity.x)), uint4(2, ai, index, 1) };
+            NativeCandidate candidate = { long2(a.identity.x, long(b.identity.x)), uint4(2, ai, index, 0) };
             nativeInsertCandidate(row, count, dropped, limit, candidate);
         }
     }
@@ -309,7 +311,7 @@ kernel void nativeRigidEmitCandidates(device NativeRigidBody *bodies [[buffer(0)
         float radius = 1.25f * (a.physical.z + c.physical.z);
         float2 closest = start + t * travel;
         if (!(dot(closest, closest) <= radius * radius)) continue;
-        NativeCandidate candidate = { long2(long(a.identity.x), long(c.identity.x)), uint4(3, low, high, 1) };
+        NativeCandidate candidate = { long2(long(a.identity.x), long(c.identity.x)), uint4(3, low, high, 0) };
         nativeInsertCandidate(row, count, dropped, limit, candidate);
     }
     uint bubbleCount = 0;

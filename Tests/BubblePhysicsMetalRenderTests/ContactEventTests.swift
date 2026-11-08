@@ -20,7 +20,7 @@ final class ContactEventTests: XCTestCase {
 
     /// Dokładnie jeden początek pary (x, y), z poprawnym punktem, normalną i impulsem, bez końca i bez powtórzeń.
     private func assertSingleBegan(_ events: [WorldEvent], _ frame: WorldFrame, pair x: UInt64, _ y: UInt64,
-                                   file: StaticString = #filePath, line: UInt = #line) throws {
+                                   normalHint: WorldPoint? = nil, file: StaticString = #filePath, line: UInt = #line) throws {
         let began = B.began(events).filter { B.isPair($0.a, $0.b, x, y) }
         XCTAssertEqual(began.count, 1, "contactBegan pary \(x)-\(y) ma być dokładnie jeden", file: file, line: line)
         XCTAssertTrue(B.ended(events).filter { B.isPair($0.0, $0.1, x, y) }.isEmpty,
@@ -31,7 +31,8 @@ final class ContactEventTests: XCTestCase {
         XCTAssertTrue(event.impulse.isFinite, file: file, line: line)
         let first = try XCTUnwrap(frame.objects[event.a], file: file, line: line)
         let second = try XCTUnwrap(frame.objects[event.b], file: file, line: line)
-        let direction = simd_normalize(second.position - first.position)
+        // Szeroka podłoga ma środek z boku od bańki, więc dla niej kierunek od pierwszego do drugiego podaje test.
+        let direction = normalHint ?? simd_normalize(second.position - first.position)
         XCTAssertGreaterThan(simd_dot(event.normal, direction), 0.7, "normalna od pierwszego obiektu do drugiego", file: file, line: line)
         let low = simd_min(first.bounds.min, second.bounds.min), high = simd_max(first.bounds.max, second.bounds.max)
         XCTAssertTrue(event.point.x >= low.x - 1 && event.point.x <= high.x + 1 && event.point.y >= low.y - 1
@@ -43,7 +44,7 @@ final class ContactEventTests: XCTestCase {
         world.submit(try B.baseTransaction().add(floor())
             .add(B.bubble(1, at: [150, 18.3], interest: .contact)))
         let result = await B.advance(world, steps: 90)
-        try assertSingleBegan(result.events, result.frame, pair: 1, floorID)
+        try assertSingleBegan(result.events, result.frame, pair: 1, floorID, normalHint: [0, -1])
     }
 
     func testBeganBubbleAndBubble() async throws {
@@ -69,9 +70,9 @@ final class ContactEventTests: XCTestCase {
     func testBeganDynamicPolygonAndStaticPolygon() async throws {
         let world = try world()
         world.submit(try B.baseTransaction().add(floor())
-            .add(B.box(1, at: [150, 15.3], half: [15, 5], role: .dynamic, interest: .contact)))
+            .add(B.box(1, at: [150, 15.15], half: [15, 5], role: .dynamic, interest: .contact)))
         let result = await B.advance(world, steps: 90)
-        try assertSingleBegan(result.events, result.frame, pair: 1, floorID)
+        try assertSingleBegan(result.events, result.frame, pair: 1, floorID, normalHint: [0, -1])
     }
 
     func testBeganDynamicPolygonAndDynamicPolygon() async throws {
