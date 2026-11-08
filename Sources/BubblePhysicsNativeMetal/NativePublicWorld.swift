@@ -58,7 +58,7 @@ struct NativePublicProperties: Equatable, Sendable {
 }
 
 struct NativePublicSettings: Equatable, Sendable {
-    var properties: [ReferenceBubbleID: NativePublicProperties]
+    var properties: [NativeSolverBubbleID: NativePublicProperties]
     var region: WorldRectangle
     var rigidPolygons: [NativeRigidPolygonInput] = []
     var eventBufferCapacity = 1024
@@ -92,7 +92,7 @@ package final class NativePublicWorld {
         guard dt.isFinite, dt > 0, Double(dt) > 0 else { throw NativeMetalSolverError.invalidSnapshot }
         var world = ReferenceWorld(configuration: .init(timeStep: dt, linearDamping: 0, angularDamping: 0),
                                    broadPhase: BruteForceBroadPhase())
-        var properties: [ReferenceBubbleID: NativePublicProperties] = [:]
+        var properties: [NativeSolverBubbleID: NativePublicProperties] = [:]
         var candidatePolygons: [ObjectID: (geometry: PolygonGeometry, position: WorldPoint, rotation: Float, segments: [ReferenceSegment])] = [:]
         var candidateNextSegmentID = nextSegmentID
         var result = Dictionary(uniqueKeysWithValues: objects.map { ($0.descriptor.id, $0) })
@@ -113,7 +113,7 @@ package final class NativePublicWorld {
                 bubble.previousCenter = .init(x: object.previousPosition.x, y: object.previousPosition.y)
                 if object.motionRole == .static { bubble.inverseMass = 0 }
                 world.addBubble(bubble)
-                properties[id] = NativePublicProperties(
+                properties[NativeSolverBubbleID(rawValue: id.rawValue)] = NativePublicProperties(
                     flags: SIMD4(1, object.motionRole == .static ? 1 : 0, b.regionExitPolicy == .wrap ? 1 : 0, 0),
                     material: SIMD4(material.damping, material.deformability, object.rigidity, material.friction),
                     restitution: material.restitution,

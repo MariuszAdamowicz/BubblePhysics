@@ -1,4 +1,3 @@
-import BubblePhysicsReference
 import BubblePhysicsModel
 
 // ABI Swift/MSL: wyłącznie lane'y SIMD o wyrównaniu 16 bajtów.
@@ -13,7 +12,7 @@ struct NativeMetalBubble: Equatable, Sendable {
     var resources = SIMD2<UInt64>.zero
     var eventData = SIMD2<UInt64>.zero // interest, merge groups
 
-    init(_ bubble: ReferenceBubble) {
+    init(_ bubble: NativeSolverBubble) {
         identity = SIMD2(Int64(bubble.id.rawValue), 0)
         position = SIMD4(bubble.center.x, bubble.center.y, bubble.previousCenter.x, bubble.previousCenter.y)
         motion = SIMD4(bubble.velocity.x, bubble.velocity.y, bubble.rotation, bubble.angularVelocity)
@@ -21,10 +20,10 @@ struct NativeMetalBubble: Equatable, Sendable {
         deformation = .zero
     }
 
-    func unpack(into bubble: inout ReferenceBubble) {
-        bubble.center = .init(x: position.x, y: position.y)
-        bubble.previousCenter = .init(x: position.z, y: position.w)
-        bubble.velocity = .init(x: motion.x, y: motion.y)
+    func unpack(into bubble: inout NativeSolverBubble) {
+        bubble.center = SIMD2(position.x, position.y)
+        bubble.previousCenter = SIMD2(position.z, position.w)
+        bubble.velocity = SIMD2(motion.x, motion.y)
         bubble.rotation = motion.z
         bubble.angularVelocity = motion.w
     }
@@ -38,14 +37,14 @@ struct NativeMetalSegment: Equatable, Sendable {
     var velocity: SIMD4<Float>
     var collision: SIMD4<Float>
 
-    init(_ segment: ReferenceSegment) {
-        identity = SIMD2(Int64(segment.id.rawValue), Int64(segment.ownerID ?? 0))
-        flags = SIMD4(segment.motion == .kinematic ? 1 : 0, segment.ownerID == nil ? 0 : 1,
-                      segment.collisionMode.allowedSide == nil ? 0 : 1, 0)
+    init(_ segment: NativeSolverSegment) {
+        identity = SIMD2(Int64(segment.id), Int64(segment.ownerID ?? 0))
+        flags = SIMD4(segment.isKinematic ? 1 : 0, segment.ownerID == nil ? 0 : 1,
+                      segment.allowedSide == nil ? 0 : 1, 0)
         previous = SIMD4(segment.previousA.x, segment.previousA.y, segment.previousB.x, segment.previousB.y)
         current = SIMD4(segment.currentA.x, segment.currentA.y, segment.currentB.x, segment.currentB.y)
         velocity = SIMD4(segment.linearVelocity.x, segment.linearVelocity.y, segment.angularVelocity, 0)
-        collision = SIMD4(segment.collisionMode.allowedSide ?? 0, 0, 0, 0)
+        collision = SIMD4(segment.allowedSide ?? 0, 0, 0, 0)
     }
 }
 
@@ -170,28 +169,29 @@ struct NativeMetalSegmentRemap: Sendable {
 /// Pełne modele służą identyfikacji i readbackowi; pakowane są tylko zmiany CPU.
 /// Poprzedni snapshot musi należeć do ostatniej pomyślnie wykonanej klatki.
 struct NativeMetalSnapshot: Sendable {
-    let configuration: ReferenceConfiguration
-    var sourceBubbles: [ReferenceBubble]
-    let sourceSegments: [ReferenceSegment]
+    let configuration: NativeSolverConfiguration
+    var sourceBubbles: [NativeSolverBubble]
+    let sourceSegments: [NativeSolverSegment]
     let bubbleChanges: [NativeMetalBubbleChange]
     let bubbleRemaps: [NativeMetalBubbleRemap]
     let segmentChanges: [NativeMetalSegmentChange]
     let segmentRemaps: [NativeMetalSegmentRemap]
-    let previousBubbles: [ReferenceBubble]?
-    let previousSegments: [ReferenceSegment]?
+    let previousBubbles: [NativeSolverBubble]?
+    let previousSegments: [NativeSolverSegment]?
     let publicSettings: NativePublicSettings?
 
-    init(world: ReferenceWorld, previous: NativeMetalSnapshot? = nil, publicSettings: NativePublicSettings? = nil) {
+    init(input: NativeSolverInput, previous: NativeMetalSnapshot? = nil) {
+        let publicSettings = input.publicSettings
         self.publicSettings = publicSettings
-        configuration = world.configuration
-        sourceBubbles = world.bubbles
-        sourceSegments = world.segments
+        configuration = input.configuration
+        sourceBubbles = input.bubbles
+        sourceSegments = input.segments
         previousBubbles = previous?.sourceBubbles
         previousSegments = previous?.sourceSegments
         let previousByID = Dictionary(uniqueKeysWithValues: (previous?.sourceBubbles ?? []).enumerated().map {
             ($0.element.id, (index: $0.offset, bubble: $0.element))
         })
-        bubbleChanges = world.bubbles.enumerated().compactMap { index, bubble in
+        bubbleChanges = input.bubbles.enumerated().compactMap { index, bubble in
             let properties = publicSettings?.properties[bubble.id]
             guard previousByID[bubble.id]?.bubble != bubble || properties != previous?.publicSettings?.properties[bubble.id] else { return nil }
             var value = NativeMetalBubble(bubble)
@@ -204,7 +204,7 @@ struct NativeMetalSnapshot: Sendable {
             }
             return .init(index: index, value: value)
         }
-        bubbleRemaps = world.bubbles.enumerated().compactMap { index, bubble in
+        bubbleRemaps = input.bubbles.enumerated().compactMap { index, bubble in
             guard let existing = previousByID[bubble.id], existing.bubble == bubble,
                   existing.index != index else { return nil }
             return .init(sourceIndex: existing.index, destinationIndex: index)
@@ -212,11 +212,11 @@ struct NativeMetalSnapshot: Sendable {
         let previousSegmentsByID = Dictionary(uniqueKeysWithValues: (previous?.sourceSegments ?? []).enumerated().map {
             ($0.element.id, (index: $0.offset, segment: $0.element))
         })
-        func segmentMaterial(_ segment: ReferenceSegment, _ settings: NativePublicSettings?) -> PhysicsMaterial? {
+        func segmentMaterial(_ segment: NativeSolverSegment, _ settings: NativePublicSettings?) -> PhysicsMaterial? {
             guard let owner = segment.ownerID else { return nil }
             return settings?.staticPolygonMaterials[ObjectID(rawValue: UInt64(bitPattern: Int64(owner)))]
         }
-        segmentChanges = world.segments.enumerated().compactMap { index, segment in
+        segmentChanges = input.segments.enumerated().compactMap { index, segment in
             guard previousSegmentsByID[segment.id]?.segment != segment
                     || segmentMaterial(segment, publicSettings) != segmentMaterial(segment, previous?.publicSettings)
             else { return nil }
@@ -227,7 +227,7 @@ struct NativeMetalSnapshot: Sendable {
             }
             return .init(index: index, value: value)
         }
-        segmentRemaps = world.segments.enumerated().compactMap { index, segment in
+        segmentRemaps = input.segments.enumerated().compactMap { index, segment in
             guard let previous = previousSegmentsByID[segment.id], previous.segment == segment,
                   previous.index != index else { return nil }
             return .init(sourceIndex: previous.index, destinationIndex: index)

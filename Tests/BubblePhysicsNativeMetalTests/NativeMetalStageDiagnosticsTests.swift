@@ -27,16 +27,16 @@ final class NativeMetalStageDiagnosticsTests: XCTestCase {
             let stages = try XCTUnwrap(solver.stageDiagnostics)
             let cpuByID = Dictionary(uniqueKeysWithValues: cpu.frame.snapshot.bubbles.map { ($0.id, $0) })
             let gpuBubbles = gpu.frame.snapshot.bubbles
-            func normalizedDifference(_ positions: [ReferenceVector2]) -> Double {
+            func normalizedDifference(_ positions: [SIMD2<Float>]) -> Double {
                 Double(zip(gpuBubbles, positions).reduce(Float.zero) { total, pair in
                     guard let cpuBubble = cpuByID[pair.0.id] else { return total }
-                    return total + (cpuBubble.center - pair.1).length / pair.0.targetRadius
+                    return total + (cpuBubble.center - ReferenceVector2(x: pair.1.x, y: pair.1.y)).length / pair.0.targetRadius
                 }) / Double(gpuBubbles.count)
             }
             let postSolverDifference = normalizedDifference(stages.postSolverPositions)
             let postGuardDifference = normalizedDifference(stages.postGuardPositions)
             let guardDisplacement = Double(zip(stages.postSolverPositions, stages.postGuardPositions).reduce(Float.zero) {
-                $0 + ($1.0 - $1.1).length
+                $0 + ($1.0 - $1.1).euclideanLength
             }) / Double(gpuBubbles.count)
             maximumGuardDisplacement = max(maximumGuardDisplacement, guardDisplacement)
             if firstVisibleDivergence == nil, postGuardDifference > 0.05 {
@@ -47,8 +47,8 @@ final class NativeMetalStageDiagnosticsTests: XCTestCase {
         let stages = try XCTUnwrap(solver.stageDiagnostics)
         XCTAssertEqual(stages.postSolverPositions.count, 6)
         XCTAssertEqual(stages.postGuardPositions.count, 6)
-        XCTAssertTrue(stages.postSolverPositions.allSatisfy(\.isFinite))
-        XCTAssertTrue(stages.postGuardPositions.allSatisfy(\.isFinite))
+        XCTAssertTrue(stages.postSolverPositions.allSatisfy(\.isFiniteVector))
+        XCTAssertTrue(stages.postGuardPositions.allSatisfy(\.isFiniteVector))
 
         let divergence = try XCTUnwrap(firstVisibleDivergence)
         print("stage_diagnostics density=6 first_visible_divergence_frame=\(divergence.frame) post_solver_center_mean=\(divergence.postSolver) post_guard_center_mean=\(divergence.postGuard) guard_displacement_world_mean=\(divergence.guardDisplacement) maximum_guard_displacement_world_mean=\(maximumGuardDisplacement)")
