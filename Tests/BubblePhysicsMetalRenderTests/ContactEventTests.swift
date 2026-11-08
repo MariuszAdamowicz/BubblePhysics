@@ -155,6 +155,32 @@ final class ContactEventTests: XCTestCase {
         XCTAssertLessThanOrEqual(began, touch, "contactBegan nie później niż pierwszy krok styku")
     }
 
+    // P-B-12: bryła osiadająca z wysokości daje jeden początek i żadnego końca. Sweep `nativeRigidPredict` nie może
+    // zatrzymać jej nad podłogą (wtedy kontakt znika na krok i wraca, gdy bryła dopada resztę szczeliny).
+    func testBeganOnceWhenDynamicPolygonSettlesOntoStaticPolygonFromHeight() async throws {
+        let world = try world()
+        world.submit(try B.baseTransaction().add(floor())
+            .add(B.box(1, at: [150, 60], half: [15, 5], role: .dynamic, interest: .contact)))
+        var events: [WorldEvent] = []
+        var timeline: [String] = []
+        _ = await B.advance(world, steps: 120) { index, frame in
+            events += frame.events
+            if !B.began(frame.events).isEmpty { timeline.append("began@\(index)") }
+            if !B.ended(frame.events).isEmpty { timeline.append("ended@\(index)") }
+        }
+        XCTAssertEqual(B.began(events).filter { B.isPair($0.a, $0.b, 1, floorID) }.count, 1, "kolejność zdarzeń: \(timeline)")
+        XCTAssertTrue(B.ended(events).filter { B.isPair($0.0, $0.1, 1, floorID) }.isEmpty, "kolejność zdarzeń: \(timeline)")
+    }
+
+    func testBeganOnceWhenBubbleSettlesOntoDynamicPolygonFromHeight() async throws {
+        let world = try world()
+        world.submit(try B.baseTransaction().add(floor())
+            .add(B.box(2, at: [150, 15.3], half: [20, 5], role: .dynamic))
+            .add(B.bubble(1, at: [150, 80], interest: .contact)))
+        let result = await B.advance(world, steps: 150)
+        try assertSingleBegan(result.events, result.frame, pair: 1, 2)
+    }
+
     // P-B-12: impuls to Σλ / Δt. Dla bańki spadającej na podłogę leży między 0,3 a 1,2 prędkości zbliżania:
     // bez dzielenia przez krok byłby ok. 60 razy mniejszy, a dzielony przez krok drugi raz ok. 60 razy większy.
     func testBeganImpulseIsAccumulatedMultiplierDividedByTimeStep() async throws {
