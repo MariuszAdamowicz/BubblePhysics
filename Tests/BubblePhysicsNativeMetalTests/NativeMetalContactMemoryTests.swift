@@ -82,11 +82,11 @@ final class NativeMetalContactMemoryTests: XCTestCase {
         XCTAssertLessThanOrEqual(frame.maximumContactCandidatesPerObject, limit)
     }
 
-    // P-B-21: 300 baniek ściśniętych w kwadracie 15×15 daje każdej z pierwszych baniek ponad k sąsiadów.
+    // P-B-21: 300 baniek ściśniętych w kwadracie 6×6 daje każdej z pierwszych baniek ponad k sąsiadów.
     func testForcedOverflowRaisesCounterPublishesFrameAndStaysFinite() async throws {
         let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         var random = LCG()
-        let squeezed = try (0..<300).map { try bubble(UInt64($0 + 1), [100 + random.next() * 15, 100 + random.next() * 15], radius: 2) }
+        let squeezed = try (0..<300).map { try bubble(UInt64($0 + 1), [100 + random.next() * 6, 100 + random.next() * 6], radius: 2) }
         var frame = try await step(world, squeezed)
         XCTAssertGreaterThan(frame.contactCandidateOverflowCount, 0, "przepełnienie k = \(limit) musi zwiększyć licznik")
         XCTAssertGreaterThanOrEqual(frame.maximumContactCandidatesPerObject, limit)

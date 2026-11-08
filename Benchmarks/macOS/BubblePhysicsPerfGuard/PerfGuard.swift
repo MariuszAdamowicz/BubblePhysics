@@ -126,8 +126,8 @@ struct PerfGuardOptions: Equatable {
 }
 
 enum PerfGuard {
-    /// Sceny, które strażnik umie zmierzyć. Scena mieszana dojdzie z etapem 3.
-    static let scenes = ["stress-300"]
+    /// Sceny, które strażnik umie zmierzyć.
+    static let scenes = ["stress-300", "mixed"]
     /// Dopuszczalne pogorszenie względem punktu odniesienia (G12-AC3).
     static let regressionTolerance = 0.10
     /// Liczby obiektów porównywane przy skalowaniu CPU.
@@ -203,13 +203,20 @@ enum PerfGuard {
         return result(measured <= limit + 1e-9, point.p95Milliseconds, detail)
     }
 
-    /// Jeden przebieg stress-300 przez `BubbleWorld` i bezpośredni renderer; zwraca p95 pełnej klatki.
+    /// Skrót dla `stress-300`.
     @MainActor
     static func measureStress300(device: MTLDevice, warmupFrames: Int, measuredFrames: Int) async throws -> Double {
-        let report = try await PublicWorldStressBenchmark.run(device: device, warmupFrames: warmupFrames,
-            measuredFrames: measuredFrames, progress: { _, _ in })
+        try await measureScene(.stress300, device: device, warmupFrames: warmupFrames, measuredFrames: measuredFrames)
+    }
+
+    /// Jeden przebieg sceny przez `BubbleWorld` i bezpośredni renderer; zwraca p95 pełnej klatki.
+    @MainActor
+    static func measureScene(_ scene: PublicWorldStressBenchmark.Scene, device: MTLDevice, warmupFrames: Int,
+                             measuredFrames: Int) async throws -> Double {
+        let report = try await PublicWorldStressBenchmark.run(device: device, scene: scene,
+            warmupFrames: warmupFrames, measuredFrames: measuredFrames, progress: { _, _ in })
         guard report.safetyPassed else {
-            throw PerfGuardError.unsafeRun("stress-300: nieudane klatki=\(report.failedFrames), wartości nieskończone=\(report.nonFiniteFrames), odczyty konturów=\(report.contourCPUReadbacks)")
+            throw PerfGuardError.unsafeRun("\(scene.name): nieudane klatki=\(report.failedFrames), wartości nieskończone=\(report.nonFiniteFrames), odczyty konturów=\(report.contourCPUReadbacks)")
         }
         return report.p95Milliseconds
     }
@@ -237,6 +244,9 @@ enum PerfGuard {
         switch scene {
         case "stress-300":
             return try await measureStress300(device: device, warmupFrames: options.warmupFrames,
+                measuredFrames: options.measuredFrames)
+        case "mixed":
+            return try await measureScene(.mixed, device: device, warmupFrames: options.warmupFrames,
                 measuredFrames: options.measuredFrames)
         default: throw PerfGuardOptions.ParseError.invalidArgument(scene)
         }

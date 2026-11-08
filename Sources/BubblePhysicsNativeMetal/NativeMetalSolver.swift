@@ -253,8 +253,8 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
     private(set) var publishedContourCPUReadbackCount = 0
     private(set) var stageDiagnostics: NativeMetalStageDiagnostics?
 
-    /// Limit k kandydatów kontaktu na obiekt, wspólny dla baniek, odcinków i brył (pomiar zadania 14: k = 48).
-    package static let candidateLimitPerObject = 48
+    /// Limit k kandydatów kontaktu na obiekt, wspólny dla baniek, odcinków i brył (zadanie 14: k = 48; zadanie 32: k = 128, bo wiersz statycznej ściany scena mieszana wypełnia wszystkimi bryłami w zasięgu).
+    package static let candidateLimitPerObject = 128
 
     /// Suma długości buforów związanych z kontaktami; 0 przed pierwszym krokiem.
     var contactMemoryBytes: Int {

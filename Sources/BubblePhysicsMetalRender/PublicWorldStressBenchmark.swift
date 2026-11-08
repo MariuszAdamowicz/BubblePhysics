@@ -1,9 +1,12 @@
 import BubblePhysics
 import Metal
 import Foundation
+import simd
 
 /// Wynik kompletnej ścieżki publicznego świata i bezpośredniego renderera.
 public struct PublicWorldStressReport: Sendable {
+    /// Nazwa zmierzonej sceny: `stress-300` albo `mixed`.
+    public let scene: String
     public let deviceName: String
     public let warmupFrames: Int
     public let measuredFrames: Int
@@ -36,7 +39,7 @@ public struct PublicWorldStressReport: Sendable {
         """
         path=public BubbleWorld + BubblePhysicsMetalRender, same command buffer
         device=\(deviceName)
-        scene=stress-300; solver_iteration_limit=\(solverIterationLimit)
+        scene=\(scene); solver_iteration_limit=\(solverIterationLimit)
         warmup=\(warmupFrames); measured=\(measuredFrames)
         p95_ms=\(String(format: "%.4f", p95Milliseconds)); max_ms=\(String(format: "%.4f", maximumMilliseconds))
         gpu_p95_ms=\(String(format: "%.4f", gpuP95Milliseconds)); host_non_gpu_p95_ms=\(String(format: "%.4f", hostNonGPUP95Milliseconds))
@@ -65,16 +68,66 @@ public enum PublicWorldStressBenchmark {
         try await run(device: device, warmupFrames: 30, measuredFrames: 300, progress: progress)
     }
 
-    package static func run(device: MTLDevice, bubbleCount: Int = Stress300Scene.defaultBubbleCount,
+    /// Scena mierzona przez `run(scene:)`.
+    package enum Scene: Equatable, Sendable {
+        case stress(bubbleCount: Int)
+        case mixed
+
+        package static let stress300 = Scene.stress(bubbleCount: Stress300Scene.defaultBubbleCount)
+
+        package var name: String {
+            switch self {
+            case .stress(let count): return count == Stress300Scene.defaultBubbleCount ? "stress-300" : "stress-\(count)"
+            case .mixed: return "mixed"
+            }
+        }
+
+        var regionHeight: Float {
+            switch self {
+            case .stress(let count): return Stress300Scene.regionHeight(bubbleCount: count)
+            case .mixed: return MixedScene.regionHeight
+            }
+        }
+
+        func configuration() throws -> WorldConfiguration {
+            switch self {
+            case .stress(let count): return try Stress300Scene.configuration(bubbleCount: count)
+            case .mixed: return try MixedScene.configuration()
+            }
+        }
+
+        func initialTransaction() throws -> WorldTransaction {
+            switch self {
+            case .stress(let count): return try Stress300Scene.initialTransaction(bubbleCount: count)
+            case .mixed: return try MixedScene.initialTransaction()
+            }
+        }
+
+        /// Transakcja przed krokiem `step` (numer od 0) albo `nil`, gdy scena nic wtedy nie zmienia.
+        func stepTransaction(step: Int) throws -> WorldTransaction? {
+            switch self {
+            case .stress: return step > 0 ? try Stress300Scene.triangleReplacement(step: step) : nil
+            case .mixed: return try MixedScene.stepTransaction(step: step)
+            }
+        }
+    }
+
+    package static func run(device: MTLDevice, bubbleCount: Int, warmupFrames: Int, measuredFrames: Int,
+                            progress: @escaping @MainActor (Int, Int) -> Void) async throws
+        -> PublicWorldStressReport {
+        try await run(device: device, scene: .stress(bubbleCount: bubbleCount), warmupFrames: warmupFrames,
+                      measuredFrames: measuredFrames, progress: progress)
+    }
+
+    package static func run(device: MTLDevice, scene: Scene = .stress300,
                             warmupFrames: Int, measuredFrames: Int,
                             progress: @escaping @MainActor (Int, Int) -> Void) async throws
         -> PublicWorldStressReport {
-        let height = Stress300Scene.regionHeight(bubbleCount: bubbleCount)
-        let configuration = try Stress300Scene.configuration(bubbleCount: bubbleCount)
-        let world = try BubbleWorld.makeBenchmarkWorld(configuration: configuration,
+        let height = scene.regionHeight
+        let world = try BubbleWorld.makeBenchmarkWorld(configuration: try scene.configuration(),
             device: device, solverIterationLimit: 4)
         let renderer = try BubblePhysicsMetalRender(device: device)
-        world.submit(try Stress300Scene.initialTransaction(bubbleCount: bubbleCount))
+        world.submit(try scene.initialTransaction())
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm,
             width: 375, height: Int(height.rounded(.up)), mipmapped: false)
         descriptor.usage = .renderTarget
@@ -98,9 +151,7 @@ public enum PublicWorldStressBenchmark {
         let total = warmupFrames + measuredFrames
         for index in 0..<total {
             try Task.checkCancellation()
-            if index > 0 {
-                world.submit(try Stress300Scene.triangleReplacement(step: index))
-            }
+            if let transaction = try scene.stepTransaction(step: index) { world.submit(transaction) }
             guard let command = queue.makeCommandBuffer() else { throw StressBenchmarkError.metalUnavailable }
             let start = DispatchTime.now().uptimeNanoseconds
             let frame = await world.advance(by: 1.0 / 60, commandBuffer: command) {
@@ -138,7 +189,7 @@ public enum PublicWorldStressBenchmark {
         }
         measured.sort()
         let frameP95 = p95(measured)
-        return PublicWorldStressReport(deviceName: device.name, warmupFrames: warmupFrames,
+        return PublicWorldStressReport(scene: scene.name, deviceName: device.name, warmupFrames: warmupFrames,
             measuredFrames: measured.count, solverIterationLimit: 4, p95Milliseconds: frameP95,
             gpuP95Milliseconds: p95(gpuMeasured), hostNonGPUP95Milliseconds: p95(hostNonGPUMeasured),
             hostEncodingP95Milliseconds: p95(hostEncodingMeasured),
@@ -228,16 +279,146 @@ package enum Stress300Scene {
     }
 }
 
-/// Scena mieszana (zaślepka zadania 31): 200 baniek, 60 brył, 10 więzów, 5 kinematycznych. Właściwa scena w zadaniu 32.
+/// Scena mieszana: 200 baniek, 60 brył (55 dynamicznych: wielokąty, koła, kapsuły i 5 kinematycznych belek),
+/// 10 więzów i 4 ściany, bez grawitacji (jak stress-300); bryły startują z losową prędkością. Wspólna dla benchmarku, strażnika i testów.
+/// Bańki leżą w dolnym pasie, dynamiczne bryły w siatce 11×5 nad belkami, belki przesuwają się poziomo.
 package enum MixedScene {
+    package static let bubbleCount = 200
+    package static let regionHeight: Float = 700
+    private static let bubbleColumns = 20
+    private static let bodyColumns = 11
+    private static let bodyRows = 5
+    private static let bubbleMaterial = PhysicsMaterialID(rawValue: 1)
+    private static let rigidMaterial = PhysicsMaterialID(rawValue: 2)
+    private static let style = RenderStyleID(rawValue: 1)
+    private static let bubbleSpacing: Float = 345 / 20
+    private static let bodySpacing: Float = 345 / 11
+    private static let bodyRowY: [Float] = [450, 500, 550, 600, 650]
+    private static let barY: [Float] = [210, 260, 310, 360, 410]
+    private static let barSpeed: Float = 120
+    private static let barHalfPeriod = 100
+
     package static func configuration() throws -> WorldConfiguration {
-        try WorldConfiguration(simulationRegion: WorldRectangle(min: [0, 0], max: [375, 700]), fixedTimeStep: 1.0 / 60)
+        try WorldConfiguration(simulationRegion: WorldRectangle(min: [0, 0], max: [375, regionHeight]),
+                               fixedTimeStep: 1.0 / 60)
     }
 
-    package static func initialTransaction() throws -> WorldTransaction { WorldTransaction() }
+    private static func bubbleID(_ index: Int) -> ObjectID { ObjectID(rawValue: UInt64(index + 1)) }
+    private static func bodyID(_ index: Int) -> ObjectID { ObjectID(rawValue: UInt64(1_001 + index)) }
+    private static func barID(_ index: Int) -> ObjectID { ObjectID(rawValue: UInt64(2_001 + index)) }
 
-    /// Transakcja kroku `step` (numer od 0) albo `nil`, gdy nic się nie zmienia.
-    package static func stepTransaction(step: Int) throws -> WorldTransaction? { nil }
+    private static func bubblePosition(_ index: Int) -> WorldPoint {
+        [15 + (Float(index % bubbleColumns) + 0.5) * bubbleSpacing, 15 + (Float(index / bubbleColumns) + 0.5) * bubbleSpacing]
+    }
+
+    private static func bodyPosition(_ index: Int) -> WorldPoint {
+        [15 + (Float(index % bodyColumns) + 0.5) * bodySpacing, bodyRowY[index / bodyColumns]]
+    }
+
+    package static func initialTransaction() throws -> WorldTransaction {
+        var transaction = try WorldTransaction()
+            .updatePhysicsMaterial(bubbleMaterial, material: PhysicsMaterial(kind: .bubble))
+            .updatePhysicsMaterial(rigidMaterial, material: PhysicsMaterial(kind: .rigid, friction: 0.2, maximumLinearSpeed: 90, maximumAngularSpeed: 8))
+            .updateRenderStyle(style, style: RenderStyle())
+        var random = StressLCG(seed: 0x4D_1C_5E)
+        for index in 0..<bubbleCount {
+            let radius = bubbleSpacing * 0.4 * (0.78 + random.nextUnit() * 0.44)
+            transaction = transaction.add(.bubble(try BubbleDescriptor(id: bubbleID(index), position: bubblePosition(index),
+                targetRadius: radius, mass: max(1, radius * radius * 0.02),
+                physicsMaterialID: bubbleMaterial, renderStyleID: style)))
+        }
+        for index in 0..<(bodyColumns * bodyRows) {
+            transaction = transaction.add(.rigidBody(try dynamicBody(index, scale: 0.8 + random.nextUnit() * 0.4,
+                velocity: [(random.nextUnit() - 0.5) * 80, (random.nextUnit() - 0.5) * 80],
+                angularVelocity: (random.nextUnit() - 0.5) * 6)))
+        }
+        for index in 0..<barY.count {
+            transaction = transaction.add(.rigidBody(try RigidBodyDescriptor(id: barID(index),
+                vertices: [[-30, -4], [30, -4], [30, 4], [-30, 4]], position: [100, barY[index]], motionRole: .kinematic,
+                physicsMaterialID: rigidMaterial, renderStyleID: style)))
+            transaction = transaction.setKinematicDrive(barID(index), drive: .velocity(linear: [barSpeed, 0], angular: 0))
+        }
+        let walls: [[WorldPoint]] = [
+            [[0, 0], [1, 0], [1, regionHeight], [0, regionHeight]],
+            [[374, 0], [375, 0], [375, regionHeight], [374, regionHeight]],
+            [[0, 0], [375, 0], [375, 1], [0, 1]],
+            [[0, regionHeight - 1], [375, regionHeight - 1], [375, regionHeight], [0, regionHeight]]
+        ]
+        for (index, vertices) in walls.enumerated() {
+            transaction = transaction.add(.rigidBody(try RigidBodyDescriptor(id: ObjectID(rawValue: UInt64(10_001 + index)),
+                vertices: vertices, physicsMaterialID: rigidMaterial, renderStyleID: style)))
+        }
+        for joint in try joints() { transaction = transaction.addJoint(joint) }
+        return transaction
+    }
+
+    /// Cztery rodzaje brył na zmianę: prostokąt, koło, kapsuła, trójkąt. `scale` zmienia rozmiar o ±20%.
+    private static func dynamicBody(_ index: Int, scale: Float, velocity: WorldPoint,
+                                    angularVelocity: Float) throws -> RigidBodyDescriptor {
+        let id = bodyID(index), position = bodyPosition(index)
+        switch index % 4 {
+        case 0:
+            return try RigidBodyDescriptor(id: id, vertices: [[-9, -6], [9, -6], [9, 6], [-9, 6]].map { $0 * scale },
+                position: position, velocity: velocity, angularVelocity: angularVelocity, motionRole: .dynamic,
+                physicsMaterialID: rigidMaterial, renderStyleID: style)
+        case 1:
+            return try RigidBodyDescriptor(id: id, shape: .circle(radius: 8 * scale), position: position,
+                velocity: velocity, angularVelocity: angularVelocity, motionRole: .dynamic, physicsMaterialID: rigidMaterial, renderStyleID: style)
+        case 2:
+            return try RigidBodyDescriptor(id: id, shape: .capsule(halfLength: 6 * scale, radius: 5 * scale),
+                position: position, velocity: velocity, angularVelocity: angularVelocity, motionRole: .dynamic,
+                physicsMaterialID: rigidMaterial, renderStyleID: style)
+        default:
+            return try RigidBodyDescriptor(id: id, vertices: [[-9, 7], [9, 7], [0, -9]].map { $0 * scale },
+                position: position, velocity: velocity, angularVelocity: angularVelocity, motionRole: .dynamic,
+                physicsMaterialID: rigidMaterial, renderStyleID: style)
+        }
+    }
+
+    /// 10 więzów: 3 dystansowe i 2 zawiasy (jeden z zakresem, jeden z silnikiem) oraz spaw między sąsiednimi bryłami,
+    /// 2 dystansowe bryła–świat, bańka–świat i bańka–bańka.
+    private static func joints() throws -> [Joint] {
+        var result: [Joint] = []
+        var nextID: UInt64 = 1
+        func make(_ build: (JointID) throws -> Joint) rethrows {
+            result.append(try build(JointID(rawValue: nextID)))
+            nextID += 1
+        }
+        let half = bodySpacing / 2
+        for index in [0, 13, 24] {
+            try make { try Joint(id: $0, bodyA: bodyID(index), bodyB: bodyID(index + 1),
+                kind: .distance(length: bodySpacing, softness: 0, damping: 0)) }
+        }
+        try make { try Joint(id: $0, bodyA: bodyID(3), bodyB: bodyID(4), anchorA: [half, 0], anchorB: [-half, 0],
+            kind: .hinge(limits: HingeLimits(lower: -0.8, upper: 0.8), motor: nil)) }
+        try make { try Joint(id: $0, bodyA: bodyID(36), bodyB: bodyID(37), anchorA: [half, 0], anchorB: [-half, 0],
+            kind: .hinge(limits: nil, motor: HingeMotor(targetAngularVelocity: 1, maximumTorque: 50))) }
+        try make { try Joint(id: $0, bodyA: bodyID(6), bodyB: bodyID(7), anchorA: [half, 0], anchorB: [-half, 0], kind: .weld) }
+        for index in [9, 31] {
+            let top = bodyPosition(index) + [0, 60]
+            try make { try Joint(id: $0, bodyA: bodyID(index), anchorB: top,
+                kind: .distance(length: 60, softness: 0, damping: 0)) }
+        }
+        let held = bubblePosition(100)
+        try make { try Joint(id: $0, bodyA: bubbleID(100), anchorB: held + [0, 30],
+            kind: .distance(length: 30, softness: 0, damping: 0)) }
+        let spacing = simd_distance(bubblePosition(55), bubblePosition(56))
+        try make { try Joint(id: $0, bodyA: bubbleID(55), bodyB: bubbleID(56),
+            kind: .distance(length: spacing, softness: 0, damping: 0)) }
+        return result
+    }
+
+    /// Belki zawracają co `barHalfPeriod` kroków; poza tym scena nie zmienia się transakcjami.
+    package static func stepTransaction(step: Int) throws -> WorldTransaction? {
+        guard step > 0, step % barHalfPeriod == 0 else { return nil }
+        let direction: Float = (step / barHalfPeriod) % 2 == 0 ? 1 : -1
+        var transaction = WorldTransaction()
+        for index in 0..<barY.count {
+            transaction = transaction.setKinematicDrive(barID(index),
+                drive: .velocity(linear: [direction * barSpeed, 0], angular: 0))
+        }
+        return transaction
+    }
 }
 
 private enum StressBenchmarkError: Error { case metalUnavailable }
