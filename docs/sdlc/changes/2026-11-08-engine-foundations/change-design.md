@@ -2,7 +2,7 @@
 
 **Date:** 2026-11-08
 **Artifact:** change-design
-**Status:** Draft
+**Status:** Approved
 **Template version:** default/0.3.2
 **References:** analiza braków silnika pod 2KBubbles (sesja 2026-11-08); audyt main@5d2c9a7 i PR #1 (`fix/audit-local-fixes`); zamknięta gałąź `magentic/2026-10-25-2kbubbles-engine-owned` (tag `archive/magentic-2026-10-25-2kbubbles-engine-owned`); `docs/superpowers/specs/2026-10-15-public-api-design.md`
 
