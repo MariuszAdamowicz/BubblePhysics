@@ -16,11 +16,16 @@ public final class BubblePhysicsMetalRender {
     /// wymaga bufora o pełnym ABI `RenderBubble` (144 bajtów).
     private let polygonBubblePlaceholder: MTLBuffer
     private var technicalPipelines: [MTLPixelFormat: MTLRenderPipelineState] = [:]
+    private var triangulationCache: [[WorldPoint]: [Int]] = [:]
+    /// `setVertexBytes` jest udokumentowane dla danych do 4 KB.
+    private static let inlineVertexByteLimit = 4096
+    private static let triangulationCacheLimit = 256
     public var customPipelines: [String: RenderStylePipeline]
 
     public init(device: MTLDevice, customPipelines: [String: RenderStylePipeline] = [:]) throws {
         self.device = device
-        guard let polygonBubblePlaceholder = device.makeBuffer(length: 144, options: .storageModeShared) else {
+        guard let polygonBubblePlaceholder = device.makeBuffer(length: NativeMetalRenderHandoff.bubbleRecordByteCount,
+                                                                options: .storageModeShared) else {
             throw BubblePhysicsMetalRenderError.renderEncoderUnavailable
         }
         self.polygonBubblePlaceholder = polygonBubblePlaceholder
@@ -61,17 +66,27 @@ public final class BubblePhysicsMetalRender {
             }
         }
         for shape in published.shapes {
-            let triangles = Self.triangulate(shape.vertices)
-            guard !triangles.isEmpty else { continue }
-            let coordinates = triangles.map { SIMD2<Float>($0.x, $0.y) }
-            guard let buffer = device.makeBuffer(bytes: coordinates,
-                length: coordinates.count * MemoryLayout<SIMD2<Float>>.stride) else { continue }
-            let retained = RetainedShapeBuffer(buffer)
-            commandBuffer.addCompletedHandler { _ in withExtendedLifetime(retained) {} }
-            encoder.setVertexBuffer(buffer, offset: 0, index: 5)
-            // Metal argument validation requires all declared slots to be bound.
-            encoder.setVertexBuffer(buffer, offset: 0, index: 0)
-            encoder.setVertexBuffer(buffer, offset: 0, index: 1)
+            let indices = triangulation(for: shape.localVertices)
+            guard !indices.isEmpty else { continue }
+            let coordinates = indices.map { SIMD2<Float>(shape.vertices[$0].x, shape.vertices[$0].y) }
+            let byteCount = coordinates.count * MemoryLayout<SIMD2<Float>>.stride
+            if byteCount <= Self.inlineVertexByteLimit {
+                // Bajty inline są kopiowane do command buffera: bez alokacji i bez śledzenia czasu życia.
+                coordinates.withUnsafeBytes { bytes in
+                    encoder.setVertexBytes(bytes.baseAddress!, length: bytes.count, index: 5)
+                    // Metal argument validation requires all declared slots to be bound.
+                    encoder.setVertexBytes(bytes.baseAddress!, length: bytes.count, index: 0)
+                    encoder.setVertexBytes(bytes.baseAddress!, length: bytes.count, index: 1)
+                }
+            } else {
+                guard let buffer = device.makeBuffer(bytes: coordinates, length: byteCount) else { continue }
+                let retained = RetainedShapeBuffer(buffer)
+                commandBuffer.addCompletedHandler { _ in withExtendedLifetime(retained) {} }
+                encoder.setVertexBuffer(buffer, offset: 0, index: 5)
+                // Metal argument validation requires all declared slots to be bound.
+                encoder.setVertexBuffer(buffer, offset: 0, index: 0)
+                encoder.setVertexBuffer(buffer, offset: 0, index: 1)
+            }
             encoder.setVertexBuffer(polygonBubblePlaceholder, offset: 0, index: 4)
             var values = SIMD4<Float>(viewport.center.x, viewport.center.y, viewport.size.x, viewport.size.y)
             encoder.setVertexBytes(&values, length: MemoryLayout<SIMD4<Float>>.stride, index: 2)
@@ -82,6 +97,15 @@ public final class BubblePhysicsMetalRender {
             selectPipeline(for: shape.item, encoder: encoder, technical: technical)
             encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: coordinates.count)
         }
+    }
+
+    /// Indeksy trójkątów zależą tylko od lokalnego pierścienia, więc są używane ponownie między klatkami.
+    private func triangulation(for ring: [WorldPoint]) -> [Int] {
+        if let cached = triangulationCache[ring] { return cached }
+        if triangulationCache.count >= Self.triangulationCacheLimit { triangulationCache.removeAll(keepingCapacity: true) }
+        let indices = Self.triangulate(ring)
+        triangulationCache[ring] = indices
+        return indices
     }
 
     private func selectPipeline(for item: BubbleWorldRenderItem, encoder: MTLRenderCommandEncoder,
@@ -97,7 +121,7 @@ public final class BubblePhysicsMetalRender {
     }
 
     /// Ear clipping obsługuje także wklęsłe proste pierścienie z modelu.
-    private static func triangulate(_ ring: [WorldPoint]) -> [WorldPoint] {
+    static func triangulate(_ ring: [WorldPoint]) -> [Int] {
         guard ring.count >= 3 else { return [] }
         let area = ring.indices.reduce(Float.zero) { sum, i in
             let a = ring[i], b = ring[(i + 1) % ring.count]
@@ -105,7 +129,7 @@ public final class BubblePhysicsMetalRender {
         }
         let sign: Float = area >= 0 ? 1 : -1
         var indices = Array(ring.indices)
-        var output: [WorldPoint] = []
+        var output: [Int] = []
         while indices.count > 3 {
             var clipped = false
             for i in indices.indices {
@@ -124,14 +148,14 @@ public final class BubblePhysicsMetalRender {
                     return ab * sign >= 0 && bc * sign >= 0 && ca * sign >= 0
                 }
                 guard !contains else { continue }
-                output += [a, b, c]
+                output += [previous, current, next]
                 indices.remove(at: i)
                 clipped = true
                 break
             }
             if !clipped { return [] }
         }
-        output += indices.map { ring[$0] }
+        output += indices
         return output
     }
 

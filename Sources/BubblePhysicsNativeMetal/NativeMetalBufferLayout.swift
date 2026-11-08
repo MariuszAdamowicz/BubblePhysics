@@ -241,6 +241,8 @@ public struct NativeMetalFrameProfile: Equatable, Sendable {
     /// Rekordy wejściowe zmienione przez grę; własna publikacja GPU nie jest uploadem.
     public var bubbleUploadCount = 0
     public var segmentUploadCount = 0
+    /// Polecenia blit, które przeniosły `bubbleUploadCount` rekordów po scaleniu ciągłych indeksów.
+    public var bubbleUploadCommandCount = 0
     public var rigidBodyUploadCount = 0
     public var rigidGeometryUploadCount = 0
     public var hostEncodingMilliseconds: Double = 0

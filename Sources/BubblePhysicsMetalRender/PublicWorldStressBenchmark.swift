@@ -30,6 +30,8 @@ public struct PublicWorldStressReport: Sendable {
             && contourCPUReadbacks == 0
     }
 
+    public var passesP95Gate: Bool { p95Milliseconds <= PublicWorldStressBenchmark.p95GateMilliseconds }
+
     public var text: String {
         """
         path=public BubbleWorld + BubblePhysicsMetalRender, same command buffer
@@ -44,13 +46,18 @@ public struct PublicWorldStressReport: Sendable {
         contour_cpu_readbacks=\(contourCPUReadbacks)
         safety=\(safetyPassed ? "pass" : "fail")
         native_quality_envelope=not_evaluated_by_this_harness
-        ceo_p95_gate_ms=10.4568; p95_gate=\(p95Milliseconds <= 10.4568 ? "pass" : "fail")
+        p95_gate_ms=\(String(format: "%.4f", PublicWorldStressBenchmark.p95GateMilliseconds)); p95_gate=\(passesP95Gate ? "pass" : "fail")
         """
     }
 }
 
 @MainActor
 public enum PublicWorldStressBenchmark {
+    /// Jedyne źródło progu akceptacji `stress-300` na iPhonie X (p95 pełnej klatki, limit solvera 4).
+    /// Roboczy budżet to 10 ms; właściciel zaakceptował odchylenie 4,6% zmierzone 2026-10-14
+    /// (docs/benchmarks/native-metal-bubble-solver-2026-10-14.md).
+    public nonisolated static let p95GateMilliseconds = 10.4568
+
     /// Wymaga fizycznego urządzenia dla wyniku akceptacyjnego. Koduje oba etapy do jednego bufora.
     public static func measure(device: MTLDevice,
                                progress: @escaping @MainActor (Int, Int) -> Void = { _, _ in }) async throws

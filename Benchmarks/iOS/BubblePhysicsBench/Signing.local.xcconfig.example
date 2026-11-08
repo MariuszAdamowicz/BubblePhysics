@@ -1,0 +1,3 @@
+// Skopiuj do Signing.local.xcconfig (ignorowany przez git) i wpisz własne wartości.
+DEVELOPMENT_TEAM = YOUR_TEAM_ID
+BENCH_BUNDLE_IDENTIFIER = com.yourcompany.BubblePhysicsBench

@@ -16,6 +16,9 @@ package struct BubbleWorldRenderState {
 }
 
 package struct BubbleWorldRenderShape {
+    /// Pierścień we współrzędnych lokalnych obiektu. Triangulacja zależy tylko od niego,
+    /// bo przekształcenie sztywne zachowuje orientację i zawieranie.
+    package let localVertices: [WorldPoint]
     package let vertices: [WorldPoint]
     package let item: BubbleWorldRenderItem
 }
@@ -102,7 +105,7 @@ public final class BubbleWorld {
                 WorldPoint(object.position.x + point.x * cosine - point.y * sine,
                            object.position.y + point.x * sine + point.y * cosine)
             }
-            return BubbleWorldRenderShape(vertices: vertices,
+            return BubbleWorldRenderShape(localVertices: ring, vertices: vertices,
                 item: BubbleWorldRenderItem(shader: style.shader,
                     channels: style.resolvedChannels(overrides: object.presentation)))
         }

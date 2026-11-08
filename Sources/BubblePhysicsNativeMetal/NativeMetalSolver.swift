@@ -231,6 +231,7 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
     private var inFlight = false
     private var lastSnapshot: NativeMetalSnapshot?
     private var frameNumber: UInt32 = 0
+    private let sensorScratch = NativeMetalSensorScratch()
     private var previousSensorPairs: MTLBuffer?
     private var previousSensorPairCount = 0
     private var previousPolygonSensorPairs: MTLBuffer?
@@ -259,45 +260,11 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
         self.collectDispatchStatistics = collectDispatchStatistics
         self.collectStageDiagnostics = collectStageDiagnostics
         self.commandExecutor = commandExecutor ?? NativeMetalCommandExecutor()
-        guard let queue = device.makeCommandQueue(),
-              let url = Bundle.module.url(forResource: "NativeGeometryKernels", withExtension: "metal-source")
-        else { throw NativeMetalSolverError.resourceUnavailable }
+        guard let queue = device.makeCommandQueue() else { throw NativeMetalSolverError.resourceUnavailable }
         self.queue = queue
-        guard let cacheURL = Bundle.module.url(forResource: "NativeXPBDKernels", withExtension: "metal-source"),
-              let safetyURL = Bundle.module.url(forResource: "NativePostSolveKernels", withExtension: "metal-source")
-        else { throw NativeMetalSolverError.resourceUnavailable }
-        let source = try String(contentsOf: url, encoding: .utf8) + "\n" + String(contentsOf: cacheURL, encoding: .utf8)
-            + "\n" + String(contentsOf: safetyURL, encoding: .utf8)
-        let options = MTLCompileOptions()
-        // Finite jest kontraktem bezpieczeństwa: fast-math zakłada jego spełnienie.
-        options.fastMathEnabled = false
-        let library = try device.makeLibrary(source: source, options: options)
-        guard let function = library.makeFunction(name: "nativePredict")
-        else { throw NativeMetalSolverError.resourceUnavailable }
-        predict = try device.makeComputePipelineState(function: function)
-        var stages: [String: MTLComputePipelineState] = [:]
-        for name in ["nativePrepareGrid", "nativeBuildGrid", "nativeSortGrid", "nativeEmitCandidates",
-                     "nativePrepareCandidateCounts", "nativeCompactCandidates", "nativeBuildContacts",
-                     "nativePrepareContactFlags", "nativeCompactActiveContacts", "nativeMatchContactCache",
-                     "nativeRetainContactCache", "nativeCompactContactCache", "nativeScanBlocks", "nativePrepareIndirectArguments",
-                     "nativeAddScanBlockOffsets", "nativeFinishScan", "nativeClearAdjacency", "nativeEmitAdjacency", "nativeBuildAdjacency",
-                     "nativePrepareSolverContacts", "nativeApplyWarmStart", "nativeUpdateContactMultipliers",
-                     "nativeSolveJacobi", "nativeMeasureResidual", "nativeReduceSolverResidual",
-                     "nativeCapturePositions",
-                     "nativeUpdateVelocities", "nativeDampContactNormalMotion", "nativeFinalizeSolverContacts", "nativeFindFastCandidates",
-                     "nativeResolveCCD", "nativeApplyCenterGuards", "nativeSeparateContainedBubbles",
-                     "nativeReapplyCenterGuards", "nativeValidateBubbleContainment", "nativeInvalidateSafetyCache", "nativeCheckFinite",
-                     "nativeAccumulateContactPressure", "nativeSeedStructuralContours", "nativeGenerateContours", "nativePrepareRenderData",
-                     "nativeApplyPublicRegion", "nativeInvalidateRegionCache",
-                     "nativeCompactMergeEvents",
-                     "nativeCompactSensorEvents",
-                     "nativeCompactPolygonSensorEvents",
-                     "nativeCompactMissingSensorEvents",
-                     "nativeRigidPredict", "nativeRigidContacts", "nativeRigidApplyBubbles", "nativeRigidApplyBodies", "nativeRigidGuardWalls", "nativeRigidFinish"] {
-            guard let function = library.makeFunction(name: name) else { throw NativeMetalSolverError.resourceUnavailable }
-            stages[name] = try device.makeComputePipelineState(function: function)
-        }
-        pipelines = stages
+        let compiled = try NativeMetalPipelineCache.pipelines(for: device)
+        predict = compiled.predict
+        pipelines = compiled.stages
     }
 
     func executeFrame(world: ReferenceWorld, scenarioStep: Int) async throws -> NativeMetalWorldFrame {
@@ -518,15 +485,18 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
                 polygonSensorAllowed.append(sensor.filter.objectIDs?.contains(polygon.object.descriptor.id) ?? true ? 1 : 0)
             }
         }
-        let sensorRecordBuffer = try (sensorRecords.isEmpty ? state.eventRecords : eventBuffer(sensorRecords))
-        let sensorVertexBuffer = try (sensorVertices.isEmpty ? state.eventRecords : eventBuffer(sensorVertices))
-        let sensorAllowedBuffer = try (sensorAllowed.isEmpty ? state.eventRecords : eventBuffer(sensorAllowed))
-        let currentSensorPairs = try (pairCount == 0 ? state.eventRecords : eventBuffer(Array(repeating:
-            NativeMetalSensorPair(participants: .zero, state: .zero), count: pairCount)))
+        // Wejścia sensorów używają trwałych buforów: przy kodowaniu nie ma klatki w locie.
+        let sensorRecordBuffer = try (sensorRecords.isEmpty ? state.eventRecords : sensorScratch.records.upload(sensorRecords, device: device))
+        let sensorVertexBuffer = try (sensorVertices.isEmpty ? state.eventRecords : sensorScratch.vertices.upload(sensorVertices, device: device))
+        let sensorAllowedBuffer = try (sensorAllowed.isEmpty ? state.eventRecords : sensorScratch.allowed.upload(sensorAllowed, device: device))
+        // Bufory par naprzemienne: pary poprzedniej klatki pozostają nienaruszone aż do publikacji.
+        let currentSensorPairs = try (pairCount == 0 ? state.eventRecords : sensorScratch.pairs.next(
+            avoiding: previousSensorPairs, zeroedCount: pairCount, of: NativeMetalSensorPair.self, device: device))
         let previousSensorPairBuffer = previousSensorPairs ?? state.eventRecords
-        let polygonSensorAllowedBuffer = try (polygonSensorAllowed.isEmpty ? state.eventRecords : eventBuffer(polygonSensorAllowed))
-        let currentPolygonSensorPairs = try (polygonPairCount == 0 ? state.eventRecords : eventBuffer(Array(repeating:
-            NativeMetalSensorPair(participants: .zero, state: .zero), count: polygonPairCount)))
+        let polygonSensorAllowedBuffer = try (polygonSensorAllowed.isEmpty ? state.eventRecords
+            : sensorScratch.polygonAllowed.upload(polygonSensorAllowed, device: device))
+        let currentPolygonSensorPairs = try (polygonPairCount == 0 ? state.eventRecords : sensorScratch.polygonPairs.next(
+            avoiding: previousPolygonSensorPairs, zeroedCount: polygonPairCount, of: NativeMetalSensorPair.self, device: device))
         let previousPolygonSensorPairBuffer = previousPolygonSensorPairs ?? state.eventRecords
 
         let descriptor = MTLCommandBufferDescriptor()
@@ -546,21 +516,24 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
         }
         // Zmiana indeksu po sortowaniu ID nie jest zmianą wejścia CPU.
         // Źródło pozostaje opublikowanym buforem, więc remapy nie kolidują.
-        for remap in snapshot.bubbleRemaps {
-            blit.copy(from: state.publishedBubbles, sourceOffset: remap.sourceIndex * bubbleStride,
-                      to: state.workingBubbles, destinationOffset: remap.destinationIndex * bubbleStride, size: bubbleStride)
+        // Zmiana indeksu po sortowaniu ID nie jest zmianą wejścia CPU.
+        // Źródło pozostaje opublikowanym buforem, więc remapy nie kolidują.
+        // Sąsiednie rekordy są łączone w jedno polecenie kopiowania na ciągły zakres.
+        for run in NativeMetalCopyRun.coalesce(snapshot.bubbleRemaps.map { ($0.sourceIndex, $0.destinationIndex) }) {
+            blit.copy(from: state.publishedBubbles, sourceOffset: run.source * bubbleStride,
+                      to: state.workingBubbles, destinationOffset: run.destination * bubbleStride, size: run.count * bubbleStride)
         }
-        for change in snapshot.bubbleChanges {
-            blit.copy(from: state.bubbleUpdates, sourceOffset: change.index * bubbleStride,
-                      to: state.workingBubbles, destinationOffset: change.index * bubbleStride, size: bubbleStride)
+        for run in NativeMetalCopyRun.coalesce(snapshot.bubbleChanges.map { ($0.index, $0.index) }) {
+            blit.copy(from: state.bubbleUpdates, sourceOffset: run.source * bubbleStride,
+                      to: state.workingBubbles, destinationOffset: run.destination * bubbleStride, size: run.count * bubbleStride)
         }
-        for remap in snapshot.segmentRemaps {
-            blit.copy(from: state.segments, sourceOffset: remap.sourceIndex * segmentStride,
-                      to: state.workingSegments, destinationOffset: remap.destinationIndex * segmentStride, size: segmentStride)
+        for run in NativeMetalCopyRun.coalesce(snapshot.segmentRemaps.map { ($0.sourceIndex, $0.destinationIndex) }) {
+            blit.copy(from: state.segments, sourceOffset: run.source * segmentStride,
+                      to: state.workingSegments, destinationOffset: run.destination * segmentStride, size: run.count * segmentStride)
         }
-        for change in snapshot.segmentChanges {
-            blit.copy(from: state.segmentUpdates, sourceOffset: change.index * segmentStride,
-                      to: state.workingSegments, destinationOffset: change.index * segmentStride, size: segmentStride)
+        for run in NativeMetalCopyRun.coalesce(snapshot.segmentChanges.map { ($0.index, $0.index) }) {
+            blit.copy(from: state.segmentUpdates, sourceOffset: run.source * segmentStride,
+                      to: state.workingSegments, destinationOffset: run.destination * segmentStride, size: run.count * segmentStride)
         }
         rigidState.encodeInputs(blit)
         blit.endEncoding()
@@ -918,6 +891,7 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
         profile.encoderCount = 2
         profile.bubbleUploadCount = snapshot.bubbleChanges.count
         profile.segmentUploadCount = snapshot.segmentChanges.count
+        profile.bubbleUploadCommandCount = NativeMetalCopyRun.coalesce(snapshot.bubbleChanges.map { ($0.index, $0.index) }).count
         profile.rigidBodyUploadCount = rigidState.bodyUploadCount
         profile.rigidGeometryUploadCount = rigidState.geometryUploadCount
         profile.hostEncodingMilliseconds = milliseconds(encodingEnd - encodingStart)
@@ -1098,4 +1072,144 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
     }
 
     private func milliseconds(_ nanoseconds: UInt64) -> Double { Double(nanoseconds) / 1_000_000 }
+}
+
+/// Ciągły zakres kopiowany jednym poleceniem blit.
+struct NativeMetalCopyRun: Equatable {
+    let source: Int
+    let destination: Int
+    let count: Int
+
+    /// Scala pary (źródło, cel) w zakresy, w których oba indeksy rosną o jeden.
+    /// Kolejność wejścia jest zachowana, więc semantyka jest taka sama jak przy kopiowaniu rekord po rekordzie.
+    static func coalesce(_ pairs: [(Int, Int)]) -> [NativeMetalCopyRun] {
+        var runs: [NativeMetalCopyRun] = []
+        runs.reserveCapacity(pairs.count)
+        for (source, destination) in pairs {
+            if let last = runs.last, last.source + last.count == source, last.destination + last.count == destination {
+                runs[runs.count - 1] = NativeMetalCopyRun(source: last.source, destination: last.destination, count: last.count + 1)
+            } else {
+                runs.append(NativeMetalCopyRun(source: source, destination: destination, count: 1))
+            }
+        }
+        return runs
+    }
+}
+
+/// Rosnący bufor współdzielony, używany ponownie między klatkami zamiast alokacji w każdej klatce.
+@MainActor
+final class NativeMetalReusableBuffer {
+    private(set) var buffer: MTLBuffer?
+
+    func upload<T>(_ values: [T], device: MTLDevice) throws -> MTLBuffer {
+        let target = try reserve(count: values.count, stride: MemoryLayout<T>.stride, device: device)
+        values.withUnsafeBytes { bytes in
+            if let base = bytes.baseAddress { memcpy(target.contents(), base, bytes.count) }
+        }
+        return target
+    }
+
+    func reserve(count: Int, stride: Int, device: MTLDevice) throws -> MTLBuffer {
+        let (length, overflow) = max(1, count).multipliedReportingOverflow(by: stride)
+        guard !overflow, length <= device.maxBufferLength else { throw NativeMetalSolverError.allocationFailed }
+        if let buffer, buffer.length >= length { return buffer }
+        // Wzrost geometryczny: realokacja jest rzadka, gdy rośnie liczba sensorów lub baniek.
+        let grown = min(device.maxBufferLength, max(length, (buffer?.length ?? 0) * 2))
+        guard let created = device.makeBuffer(length: grown, options: .storageModeShared) else {
+            throw NativeMetalSolverError.allocationFailed
+        }
+        buffer = created
+        return created
+    }
+}
+
+/// Dwa naprzemienne bufory: jeden trzyma opublikowane pary, drugi przyjmuje następną klatkę.
+@MainActor
+final class NativeMetalAlternatingBuffer {
+    private let slots = [NativeMetalReusableBuffer(), NativeMetalReusableBuffer()]
+
+    func next<T>(avoiding previous: MTLBuffer?, zeroedCount count: Int, of type: T.Type,
+                 device: MTLDevice) throws -> MTLBuffer {
+        let slot = slots[0].buffer != nil && slots[0].buffer === previous ? slots[1] : slots[0]
+        let buffer = try slot.reserve(count: count, stride: MemoryLayout<T>.stride, device: device)
+        memset(buffer.contents(), 0, count * MemoryLayout<T>.stride)
+        return buffer
+    }
+}
+
+@MainActor
+final class NativeMetalSensorScratch {
+    let records = NativeMetalReusableBuffer()
+    let vertices = NativeMetalReusableBuffer()
+    let allowed = NativeMetalReusableBuffer()
+    let polygonAllowed = NativeMetalReusableBuffer()
+    let pairs = NativeMetalAlternatingBuffer()
+    let polygonPairs = NativeMetalAlternatingBuffer()
+}
+
+/// Kompiluje shadery solvera raz na urządzenie. Stany pipeline'ów są niezmienne i współdzielone,
+/// więc każda instancja solvera na tym samym urządzeniu używa ich ponownie zamiast kompilować przy starcie.
+@MainActor
+enum NativeMetalPipelineCache {
+    struct Compiled {
+        let predict: MTLComputePipelineState
+        let stages: [String: MTLComputePipelineState]
+    }
+
+    private static var compiled: [UInt64: Compiled] = [:]
+
+    static let stageNames: [String] = ["nativePrepareGrid", "nativeBuildGrid", "nativeSortGrid", "nativeEmitCandidates",
+        "nativePrepareCandidateCounts", "nativeCompactCandidates", "nativeBuildContacts",
+        "nativePrepareContactFlags", "nativeCompactActiveContacts", "nativeMatchContactCache",
+        "nativeRetainContactCache", "nativeCompactContactCache", "nativeScanBlocks", "nativePrepareIndirectArguments",
+        "nativeAddScanBlockOffsets", "nativeFinishScan", "nativeClearAdjacency", "nativeEmitAdjacency", "nativeBuildAdjacency",
+        "nativePrepareSolverContacts", "nativeApplyWarmStart", "nativeUpdateContactMultipliers",
+        "nativeSolveJacobi", "nativeMeasureResidual", "nativeReduceSolverResidual",
+        "nativeCapturePositions",
+        "nativeUpdateVelocities", "nativeDampContactNormalMotion", "nativeFinalizeSolverContacts", "nativeFindFastCandidates",
+        "nativeResolveCCD", "nativeApplyCenterGuards", "nativeSeparateContainedBubbles",
+        "nativeReapplyCenterGuards", "nativeValidateBubbleContainment", "nativeInvalidateSafetyCache", "nativeCheckFinite",
+        "nativeAccumulateContactPressure", "nativeSeedStructuralContours", "nativeGenerateContours", "nativePrepareRenderData",
+        "nativeApplyPublicRegion", "nativeInvalidateRegionCache",
+        "nativeCompactMergeEvents",
+        "nativeCompactSensorEvents",
+        "nativeCompactPolygonSensorEvents",
+        "nativeCompactMissingSensorEvents",
+        "nativeRigidPredict", "nativeRigidContacts", "nativeRigidApplyBubbles", "nativeRigidApplyBodies", "nativeRigidGuardWalls", "nativeRigidFinish"]
+
+    static func pipelines(for device: MTLDevice) throws -> Compiled {
+        if let cached = compiled[device.registryID] { return cached }
+        let source = try NativeMetalShaderSource.solverSource()
+        let options = MTLCompileOptions()
+        // Finite jest kontraktem bezpieczeństwa: fast-math zakłada jego spełnienie.
+        options.fastMathEnabled = false
+        let library = try device.makeLibrary(source: source, options: options)
+        guard let function = library.makeFunction(name: "nativePredict")
+        else { throw NativeMetalSolverError.resourceUnavailable }
+        let predict = try device.makeComputePipelineState(function: function)
+        var stages: [String: MTLComputePipelineState] = [:]
+        for name in stageNames {
+            guard let function = library.makeFunction(name: name) else { throw NativeMetalSolverError.resourceUnavailable }
+            stages[name] = try device.makeComputePipelineState(function: function)
+        }
+        let result = Compiled(predict: predict, stages: stages)
+        compiled[device.registryID] = result
+        return result
+    }
+}
+
+/// Wczytuje dołączone pliki `.metal-source` kompilowane w czasie działania.
+enum NativeMetalShaderSource {
+    static let solverFiles = ["NativeGeometryKernels", "NativeXPBDKernels", "NativePostSolveKernels"]
+
+    static func load(_ name: String) throws -> String {
+        guard let url = Bundle.module.url(forResource: name, withExtension: "metal-source") else {
+            throw NativeMetalSolverError.resourceUnavailable
+        }
+        return try String(contentsOf: url, encoding: .utf8)
+    }
+
+    static func solverSource() throws -> String {
+        try solverFiles.map(load).joined(separator: "\n")
+    }
 }

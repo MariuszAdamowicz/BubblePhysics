@@ -405,7 +405,9 @@ public final class ReferenceMetalSolver {
             let candidateFlags = try buffer(name: "geometryCandidateFlags", count: max(1, Int(upper)), stride: MemoryLayout<UInt32>.stride)
             let candidateEvents = try buffer(name: "geometryCandidateEvents", count: max(1, Int(upper)), stride: MemoryLayout<ReferenceMetalGeometryEvent>.stride)
             memset(control.contents(), 0, control.length)
-            let buffers = inputs + [predicted, guarded, pairs, contacts, events, labels, touched, components, control, candidateFlags, candidateEvents]
+            // Musi odpowiadać GARGS w ReferenceGeometryKernels: bufory 0...13, potem
+            // stałe parametry w slocie 14 (setBytes) i bufory robocze kandydatów w 15/16.
+            let buffers = inputs + [predicted, guarded, pairs, contacts, events, labels, touched, components, control]
             let command = try makeCommand(stage: "referenceGeometry", scenarioStep: Int(step))
             let config = snapshot.configuration
             var parameters = ReferenceMetalGeometryParameters(counts: SIMD4(bubbles, segments, previous, UInt32(pairCapacity)),
@@ -420,6 +422,8 @@ public final class ReferenceMetalSolver {
                 encoder.setComputePipelineState(pipeline)
                 for (i, buffer) in buffers.enumerated() { encoder.setBuffer(buffer, offset: 0, index: i) }
                 encoder.setBytes(&parameters, length: MemoryLayout<ReferenceMetalGeometryParameters>.stride, index: 14)
+                encoder.setBuffer(candidateFlags, offset: 0, index: 15)
+                encoder.setBuffer(candidateEvents, offset: 0, index: 16)
                 encoder.dispatchThreads(MTLSize(width: width, height: 1, depth: 1),
                     threadsPerThreadgroup: MTLSize(width: min(256, width, pipeline.maxTotalThreadsPerThreadgroup), height: 1, depth: 1))
                 encoder.endEncoding()

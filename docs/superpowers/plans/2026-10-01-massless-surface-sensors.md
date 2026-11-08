@@ -569,7 +569,7 @@ Expected: all tests pass; both builds report `BUILD SUCCEEDED`.
 
 - [ ] **Step 5: Install and launch with Xcode 26.6**
 
-Use `/Applications/Xcode-26.6.app`, destination `iPhone (Mariusz)`. Confirm in
+Use `/Applications/Xcode-26.6.app`, the connected physical iPhone as destination. Confirm in
 Xcode that the process remains running without Metal runtime issues for at least
 60 seconds.
 

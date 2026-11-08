@@ -15,6 +15,8 @@ final class NativeMetalSolverLifecycleTests: XCTestCase {
             _ = await runner.step(world: &world, scenarioStep: step)
             XCTAssertNil(runner.telemetry.fallbackReason)
             XCTAssertEqual(runner.profile.bubbleUploadCount, step == 0 ? 300 : 0)
+            // Sąsiednie rekordy są łączone w jedno polecenie blit.
+            XCTAssertEqual(runner.profile.bubbleUploadCommandCount, step == 0 ? 1 : 0)
             XCTAssertEqual(world.bubbles.count, 300)
             XCTAssertEqual(runner.profile.commandBufferCount, 1)
         }

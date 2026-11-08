@@ -403,7 +403,7 @@ Expected: all tests pass and both builds report `BUILD SUCCEEDED`.
 
 - [ ] **Step 2: Install, launch and observe on iPhone X**
 
-Uruchom `Radial` na `iPhone (Mariusz)` przez co najmniej 60 sekund i potwierdź, że proces pozostaje podłączony bez błędu Metal.
+Uruchom `Radial` na podłączonym fizycznym iPhonie przez co najmniej 60 sekund i potwierdź, że proces pozostaje podłączony bez błędu Metal.
 
 - [ ] **Step 3: Record technical telemetry**
 

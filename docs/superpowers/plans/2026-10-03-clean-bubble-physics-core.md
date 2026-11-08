@@ -532,7 +532,7 @@ Górny pasek poza komorą zawiera tylko `Reset`, `Dane`, `Środek` i `Okrąg`, k
 
 - [ ] **Step 5: Wygenerować osobny projekt Xcode**
 
-`project.yml` ma deployment target `16.0`, bundle id `com.mariuszadamowicz.BubblePhysicsLab` i zależność tylko od produktu `BubblePhysicsCore` z pakietu `../../..`.
+`project.yml` ma deployment target `16.0`, bundle id `com.example.BubblePhysicsLab` i zależność tylko od produktu `BubblePhysicsCore` z pakietu `../../..`.
 
 Run: `cd Benchmarks/iOS/BubblePhysicsLab && xcodegen generate`
 

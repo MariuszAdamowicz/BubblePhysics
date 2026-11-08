@@ -4,3 +4,6 @@
 xcuserdata/
 *.xcuserstate
 .DS_Store
+
+# Lokalne ustawienia podpisu hosta benchmarku iOS
+Benchmarks/iOS/BubblePhysicsBench/Signing.local.xcconfig

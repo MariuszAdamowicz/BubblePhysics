@@ -16,6 +16,7 @@
 /* Begin PBXFileReference section */
 		061528BD02245748875CB02D /* BubblePhysicsBenchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BubblePhysicsBenchApp.swift; sourceTree = "<group>"; };
 		70DEEBEF64919AF7D59AE563 /* BubblePhysicsBench.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = BubblePhysicsBench.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		5A1C0F3E9B2D4E6F80A1B2C3 /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
 		DAAC9E74101A14CF54656AA1 /* PublicWorldStressView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PublicWorldStressView.swift; sourceTree = "<group>"; };
 		EBE118F3EF470FF445638A9A /* bubble-physics */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "bubble-physics"; path = ../../..; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
@@ -37,6 +38,7 @@
 			isa = PBXGroup;
 			children = (
 				8BED0A2432CE41B1664AFF12 /* App */,
+				5A1C0F3E9B2D4E6F80A1B2C3 /* Signing.xcconfig */,
 				62B73258DB6FD046BDDB8E57 /* Packages */,
 				8BCAE9AD08E07996986479EE /* Products */,
 			);
@@ -100,7 +102,6 @@
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
 					55DE780700A92AA9FAE5BFE0 = {
-						DevelopmentTeam = T8K3TYUY9D;
 					};
 				};
 			};
@@ -141,17 +142,16 @@
 /* Begin XCBuildConfiguration section */
 		2BC2110FF6CC3A3DBD3AB41B /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 5A1C0F3E9B2D4E6F80A1B2C3 /* Signing.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				DEVELOPMENT_TEAM = T8K3TYUY9D;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.mariuszadamowicz.BubblePhysicsBench;
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -160,17 +160,16 @@
 		};
 		43F30F85160C75BC25346832 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 5A1C0F3E9B2D4E6F80A1B2C3 /* Signing.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				DEVELOPMENT_TEAM = T8K3TYUY9D;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.mariuszadamowicz.BubblePhysicsBench;
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
