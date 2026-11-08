@@ -15,6 +15,8 @@ public struct WorldDiagnostics: Equatable, Sendable {
     public let backlogSeconds: TimeInterval
     /// Kolejne ukończone wywołania advance z co najmniej jednym zaległym pełnym krokiem.
     public let consecutiveBackloggedAdvances: UInt64
+    /// Suma czasu odrzuconego przez limit backlogu `WorldConfiguration.maximumBacklog` od początku świata (etap 4).
+    public let discardedBacklogSeconds: TimeInterval
     public let stepsInLastAdvance: Int
     public let pendingTransactionCount: Int
     public let isPaused: Bool

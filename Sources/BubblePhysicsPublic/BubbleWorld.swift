@@ -67,13 +67,15 @@ public final class BubbleWorld {
     internal init(configuration: WorldConfiguration, stepper: any CompleteStepper) {
         self.configuration = configuration
         self.state = RuntimeState(configuration: configuration)
-        self.clock = FixedStepDriver(fixedTimeStep: configuration.fixedTimeStep)
+        self.clock = FixedStepDriver(fixedTimeStep: configuration.fixedTimeStep,
+                                     maximumBacklog: configuration.maximumBacklog)
         self.stepper = stepper
     }
 
     public var diagnostics: WorldDiagnostics {
         WorldDiagnostics(backlogSeconds: clock.backlogSeconds,
             consecutiveBackloggedAdvances: clock.consecutiveBackloggedAdvances,
+            discardedBacklogSeconds: clock.discardedBacklogSeconds,
             stepsInLastAdvance: stepsInLastAdvance, pendingTransactionCount: pending.count,
             isPaused: isPaused, isAdvancing: isAdvancing, lastAdvanceIssue: lastAdvanceIssue,
             eventOverflow: lastFrame.eventOverflow,

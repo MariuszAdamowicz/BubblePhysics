@@ -69,4 +69,51 @@ final class FixedStepDriverTests: XCTestCase {
         XCTAssertTrue(driver.accumulate(step - step.nextDown))
         XCTAssertTrue(driver.canStep)
     }
+
+    // P-B-53: backlog ma górny limit, nadmiar jest sumowany do diagnostyki.
+    func testBacklogIsClampedToMaximumAndTheExcessIsSummed() {
+        var driver = FixedStepDriver(fixedTimeStep: 0.125, maximumBacklog: 0.25)
+        XCTAssertTrue(driver.accumulate(10))
+        XCTAssertEqual(driver.backlogSeconds, 0.25)
+        XCTAssertEqual(driver.discardedBacklogSeconds, 9.75, accuracy: 1e-12)
+        XCTAssertTrue(driver.accumulate(0.125))
+        XCTAssertEqual(driver.backlogSeconds, 0.25)
+        XCTAssertEqual(driver.discardedBacklogSeconds, 9.875, accuracy: 1e-12)
+    }
+
+    func testBacklogBelowTheLimitIsNeverDiscarded() {
+        var driver = FixedStepDriver(fixedTimeStep: 0.125, maximumBacklog: 0.25)
+        XCTAssertTrue(driver.accumulate(0.1))
+        XCTAssertTrue(driver.accumulate(0.15))
+        XCTAssertEqual(driver.backlogSeconds, 0.25, accuracy: 1e-12)
+        XCTAssertEqual(driver.discardedBacklogSeconds, 0, accuracy: 1e-12)
+        driver.completeStep()
+        XCTAssertTrue(driver.accumulate(0.125))
+        XCTAssertEqual(driver.backlogSeconds, 0.25, accuracy: 1e-12)
+        XCTAssertEqual(driver.discardedBacklogSeconds, 0, accuracy: 1e-12)
+    }
+
+    func testLimitBelowOneStepStillLetsAStepHappen() {
+        var driver = FixedStepDriver(fixedTimeStep: 0.5, maximumBacklog: 0.25)
+        XCTAssertTrue(driver.accumulate(3))
+        XCTAssertTrue(driver.canStep, "limit krótszy niż krok nie może zablokować symulacji")
+        XCTAssertEqual(driver.backlogSeconds, 0.5)
+    }
+
+    func testClampingKeepsRejectingNonFiniteAndOverflowingTime() {
+        var driver = FixedStepDriver(fixedTimeStep: 0.125, maximumBacklog: 0.25)
+        XCTAssertTrue(driver.accumulate(0.0625))
+        for invalid in [-1, Double.nan, .infinity] {
+            XCTAssertFalse(driver.accumulate(invalid))
+            XCTAssertEqual(driver.backlogSeconds, 0.0625)
+            XCTAssertEqual(driver.discardedBacklogSeconds, 0)
+        }
+    }
+
+    func testDiscardedTimeSaturatesInsteadOfOverflowing() {
+        var driver = FixedStepDriver(fixedTimeStep: 0.125, maximumBacklog: 0.25)
+        for _ in 0..<3 { XCTAssertTrue(driver.accumulate(Double.greatestFiniteMagnitude / 2)) }
+        XCTAssertTrue(driver.discardedBacklogSeconds.isFinite)
+        XCTAssertEqual(driver.backlogSeconds, 0.25)
+    }
 }

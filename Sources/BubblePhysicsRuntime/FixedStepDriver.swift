@@ -8,12 +8,19 @@ package struct FixedStepDriver {
     package private(set) var simulationTime: TimeInterval = 0
     package private(set) var completedSteps: UInt64 = 0
     package private(set) var consecutiveBackloggedAdvances: UInt64 = 0
+    /// Górny limit backlogu; limit krótszy niż krok działa jak jeden krok, żeby symulacja mogła ruszyć.
+    package let maximumBacklog: TimeInterval
+    /// Suma czasu odrzuconego przez limit backlogu od początku świata (nasyca się, nie przepełnia).
+    package private(set) var discardedBacklogSeconds: TimeInterval = 0
 
-    package init(fixedTimeStep: TimeInterval, maximumStepsPerAdvance: Int = 8) {
+    package init(fixedTimeStep: TimeInterval, maximumStepsPerAdvance: Int = 8,
+                 maximumBacklog: TimeInterval = .infinity) {
         precondition(fixedTimeStep.isFinite && fixedTimeStep > 0)
         precondition(maximumStepsPerAdvance > 0)
+        precondition(maximumBacklog > 0)
         self.fixedTimeStep = fixedTimeStep
         self.maximumStepsPerAdvance = maximumStepsPerAdvance
+        self.maximumBacklog = max(maximumBacklog, fixedTimeStep)
     }
 
     package var canStep: Bool {
@@ -24,12 +31,20 @@ package struct FixedStepDriver {
             (backlogSeconds > 0 && fixedTimeStep - backlogSeconds <= roundingTolerance)
     }
 
-    /// Odrzucenie pozostawia cały akumulator bez zmian.
+    /// Odrzucenie (czas niepoprawny albo przepełnienie) pozostawia cały akumulator bez zmian.
+    /// Backlog ponad limit jest obcinany, a nadmiar trafia do `discardedBacklogSeconds`.
     package mutating func accumulate(_ seconds: TimeInterval) -> Bool {
         guard seconds.isFinite, seconds >= 0 else { return false }
         let accumulated = backlogSeconds + seconds
         guard accumulated.isFinite, (simulationTime + accumulated).isFinite else { return false }
-        backlogSeconds = accumulated
+        if accumulated > maximumBacklog {
+            let excess = accumulated - maximumBacklog
+            let total = discardedBacklogSeconds + excess
+            discardedBacklogSeconds = total.isFinite ? total : .greatestFiniteMagnitude
+            backlogSeconds = maximumBacklog
+        } else {
+            backlogSeconds = accumulated
+        }
         return true
     }
 

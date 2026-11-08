@@ -6,7 +6,8 @@ import XCTest
 final class BubbleWorldCompletionTests: XCTestCase {
     private func world(stepper: any CompleteStepper) throws -> BubbleWorld {
         BubbleWorld(configuration: try WorldConfiguration(simulationRegion:
-            WorldRectangle(min: [-10, -10], max: [10, 10]), fixedTimeStep: 0.125), stepper: stepper)
+            WorldRectangle(min: [-10, -10], max: [10, 10]), fixedTimeStep: 0.125,
+            maximumBacklog: 10), stepper: stepper)
     }
 
     // P-B-21, P-B-64: licznik przepełnienia kandydatów narasta z kroku na krok, a maksimum na obiekt dotyczy ostatniego kroku.

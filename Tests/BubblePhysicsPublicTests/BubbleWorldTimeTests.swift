@@ -3,9 +3,10 @@ import XCTest
 
 @MainActor
 final class BubbleWorldTimeTests: XCTestCase {
-    private func world(step: Double = 0.125) throws -> BubbleWorld {
+    private func world(step: Double = 0.125, maximumBacklog: TimeInterval = 10) throws -> BubbleWorld {
         try BubbleWorld(configuration: WorldConfiguration(simulationRegion:
-            WorldRectangle(min: [-10, -10], max: [10, 10]), fixedTimeStep: step), device: nil)
+            WorldRectangle(min: [-10, -10], max: [10, 10]), fixedTimeStep: step,
+            maximumBacklog: maximumBacklog), device: nil)
     }
 
     func testAdvanceAccumulatesPresentationTimeIntoDeterministicFixedSteps() async throws {
@@ -27,11 +28,11 @@ final class BubbleWorldTimeTests: XCTestCase {
     }
 
     func testOneSecondBatchAndSixtyPresentationIntervalsCompleteSameSixtySteps() async throws {
-        let batched = try world(step: 1.0 / 60.0)
+        let batched = try world(step: 1.0 / 60.0, maximumBacklog: 10)
         var batchedFrame = await batched.advance(by: 1)
         for _ in 0..<8 { batchedFrame = await batched.advance(by: 0) }
 
-        let split = try world(step: 1.0 / 60.0)
+        let split = try world(step: 1.0 / 60.0, maximumBacklog: 10)
         var splitFrame = await split.advance(by: 0)
         for _ in 0..<60 { splitFrame = await split.advance(by: 1.0 / 60.0) }
 
@@ -90,7 +91,7 @@ final class BubbleWorldTimeTests: XCTestCase {
     }
 
     func testPersistentBacklogCanBeDrainedWithoutChangingConfiguredStep() async throws {
-        let world = try world()
+        let world = try world(maximumBacklog: 1000)
         let first = await world.advance(by: 100)
         XCTAssertGreaterThan(first.stepIndex, 0)
         XCTAssertLessThan(first.simulationTime, 100)
@@ -123,5 +124,29 @@ final class BubbleWorldTimeTests: XCTestCase {
         let valid = await world.advance(by: 0.0625)
         XCTAssertEqual(valid.transactionReceipts.map(\.token), [token])
         XCTAssertNil(world.diagnostics.lastAdvanceIssue)
+    }
+
+    // P-B-53: advance(by: 10) obcina backlog do 0,25 s, a nadmiar trafia do diagnostyki.
+    func testAdvanceOfTenSecondsClampsBacklogToQuarterSecondAndReportsTheExcess() async throws {
+        let step = 1.0 / 60.0
+        let world = try world(step: step, maximumBacklog: 0.25)
+        XCTAssertEqual(world.configuration.maximumBacklog, 0.25)
+        let first = await world.advance(by: 10)
+        XCTAssertEqual(first.stepIndex, 8, "najwyżej osiem kroków na advance bez bufora poleceń")
+        XCTAssertEqual(world.diagnostics.backlogSeconds + first.simulationTime, 0.25, accuracy: 1e-9)
+        XCTAssertEqual(world.diagnostics.discardedBacklogSeconds, 9.75, accuracy: 1e-9)
+        var final = first
+        for _ in 0..<2 { final = await world.advance(by: 0) }
+        XCTAssertEqual(final.stepIndex, 15, "0,25 s to dokładnie 15 kroków po 1/60")
+        XCTAssertEqual(world.diagnostics.discardedBacklogSeconds, 9.75, accuracy: 1e-9)
+        _ = await world.advance(by: 10)
+        XCTAssertEqual(world.diagnostics.discardedBacklogSeconds, 19.5, accuracy: 1e-9,
+            "kolejne długie przerwy dopisują się do sumy")
+    }
+
+    func testBacklogBelowTheLimitReportsNoDiscardedTime() async throws {
+        let world = try world(maximumBacklog: 0.25)
+        _ = await world.advance(by: 0.2)
+        XCTAssertEqual(world.diagnostics.discardedBacklogSeconds, 0)
     }
 }

@@ -93,6 +93,23 @@ final class ModelValidationTests: XCTestCase {
         XCTAssertThrowsError(try WorldConfiguration(simulationRegion: region, globalForce: [.infinity, 0]))
     }
 
+    // P-B-53: limit backlogu ma domyślną wartość 0,25 s i jest walidowany jak krok.
+    func testMaximumBacklogDefaultsToQuarterSecondAndIsValidated() throws {
+        let region = try WorldRectangle(min: [-1, -1], max: [1, 1])
+        XCTAssertEqual(try WorldConfiguration(simulationRegion: region).maximumBacklog, 0.25)
+        XCTAssertEqual(try WorldConfiguration(simulationRegion: region, maximumBacklog: 2).maximumBacklog, 2)
+        for invalid in [Double.nan, .infinity, -.infinity] {
+            XCTAssertThrowsError(try WorldConfiguration(simulationRegion: region, maximumBacklog: invalid)) {
+                XCTAssertEqual($0 as? ModelValidationError, .nonFiniteValue("maximumBacklog"))
+            }
+        }
+        for invalid in [0.0, -0.25] {
+            XCTAssertThrowsError(try WorldConfiguration(simulationRegion: region, maximumBacklog: invalid)) {
+                XCTAssertEqual($0 as? ModelValidationError, .nonPositiveValue("maximumBacklog"))
+            }
+        }
+    }
+
     func testBubbleAndPolygonValidatePhysicalValues() throws {
         for radius: Float in [0, -1, .nan, .infinity] {
             XCTAssertThrowsError(try BubbleDescriptor(id: ObjectID(rawValue: 1), position: .zero,

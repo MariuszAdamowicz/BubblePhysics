@@ -221,7 +221,8 @@ final class RegionPolicyTests: XCTestCase {
         world.submit(try WorldTransaction()
             .updatePhysicsMaterial(.init(rawValue: 1), material: PhysicsMaterial(kind: .bubble))
             .updateRenderStyle(.init(rawValue: 1), style: RenderStyle()).add(object.descriptor))
-        _ = await world.advance(by: 0.75)
+        // Limit backlogu (0,25 s) pozwala na jeden krok na wywołanie przy kroku 0,25 s.
+        for _ in 0..<3 { _ = await world.advance(by: 0.25) }
         let token = world.submit(WorldTransaction().remove(.init(rawValue: 1)))
         let frame = await world.advance(by: 0.25)
         XCTAssertEqual(frame.events, [.transactionRejected(token, TransactionRejection(operationIndex: 0,
