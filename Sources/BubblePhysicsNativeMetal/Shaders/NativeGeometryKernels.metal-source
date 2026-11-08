@@ -12,10 +12,12 @@ struct NativeBubble {
     ulong2 resources;
     ulong2 eventData;
     float4 bounds;
+    uint4 filter; // kategoria, maska, reserved, reserved
 };
 struct NativeSegment {
     long2 identity; uint4 flags; float4 previous; float4 current;
     float4 velocity; float4 collision;
+    uint4 filter; // kategoria, maska, reserved, reserved
 };
 struct NativeContactCache {
     long2 participants; uint4 metadata; float4 geometry; float4 response;
@@ -28,6 +30,7 @@ struct NativeRenderPacket { long2 identity; float4 geometry; float4 deformation;
 struct NativeRigidBody {
     ulong2 identity; float4 pose; float4 previous; float4 motion; float4 physical;
     uint4 ranges; uint4 flags;
+    uint4 filter; // kategoria, maska, kinematyczna (1), reserved
 };
 struct NativeRigidCorrection { float4 first; float4 second; float4 velocityFirst; float4 velocitySecond; };
 // Ostatni kontakt bryły ze ścianą, zatrzymany przez sweep w nativeRigidPredict; para (bryła, właściciel ściany).
@@ -107,6 +110,13 @@ kernel void nativeSeedStructuralContours(device NativeBubble *bubbles [[buffer(0
     if (!all(isfinite(value))) atomic_fetch_or_explicit(safety + 3, 1, memory_order_relaxed);
     pressure[index] = value;
 }
+
+// Filtr obustronny (P-B-11): para ma kontakt tylko wtedy, gdy każdy obiekt przyjmuje kategorię drugiego.
+bool nativeFilterAccepts(uint4 a, uint4 b) {
+    return (a.x & b.y) != 0 && (b.x & a.y) != 0;
+}
+// Bryła nieruchoma dla solvera: statyczna albo kinematyczna (odwrotna masa 0). Dwie takie nie tworzą pary.
+bool nativeRigidImmovable(NativeRigidBody b) { return b.flags.x != 0 || b.filter.z != 0; }
 
 float2 nativeRotate(float2 p, float angle) {
     float c = cos(angle), s = sin(angle); return float2(p.x*c-p.y*s, p.x*s+p.y*c);
@@ -231,6 +241,7 @@ kernel void nativeEmitCandidates(device NativeBubble *bubbles [[buffer(0)]],
             uint j = grid[k].metadata.x;
             if (j <= index) continue;
             NativeBubble b = bubbles[j];
+            if (!nativeFilterAccepts(a.filter, b.filter)) continue;
             float reach = a.physical.z + b.physical.z + contacts.thresholds.w;
             if (all(abs(a.position.xy - b.position.xy) <= reach)) {
                 NativeCandidate candidate = { long2(a.identity.x, b.identity.x), uint4(0, index, j, 1) };
@@ -240,6 +251,7 @@ kernel void nativeEmitCandidates(device NativeBubble *bubbles [[buffer(0)]],
     }
     for (uint j = 0; j < control.counts.y; ++j) {
         NativeSegment s = segments[j];
+        if (!nativeFilterAccepts(a.filter, s.filter)) continue;
         float reach = a.physical.z + contacts.thresholds.w;
         float2 lower = min(s.current.xy, s.current.zw) - reach;
         float2 upper = max(s.current.xy, s.current.zw) + reach;
@@ -276,6 +288,7 @@ kernel void nativeRigidEmitCandidates(device NativeRigidBody *bodies [[buffer(0)
         float2 bodyHigh = max(b.pose.xy, b.previous.xy) + b.physical.z;
         for (uint ai = 0; ai < counts.y; ++ai) {
             NativeBubble a = bubbles[ai];
+            if (!nativeFilterAccepts(a.filter, b.filter)) continue;
             float2 center = positions[ai].xy;
             float reach = 1.5f * a.physical.z;
             float2 bubbleLow = min(center, a.position.zw) - reach, bubbleHigh = max(center, a.position.zw) + reach;
@@ -288,7 +301,8 @@ kernel void nativeRigidEmitCandidates(device NativeRigidBody *bodies [[buffer(0)
         if (other == index) continue;
         uint low = min(index, other), high = max(index, other);
         NativeRigidBody a = bodies[low], c = bodies[high];
-        if (a.flags.x && c.flags.x) continue;
+        if (nativeRigidImmovable(a) && nativeRigidImmovable(c)) continue;
+        if (!nativeFilterAccepts(a.filter, c.filter)) continue;
         float2 start = a.previous.xy - c.previous.xy, end = a.pose.xy - c.pose.xy, travel = end - start;
         float travelSquared = dot(travel, travel);
         float t = travelSquared > FLT_MIN ? clamp(-dot(start, travel) / travelSquared, 0.0f, 1.0f) : 0.0f;

@@ -12,6 +12,7 @@ struct NativeMetalBubble: Equatable, Sendable {
     var resources = SIMD2<UInt64>.zero
     var eventData = SIMD2<UInt64>.zero // interest, merge groups
     var bounds = SIMD4<Float>.zero // AABB zdeformowanego konturu po kroku: min.xy, max.xy
+    var filter = NativeMetalFilter.default // kategoria, maska, reserved, reserved
 
     init(_ bubble: NativeSolverBubble) {
         identity = SIMD2(Int64(bubble.id.rawValue), 0)
@@ -30,6 +31,15 @@ struct NativeMetalBubble: Equatable, Sendable {
     }
 }
 
+/// Filtr kolizji w rekordach GPU: kategoria i maska w pierwszych dwóch lane'ach, reszta zarezerwowana.
+/// Brak filtra (rekord bez ustawień publicznych) oznacza filtr domyślny, czyli kolizję ze wszystkim.
+enum NativeMetalFilter {
+    static let `default` = pack(.default)
+    static func pack(_ filter: CollisionFilter, kinematic: Bool = false) -> SIMD4<UInt32> {
+        SIMD4(filter.category, filter.mask, kinematic ? 1 : 0, 0)
+    }
+}
+
 struct NativeMetalSegment: Equatable, Sendable {
     var identity: SIMD2<Int64>
     var flags: SIMD4<UInt32>
@@ -37,6 +47,7 @@ struct NativeMetalSegment: Equatable, Sendable {
     var current: SIMD4<Float>
     var velocity: SIMD4<Float>
     var collision: SIMD4<Float>
+    var filter: SIMD4<UInt32> // kategoria, maska, reserved, reserved
 
     init(_ segment: NativeSolverSegment) {
         identity = SIMD2(Int64(segment.id), Int64(segment.ownerID ?? 0))
@@ -46,6 +57,7 @@ struct NativeMetalSegment: Equatable, Sendable {
         current = SIMD4(segment.currentA.x, segment.currentA.y, segment.currentB.x, segment.currentB.y)
         velocity = SIMD4(segment.linearVelocity.x, segment.linearVelocity.y, segment.angularVelocity, 0)
         collision = SIMD4(segment.allowedSide ?? 0, 0, 0, 0)
+        filter = NativeMetalFilter.pack(segment.filter)
     }
 }
 
@@ -202,6 +214,7 @@ package struct NativeMetalSnapshot: Sendable {
                 // restitucję bez współdzielenia bufora deformacji konturu.
                 value.resources.x = UInt64(properties.restitution.bitPattern)
                 value.eventData = properties.eventData
+                value.filter = NativeMetalFilter.pack(properties.filter)
             }
             return .init(index: index, value: value)
         }

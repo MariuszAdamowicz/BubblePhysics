@@ -58,6 +58,7 @@ struct NativePublicProperties: Equatable, Sendable {
     var restitution: Float
     var resources: SIMD2<UInt64> // material ID, style ID
     var eventData: SIMD2<UInt64> // interest, merge groups
+    var filter: CollisionFilter = .default
 }
 
 struct NativePublicSettings: Equatable, Sendable {
@@ -128,7 +129,7 @@ package final class NativePublicWorld {
                     material: SIMD4(material.damping, material.deformability, object.rigidity, material.friction),
                     restitution: material.restitution,
                     resources: SIMD2(b.physicsMaterialID.rawValue, b.renderStyleID.rawValue),
-                    eventData: SIMD2(b.eventInterest.rawValue, b.mergeGroups.rawValue))
+                    eventData: SIMD2(b.eventInterest.rawValue, b.mergeGroups.rawValue), filter: b.filter)
                 if let shape = object.structuralShape { structuralShapes[b.id] = shape }
                 styleID = b.renderStyleID; local = object.presentation
             case .polygon(let p):
@@ -156,7 +157,7 @@ package final class NativePublicWorld {
                     entry = (p.geometry, object.position, object.rotation, segments)
                 }
                 candidatePolygons[p.id] = entry
-                solverSegments.append(contentsOf: entry.segments)
+                solverSegments.append(contentsOf: entry.segments.map { var segment = $0; segment.filter = p.filter; return segment })
             case .sensor(let s): styleID = s.renderStyleID; local = object.presentation
             case .forceField(let f): styleID = f.renderStyleID; local = object.presentation
             }

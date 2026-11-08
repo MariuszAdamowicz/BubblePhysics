@@ -71,14 +71,16 @@ final class NativeMetalShaderABITests: XCTestCase {
                 ("material", MemoryLayout<NativeMetalBubble>.offset(of: \.material)),
                 ("resources", MemoryLayout<NativeMetalBubble>.offset(of: \.resources)),
                 ("eventData", MemoryLayout<NativeMetalBubble>.offset(of: \.eventData)),
-                ("bounds", MemoryLayout<NativeMetalBubble>.offset(of: \.bounds))]),
+                ("bounds", MemoryLayout<NativeMetalBubble>.offset(of: \.bounds)),
+                ("filter", MemoryLayout<NativeMetalBubble>.offset(of: \.filter))]),
             Probe(name: "segment", mslSize: "NativeSegment", swiftSize: MemoryLayout<NativeMetalSegment>.stride, fields: [
                 ("identity", MemoryLayout<NativeMetalSegment>.offset(of: \.identity)),
                 ("flags", MemoryLayout<NativeMetalSegment>.offset(of: \.flags)),
                 ("previous", MemoryLayout<NativeMetalSegment>.offset(of: \.previous)),
                 ("current", MemoryLayout<NativeMetalSegment>.offset(of: \.current)),
                 ("velocity", MemoryLayout<NativeMetalSegment>.offset(of: \.velocity)),
-                ("collision", MemoryLayout<NativeMetalSegment>.offset(of: \.collision))]),
+                ("collision", MemoryLayout<NativeMetalSegment>.offset(of: \.collision)),
+                ("filter", MemoryLayout<NativeMetalSegment>.offset(of: \.filter))]),
             Probe(name: "cache", mslSize: "NativeContactCache", swiftSize: MemoryLayout<NativeContactCacheRecord>.stride, fields: [
                 ("participants", MemoryLayout<NativeContactCacheRecord>.offset(of: \.participants)),
                 ("metadata", MemoryLayout<NativeContactCacheRecord>.offset(of: \.metadata)),
@@ -106,7 +108,8 @@ final class NativeMetalShaderABITests: XCTestCase {
                 ("motion", MemoryLayout<NativeRigidBody>.offset(of: \.motion)),
                 ("physical", MemoryLayout<NativeRigidBody>.offset(of: \.physical)),
                 ("ranges", MemoryLayout<NativeRigidBody>.offset(of: \.ranges)),
-                ("flags", MemoryLayout<NativeRigidBody>.offset(of: \.flags))]),
+                ("flags", MemoryLayout<NativeRigidBody>.offset(of: \.flags)),
+                ("filter", MemoryLayout<NativeRigidBody>.offset(of: \.filter))]),
             Probe(name: "structuralHeader", mslSize: "NativeStructuralHeader", swiftSize: MemoryLayout<NativeStructuralHeader>.stride, fields: [
                 ("origin", MemoryLayout<NativeStructuralHeader>.offset(of: \.origin))]),
             Probe(name: "structuralSource", mslSize: "NativeStructuralSource", swiftSize: MemoryLayout<NativeStructuralSourceRecord>.stride, fields: [
@@ -136,7 +139,8 @@ final class NativeMetalShaderABITests: XCTestCase {
             ("deformation", MemoryLayout<NativeMetalBubble>.offset(of: \.deformation)),
             ("material", MemoryLayout<NativeMetalBubble>.offset(of: \.material)),
             ("eventData", MemoryLayout<NativeMetalBubble>.offset(of: \.eventData)),
-            ("bounds", MemoryLayout<NativeMetalBubble>.offset(of: \.bounds))])]
+            ("bounds", MemoryLayout<NativeMetalBubble>.offset(of: \.bounds)),
+            ("filter", MemoryLayout<NativeMetalBubble>.offset(of: \.filter))])]
         assertMatches(probes, try measure(probes, sources: [try source("NativeRenderKernels")], device: device))
     }
 }

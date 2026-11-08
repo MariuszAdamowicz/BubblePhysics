@@ -18,7 +18,8 @@ struct NativeRigidBody: Equatable {
     var motion: SIMD4<Float> // velocity.xy, angular velocity, damping
     var physical: SIMD4<Float> // inverse mass, inverse moment, radius, reserved
     var ranges: SIMD4<UInt32> // vertex offset/count, convex triangle offset/count
-    var flags: SIMD4<UInt32> // static, wrap, region result, reserved
+    var flags: SIMD4<UInt32> // static, wrap, region result, restitution
+    var filter: SIMD4<UInt32> // kategoria, maska, kinematyczna, reserved
 }
 
 struct NativeRigidGeometry {
@@ -161,7 +162,8 @@ final class NativeRigidPolygonState {
                 // Kontakt miesza tarcie przez średnią geometryczną i sprężystość przez max.
                 physical: SIMD4(isStatic ? 0 : 1 / p.mass, isStatic ? 0 : 1 / p.momentOfInertia, geometry.radius, input.friction),
                 ranges: SIMD4(UInt32(vertices.count), UInt32(geometry.vertices.count), UInt32(triangles.count), UInt32(geometry.triangles.count)),
-                flags: SIMD4(isStatic ? 1 : 0, p.regionExitPolicy == .wrap ? 1 : 0, 0, input.restitution.bitPattern))
+                flags: SIMD4(isStatic ? 1 : 0, p.regionExitPolicy == .wrap ? 1 : 0, 0, input.restitution.bitPattern),
+                filter: NativeMetalFilter.pack(p.filter))
             guard record.physical.x.isFinite, record.physical.y.isFinite else { throw NativeMetalSolverError.invalidSnapshot }
             records.append(record)
             vertices += geometry.vertices

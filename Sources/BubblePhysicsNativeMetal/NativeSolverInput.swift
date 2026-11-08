@@ -60,6 +60,8 @@ package struct NativeSolverSegment: Equatable, Sendable {
     package var ownerID: Int?
     /// `nil` oznacza segment dwustronny; w przeciwnym razie znak dozwolonej strony (−1 albo 1).
     package var allowedSide: Float?
+    /// Filtr kolizji właściciela (krawędź statycznej bryły); domyślnie kolizja ze wszystkim.
+    package var filter: CollisionFilter = .default
 
     package init(id: Int, previousA: SIMD2<Float>, previousB: SIMD2<Float>, currentA: SIMD2<Float>,
                  currentB: SIMD2<Float>, linearVelocity: SIMD2<Float> = .zero, angularVelocity: Float = 0,

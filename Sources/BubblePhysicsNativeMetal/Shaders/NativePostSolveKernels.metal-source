@@ -38,7 +38,8 @@ kernel void nativeFindFastCandidates(device NativeBubble *bubbles [[buffer(0)]],
     changed[i] = 0;
     NativeBubble b = bubbles[i];
     for (uint j = 0; j < control.counts.y; ++j)
-        if (nativeFastCandidate(b, segments[j], control, contacts)) nativeSafetyEvent(safety, 0);
+        if (nativeFilterAccepts(b.filter, segments[j].filter) && nativeFastCandidate(b, segments[j], control, contacts))
+            nativeSafetyEvent(safety, 0);
 }
 
 float2 nativeReturnToOriginalSide(float2 start, float2 end, NativeSegment s, float margin) {
@@ -107,6 +108,7 @@ kernel void nativeResolveCCD(device NativeBubble *bubbles [[buffer(0)]],
     float2 start = bubbles[i].position.zw, end = positions[i].xy;
     for (uint j = 0; j < control.counts.y; ++j) {
         NativeSegment s = segments[j];
+        if (!nativeFilterAccepts(bubbles[i].filter, s.filter)) continue;
         if (!nativeFastCandidate(bubbles[i], s, control, contacts)) continue;
         if (!nativeCenterPathFinite(start, end, s, statistics)) { nativeSafetyFailure(safety, 1); continue; }
         if (!nativeForbiddenCenterCrossing(start, end, s, segments, control.counts.y, statistics, false)) continue;
@@ -141,6 +143,7 @@ void nativeGuardCenter(device NativeBubble *bubbles, device NativeSegment *segme
     float margin = max(contacts.thresholds.z * 2, 1e-5f);
     for (uint j = 0; j < control.counts.y; ++j) {
         NativeSegment s = segments[j];
+        if (!nativeFilterAccepts(bubbles[i].filter, s.filter)) continue;
         float2 corrected = end;
         if (nativeFastCandidate(bubbles[i], s, control, contacts) || nativePossibleCenterCrossing(start, end, s)) {
             if (!nativeCenterPathFinite(start, end, s, statistics)) { nativeSafetyFailure(safety, 1); continue; }
@@ -156,7 +159,7 @@ void nativeGuardCenter(device NativeBubble *bubbles, device NativeSegment *segme
     }
     for (uint j = 0; j < control.counts.y; ++j) {
         NativeSegment s = segments[j];
-        if (!s.flags.y) continue;
+        if (!s.flags.y || !nativeFilterAccepts(bubbles[i].filter, s.filter)) continue;
         bool first = true;
         for (uint k = 0; k < j; ++k)
             if (segments[k].flags.y && segments[k].identity.y == s.identity.y) first = false;
@@ -182,6 +185,7 @@ void nativeGuardCenter(device NativeBubble *bubbles, device NativeSegment *segme
     if (!all(isfinite(end))) nativeSafetyFailure(safety, 1);
     for (uint j = 0; j < control.counts.y; ++j) {
         NativeSegment s = segments[j];
+        if (!nativeFilterAccepts(bubbles[i].filter, s.filter)) continue;
         if (nativeFastCandidate(bubbles[i], s, control, contacts) || nativePossibleCenterCrossing(start, end, s)) {
             if (!nativeCenterPathFinite(start, end, s, statistics)) nativeSafetyFailure(safety, 1);
             else if (nativeForbiddenCenterCrossing(start, end, s, segments, control.counts.y, statistics, true))
@@ -225,6 +229,7 @@ kernel void nativeSeparateContainedBubbles(device NativeBubble *bubbles [[buffer
     for (uint j = lane; j < control.counts.x; j += width) {
         if (i == j) continue;
         NativeBubble b = bubbles[j];
+        if (!nativeFilterAccepts(a.filter, b.filter)) continue;
         float minimum = abs(a.physical.z - b.physical.z);
         if (minimum <= solver.physics.y) continue;
         float2 delta = center - input[j].xy;
@@ -280,6 +285,7 @@ kernel void nativeValidateBubbleContainment(device NativeBubble *bubbles [[buffe
     uint i = pair / count, j = pair % count;
     if (j <= i) return;
     if (bubbles[i].physical.y + bubbles[j].physical.y <= 0) return;
+    if (!nativeFilterAccepts(bubbles[i].filter, bubbles[j].filter)) return;
     float distance = length(positions[j].xy - positions[i].xy);
     float smaller = min(bubbles[i].physical.z, bubbles[j].physical.z);
     float larger = max(bubbles[i].physical.z, bubbles[j].physical.z);
@@ -345,6 +351,8 @@ kernel void nativeRigidPredict(device NativeRigidBody *bodies [[buffer(0)]],
     float dt=control.physics.x;b.motion.xyz*=exp(-b.motion.w*dt);
     float3 start=b.pose.xyz;b.pose.xyz+=b.motion.xyz*dt;
     if(!all(isfinite(b.pose)) || !all(isfinite(b.motion))) { nativeSafetyFailure(safety,1);bodies[index]=b;return; }
+    // Kinematyczna bryła jedzie po zadanym torze: nie tłumi, nie zatrzymuje jej ściana ani żadne sąsiednie ciało.
+    if(b.filter.z){bodies[index]=b;return;}
     // Konserwatywny sweep wierzchołków zatrzymuje bryłę przed cienką ścianą.
     // Próbkowanie obrotu obejmuje łuk; przekroczenie budżetu odrzuca klatkę.
     uint steps=max(1u,uint(ceil(abs(b.pose.z-start.z)/0.05f)));
@@ -356,6 +364,7 @@ kernel void nativeRigidPredict(device NativeRigidBody *bodies [[buffer(0)]],
         for(uint j=0;j<control.counts.y && !crossed;++j){
             NativeSegment wall=segments[j];
             if(ulong(wall.identity.y)==b.identity.x && wall.flags.y)continue;
+            if(!nativeFilterAccepts(b.filter,wall.filter))continue;
             for(uint k=0;k<b.ranges.y;++k){
                 float2 v=vertices[b.ranges.x+k];
                 float2 startVertex=p.xy+nativeRotate(v,p.z),endVertex=q.xy+nativeRotate(v,q.z);
@@ -396,10 +405,10 @@ kernel void nativeRigidPredict(device NativeRigidBody *bodies [[buffer(0)]],
 kernel void nativeRigidGuardWalls(device NativeRigidBody *bodies [[buffer(0)]],
     device float2 *vertices [[buffer(1)]], device uint4 *triangles [[buffer(2)]],
     constant uint4 &counts [[buffer(3)]], uint index [[thread_position_in_grid]]) {
-    if(index>=counts.x || bodies[index].flags.x)return;
+    if(index>=counts.x || bodies[index].flags.x || bodies[index].filter.z)return;
     NativeRigidBody b=bodies[index];
     for(uint j=0;j<counts.x;++j){
-        if(!bodies[j].flags.x)continue;
+        if(!bodies[j].flags.x || !nativeFilterAccepts(b.filter,bodies[j].filter))continue;
         NativeRigidBody wall=bodies[j];
         for(uint k=0;k<b.ranges.y;++k){
             float2 p=nativeRigidVertex(b,vertices,k);
@@ -497,9 +506,11 @@ kernel void nativeAccumulateContactPressure(device NativeBubble *bubbles [[buffe
     float2 direction = float2(cos(angle), sin(angle));
     float limit = bubble.physical.z;
     // Rzeczywiste skończone krawędzie: także te, które guard dopiero dosunął do bańki.
-    for (uint j = 0; j < control.counts.y; ++j)
+    for (uint j = 0; j < control.counts.y; ++j) {
+        if (!nativeFilterAccepts(bubble.filter, segments[j].filter)) continue;
         limit = nativeContourRayLimit(bubble.position.xy, direction, segments[j].current.xy,
             segments[j].current.zw, limit, contour.shape.w);
+    }
     float directionalPressure = 0;
     for (uint j = 0; j < degrees[bubbleIndex]; ++j) {
         uint4 edge = adjacency[bubbleIndex * contacts.cache.w + j];

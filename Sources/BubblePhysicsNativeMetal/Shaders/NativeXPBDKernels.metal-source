@@ -584,7 +584,7 @@ kernel void nativeRigidContacts(device NativeRigidBody *bodies [[buffer(0)]],
     } else {
         uint ai=candidate.metadata.y,bi=candidate.metadata.z;
         NativeRigidBody a=bodies[ai],b=bodies[bi];
-        if(ai>=bi || (a.flags.x&&b.flags.x)){corrections[index]=result;return;}
+        if(ai>=bi || (nativeRigidImmovable(a)&&nativeRigidImmovable(b))){corrections[index]=result;return;}
         float2 start=a.previous.xy-b.previous.xy,end=a.pose.xy-b.pose.xy,travel=end-start;
         float travelSquared=dot(travel,travel);
         float t=travelSquared>FLT_MIN ? clamp(-dot(start,travel)/travelSquared,0.0f,1.0f) : 0.0f;
