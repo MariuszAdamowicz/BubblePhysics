@@ -39,6 +39,19 @@ final class TransitionTests: XCTestCase {
         }
     }
 
+    // P-B-28: przejście parametru materiału nie może zgubić limitów prędkości (materiał jest budowany od nowa).
+    func testMaterialTransitionKeepsSpeedLimits() throws {
+        var state = try initial()
+        state.physicsMaterials[material] = try PhysicsMaterial(kind: .bubble, maximumLinearSpeed: 30, maximumAngularSpeed: 4)
+        state = try TransactionStager.stage(WorldTransaction()
+            .startTransition(.init(target: .physicsMaterial(material, .friction), value: .scalar(0.8), duration: 1)),
+            against: state).state
+        try MotionControllers.prepare(&state, duration: 0.5)
+        XCTAssertEqual(state.physicsMaterials[material]?.friction, 0.4)
+        XCTAssertEqual(state.physicsMaterials[material]?.maximumLinearSpeed, 30)
+        XCTAssertEqual(state.physicsMaterials[material]?.maximumAngularSpeed, 4)
+    }
+
     func testMaterialContactTransitionsUpdateFrictionAndRestitutionTogether() throws {
         var state = try TransactionStager.stage(WorldTransaction()
             .startTransition(.init(target: .physicsMaterial(material, .friction), value: .scalar(0.8), duration: 1))

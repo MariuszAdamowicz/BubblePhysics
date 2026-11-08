@@ -384,6 +384,8 @@ kernel void nativeRigidPredict(device NativeRigidBody *bodies [[buffer(0)]],
     NativeRigidBody b=bodies[index];b.previous.xy=b.pose.xy;b.pose.w=b.pose.z;b.flags.z=0;
     if(b.flags.x){b.motion.xyz=0;bodies[index]=b;return;}
     float dt=control.physics.x;b.motion.xyz*=exp(-b.motion.w*dt);
+    // Limity prędkości z materiału; kinematyczna ma narzucony tor i limitu nie dotyczy.
+    if(!b.filter.z){b.motion.xy=nativeClampLinearSpeed(b.motion.xy,b.limits.x);b.motion.z=nativeClampAngularSpeed(b.motion.z,b.limits.y);}
     float3 start=b.pose.xyz;b.pose.xyz+=b.motion.xyz*dt;
     if(!all(isfinite(b.pose)) || !all(isfinite(b.motion))) { nativeSafetyFailure(safety,1);bodies[index]=b;return; }
     // Kinematyczna bryła jedzie po zadanym torze: nie tłumi, nie zatrzymuje jej ściana ani żadne sąsiednie ciało.
@@ -476,6 +478,7 @@ kernel void nativeRigidFinish(device NativeRigidBody *bodies [[buffer(0)]],
     NativeRigidBody b=bodies[index];
     if(!all(isfinite(b.pose))||!all(isfinite(b.previous))||!all(isfinite(b.motion))){nativeSafetyFailure(safety,1);return;}
     if(b.flags.x)return;
+    if(!b.filter.z){b.motion.xy=nativeClampLinearSpeed(b.motion.xy,b.limits.x);b.motion.z=nativeClampAngularSpeed(b.motion.z,b.limits.y);}
     float2 low=float2(INFINITY),high=float2(-INFINITY);
     for(uint i=0;i<b.ranges.y;++i){float2 v=nativeRigidVertex(b,vertices,i);low=min(low,v);high=max(high,v);}
     // Rdzeń koła i kapsuły powiększony o promień kształtu (0 dla wielokąta).
@@ -738,11 +741,13 @@ kernel void nativePrepareRenderData(device NativeBubble *bubbles [[buffer(0)]],
         if (!isfinite(edge)) nativeSafetyFailure(safety, 1);
         else if (edge > contour.shape.x) nativeSafetyFailure(safety, 4);
     }
-    bubble.deformation = float4(maximum, effectiveRadius, 0, 0);
+    // Limity prędkości z materiału (zw) przechodzą do następnego kroku w rekordzie bańki, a pakiet renderu ich nie niesie.
+    float4 limits = bubble.deformation;
+    bubble.deformation = float4(maximum, effectiveRadius, limits.z, limits.w);
     bubble.bounds = float4(boundsMin, boundsMax);
     bubbles[index] = bubble;
     NativeRenderPacket packet = {bubble.identity,
-        float4(bubble.position.xy, bubble.physical.z, bubble.motion.z), bubble.deformation};
+        float4(bubble.position.xy, bubble.physical.z, bubble.motion.z), float4(maximum, effectiveRadius, 0, 0)};
     if (!all(isfinite(packet.geometry))) nativeSafetyFailure(safety, 1);
     packets[index] = packet;
 }

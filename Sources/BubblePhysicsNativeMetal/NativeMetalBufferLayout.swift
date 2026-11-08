@@ -6,7 +6,7 @@ struct NativeMetalBubble: Equatable, Sendable {
     var position: SIMD4<Float> // center.xy, previousCenter.xy
     var motion: SIMD4<Float> // velocity.xy, rotation, angularVelocity
     var physical: SIMD4<Float> // mass, inverseMass, radius, stiffness
-    var deformation: SIMD4<Float> // maksymalna względna deformacja konturu, reserved
+    var deformation: SIMD4<Float> // maksymalna względna deformacja konturu, promień efektywny, limit prędkości liniowej, kątowej (0 = brak)
     var publicFlags = SIMD4<UInt32>.zero
     var material = SIMD4<Float>.zero
     var resources = SIMD2<UInt64>.zero
@@ -215,6 +215,7 @@ package struct NativeMetalSnapshot: Sendable {
                 value.resources.x = UInt64(properties.restitution.bitPattern)
                 value.eventData = properties.eventData
                 value.filter = NativeMetalFilter.pack(properties.filter)
+                value.deformation = SIMD4(0, 0, properties.speedLimits.x, properties.speedLimits.y)
             }
             return .init(index: index, value: value)
         }

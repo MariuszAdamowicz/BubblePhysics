@@ -59,6 +59,8 @@ struct NativePublicProperties: Equatable, Sendable {
     var resources: SIMD2<UInt64> // material ID, style ID
     var eventData: SIMD2<UInt64> // interest, merge groups
     var filter: CollisionFilter = .default
+    /// Limity prędkości z materiału: liniowa, kątowa (0 = bez limitu); w rekordzie bańki jako `deformation.zw`.
+    var speedLimits: SIMD2<Float> = .zero
 }
 
 struct NativePublicSettings: Equatable, Sendable {
@@ -135,13 +137,16 @@ package final class NativePublicWorld {
                     material: SIMD4(material.damping, material.deformability, object.rigidity, material.friction),
                     restitution: material.restitution,
                     resources: SIMD2(b.physicsMaterialID.rawValue, b.renderStyleID.rawValue),
-                    eventData: SIMD2(b.eventInterest.rawValue, b.mergeGroups.rawValue), filter: b.filter)
+                    eventData: SIMD2(b.eventInterest.rawValue, b.mergeGroups.rawValue), filter: b.filter,
+                    speedLimits: SIMD2(material.maximumLinearSpeed ?? 0, material.maximumAngularSpeed ?? 0))
                 if let shape = object.structuralShape { structuralShapes[b.id] = shape }
                 styleID = b.renderStyleID; local = object.presentation
             case .rigidBody(let p):
                 guard let material = materials[p.physicsMaterialID] else { throw NativeMetalSolverError.invalidSnapshot }
                 rigidPolygons.append(.init(object: object, damping: material.damping,
-                    friction: material.friction, restitution: material.restitution))
+                    friction: material.friction, restitution: material.restitution,
+                    maximumLinearSpeed: material.maximumLinearSpeed ?? 0,
+                    maximumAngularSpeed: material.maximumAngularSpeed ?? 0))
                 styleID = p.renderStyleID; local = object.presentation
                 // Statyczne krawędzie zachowują dotychczasowy cache i guardy baniek.
                 // Bryły dynamiczne trafiają wyłącznie do obustronnego solvera brył.

@@ -135,6 +135,16 @@ void nativeCountWork(device atomic_uint *statistics, uint slot) {
         atomic_fetch_add_explicit(statistics + slot, 1, memory_order_relaxed);
 }
 
+// Limity prędkości z materiału (0 = bez limitu): długość wektora i wartość bezwzględna prędkości kątowej.
+float2 nativeClampLinearSpeed(float2 velocity, float limit) {
+    float speed = length(velocity);
+    return limit > 0 && speed > limit ? velocity * (limit / speed) : velocity;
+}
+
+float nativeClampAngularSpeed(float velocity, float limit) {
+    return limit > 0 ? clamp(velocity, -limit, limit) : velocity;
+}
+
 kernel void nativePredict(device NativeBubble *bubbles [[buffer(0)]],
                           constant NativeControl &control [[buffer(1)]],
                           uint index [[thread_position_in_grid]]) {
@@ -145,6 +155,8 @@ kernel void nativePredict(device NativeBubble *bubbles [[buffer(0)]],
     b.position.zw = b.position.xy;
     if (b.publicFlags.x && b.publicFlags.y) { b.motion.xy = 0; b.motion.w = 0; bubbles[index] = b; return; }
     b.motion.xy *= exp(-(b.publicFlags.x ? b.material.x : control.physics.y) * dt);
+    b.motion.xy = nativeClampLinearSpeed(b.motion.xy, b.deformation.z);
+    b.motion.w = nativeClampAngularSpeed(b.motion.w, b.deformation.w);
     b.position.xy += b.motion.xy * dt;
     b.motion.z += b.motion.w * dt;
     b.motion.w *= exp(-(b.publicFlags.x ? b.material.x : control.physics.z) * dt);

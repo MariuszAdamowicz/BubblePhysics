@@ -204,7 +204,8 @@ package enum MotionControllers {
                         deformability: parameter == .deformability ? scalar : m.deformability,
                         damping: parameter == .damping ? scalar : m.damping,
                         friction: parameter == .friction ? scalar : m.friction,
-                        restitution: parameter == .restitution ? scalar : m.restitution)
+                        restitution: parameter == .restitution ? scalar : m.restitution,
+                        maximumLinearSpeed: m.maximumLinearSpeed, maximumAngularSpeed: m.maximumAngularSpeed)
                 }
             case (.renderStyle(let id, let parameter), .scalar(let scalar)):
                 if let style = state.renderStyles[id] {

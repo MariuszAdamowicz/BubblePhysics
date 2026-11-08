@@ -764,6 +764,8 @@ kernel void nativeUpdateVelocities(device NativeBubble *bubbles [[buffer(0)]],
     float correctionScale = min(1.0f, max(0.0f, control.physics.w) * dt * dt);
     bubble.position.xy = positions[index].xy;
     bubble.motion.xy += correction * (correctionScale / max(dt, 1e-6f));
+    bubble.motion.xy = nativeClampLinearSpeed(bubble.motion.xy, bubble.deformation.z);
+    bubble.motion.w = nativeClampAngularSpeed(bubble.motion.w, bubble.deformation.w);
     bubbles[index] = bubble;
 }
 
@@ -809,5 +811,7 @@ kernel void nativeDampContactNormalMotion(device NativeBubble *bubbles [[buffer(
         if (abs(normalVelocity) > restSpeed) continue;
         bubble.motion.xy -= outward * (normalVelocity * factor * share);
     }
+    // Odbicie od szybkiego partnera mogłoby przekroczyć limit materiału.
+    bubble.motion.xy = nativeClampLinearSpeed(bubble.motion.xy, bubble.deformation.z);
     bubbles[index] = bubble;
 }

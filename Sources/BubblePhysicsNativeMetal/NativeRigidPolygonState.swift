@@ -7,6 +7,9 @@ struct NativeRigidPolygonInput: Equatable, Sendable {
     var damping: Float
     var friction: Float
     var restitution: Float
+    /// Limity prędkości z materiału (0 = bez limitu).
+    var maximumLinearSpeed: Float = 0
+    var maximumAngularSpeed: Float = 0
 
     /// Koło i kapsuła (rdzeń z promieniem): także statyczne uczestniczą w kontaktach z bańkami w solverze brył,
     /// bo statyczny wielokąt dla baniek to odcinki, a one nie mają odcinków.
@@ -213,7 +216,7 @@ final class NativeRigidPolygonState {
                 flags: SIMD4(isStatic ? 1 : 0, p.regionExitPolicy == .wrap ? 1 : 0, 0, input.restitution.bitPattern),
                 filter: NativeMetalFilter.pack(p.filter, kinematic: isKinematic),
                 shape: SIMD4(Float(geometry.kind), geometry.coreRadius, geometry.halfLength, 0),
-                limits: .zero)
+                limits: SIMD4(input.maximumLinearSpeed, input.maximumAngularSpeed, 0, 0))
             guard record.physical.x.isFinite, record.physical.y.isFinite else { throw NativeMetalSolverError.invalidSnapshot }
             records.append(record)
             vertices += geometry.vertices
