@@ -264,7 +264,7 @@ Etapy wdrożenia ustala plan. Wymaganie z tego dokumentu: najpierw porządki wyd
 - **`Sources/BubblePhysicsPublic/Model/WorldFrame.swift`** — `objects: [ObjectID: ObjectState]`, zdarzenia `contactBegan`/`contactEnded`.
 - **`Sources/BubblePhysicsPublic/Model/WorldConfiguration.swift`** — limit backlogu, przełącznik automatycznej pauzy.
 - **`Sources/BubblePhysicsPublic/Model/Queries.swift`** (nowy) — typy zapytań i wyników.
-- **`Sources/BubblePhysicsPublic/BubbleWorld.swift`** — zapytania synchroniczne, asynchroniczny hit-test, stan końcowy „zawiódł”, interpolacja, cykl życia, licznik przepełnienia kandydatów w diagnostyce.
+- **`Sources/BubblePhysicsPublic/BubbleWorld.swift`** — zapytania synchroniczne, asynchroniczny hit-test, stan końcowy „zawiódł”, interpolacja, cykl życia, licznik przepełnienia kandydatów i największa liczba kandydatów na obiekt w diagnostyce.
 - **`Sources/BubblePhysicsRuntime/*`** — staging nowych operacji, siatka zapytań, polityka czasu, sterowanie kinematyczne, cykl życia.
 - **`Sources/BubblePhysicsNativeMetal/NativePublicWorld.swift`, `NativeMetalSolver.swift`, `NativeMetalBackend.swift`** — neutralne typy wejścia i wyniku solvera, liniowa budowa wejścia z `RuntimeState`, bez importu `BubblePhysicsReference`.
 - **`Sources/BubblePhysicsNativeMetalDiagnostics/*`** (nowy) — runnery, odtwarzanie wizualne, obwiednia jakości i adapter `ReferenceWorld` → wejście solvera, przeniesione z NativeMetal.
