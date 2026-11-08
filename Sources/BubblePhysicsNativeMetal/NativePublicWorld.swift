@@ -26,7 +26,7 @@ package struct NativePublicObject: Equatable, Sendable {
             position = b.position; velocity = b.velocity; rotation = 0; angularVelocity = 0; motionRole = b.motionRole
             collisionRadius = b.targetRadius; effectiveRadius = b.targetRadius
             presentation = b.presentation
-        case .polygon(let p):
+        case .rigidBody(let p):
             position = p.position; velocity = p.velocity; rotation = p.rotation
             angularVelocity = p.angularVelocity; motionRole = p.motionRole
             presentation = p.presentation
@@ -138,8 +138,10 @@ package final class NativePublicWorld {
                     eventData: SIMD2(b.eventInterest.rawValue, b.mergeGroups.rawValue), filter: b.filter)
                 if let shape = object.structuralShape { structuralShapes[b.id] = shape }
                 styleID = b.renderStyleID; local = object.presentation
-            case .polygon(let p):
+            case .rigidBody(let p):
                 guard let material = materials[p.physicsMaterialID] else { throw NativeMetalSolverError.invalidSnapshot }
+                // Koło i kapsuła przechodzą staging, a solver dostaje je w zadaniu 27.
+                guard case .polygon(let geometry) = p.shape else { throw NativeMetalSolverError.invalidSnapshot }
                 rigidPolygons.append(.init(object: object, damping: material.damping,
                     friction: material.friction, restitution: material.restitution))
                 styleID = p.renderStyleID; local = object.presentation
@@ -147,11 +149,11 @@ package final class NativePublicWorld {
                 // Bryły dynamiczne trafiają wyłącznie do obustronnego solvera brył.
                 if object.motionRole != .static { break }
                 let entry: (geometry: PolygonGeometry, position: WorldPoint, rotation: Float, segments: [NativeSolverSegment])
-                if let cached = polygons[p.id], cached.geometry == p.geometry,
+                if let cached = polygons[p.id], cached.geometry == geometry,
                    cached.position == object.position, cached.rotation == object.rotation { entry = cached }
                 else {
                     let c = cos(object.rotation), s = sin(object.rotation)
-                    let points = p.geometry.vertices.map { WorldPoint($0.x * c - $0.y * s, $0.x * s + $0.y * c) + object.position }
+                    let points = geometry.vertices.map { WorldPoint($0.x * c - $0.y * s, $0.x * s + $0.y * c) + object.position }
                     var segments: [NativeSolverSegment] = []
                     for i in points.indices {
                         guard candidateNextSegmentID < Int.max else { throw NativeMetalSolverError.capacityOverflow }
@@ -160,7 +162,7 @@ package final class NativePublicWorld {
                             ownerID: Int(bitPattern: UInt(p.id.rawValue))))
                         candidateNextSegmentID += 1
                     }
-                    entry = (p.geometry, object.position, object.rotation, segments)
+                    entry = (geometry, object.position, object.rotation, segments)
                 }
                 candidatePolygons[p.id] = entry
                 solverSegments.append(contentsOf: entry.segments.map { var segment = $0; segment.filter = p.filter; return segment })
@@ -171,7 +173,7 @@ package final class NativePublicWorld {
             presentation[object.descriptor.id] = style.resolvedChannels(overrides: local)
         }
         let staticPolygonMaterials = Dictionary(uniqueKeysWithValues: objects.compactMap { object -> (ObjectID, PhysicsMaterial)? in
-            guard case .polygon(let polygon) = object.descriptor, object.motionRole == .static,
+            guard case .rigidBody(let polygon) = object.descriptor, object.motionRole == .static,
                   let material = materials[polygon.physicsMaterialID] else { return nil }
             return (polygon.id, material)
         })
@@ -230,7 +232,7 @@ package final class NativePublicWorld {
             }
         }
         for object in objects {
-            guard case .polygon(let descriptor) = object.descriptor else { continue }
+            guard case .rigidBody(let descriptor) = object.descriptor else { continue }
             if solver.removedPolygons.contains(descriptor.id), descriptor.eventInterest.contains(.didExitSimulationRegion) {
                 append(.didExitSimulationRegion(descriptor.id))
             }
@@ -242,7 +244,7 @@ package final class NativePublicWorld {
             let interest: EventInterest
             switch object.descriptor {
             case .bubble(let b): interest = b.eventInterest
-            case .polygon(let p): interest = p.eventInterest
+            case .rigidBody(let p): interest = p.eventInterest
             default: return nil
             }
             return interest.contains(.contact) ? object.descriptor.id : nil

@@ -26,7 +26,7 @@ final class NativeMetalContactMemoryTests: XCTestCase {
     }
 
     private func box(_ id: UInt64, _ center: WorldPoint, half: Float) throws -> NativePublicObject {
-        NativePublicObject(descriptor: .polygon(try PolygonDescriptor(id: ObjectID(rawValue: id),
+        NativePublicObject(descriptor: .rigidBody(try RigidBodyDescriptor(id: ObjectID(rawValue: id),
             vertices: [[-half, -half], [half, -half], [half, half], [-half, half]], position: center,
             physicsMaterialID: polygonMaterial, renderStyleID: style)))
     }
@@ -47,7 +47,7 @@ final class NativeMetalContactMemoryTests: XCTestCase {
 
     private func step(_ world: NativePublicWorld, _ objects: [NativePublicObject]) async throws -> NativePublicFrame {
         try await world.step(objects: objects,
-            materials: [bubbleMaterial: try PhysicsMaterial(kind: .bubble), polygonMaterial: try PhysicsMaterial(kind: .polygon)],
+            materials: [bubbleMaterial: try PhysicsMaterial(kind: .bubble), polygonMaterial: try PhysicsMaterial(kind: .rigid)],
             styles: [style: try RenderStyle()], region: WorldRectangle(min: [0, 0], max: [1400, 1100]), duration: 1.0 / 60)
     }
 

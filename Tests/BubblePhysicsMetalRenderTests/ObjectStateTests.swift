@@ -20,7 +20,7 @@ final class ObjectStateTests: XCTestCase {
     private func baseTransaction() throws -> WorldTransaction {
         try WorldTransaction()
             .updatePhysicsMaterial(bubbleMaterial, material: PhysicsMaterial(kind: .bubble))
-            .updatePhysicsMaterial(polygonMaterial, material: PhysicsMaterial(kind: .polygon))
+            .updatePhysicsMaterial(polygonMaterial, material: PhysicsMaterial(kind: .rigid))
             .updateRenderStyle(style, style: RenderStyle())
     }
 
@@ -32,7 +32,7 @@ final class ObjectStateTests: XCTestCase {
 
     private func box(_ id: UInt64, center: WorldPoint, half: Float, role: MotionRole = .dynamic,
                      velocity: WorldPoint = .zero, angularVelocity: Float = 0) throws -> WorldObject {
-        .polygon(try PolygonDescriptor(id: ObjectID(rawValue: id),
+        .rigidBody(try RigidBodyDescriptor(id: ObjectID(rawValue: id),
             vertices: [[-half, -half], [half, -half], [half, half], [-half, half]], position: center,
             velocity: velocity, angularVelocity: angularVelocity, motionRole: role,
             physicsMaterialID: polygonMaterial, renderStyleID: style))
@@ -121,7 +121,7 @@ final class ObjectStateTests: XCTestCase {
     func testRotatedPolygonBoundsFollowItsRotation() async throws {
         let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
         let world = try makeWorld(device: device)
-        world.submit(try baseTransaction().add(.polygon(try PolygonDescriptor(id: ObjectID(rawValue: 7),
+        world.submit(try baseTransaction().add(.rigidBody(try RigidBodyDescriptor(id: ObjectID(rawValue: 7),
             vertices: [[-10, -10], [10, -10], [10, 10], [-10, 10]], position: [100, 100], rotation: .pi / 4,
             motionRole: .static, physicsMaterialID: polygonMaterial, renderStyleID: style))))
         let frame = await world.advance(by: 1.0 / 60)

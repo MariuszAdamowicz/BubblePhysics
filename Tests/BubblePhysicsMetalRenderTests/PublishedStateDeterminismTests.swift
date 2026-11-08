@@ -41,6 +41,8 @@ final class PublishedStateDeterminismTests: XCTestCase {
             switch object.kind {
             case .bubble(let radius): kind = [1, radius.bitPattern]
             case .polygon: kind = [2, 0]
+            case .circle(let radius): kind = [3, radius.bitPattern]
+            case .capsule(let halfLength, let radius): kind = [4, halfLength.bitPattern, radius.bitPattern]
             }
             fnv1a([UInt32(truncatingIfNeeded: id.rawValue), UInt32(truncatingIfNeeded: id.rawValue >> 32)] + kind
                 + [object.position.x, object.position.y, object.velocity.x, object.velocity.y,

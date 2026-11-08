@@ -11,6 +11,11 @@ public enum TransactionRejectionReason: Error, Equatable, Sendable {
     case renderStyleNotFound(RenderStyleID)
     case incompatiblePhysicsMaterial(PhysicsMaterialID, ObjectID)
     case incompatibleObjectKind(ObjectID)
+    case jointNotFound(JointID)
+    case duplicateJointID(JointID)
+    /// Więz wymaga ciała, którego rola albo rodzaj go nie dopuszcza: zawias lub spaw z bańką, ciało `pathDriven`
+    /// albo więz bez żadnego ciała ruchomego (dynamic, motorDriven, playerDriven).
+    case unsupportedJointBody(JointID)
     case incompatibleMotionRole(ObjectID)
     /// Tymczasowy limit wdrożonego runtime; deskryptor nadal jest poprawny dla kontraktu v1.
     case unsupportedMotionRole(ObjectID, MotionRole)
@@ -36,9 +41,13 @@ public struct TransactionReceipt: Equatable, Sendable {
     public let createdObjectIDs: [ObjectID]
     public let removedObjectIDs: [ObjectID]
     public let replacedObjectIDs: [ObjectID]
-    package init(token: TransactionToken, createdObjectIDs: [ObjectID], removedObjectIDs: [ObjectID], replacedObjectIDs: [ObjectID]) {
+    /// Więzy usunięte przez transakcję (rosnąco po `JointID`): jawnym `removeJoint` albo razem z ciałem, które łączyły.
+    public let removedJointIDs: [JointID]
+    package init(token: TransactionToken, createdObjectIDs: [ObjectID], removedObjectIDs: [ObjectID], replacedObjectIDs: [ObjectID],
+                 removedJointIDs: [JointID] = []) {
         self.token = token; self.createdObjectIDs = createdObjectIDs
         self.removedObjectIDs = removedObjectIDs; self.replacedObjectIDs = replacedObjectIDs
+        self.removedJointIDs = removedJointIDs
     }
 }
 
@@ -64,6 +73,8 @@ public struct ObjectState: Equatable, Sendable {
         /// Efektywny promień po deformacji i odbudowie; nie jest promieniem docelowym.
         case bubble(effectiveRadius: Float)
         case polygon
+        case circle(radius: Float)
+        case capsule(halfLength: Float, radius: Float)
     }
 
     public let kind: Kind

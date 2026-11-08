@@ -9,6 +9,7 @@ package struct RuntimeState: Equatable, Sendable {
     package var physicsMaterials: [PhysicsMaterialID: PhysicsMaterial] = [:]
     package var renderStyles: [RenderStyleID: RenderStyle] = [:]
     package var transitions: [TransitionTarget: ParameterTransition] = [:]
+    package var joints: [JointID: Joint] = [:]
     package var globalForce: WorldPoint
     package var nextDriveID: UInt64 = 1
     package var transitionProgress: [TransitionTarget: PhysicalTransitionProgress] = [:]
@@ -55,19 +56,19 @@ package struct RuntimeObject: Equatable, Sendable {
         self.descriptor = descriptor
         switch descriptor {
         case .bubble(let value): motionRole = value.motionRole; velocity = value.velocity
-        case .polygon(let value): motionRole = value.motionRole; velocity = value.velocity
+        case .rigidBody(let value): motionRole = value.motionRole; velocity = value.velocity
         case .forceField, .sensor: motionRole = .static; velocity = .zero
         }
         switch descriptor {
         case .bubble(let value): position = value.position; rotation = 0; angularVelocity = 0
-        case .polygon(let value): position = value.position; rotation = value.rotation; angularVelocity = value.angularVelocity
+        case .rigidBody(let value): position = value.position; rotation = value.rotation; angularVelocity = value.angularVelocity
         case .forceField(let value): position = value.position; rotation = value.rotation; angularVelocity = 0
         case .sensor(let value): position = value.position; rotation = value.rotation; angularVelocity = 0
         }
         previousPosition = position
         switch descriptor {
         case .bubble(let b): presentation = b.presentation
-        case .polygon(let p): presentation = p.presentation
+        case .rigidBody(let p): presentation = p.presentation
         case .sensor(let s): presentation = s.presentation
         case .forceField(let f): presentation = f.presentation
         }
@@ -78,14 +79,14 @@ package struct RuntimeObject: Equatable, Sendable {
     var material: (PhysicsMaterialID, PhysicsMaterialKind)? {
         switch descriptor {
         case .bubble(let value): return (value.physicsMaterialID, .bubble)
-        case .polygon(let value): return (value.physicsMaterialID, .polygon)
+        case .rigidBody(let value): return (value.physicsMaterialID, .rigid)
         case .forceField, .sensor: return nil
         }
     }
     package var style: RenderStyleID {
         switch descriptor {
         case .bubble(let value): return value.renderStyleID
-        case .polygon(let value): return value.renderStyleID
+        case .rigidBody(let value): return value.renderStyleID
         case .forceField(let value): return value.renderStyleID
         case .sensor(let value): return value.renderStyleID
         }
@@ -93,7 +94,7 @@ package struct RuntimeObject: Equatable, Sendable {
     var interests: EventInterest {
         switch descriptor {
         case .bubble(let value): return value.eventInterest
-        case .polygon(let value): return value.eventInterest
+        case .rigidBody(let value): return value.eventInterest
         case .forceField(let value): return value.eventInterest
         case .sensor(let value): return value.eventInterest
         }
@@ -101,7 +102,7 @@ package struct RuntimeObject: Equatable, Sendable {
     var mass: Float? {
         switch descriptor {
         case .bubble(let value): return value.mass
-        case .polygon(let value): return value.mass
+        case .rigidBody(let value): return value.mass
         case .forceField, .sensor: return nil
         }
     }
@@ -115,6 +116,8 @@ package struct StagedWorldChange: Sendable {
     package let removedObjectIDs: [ObjectID]
     package let replacedObjectIDs: [ObjectID]
     package let events: [WorldEvent]
+    /// Więzy usunięte przez transakcję, rosnąco po `JointID`.
+    package let removedJointIDs: [JointID]
 }
 
 package struct PendingTransaction: Sendable {
@@ -145,7 +148,8 @@ package enum TransactionStager {
         }
         return StagedWorldChange(state: candidate.state, operations: transaction.operations,
                                  createdObjectIDs: candidate.created, removedObjectIDs: candidate.removed,
-                                 replacedObjectIDs: candidate.replaced, events: candidate.events)
+                                 replacedObjectIDs: candidate.replaced, events: candidate.events,
+                                 removedJointIDs: Array(Set(candidate.removedJoints)).sorted { $0.rawValue < $1.rawValue })
     }
 
     /// Wywoływane raz na granicy kroku. Odrzucona transakcja nie zmienia stanu dla następnej.
@@ -164,7 +168,7 @@ package enum TransactionStager {
                 changes.append(change)
                 receipts.append(TransactionReceipt(token: submission.token,
                     createdObjectIDs: change.createdObjectIDs, removedObjectIDs: change.removedObjectIDs,
-                    replacedObjectIDs: change.replacedObjectIDs))
+                    replacedObjectIDs: change.replacedObjectIDs, removedJointIDs: change.removedJointIDs))
                 events += change.events
             } catch let rejection as TransactionRejection {
                 events.append(.transactionRejected(submission.token, rejection))
@@ -185,6 +189,7 @@ private struct StagingContext {
     var created: [ObjectID] = []
     var removed: [ObjectID] = []
     var replaced: [ObjectID] = []
+    var removedJoints: [JointID] = []
     var events: [WorldEvent] = []
 
     mutating func apply(_ operation: WorldOperation) throws {
@@ -198,6 +203,7 @@ private struct StagingContext {
             discardObjectTransitions(id)
             try validate(replacement)
             state.objects[id] = replacement
+            try validateJoints(attachedTo: id)
             replaced.append(id)
             if previous.interests.contains(.didReplace) || replacement.interests.contains(.didReplace) { events.append(.didReplace(id)) }
         case .updatePhysicsMaterial(let id, let material):
@@ -222,6 +228,7 @@ private struct StagingContext {
             if role != .kinematic { existing.kinematicDrive = nil }
             try validate(existing)
             state.objects[id] = existing
+            try validateJoints(attachedTo: id)
         case .setPathDrive(let id, let drive):
             try apply(.setMotion(id, .pathDriven))
             state.objects[id]?.pathDrive = drive; state.objects[id]?.pathIndex = 0
@@ -278,21 +285,27 @@ private struct StagingContext {
             existing.radiusBlendStart = existing.collisionRadius; existing.rigidityBlendStart = existing.rigidity; existing.shapeElapsed = 0
             try validate(existing)
             state.objects[id] = existing
+            try validateJoints(attachedTo: id)
         case .startTransition(let transition):
             try validate(transition)
             state.transitions[transition.target] = transition
             state.transitionProgress.removeValue(forKey: transition.target)
         case .mergeBubbles(let sources, let result): try merge(sources, result: result)
         case .splitBubble(let source, let first, let second): try split(source, first: first, second: second)
-        case .replacePolygons(let sources, let results):
+        case .replaceRigidBodies(let sources, let results):
             guard !sources.isEmpty, !results.isEmpty, Set(sources).count == sources.count else {
                 throw TransactionRejectionReason.invalidStructuralOperation
             }
             for id in sources {
-                guard case .polygon = try object(id).descriptor else { throw TransactionRejectionReason.incompatibleObjectKind(id) }
+                guard case .rigidBody = try object(id).descriptor else { throw TransactionRejectionReason.incompatibleObjectKind(id) }
             }
             for id in sources { try remove(id) }
-            for result in results { try add(.polygon(result)) }
+            for result in results { try add(.rigidBody(result)) }
+        case .addJoint(let joint): try add(joint)
+        case .removeJoint(let id):
+            guard state.joints[id] != nil else { throw TransactionRejectionReason.jointNotFound(id) }
+            state.joints.removeValue(forKey: id)
+            removedJoints.append(id)
         }
     }
 
@@ -318,7 +331,49 @@ private struct StagingContext {
         state.objects.removeValue(forKey: id)
         discardObjectTransitions(id)
         removed.append(id)
+        removeJoints(attachedTo: id)
         if existing.interests.contains(.didRemove) { events.append(.didRemove(id)) }
+    }
+    /// Usunięcie ciała (także w scaleniu, podziale i `replaceRigidBodies`) usuwa jego więzy.
+    mutating func removeJoints(attachedTo id: ObjectID) {
+        for (jointID, joint) in state.joints where joint.bodyA == id || joint.bodyB == id {
+            state.joints.removeValue(forKey: jointID)
+            removedJoints.append(jointID)
+        }
+    }
+    mutating func add(_ joint: Joint) throws {
+        guard state.joints[joint.id] == nil else { throw TransactionRejectionReason.duplicateJointID(joint.id) }
+        for bodyID in [joint.bodyA] + (joint.bodyB.map { [$0] } ?? []) {
+            let body = try object(bodyID)
+            switch body.descriptor {
+            case .bubble, .rigidBody: break
+            case .forceField, .sensor: throw TransactionRejectionReason.incompatibleObjectKind(bodyID)
+            }
+        }
+        guard jointBodiesAreSupported(joint) else { throw TransactionRejectionReason.unsupportedJointBody(joint.id) }
+        state.joints[joint.id] = joint
+    }
+    /// Więz wymaga ciała ruchomego (dynamic, motorDriven, playerDriven), nie dopuszcza `pathDriven`,
+    /// a bańka może być tylko w więzie dystansowym. Drugim końcem może być ciało nieruchome albo świat.
+    func jointBodiesAreSupported(_ joint: Joint) -> Bool {
+        var movable = false
+        for bodyID in [joint.bodyA] + (joint.bodyB.map { [$0] } ?? []) {
+            guard let body = state.objects[bodyID] else { return false }
+            if case .bubble = body.descriptor, !joint.isDistance { return false }
+            switch body.motionRole {
+            case .pathDriven: return false
+            case .dynamic, .motorDriven, .playerDriven: movable = true
+            case .static, .kinematic: break
+            }
+        }
+        return movable
+    }
+    /// Zmiana roli albo rodzaju ciała nie może zostawić przy nim więzu, którego stager by nie przyjął.
+    func validateJoints(attachedTo id: ObjectID) throws {
+        for joint in state.joints.values.sorted(by: { $0.id.rawValue < $1.id.rawValue })
+        where joint.bodyA == id || joint.bodyB == id {
+            guard jointBodiesAreSupported(joint) else { throw TransactionRejectionReason.unsupportedJointBody(joint.id) }
+        }
     }
     mutating func discardObjectTransitions(_ id: ObjectID) {
         state.transitions = state.transitions.filter { target, _ in
@@ -350,9 +405,9 @@ private struct StagingContext {
                     targetRadius: maximumRadius, motionRole: .static,
                     physicsMaterialID: value.physicsMaterialID, renderStyleID: value.renderStyleID))
             }
-        case .polygon(let value):
+        case .rigidBody(let value):
             if object.motionRole == .static {
-                try state.configuration.validate(PolygonDescriptor(id: value.id, vertices: value.geometry.vertices,
+                try state.configuration.validate(RigidBodyDescriptor(id: value.id, shape: value.shape,
                     position: object.position, rotation: object.rotation, motionRole: .static,
                     physicsMaterialID: value.physicsMaterialID, renderStyleID: value.renderStyleID))
             }

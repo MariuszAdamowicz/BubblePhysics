@@ -6,8 +6,8 @@ final class ModelValidationTests: XCTestCase {
     private let style = RenderStyleID(rawValue: 1)
 
     private func polygon(_ vertices: [WorldPoint], role: MotionRole = .static,
-                         position: WorldPoint = .zero, rotation: Float = 0) throws -> PolygonDescriptor {
-        try PolygonDescriptor(id: ObjectID(rawValue: 1), vertices: vertices,
+                         position: WorldPoint = .zero, rotation: Float = 0) throws -> RigidBodyDescriptor {
+        try RigidBodyDescriptor(id: ObjectID(rawValue: 1), vertices: vertices,
                               position: position, rotation: rotation, motionRole: role,
                               physicsMaterialID: material, renderStyleID: style)
     }
@@ -102,7 +102,7 @@ final class ModelValidationTests: XCTestCase {
                                                   physicsMaterialID: material, renderStyleID: style))
         XCTAssertThrowsError(try BubbleDescriptor(id: ObjectID(rawValue: 1), position: .zero, targetRadius: 1, mass: 0,
                                                   physicsMaterialID: material, renderStyleID: style))
-        XCTAssertThrowsError(try PolygonDescriptor(id: ObjectID(rawValue: 1), vertices: [[0, 0], [1, 0], [0, 1]],
+        XCTAssertThrowsError(try RigidBodyDescriptor(id: ObjectID(rawValue: 1), vertices: [[0, 0], [1, 0], [0, 1]],
                                                    momentOfInertia: 0, physicsMaterialID: material, renderStyleID: style))
         XCTAssertThrowsError(try polygon([[0, 0], [1, 0], [0, 1]], rotation: .infinity))
     }
@@ -128,7 +128,7 @@ final class ModelValidationTests: XCTestCase {
 
     func testResourcesValidatePhysicsAndLocalChannelsOverrideStyle() throws {
         XCTAssertThrowsError(try PhysicsMaterial(kind: .bubble, deformability: 1.1))
-        XCTAssertThrowsError(try PhysicsMaterial(kind: .polygon, friction: -1))
+        XCTAssertThrowsError(try PhysicsMaterial(kind: .rigid, friction: -1))
         XCTAssertThrowsError(try PhysicsMaterial(kind: .bubble, damping: .nan))
         XCTAssertThrowsError(try PhysicsMaterial(kind: .bubble, restitution: 2))
         let saturation = ParameterID(rawValue: "saturation")
@@ -138,5 +138,63 @@ final class ModelValidationTests: XCTestCase {
         XCTAssertEqual(renderStyle.resolvedChannels(overrides: local), [saturation: 0.5, highlight: 1])
         XCTAssertThrowsError(try PresentationParameters(channels: [saturation: .nan]))
         XCTAssertThrowsError(try RenderStyle(shader: .technical, channels: [saturation: .infinity]))
+    }
+
+    func testMaterialSpeedLimitsAreOptionalAndMustBePositiveAndFinite() throws {
+        let unlimited = try PhysicsMaterial(kind: .rigid)
+        XCTAssertNil(unlimited.maximumLinearSpeed)
+        XCTAssertNil(unlimited.maximumAngularSpeed)
+        let limited = try PhysicsMaterial(kind: .bubble, maximumLinearSpeed: 30, maximumAngularSpeed: 4)
+        XCTAssertEqual(limited.maximumLinearSpeed, 30)
+        XCTAssertEqual(limited.maximumAngularSpeed, 4)
+        for bad: Float in [0, -1, .nan, .infinity] {
+            XCTAssertThrowsError(try PhysicsMaterial(kind: .rigid, maximumLinearSpeed: bad), "linear \(bad)")
+            XCTAssertThrowsError(try PhysicsMaterial(kind: .rigid, maximumAngularSpeed: bad), "angular \(bad)")
+        }
+    }
+
+    func testStaticCircleAndCapsuleMustFitInsideSimulationRegion() throws {
+        let configuration = try WorldConfiguration(simulationRegion: WorldRectangle(min: [0, 0], max: [10, 10]))
+        func body(_ shape: RigidShape, position: WorldPoint, rotation: Float = 0) throws -> RigidBodyDescriptor {
+            try RigidBodyDescriptor(id: ObjectID(rawValue: 1), shape: shape, position: position, rotation: rotation,
+                                    motionRole: .static, physicsMaterialID: material, renderStyleID: style)
+        }
+        XCTAssertNoThrow(try configuration.validate(body(.circle(radius: 2), position: [5, 5])))
+        XCTAssertThrowsError(try configuration.validate(body(.circle(radius: 2), position: [1, 5]))) {
+            XCTAssertEqual($0 as? ModelValidationError, .staticGeometryOutsideSimulationRegion)
+        }
+        // Kapsuła poziomo mieści się (końce na x = 2 i 8), obrócona o 90° wystaje przez górę.
+        let capsule = RigidShape.capsule(halfLength: 3, radius: 1)
+        XCTAssertNoThrow(try configuration.validate(body(capsule, position: [5, 5])))
+        XCTAssertThrowsError(try configuration.validate(body(capsule, position: [5, 8], rotation: .pi / 2)))
+        XCTAssertNoThrow(try configuration.validate(body(capsule, position: [5, 5], rotation: .pi / 2)))
+    }
+
+    func testJointValidatesAnchorsBodiesAndKindParameters() throws {
+        let a = ObjectID(rawValue: 1), b = ObjectID(rawValue: 2)
+        let id = JointID(rawValue: 1)
+        let rigid = Joint.Kind.distance(length: 3, softness: 0, damping: 0)
+        XCTAssertNoThrow(try Joint(id: id, bodyA: a, bodyB: b, kind: rigid))
+        XCTAssertNoThrow(try Joint(id: id, bodyA: a, bodyB: nil, anchorB: [4, 5], kind: rigid))
+        XCTAssertThrowsError(try Joint(id: id, bodyA: a, bodyB: a, kind: rigid), "to samo ciało na obu końcach")
+        XCTAssertThrowsError(try Joint(id: id, bodyA: a, bodyB: b, anchorA: [.nan, 0], kind: rigid))
+        XCTAssertThrowsError(try Joint(id: id, bodyA: a, bodyB: b, anchorB: [0, .infinity], kind: rigid))
+        XCTAssertThrowsError(try Joint(id: id, bodyA: a, bodyB: b, referenceAngle: .nan, kind: .weld))
+        for kind: Joint.Kind in [.distance(length: -1, softness: 0, damping: 0),
+                                 .distance(length: .nan, softness: 0, damping: 0),
+                                 .distance(length: 1, softness: -0.1, damping: 0),
+                                 .distance(length: 1, softness: 0, damping: -1)] {
+            XCTAssertThrowsError(try Joint(id: id, bodyA: a, bodyB: b, kind: kind), "\(kind)")
+        }
+        XCTAssertThrowsError(try HingeLimits(lower: 1, upper: -1))
+        XCTAssertThrowsError(try HingeLimits(lower: .nan, upper: 1))
+        XCTAssertNoThrow(try HingeLimits(lower: -0.5, upper: 0.5))
+        XCTAssertThrowsError(try HingeMotor(targetAngularVelocity: 1, maximumTorque: 0))
+        XCTAssertThrowsError(try HingeMotor(targetAngularVelocity: .nan, maximumTorque: 1))
+        let hinge = try Joint(id: id, bodyA: a, bodyB: b,
+                              kind: .hinge(limits: HingeLimits(lower: -1, upper: 1),
+                                           motor: HingeMotor(targetAngularVelocity: 2, maximumTorque: 5)))
+        XCTAssertFalse(hinge.collideConnected, "ciała połączone więzem domyślnie nie kolidują")
+        XCTAssertTrue(try Joint(id: id, bodyA: a, bodyB: b, kind: .weld, collideConnected: true).collideConnected)
     }
 }

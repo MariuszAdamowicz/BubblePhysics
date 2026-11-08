@@ -1,6 +1,7 @@
 public enum PhysicsMaterialKind: Hashable, Sendable {
     case bubble
-    case polygon
+    /// Wszystkie sztywne bryły: wielokąt, koło i kapsuła.
+    case rigid
 }
 
 /// Zasób fizyczny, bez masy i promienia należących do konkretnego obiektu.
@@ -11,20 +12,28 @@ public struct PhysicsMaterial: Equatable, Sendable {
     public let damping: Float
     public let friction: Float
     public let restitution: Float
+    /// Górne granice prędkości; `nil` oznacza brak limitu. Dotyczą każdego obiektu z tym materiałem.
+    public let maximumLinearSpeed: Float?
+    public let maximumAngularSpeed: Float?
 
     public init(kind: PhysicsMaterialKind, deformability: Float = 0, damping: Float = 0,
-                friction: Float = 0, restitution: Float = 0) throws {
+                friction: Float = 0, restitution: Float = 0,
+                maximumLinearSpeed: Float? = nil, maximumAngularSpeed: Float? = nil) throws {
         try requireNonnegative(deformability, "deformability")
         try requireNonnegative(damping, "damping")
         try requireNonnegative(friction, "friction")
         try requireNonnegative(restitution, "restitution")
         guard deformability <= 1 else { throw ModelValidationError.valueOutOfRange("deformability") }
         guard restitution <= 1 else { throw ModelValidationError.valueOutOfRange("restitution") }
+        if let maximumLinearSpeed { try requirePositive(maximumLinearSpeed, "maximumLinearSpeed") }
+        if let maximumAngularSpeed { try requirePositive(maximumAngularSpeed, "maximumAngularSpeed") }
         self.kind = kind
         self.deformability = deformability
         self.damping = damping
         self.friction = friction
         self.restitution = restitution
+        self.maximumLinearSpeed = maximumLinearSpeed
+        self.maximumAngularSpeed = maximumAngularSpeed
     }
 }
 

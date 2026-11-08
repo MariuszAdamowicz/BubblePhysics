@@ -41,7 +41,7 @@ package enum MotionControllers {
                 if object.motionRole == .motorDriven, let motor = object.motorDrive {
                     force += motor.force
                     let inertia: Float
-                    if case .polygon(let polygon) = object.descriptor { inertia = polygon.momentOfInertia }
+                    if case .rigidBody(let body) = object.descriptor { inertia = body.resolvedMomentOfInertia }
                     else { inertia = 0.5 * mass * object.collisionRadius * object.collisionRadius }
                     object.angularVelocity += motor.torque / inertia * dt
                 }

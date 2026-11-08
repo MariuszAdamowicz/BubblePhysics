@@ -61,9 +61,17 @@ public struct WorldConfiguration: Equatable, Sendable {
         try validateCircle(center: bubble.position, radius: bubble.targetRadius)
     }
 
-    public func validate(_ polygon: PolygonDescriptor) throws {
-        guard polygon.motionRole == .static else { return }
-        try validatePolygon(polygon.geometry, position: polygon.position, rotation: polygon.rotation)
+    public func validate(_ body: RigidBodyDescriptor) throws {
+        guard body.motionRole == .static else { return }
+        switch body.shape {
+        case .polygon(let geometry): try validatePolygon(geometry, position: body.position, rotation: body.rotation)
+        case .circle(let radius): try validateCircle(center: body.position, radius: radius)
+        case .capsule(let halfLength, let radius):
+            // Kapsuła to odcinek osi powiększony o promień: oba końce z kołem o tym promieniu.
+            let axis = WorldPoint(cos(body.rotation), sin(body.rotation)) * halfLength
+            try validateCircle(center: body.position + axis, radius: radius)
+            try validateCircle(center: body.position - axis, radius: radius)
+        }
     }
 
     /// Pola i sensory w tym modelu mają nieruchomy zasięg.

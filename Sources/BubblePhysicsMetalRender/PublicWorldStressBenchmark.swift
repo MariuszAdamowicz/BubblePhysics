@@ -174,7 +174,7 @@ package enum Stress300Scene {
         let styleID = RenderStyleID(rawValue: 1)
         var transaction = WorldTransaction()
             .updatePhysicsMaterial(materialID, material: try PhysicsMaterial(kind: .bubble))
-            .updatePhysicsMaterial(polygonMaterialID, material: try PhysicsMaterial(kind: .polygon))
+            .updatePhysicsMaterial(polygonMaterialID, material: try PhysicsMaterial(kind: .rigid))
             .updateRenderStyle(styleID, style: try RenderStyle())
         var random = StressLCG(seed: 0x2B_60_F5)
         let horizontalSpacing: Float = 345 / 15
@@ -199,20 +199,20 @@ package enum Stress300Scene {
             [[0,height - 1], [375,height - 1], [375,height], [0,height]]
         ]
         for (index, vertices) in walls.enumerated() {
-            transaction = transaction.add(.polygon(try PolygonDescriptor(
+            transaction = transaction.add(.rigidBody(try RigidBodyDescriptor(
                 id: ObjectID(rawValue: UInt64(10_001 + index)), vertices: vertices,
                 physicsMaterialID: polygonMaterialID, renderStyleID: styleID)))
         }
-        transaction = transaction.add(.polygon(try triangle(step: 0)))
+        transaction = transaction.add(.rigidBody(try triangle(step: 0)))
         return transaction
     }
 
     /// Zastępuje trójkąt jego pozycją na kroku `step` (tor po pięciu punktach, 40 kroków na odcinek).
     package static func triangleReplacement(step: Int) throws -> WorldTransaction {
-        WorldTransaction().replace(ObjectID(rawValue: 10_000), with: .polygon(try triangle(step: step)))
+        WorldTransaction().replace(ObjectID(rawValue: 10_000), with: .rigidBody(try triangle(step: step)))
     }
 
-    private static func triangle(step: Int) throws -> PolygonDescriptor {
+    private static func triangle(step: Int) throws -> RigidBodyDescriptor {
         let polygonMaterialID = PhysicsMaterialID(rawValue: 2)
         let styleID = RenderStyleID(rawValue: 1)
         let triangleVertices: [WorldPoint] = [[-46,34], [46,34], [0,-52]]
@@ -223,7 +223,7 @@ package enum Stress300Scene {
         let center = WorldPoint(
             waypoints[leg].x + (waypoints[next].x - waypoints[leg].x) * t,
             waypoints[leg].y + (waypoints[next].y - waypoints[leg].y) * t)
-        return try PolygonDescriptor(id: ObjectID(rawValue: 10_000), vertices: triangleVertices,
+        return try RigidBodyDescriptor(id: ObjectID(rawValue: 10_000), vertices: triangleVertices,
             position: center, physicsMaterialID: polygonMaterialID, renderStyleID: styleID)
     }
 }

@@ -20,7 +20,7 @@ final class RigidContactMemoryTests: XCTestCase {
                 physicsMaterialID: bubbleMaterial, renderStyleID: style))))
         }
         for index in 0..<bodies {
-            objects.append(NativePublicObject(descriptor: .polygon(try PolygonDescriptor(id: ObjectID(rawValue: UInt64(10_000 + index)),
+            objects.append(NativePublicObject(descriptor: .rigidBody(try RigidBodyDescriptor(id: ObjectID(rawValue: UInt64(10_000 + index)),
                 vertices: [[-2, -2], [2, -2], [2, 2], [-2, 2]],
                 position: [Float(index % 20) * 30 + 30, Float(index / 20) * 30 + 30], motionRole: .dynamic,
                 physicsMaterialID: polygonMaterial, renderStyleID: style))))
@@ -31,7 +31,7 @@ final class RigidContactMemoryTests: XCTestCase {
     private func measure(bodies: Int) async throws -> (rigid: Int, total: Int) {
         let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         _ = try await world.step(objects: scene(bodies: bodies),
-            materials: [bubbleMaterial: try PhysicsMaterial(kind: .bubble), polygonMaterial: try PhysicsMaterial(kind: .polygon)],
+            materials: [bubbleMaterial: try PhysicsMaterial(kind: .bubble), polygonMaterial: try PhysicsMaterial(kind: .rigid)],
             styles: [style: try RenderStyle()], region: WorldRectangle(min: [0, 0], max: [700, 700]), duration: 1.0 / 60)
         return (world.rigidContactMemoryBytes, world.rigidContactMemoryBytes + world.contactMemoryBytes)
     }
@@ -69,16 +69,16 @@ final class RigidContactMemoryTests: XCTestCase {
                 position: [100 + offsets[min(side, 3)].x, 100 + offsets[min(side, 3)].y], targetRadius: 1,
                 physicsMaterialID: bubbleMaterial, renderStyleID: style))))
         }
-        objects.append(NativePublicObject(descriptor: .polygon(try PolygonDescriptor(id: ObjectID(rawValue: 10_000),
+        objects.append(NativePublicObject(descriptor: .rigidBody(try RigidBodyDescriptor(id: ObjectID(rawValue: 10_000),
             vertices: [[-20, -20], [20, -20], [20, 20], [-20, 20]], position: [100, 100], motionRole: .dynamic,
             physicsMaterialID: polygonMaterial, renderStyleID: style))))
         var frame = try await world.step(objects: objects,
-            materials: [bubbleMaterial: try PhysicsMaterial(kind: .bubble), polygonMaterial: try PhysicsMaterial(kind: .polygon)],
+            materials: [bubbleMaterial: try PhysicsMaterial(kind: .bubble), polygonMaterial: try PhysicsMaterial(kind: .rigid)],
             styles: [style: try RenderStyle()], region: WorldRectangle(min: [-200, -200], max: [400, 400]), duration: 1.0 / 60)
         XCTAssertGreaterThan(frame.contactCandidateOverflowCount, 0)
         XCTAssertGreaterThanOrEqual(frame.maximumContactCandidatesPerObject, limit)
         frame = try await world.step(objects: Array(frame.objects.values),
-            materials: [bubbleMaterial: try PhysicsMaterial(kind: .bubble), polygonMaterial: try PhysicsMaterial(kind: .polygon)],
+            materials: [bubbleMaterial: try PhysicsMaterial(kind: .bubble), polygonMaterial: try PhysicsMaterial(kind: .rigid)],
             styles: [style: try RenderStyle()], region: WorldRectangle(min: [-200, -200], max: [400, 400]), duration: 1.0 / 60)
         XCTAssertEqual(frame.objects.count, limit + 13)
         for object in frame.objects.values {

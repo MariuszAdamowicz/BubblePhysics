@@ -10,9 +10,9 @@ final class KinematicDriveControllerTests: XCTestCase {
     private func seeded(drive: KinematicDrive?, force: WorldPoint = [0, -500]) throws -> RuntimeState {
         let materialID = PhysicsMaterialID(rawValue: 2), styleID = RenderStyleID(rawValue: 1)
         var transaction = WorldTransaction()
-            .updatePhysicsMaterial(materialID, material: try PhysicsMaterial(kind: .polygon))
+            .updatePhysicsMaterial(materialID, material: try PhysicsMaterial(kind: .rigid))
             .updateRenderStyle(styleID, style: try RenderStyle())
-            .add(.polygon(try PolygonDescriptor(id: kinematicID, vertices: [[0, 0], [2, 0], [2, 2], [0, 2]],
+            .add(.rigidBody(try RigidBodyDescriptor(id: kinematicID, vertices: [[0, 0], [2, 0], [2, 2], [0, 2]],
                 position: [10, 20], motionRole: .kinematic, physicsMaterialID: materialID, renderStyleID: styleID)))
         if let drive { transaction = transaction.setKinematicDrive(kinematicID, drive: drive) }
         var state = RuntimeState(configuration: try WorldConfiguration(

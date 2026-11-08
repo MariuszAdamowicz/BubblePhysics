@@ -22,7 +22,7 @@ package final class NativeCompleteStepper: CompleteStepper {
         }
         func descriptor(_ value: WorldObject) throws {
             switch value {
-            case .polygon(let p): try role(p.id, p.motionRole, polygon: true)
+            case .rigidBody(let p): try role(p.id, p.motionRole, polygon: true)
             case .bubble(let b): try role(b.id, b.motionRole, polygon: false)
             default: break
             }
@@ -31,7 +31,7 @@ package final class NativeCompleteStepper: CompleteStepper {
             do {
                 switch operation {
                 case .add(let value), .replace(_, let value): try descriptor(value)
-                case .replacePolygons(_, let results): for p in results { try descriptor(.polygon(p)) }
+                case .replaceRigidBodies(_, let results): for p in results { try descriptor(.rigidBody(p)) }
                 case .mergeBubbles(_, let result):
                     guard result.motionRole == .dynamic || result.motionRole == .static else {
                         throw TransactionRejectionReason.unsupportedMotionRole(result.id, result.motionRole)
@@ -42,17 +42,17 @@ package final class NativeCompleteStepper: CompleteStepper {
                     }
                 case .setMotion(let id, let value):
                     if let object = change.state.objects[id] {
-                        if case .polygon = object.descriptor { try role(id, value, polygon: true) }
+                        if case .rigidBody = object.descriptor { try role(id, value, polygon: true) }
                         else { try role(id, value, polygon: false) }
                     }
                 case .updatePhysicsMaterial(let id, let material):
-                    if material.kind == .polygon && material.deformability != 0 {
+                    if material.kind == .rigid && material.deformability != 0 {
                         throw TransactionRejectionReason.unsupportedPhysicsParameter(id, .deformability)
                     }
                 case .startTransition(let transition):
                     if case .physicsMaterial(let id, let parameter) = transition.target,
                        case .scalar(let value) = transition.value, value > 0,
-                       parameter == .deformability && change.state.physicsMaterials[id]?.kind == .polygon {
+                       parameter == .deformability && change.state.physicsMaterials[id]?.kind == .rigid {
                         throw TransactionRejectionReason.unsupportedPhysicsParameter(id, parameter)
                     }
                 default: break
@@ -157,15 +157,31 @@ extension RuntimeState {
                 let r = max(object.collisionRadius, object.targetRadius)
                 bounds = object.bounds ?? WorldRectangle(uncheckedMin: object.position - SIMD2(r, r),
                                                          max: object.position + SIMD2(r, r))
-            case .polygon(let polygon):
-                kind = .polygon
-                bounds = Self.polygonBounds(polygon.geometry, position: object.position, rotation: object.rotation)
+            case .rigidBody(let body):
+                switch body.shape {
+                case .polygon(let geometry):
+                    kind = .polygon
+                    bounds = Self.polygonBounds(geometry, position: object.position, rotation: object.rotation)
+                case .circle(let radius):
+                    kind = .circle(radius: radius)
+                    bounds = Self.capsuleBounds(halfLength: 0, radius: radius, position: object.position, rotation: object.rotation)
+                case .capsule(let halfLength, let radius):
+                    kind = .capsule(halfLength: halfLength, radius: radius)
+                    bounds = Self.capsuleBounds(halfLength: halfLength, radius: radius, position: object.position, rotation: object.rotation)
+                }
             case .sensor, .forceField: continue
             }
             result[id] = ObjectState(kind: kind, position: object.position, velocity: object.velocity,
                 rotation: object.rotation, angularVelocity: object.angularVelocity, bounds: bounds)
         }
         return result
+    }
+
+    /// Odcinek osi kapsuły (dla koła zerowy) powiększony o promień.
+    private static func capsuleBounds(halfLength: Float, radius: Float, position: WorldPoint,
+                                      rotation: Float) -> WorldRectangle {
+        let end = SIMD2<Float>(abs(cos(rotation)), abs(sin(rotation))) * halfLength + SIMD2(repeating: radius)
+        return WorldRectangle(uncheckedMin: position - end, max: position + end)
     }
 
     private static func polygonBounds(_ geometry: PolygonGeometry, position: WorldPoint,

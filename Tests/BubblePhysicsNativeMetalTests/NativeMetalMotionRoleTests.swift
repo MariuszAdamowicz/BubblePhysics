@@ -9,12 +9,12 @@ final class NativeMetalMotionRoleTests: XCTestCase {
     func initial(role: MotionRole = .dynamic, soft: Float = 0, wallAt x: Float? = nil) throws -> RuntimeState {
         var transaction = try WorldTransaction()
             .updatePhysicsMaterial(.init(rawValue: 1), material: PhysicsMaterial(kind: .bubble, deformability: soft))
-            .updatePhysicsMaterial(.init(rawValue: 2), material: PhysicsMaterial(kind: .polygon))
+            .updatePhysicsMaterial(.init(rawValue: 2), material: PhysicsMaterial(kind: .rigid))
             .updateRenderStyle(.init(rawValue: 1), style: RenderStyle())
             .add(.bubble(BubbleDescriptor(id: ball, position: .zero, targetRadius: 1, motionRole: role,
                 physicsMaterialID: .init(rawValue: 1), renderStyleID: .init(rawValue: 1))))
         if let x {
-            transaction = try transaction.add(.polygon(PolygonDescriptor(id: wall,
+            transaction = try transaction.add(.rigidBody(RigidBodyDescriptor(id: wall,
                 vertices: [[x,-10],[x+0.25,-10],[x+0.25,10],[x,10]],
                 physicsMaterialID: .init(rawValue: 2), renderStyleID: .init(rawValue: 1))))
         }
@@ -126,18 +126,20 @@ final class NativeMetalMotionRoleTests: XCTestCase {
 
     func testPlayerDrivenPolygonReportsWallAndMotorTorqueChangesRotation() async throws {
         let stepper = try NativeCompleteStepper(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
-        let polygon = try PolygonDescriptor(id: ball, vertices: [[-0.5,-0.5],[0.5,-0.5],[0.5,0.5],[-0.5,0.5]],
+        let polygon = try RigidBodyDescriptor(id: ball, vertices: [[-0.5,-0.5],[0.5,-0.5],[0.5,0.5],[-0.5,0.5]],
             motionRole: .dynamic, physicsMaterialID: .init(rawValue: 2), renderStyleID: .init(rawValue: 1))
         var complete = try await step(stepper, initial(wallAt: 2), WorldTransaction()
-            .replace(ball, with: .polygon(polygon)).beginPlayerDrive(ball, target: [8,0]))
+            .replace(ball, with: .rigidBody(polygon)).beginPlayerDrive(ball, target: [8,0]))
         for _ in 0..<60 { complete = try await step(stepper, complete.state) }
         XCTAssertEqual(complete.driveFeedback.first?.blockingContact?.objectID, wall)
         XCTAssertLessThanOrEqual(try XCTUnwrap(complete.state.objects[ball]).position.x, 1.501)
         let motorStepper = try NativeCompleteStepper(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
-        let motor = try await step(motorStepper, initial(), WorldTransaction().replace(ball, with: .polygon(polygon))
+        let motor = try await step(motorStepper, initial(), WorldTransaction().replace(ball, with: .rigidBody(polygon))
             .setMotorDrive(ball, drive: MotorDrive(force: [6,0], torque: 6)))
         XCTAssertGreaterThan(try XCTUnwrap(motor.state.objects[ball]).rotation, 0)
-        XCTAssertEqual(try XCTUnwrap(motor.state.objects[ball]).angularVelocity, 0.1, accuracy: 0.0001)
+        // Bez podanego momentu bezwładność liczy się z kształtu: kwadrat 1×1 o masie 1 ma m·(w² + h²)/12 = 1/6.
+        XCTAssertEqual(polygon.resolvedMomentOfInertia, 1.0 / 6, accuracy: 1e-6)
+        XCTAssertEqual(try XCTUnwrap(motor.state.objects[ball]).angularVelocity, 6 / (1.0 / 6) / 60, accuracy: 0.0001)
     }
 
     func testRadialVortexFalloffAndObjectFilterHavePhysicalEffect() async throws {

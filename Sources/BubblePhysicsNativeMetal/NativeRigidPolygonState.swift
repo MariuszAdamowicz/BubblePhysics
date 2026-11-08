@@ -145,11 +145,11 @@ final class NativeRigidPolygonState {
         var orderMatchesPublished = true
         for (index, input) in inputs.enumerated() {
             let o = input.object
-            guard case .polygon(let p) = o.descriptor else { throw NativeMetalSolverError.invalidSnapshot }
+            guard case .rigidBody(let p) = o.descriptor, case .polygon(let polygonGeometry) = p.shape else { throw NativeMetalSolverError.invalidSnapshot }
             let geometry: NativeRigidGeometry
-            if let cached = geometryCache[p.id], cached.0 == p.geometry { geometry = cached.1 }
-            else { geometry = try NativeRigidGeometry(p.geometry); geometryCache[p.id] = (p.geometry, geometry) }
-            newGeometry.append((p.id, p.geometry))
+            if let cached = geometryCache[p.id], cached.0 == polygonGeometry { geometry = cached.1 }
+            else { geometry = try NativeRigidGeometry(polygonGeometry); geometryCache[p.id] = (polygonGeometry, geometry) }
+            newGeometry.append((p.id, polygonGeometry))
             orderMatchesPublished = orderMatchesPublished && index < publishedGeometry.count
                 && publishedGeometry[index].0 == p.id
             let c = cos(o.rotation), s = sin(o.rotation), center = geometry.centroid
@@ -170,7 +170,7 @@ final class NativeRigidPolygonState {
                 previous: SIMD4(o.previousPosition.x + offset.x, o.previousPosition.y + offset.y, center.x, center.y),
                 motion: SIMD4(velocity.x, velocity.y, isStatic ? 0 : o.angularVelocity, isKinematic ? 0 : input.damping),
                 // Kontakt miesza tarcie przez średnią geometryczną i sprężystość przez max.
-                physical: SIMD4(isStatic || isKinematic ? 0 : 1 / p.mass, isStatic || isKinematic ? 0 : 1 / p.momentOfInertia,
+                physical: SIMD4(isStatic || isKinematic ? 0 : 1 / p.mass, isStatic || isKinematic ? 0 : 1 / p.resolvedMomentOfInertia,
                                 geometry.radius, input.friction),
                 ranges: SIMD4(UInt32(vertices.count), UInt32(geometry.vertices.count), UInt32(triangles.count), UInt32(geometry.triangles.count)),
                 flags: SIMD4(isStatic ? 1 : 0, p.regionExitPolicy == .wrap ? 1 : 0, 0, input.restitution.bitPattern),
@@ -246,7 +246,7 @@ final class NativeRigidPolygonState {
 
     func publish(_ objects: [ObjectID: NativePublicObject]) {
         publishedInputs = current.map { var input = $0; input.object = objects[input.object.descriptor.id]!; return input }
-        publishedGeometry = current.compactMap { if case .polygon(let p) = $0.object.descriptor { return (p.id, p.geometry) }; return nil }
+        publishedGeometry = current.compactMap { if case .rigidBody(let p) = $0.object.descriptor, case .polygon(let geometry) = p.shape { return (p.id, geometry) }; return nil }
         let old = buffers["published"]!; buffers["published"] = bodies; buffers["working"] = old
         let oldVertices = buffers["publishedVertices"]!; buffers["publishedVertices"] = vertices; buffers["vertices"] = oldVertices
         let oldTriangles = buffers["publishedTriangles"]!; buffers["publishedTriangles"] = triangles; buffers["triangles"] = oldTriangles

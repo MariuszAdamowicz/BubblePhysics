@@ -104,7 +104,7 @@ public final class BubbleWorld {
             let ring: [WorldPoint]
             switch object.descriptor {
             case .bubble: return nil
-            case .polygon(let polygon): ring = polygon.geometry.vertices
+            case .rigidBody(let body): ring = Self.rigidRing(body.shape)
             case .sensor(let sensor): ring = Self.rangeRing(sensor.geometry)
             case .forceField(let field): ring = Self.rangeRing(field.geometry)
             }
@@ -118,6 +118,30 @@ public final class BubbleWorld {
                     channels: style.resolvedChannels(overrides: object.presentation)))
         }
         return BubbleWorldRenderState(handoff: handoff, items: items, shapes: shapes)
+    }
+
+    /// Obrys bryły do rysowania jako pierścień; koło i kapsuła to wielokąty o 48 wierzchołkach na pełny obrót.
+    private static func rigidRing(_ shape: RigidShape) -> [WorldPoint] {
+        switch shape {
+        case .polygon(let geometry): return geometry.vertices
+        case .circle(let radius):
+            return (0..<48).map { index in
+                let angle = Float(index) * 2 * Float.pi / 48
+                return WorldPoint(radius * cos(angle), radius * sin(angle))
+            }
+        case .capsule(let halfLength, let radius):
+            // Prawe półkole od −90° do 90°, potem lewe od 90° do 270°, środki na końcach osi.
+            let arc = 24
+            let right = (0...arc).map { index -> WorldPoint in
+                let angle = -Float.pi / 2 + Float(index) * Float.pi / Float(arc)
+                return WorldPoint(halfLength + radius * cos(angle), radius * sin(angle))
+            }
+            let left = (0...arc).map { index -> WorldPoint in
+                let angle = Float.pi / 2 + Float(index) * Float.pi / Float(arc)
+                return WorldPoint(-halfLength + radius * cos(angle), radius * sin(angle))
+            }
+            return right + left
+        }
     }
 
     private static func rangeRing(_ geometry: RangeGeometry) -> [WorldPoint] {

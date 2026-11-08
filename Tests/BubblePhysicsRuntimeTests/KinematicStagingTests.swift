@@ -15,15 +15,15 @@ final class KinematicStagingTests: XCTestCase {
     private func resources() throws -> WorldTransaction {
         WorldTransaction()
             .updatePhysicsMaterial(materialID, material: try PhysicsMaterial(kind: .bubble))
-            .updatePhysicsMaterial(polygonMaterialID, material: try PhysicsMaterial(kind: .polygon))
+            .updatePhysicsMaterial(polygonMaterialID, material: try PhysicsMaterial(kind: .rigid))
             .updateRenderStyle(styleID, style: try RenderStyle())
     }
     private func bubble(_ value: UInt64, role: MotionRole = .dynamic) throws -> BubbleDescriptor {
         try BubbleDescriptor(id: id(value), position: .zero, targetRadius: 1, motionRole: role,
                              physicsMaterialID: materialID, renderStyleID: styleID)
     }
-    private func box(_ value: UInt64, role: MotionRole) throws -> PolygonDescriptor {
-        try PolygonDescriptor(id: id(value), vertices: [[0, 0], [2, 0], [2, 2], [0, 2]], motionRole: role,
+    private func box(_ value: UInt64, role: MotionRole) throws -> RigidBodyDescriptor {
+        try RigidBodyDescriptor(id: id(value), vertices: [[0, 0], [2, 0], [2, 2], [0, 2]], motionRole: role,
                               physicsMaterialID: polygonMaterialID, renderStyleID: styleID)
     }
     private func assertRejected(_ transaction: WorldTransaction, against state: RuntimeState, index: Int,
@@ -47,7 +47,7 @@ final class KinematicStagingTests: XCTestCase {
     }
 
     func testKinematicPolygonIsAcceptedAndCarriesItsDrive() throws {
-        let seeded = try TransactionStager.stage(resources().add(.polygon(box(2, role: .static))), against: state()).state
+        let seeded = try TransactionStager.stage(resources().add(.rigidBody(box(2, role: .static))), against: state()).state
         let kinematic = try TransactionStager.stage(WorldTransaction().setMotion(id(2), role: .kinematic), against: seeded).state
         XCTAssertEqual(kinematic.objects[id(2)]?.motionRole, .kinematic)
         let drive = KinematicDrive.velocity(linear: [1, 0], angular: 0.5)
@@ -57,7 +57,7 @@ final class KinematicStagingTests: XCTestCase {
 
     func testSetKinematicDriveForAnotherRoleOrMissingObjectIsRejected() throws {
         let drive = KinematicDrive.target(position: [3, 3], rotation: 0)
-        let seeded = try TransactionStager.stage(resources().add(.polygon(box(2, role: .dynamic))).add(.bubble(bubble(1))),
+        let seeded = try TransactionStager.stage(resources().add(.rigidBody(box(2, role: .dynamic))).add(.bubble(bubble(1))),
                                                  against: state()).state
         assertRejected(WorldTransaction().setKinematicDrive(id(2), drive: drive), against: seeded, index: 0,
                        reason: .incompatibleMotionRole(id(2)))
@@ -68,7 +68,7 @@ final class KinematicStagingTests: XCTestCase {
     }
 
     func testLeavingKinematicRoleDiscardsTheDrive() throws {
-        let seeded = try TransactionStager.stage(resources().add(.polygon(box(2, role: .kinematic)))
+        let seeded = try TransactionStager.stage(resources().add(.rigidBody(box(2, role: .kinematic)))
             .setKinematicDrive(id(2), drive: .velocity(linear: [1, 0], angular: 0)), against: state()).state
         XCTAssertNotNil(seeded.objects[id(2)]?.kinematicDrive)
         let dynamic = try TransactionStager.stage(WorldTransaction().setMotion(id(2), role: .dynamic), against: seeded).state

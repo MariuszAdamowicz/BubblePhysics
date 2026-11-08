@@ -9,9 +9,9 @@ final class RigidPolygonRuntimeTests: XCTestCase {
                 WorldRectangle(min: [-10,-10], max: [10,10]), fixedTimeStep: 0.125))
             let id = ObjectID(rawValue: UInt64.max)
             let token = world.submit(try WorldTransaction()
-                .updatePhysicsMaterial(.init(rawValue: 1), material: PhysicsMaterial(kind: .polygon))
+                .updatePhysicsMaterial(.init(rawValue: 1), material: PhysicsMaterial(kind: .rigid))
                 .updateRenderStyle(.init(rawValue: 1), style: RenderStyle())
-                .add(.polygon(PolygonDescriptor(id: id, vertices: [[-1,-1],[1,-1],[1,1],[-1,1]],
+                .add(.rigidBody(RigidBodyDescriptor(id: id, vertices: [[-1,-1],[1,-1],[1,1],[-1,1]],
                     velocity: [2,0], angularVelocity: 1, motionRole: role,
                     physicsMaterialID: .init(rawValue: 1), renderStyleID: .init(rawValue: 1)))))
             let frame = await world.advance(by: 0.125)

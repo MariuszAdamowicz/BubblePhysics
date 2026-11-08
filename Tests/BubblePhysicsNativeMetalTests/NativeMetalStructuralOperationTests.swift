@@ -87,27 +87,27 @@ final class NativeMetalStructuralOperationTests: XCTestCase {
 
     func testPolygonReplacementIsAtomicAndRebuildsOnlyAffectedCollisionState() async throws {
         let polygonMaterial = PhysicsMaterialID(rawValue: 2)
-        func polygon(_ n: UInt64, _ x: Float) throws -> PolygonDescriptor {
-            try PolygonDescriptor(id: id(n), vertices: [[0,0],[1,0],[0,1]], position: [x,0],
+        func polygon(_ n: UInt64, _ x: Float) throws -> RigidBodyDescriptor {
+            try RigidBodyDescriptor(id: id(n), vertices: [[0,0],[1,0],[0,1]], position: [x,0],
                 physicsMaterialID: polygonMaterial, renderStyleID: style)
         }
         let one = try polygon(10, -5), two = try polygon(20, 5), replacement = try polygon(30, -4)
         let base = RuntimeState(configuration: try WorldConfiguration(
             simulationRegion: WorldRectangle(min: [-100,-100], max: [100,100])))
         let state = try TransactionStager.stage(try WorldTransaction()
-            .updatePhysicsMaterial(polygonMaterial, material: PhysicsMaterial(kind: .polygon))
+            .updatePhysicsMaterial(polygonMaterial, material: PhysicsMaterial(kind: .rigid))
             .updateRenderStyle(style, style: RenderStyle())
-            .add(.polygon(one)).add(.polygon(two)), against: base).state
-        let invalid = WorldTransaction().replacePolygons([one.id], with: [two])
+            .add(.rigidBody(one)).add(.rigidBody(two)), against: base).state
+        let invalid = WorldTransaction().replaceRigidBodies([one.id], with: [two])
         XCTAssertThrowsError(try TransactionStager.stage(invalid, against: state))
         XCTAssertEqual(Set(state.objects.keys), [one.id, two.id])
         let staged = try TransactionStager.stage(
-            WorldTransaction().replacePolygons([one.id], with: [replacement]), against: state)
+            WorldTransaction().replaceRigidBodies([one.id], with: [replacement]), against: state)
         XCTAssertEqual(Set(staged.state.objects.keys), [two.id, replacement.id])
         XCTAssertEqual(staged.removedObjectIDs, [one.id])
         XCTAssertEqual(staged.createdObjectIDs, [replacement.id])
         let native = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
-        let materials = [polygonMaterial: try PhysicsMaterial(kind: .polygon)]
+        let materials = [polygonMaterial: try PhysicsMaterial(kind: .rigid)]
         let styles = [style: try RenderStyle()]
         let region = try WorldRectangle(min: [-100,-100], max: [100,100])
         _ = try await native.step(objects: state.objects.values.map { NativePublicObject(descriptor: $0.descriptor) },
@@ -138,11 +138,11 @@ final class NativeMetalStructuralOperationTests: XCTestCase {
             motionRole: .static, physicsMaterialID: material, renderStyleID: style)
         var state = try initial([left, right])
         let wallMaterial = PhysicsMaterialID(rawValue: 2)
-        let wall = try PolygonDescriptor(id: id(100), vertices: [[0.5,-4],[2,-4],[2,4],[0.5,4]],
+        let wall = try RigidBodyDescriptor(id: id(100), vertices: [[0.5,-4],[2,-4],[2,4],[0.5,4]],
             physicsMaterialID: wallMaterial, renderStyleID: style)
         state = try TransactionStager.stage(WorldTransaction()
-            .updatePhysicsMaterial(wallMaterial, material: PhysicsMaterial(kind: .polygon))
-            .add(.polygon(wall)), against: state).state
+            .updatePhysicsMaterial(wallMaterial, material: PhysicsMaterial(kind: .rigid))
+            .add(.rigidBody(wall)), against: state).state
         let native = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         let first = try await native.step(objects: state.objects.values.map { NativePublicObject(descriptor: $0.descriptor) },
             materials: state.physicsMaterials, styles: state.renderStyles,
@@ -168,11 +168,11 @@ final class NativeMetalStructuralOperationTests: XCTestCase {
                 motionRole: .static, physicsMaterialID: material, renderStyleID: style)
             var state = try initial([left, right])
             let wallMaterial = PhysicsMaterialID(rawValue: 2)
-            let wall = try PolygonDescriptor(id: id(100), vertices: [[0.5,-4],[2,-4],[2,4],[0.5,4]],
+            let wall = try RigidBodyDescriptor(id: id(100), vertices: [[0.5,-4],[2,-4],[2,4],[0.5,4]],
                 physicsMaterialID: wallMaterial, renderStyleID: style)
             state = try TransactionStager.stage(WorldTransaction()
-                .updatePhysicsMaterial(wallMaterial, material: PhysicsMaterial(kind: .polygon))
-                .add(.polygon(wall)), against: state).state
+                .updatePhysicsMaterial(wallMaterial, material: PhysicsMaterial(kind: .rigid))
+                .add(.rigidBody(wall)), against: state).state
             let native = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
             let first = try await native.step(objects: state.objects.values.map { NativePublicObject(descriptor: $0.descriptor) },
                 materials: state.physicsMaterials, styles: state.renderStyles,

@@ -40,7 +40,7 @@ final class CollisionFilterTests: XCTestCase {
         let filter = CollisionFilter(category: 4, mask: 8)
         let bubble = try BubbleDescriptor(id: id(1), position: .zero, targetRadius: 1, physicsMaterialID: materialID,
                                           renderStyleID: styleID, filter: filter)
-        let polygon = try PolygonDescriptor(id: id(2), vertices: [[0, 0], [1, 0], [0, 1]], physicsMaterialID: materialID,
+        let polygon = try RigidBodyDescriptor(id: id(2), vertices: [[0, 0], [1, 0], [0, 1]], physicsMaterialID: materialID,
                                             renderStyleID: styleID, filter: filter)
         XCTAssertEqual(bubble.filter, filter)
         XCTAssertEqual(polygon.filter, filter)

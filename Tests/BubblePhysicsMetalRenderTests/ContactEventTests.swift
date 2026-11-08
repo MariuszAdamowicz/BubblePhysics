@@ -211,7 +211,7 @@ final class ContactEventTests: XCTestCase {
     func testBeganPointIsWeightedTowardDeeperPenetrationInACorner() async throws {
         func cornerPoint(bubbleAt position: WorldPoint) async throws -> WorldPoint {
             let world = try B.makeWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
-            let corner = WorldObject.polygon(try PolygonDescriptor(id: ObjectID(rawValue: floorID),
+            let corner = WorldObject.rigidBody(try RigidBodyDescriptor(id: ObjectID(rawValue: floorID),
                 vertices: [[0, 0], [100, 0], [100, 10], [10, 10], [10, 60], [0, 60]], position: [100, 100],
                 mass: 1, momentOfInertia: 1000, motionRole: .static, physicsMaterialID: B.polygonMaterial,
                 renderStyleID: B.style))

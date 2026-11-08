@@ -82,10 +82,10 @@ final class TransactionStagerTests: XCTestCase {
 
     func testMissingAndIncompatibleResourcesAreRejected() throws {
         assertRejected(WorldTransaction().add(.bubble(try bubble(1))), reason: .physicsMaterialNotFound(materialID))
-        assertRejected(try resources().updatePhysicsMaterial(materialID, material: PhysicsMaterial(kind: .polygon))
+        assertRejected(try resources().updatePhysicsMaterial(materialID, material: PhysicsMaterial(kind: .rigid))
             .add(.bubble(bubble(1))), reason: .incompatiblePhysicsMaterial(materialID, id(1)))
         let initial = try TransactionStager.stage(resources().add(.bubble(bubble(1))), against: state()).state
-        assertRejected(WorldTransaction().updatePhysicsMaterial(materialID, material: try PhysicsMaterial(kind: .polygon)),
+        assertRejected(WorldTransaction().updatePhysicsMaterial(materialID, material: try PhysicsMaterial(kind: .rigid)),
                        against: initial, reason: .incompatiblePhysicsMaterial(materialID, id(1)))
     }
 
@@ -160,17 +160,17 @@ final class TransactionStagerTests: XCTestCase {
 
     func testReplaceRemoveAndPolygonReplacementValidateProspectiveObjects() throws {
         let polygonMaterial = PhysicsMaterialID(rawValue: 2)
-        func polygon(_ value: UInt64) throws -> PolygonDescriptor {
-            try PolygonDescriptor(id: id(value), vertices: [[0, 0], [1, 0], [0, 1]],
+        func polygon(_ value: UInt64) throws -> RigidBodyDescriptor {
+            try RigidBodyDescriptor(id: id(value), vertices: [[0, 0], [1, 0], [0, 1]],
                                   physicsMaterialID: polygonMaterial, renderStyleID: styleID)
         }
         let transaction = try resources()
-            .updatePhysicsMaterial(polygonMaterial, material: PhysicsMaterial(kind: .polygon))
-            .add(.bubble(bubble(1))).replace(id(1), with: .polygon(polygon(1)))
-            .replacePolygons([id(1)], with: [polygon(2), polygon(3)]).remove(id(2))
+            .updatePhysicsMaterial(polygonMaterial, material: PhysicsMaterial(kind: .rigid))
+            .add(.bubble(bubble(1))).replace(id(1), with: .rigidBody(polygon(1)))
+            .replaceRigidBodies([id(1)], with: [polygon(2), polygon(3)]).remove(id(2))
         let changed = try TransactionStager.stage(transaction, against: state())
         XCTAssertEqual(Set(changed.state.objects.keys), [id(3)])
-        assertRejected(try resources().add(.bubble(bubble(1))).replacePolygons([id(1)], with: [polygon(2)]),
+        assertRejected(try resources().add(.bubble(bubble(1))).replaceRigidBodies([id(1)], with: [polygon(2)]),
                        reason: .incompatibleObjectKind(id(1)))
     }
 
@@ -263,15 +263,47 @@ final class TransactionStagerTests: XCTestCase {
     func testInvalidPolygonRollsBackValidObjectAndResourceChanges() throws {
         let initial = try state()
         let polygonMaterial = PhysicsMaterialID(rawValue: 2)
-        let outside = try PolygonDescriptor(id: id(2), vertices: [[0, 0], [2, 0], [0, 2]], position: [100, 100],
+        let outside = try RigidBodyDescriptor(id: id(2), vertices: [[0, 0], [2, 0], [0, 2]], position: [100, 100],
                                             physicsMaterialID: polygonMaterial, renderStyleID: styleID)
         let transaction = try resources().add(.bubble(bubble(1)))
-            .updatePhysicsMaterial(polygonMaterial, material: PhysicsMaterial(kind: .polygon)).add(.polygon(outside))
+            .updatePhysicsMaterial(polygonMaterial, material: PhysicsMaterial(kind: .rigid)).add(.rigidBody(outside))
         let batch = TransactionStager.stageBatch([PendingTransaction(token: TransactionToken(rawValue: 1), transaction: transaction)], against: initial)
         XCTAssertEqual(batch.state, initial)
         XCTAssertEqual(batch.frame.events, [.transactionRejected(TransactionToken(rawValue: 1),
             TransactionRejection(operationIndex: 4, reason: .invalidValue(.staticGeometryOutsideSimulationRegion)))])
         XCTAssertTrue(batch.frame.transactionReceipts.isEmpty)
+    }
+
+    func testCircleAndCapsuleAreStagedAndPublishedWithKindAndBounds() throws {
+        let rigid = PhysicsMaterialID(rawValue: 2)
+        let circle = try RigidBodyDescriptor(id: id(1), shape: .circle(radius: 2), position: [10, 20],
+            motionRole: .dynamic, physicsMaterialID: rigid, renderStyleID: styleID)
+        let capsule = try RigidBodyDescriptor(id: id(2), shape: .capsule(halfLength: 3, radius: 1), position: [-10, 5],
+            rotation: .pi / 2, motionRole: .dynamic, physicsMaterialID: rigid, renderStyleID: styleID)
+        let staged = try TransactionStager.stage(resources()
+            .updatePhysicsMaterial(rigid, material: PhysicsMaterial(kind: .rigid))
+            .add(.rigidBody(circle)).add(.rigidBody(capsule)), against: state()).state
+        let published = staged.publishedObjectStates()
+        XCTAssertEqual(published[id(1)]?.kind, .circle(radius: 2))
+        XCTAssertEqual(published[id(1)]?.bounds.min, [8, 18])
+        XCTAssertEqual(published[id(1)]?.bounds.max, [12, 22])
+        XCTAssertEqual(published[id(2)]?.kind, .capsule(halfLength: 3, radius: 1))
+        // Oś obrócona o 90°: wysokość 2·(3 + 1), szerokość 2·1.
+        let bounds = try XCTUnwrap(published[id(2)]?.bounds)
+        XCTAssertEqual(bounds.min.x, -11, accuracy: 1e-5); XCTAssertEqual(bounds.max.x, -9, accuracy: 1e-5)
+        XCTAssertEqual(bounds.min.y, 1, accuracy: 1e-5); XCTAssertEqual(bounds.max.y, 9, accuracy: 1e-5)
+        // Bryły kołowe wymagają materiału `.rigid`, jak wielokąty.
+        assertRejected(try resources().add(.rigidBody(circle)), reason: .physicsMaterialNotFound(rigid))
+        assertRejected(try resources().updatePhysicsMaterial(rigid, material: PhysicsMaterial(kind: .bubble)).add(.rigidBody(circle)),
+                       reason: .incompatiblePhysicsMaterial(rigid, id(1)))
+    }
+
+    func testStaticCircleOutsideRegionIsRejectedAtStaging() throws {
+        let rigid = PhysicsMaterialID(rawValue: 2)
+        let outside = try RigidBodyDescriptor(id: id(1), shape: .circle(radius: 5), position: [98, 0],
+            motionRole: .static, physicsMaterialID: rigid, renderStyleID: styleID)
+        assertRejected(try resources().updatePhysicsMaterial(rigid, material: PhysicsMaterial(kind: .rigid)).add(.rigidBody(outside)),
+                       reason: .invalidValue(.staticGeometryOutsideSimulationRegion))
     }
 
     private func assertRejected(_ transaction: WorldTransaction, against initial: RuntimeState? = nil,

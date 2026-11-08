@@ -14,11 +14,11 @@ final class NativeMetalPublicObjectTests: XCTestCase {
         let bubble = NativePublicObject(descriptor: .bubble(try BubbleDescriptor(id: .init(rawValue: 1),
             position: [-0.75, 0], velocity: [3, 4], targetRadius: 1,
             physicsMaterialID: bubbleMaterial, renderStyleID: style)))
-        let polygon = NativePublicObject(descriptor: .polygon(try PolygonDescriptor(id: .init(rawValue: 2),
+        let polygon = NativePublicObject(descriptor: .rigidBody(try RigidBodyDescriptor(id: .init(rawValue: 2),
             vertices: [[0, -4], [2, -4], [2, 4], [0, 4]], motionRole: polygonRole ?? .static,
             physicsMaterialID: polygonMaterial, renderStyleID: style)))
         let materials = try [bubbleMaterial: PhysicsMaterial(kind: .bubble, friction: friction),
-                             polygonMaterial: PhysicsMaterial(kind: .polygon, friction: friction)]
+                             polygonMaterial: PhysicsMaterial(kind: .rigid, friction: friction)]
         let frame = try await world.step(objects: [bubble, polygon], materials: materials,
             styles: [style: RenderStyle()], region: WorldRectangle(min: [-10, -10], max: [10, 10]), duration: 1.0 / 60.0)
         return try XCTUnwrap(frame.objects[bubble.descriptor.id]).velocity
@@ -61,12 +61,12 @@ final class NativeMetalPublicObjectTests: XCTestCase {
             let bubble = NativePublicObject(descriptor: .bubble(try BubbleDescriptor(id: .init(rawValue: 1),
                 position: [-0.75, 0], velocity: [3, 0], targetRadius: 1,
                 physicsMaterialID: bubbleMaterial, renderStyleID: style)))
-            let wall = NativePublicObject(descriptor: .polygon(try PolygonDescriptor(id: .init(rawValue: 2),
+            let wall = NativePublicObject(descriptor: .rigidBody(try RigidBodyDescriptor(id: .init(rawValue: 2),
                 vertices: [[0, -4], [2, -4], [2, 4], [0, 4]],
                 physicsMaterialID: polygonMaterial, renderStyleID: style)))
             let frame = try await world.step(objects: [bubble, wall], materials: [
                 bubbleMaterial: PhysicsMaterial(kind: .bubble, restitution: restitution),
-                polygonMaterial: PhysicsMaterial(kind: .polygon, restitution: restitution)
+                polygonMaterial: PhysicsMaterial(kind: .rigid, restitution: restitution)
             ], styles: [style: RenderStyle()], region: WorldRectangle(min: [-10, -10], max: [10, 10]), duration: 1.0 / 60.0)
             return try XCTUnwrap(frame.objects[bubble.descriptor.id]).velocity
         }
@@ -82,11 +82,11 @@ final class NativeMetalPublicObjectTests: XCTestCase {
             let bubble = NativePublicObject(descriptor: .bubble(try BubbleDescriptor(id: .init(rawValue: 1),
                 position: [-0.75, 0], velocity: [60, 0], targetRadius: 1,
                 physicsMaterialID: bubbleMaterial, renderStyleID: style)))
-            let wall = NativePublicObject(descriptor: .polygon(try PolygonDescriptor(id: .init(rawValue: 2),
+            let wall = NativePublicObject(descriptor: .rigidBody(try RigidBodyDescriptor(id: .init(rawValue: 2),
                 vertices: [[0, -4], [2, -4], [2, 4], [0, 4]], physicsMaterialID: polygonMaterial, renderStyleID: style)))
             let frame = try await world.step(objects: [bubble, wall], materials: [
                 bubbleMaterial: PhysicsMaterial(kind: .bubble, restitution: restitution),
-                polygonMaterial: PhysicsMaterial(kind: .polygon, restitution: restitution)
+                polygonMaterial: PhysicsMaterial(kind: .rigid, restitution: restitution)
             ], styles: [style: RenderStyle()], region: WorldRectangle(min: [-20, -10], max: [20, 10]), duration: 1.0 / 240.0)
             return try XCTUnwrap(frame.objects[bubble.descriptor.id]).velocity
         }
@@ -112,11 +112,11 @@ final class NativeMetalPublicObjectTests: XCTestCase {
     func testRemovingEarlierPolygonDoesNotUploadUnchangedRemainingGeometry() async throws {
         let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         let objects = try [UInt64(1), UInt64(2)].map { id in
-            NativePublicObject(descriptor: .polygon(try PolygonDescriptor(id: .init(rawValue: id),
+            NativePublicObject(descriptor: .rigidBody(try RigidBodyDescriptor(id: .init(rawValue: id),
                 vertices: [[0, 0], [1, 0], [0, 1]], position: [Float(id) * 3, 0],
                 physicsMaterialID: .init(rawValue: 1), renderStyleID: .init(rawValue: 1))))
         }
-        let materials = try [PhysicsMaterialID(rawValue: 1): PhysicsMaterial(kind: .polygon)]
+        let materials = try [PhysicsMaterialID(rawValue: 1): PhysicsMaterial(kind: .rigid)]
         let styles = try [RenderStyleID(rawValue: 1): RenderStyle()]
         let region = try WorldRectangle(min: [-10, -10], max: [10, 10])
         _ = try await world.step(objects: objects, materials: materials, styles: styles, region: region, duration: 0.25)
@@ -149,14 +149,14 @@ final class NativeMetalPublicObjectTests: XCTestCase {
             NativePublicObject(descriptor: .bubble(BubbleDescriptor(id: .init(rawValue: 1), position: .zero,
                 velocity: [8, 0], targetRadius: 1, motionRole: .static,
                 physicsMaterialID: .init(rawValue: 1), renderStyleID: .init(rawValue: 1)))),
-            NativePublicObject(descriptor: .polygon(PolygonDescriptor(id: .init(rawValue: 2),
+            NativePublicObject(descriptor: .rigidBody(RigidBodyDescriptor(id: .init(rawValue: 2),
                 vertices: [[-2, -2], [2, -2], [2, 2], [-2, 2]],
                 physicsMaterialID: .init(rawValue: 2), renderStyleID: .init(rawValue: 1)))),
             NativePublicObject(descriptor: .bubble(BubbleDescriptor(id: .init(rawValue: 3), position: .zero,
                 targetRadius: 0.5, motionRole: .static, physicsMaterialID: .init(rawValue: 1), renderStyleID: .init(rawValue: 1))))
         ]
         let frame = try await world.step(objects: objects,
-            materials: [.init(rawValue: 1): PhysicsMaterial(kind: .bubble), .init(rawValue: 2): PhysicsMaterial(kind: .polygon)],
+            materials: [.init(rawValue: 1): PhysicsMaterial(kind: .bubble), .init(rawValue: 2): PhysicsMaterial(kind: .rigid)],
             styles: [.init(rawValue: 1): RenderStyle()], region: WorldRectangle(min: [-10, -10], max: [10, 10]), duration: 0.25)
         XCTAssertEqual(frame.objects[.init(rawValue: 1)]?.position, .zero)
         XCTAssertEqual(frame.objects[.init(rawValue: 1)]?.velocity, .zero)
@@ -191,12 +191,12 @@ final class NativeMetalPublicObjectTests: XCTestCase {
         let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         let style = RenderStyleID(rawValue: 1)
         let materials = try [PhysicsMaterialID(rawValue: 1): PhysicsMaterial(kind: .bubble),
-                            PhysicsMaterialID(rawValue: 2): PhysicsMaterial(kind: .polygon)]
+                            PhysicsMaterialID(rawValue: 2): PhysicsMaterial(kind: .rigid)]
         let objects = try [
             NativePublicObject(descriptor: .bubble(BubbleDescriptor(id: .init(rawValue: 10),
                 position: [-1.5, 0], velocity: [4, 0], targetRadius: 1,
                 physicsMaterialID: .init(rawValue: 1), renderStyleID: style))),
-            NativePublicObject(descriptor: .polygon(PolygonDescriptor(id: .init(rawValue: UInt64.max),
+            NativePublicObject(descriptor: .rigidBody(RigidBodyDescriptor(id: .init(rawValue: UInt64.max),
                 vertices: [[0, -5], [2, -5], [2, 5], [0, 5]],
                 physicsMaterialID: .init(rawValue: 2), renderStyleID: style,
                 presentation: PresentationParameters(channels: [.init(rawValue: "saturation"): 0.8]))))

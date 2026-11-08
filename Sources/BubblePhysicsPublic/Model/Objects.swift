@@ -152,16 +152,74 @@ public struct BubbleDescriptor: Equatable, Sendable {
     }
 }
 
-public struct PolygonDescriptor: Equatable, Sendable {
+/// Kształt sztywnej bryły w jej układzie lokalnym. Środek koła i kapsuły leży w `position` bryły,
+/// a oś kapsuły to lokalna oś X: odcinek od (−halfLength, 0) do (halfLength, 0) powiększony o `radius`.
+public enum RigidShape: Equatable, Sendable {
+    case polygon(PolygonGeometry)
+    case circle(radius: Float)
+    case capsule(halfLength: Float, radius: Float)
+
+    internal func validate() throws {
+        switch self {
+        case .polygon: break
+        case .circle(let radius): try requirePositive(radius, "shape.radius")
+        case .capsule(let halfLength, let radius):
+            try requirePositive(halfLength, "shape.halfLength")
+            try requirePositive(radius, "shape.radius")
+        }
+    }
+
+    /// Moment bezwładności jednorodnej bryły o danej masie względem jej środka ciężkości.
+    /// Dla wielokąta to środek pola, a nie początek układu lokalnego.
+    public func momentOfInertia(mass: Float) -> Float {
+        let m = Double(mass)
+        switch self {
+        case .circle(let radius):
+            let r = Double(radius)
+            return Float(m * r * r / 2)
+        case .capsule(let halfLength, let radius):
+            // Prostokąt 2h × 2r i dwa półkola; półkole ma środek ciężkości 4r/(3π) od krawędzi prostej.
+            let h = Double(halfLength), r = Double(radius)
+            let rectangleArea = 4 * h * r, discArea = Double.pi * r * r
+            let rectangleMass = m * rectangleArea / (rectangleArea + discArea)
+            let discMass = m - rectangleMass
+            let rectangle = rectangleMass * (4 * h * h + 4 * r * r) / 12
+            let caps = discMass * (r * r / 2 + h * h + 8 * h * r / (3 * Double.pi))
+            return Float(rectangle + caps)
+        case .polygon(let geometry):
+            // Momenty względem punktu odniesienia (pierwszy wierzchołek, dla dokładności), potem Steiner do środka pola.
+            let origin = geometry.vertices[0]
+            let points = geometry.vertices.map { SIMD2<Double>(Double($0.x - origin.x), Double($0.y - origin.y)) }
+            var area: Double = 0, secondMoment: Double = 0
+            var centroid = SIMD2<Double>.zero
+            for i in points.indices {
+                let a = points[i], b = points[(i + 1) % points.count]
+                let cross = a.x * b.y - a.y * b.x
+                area += cross
+                centroid += (a + b) * cross
+                secondMoment += cross * (a.x * a.x + a.x * b.x + b.x * b.x + a.y * a.y + a.y * b.y + b.y * b.y)
+            }
+            area /= 2
+            centroid /= 6 * area
+            // `secondMoment / 12` to całka r² dA względem punktu odniesienia; dzielenie przez pole daje wartość na jednostkę masy.
+            let perMass = (secondMoment / 12) / area
+            return Float(m * (perMass - (centroid.x * centroid.x + centroid.y * centroid.y)))
+        }
+    }
+}
+
+/// Sztywna bryła: wielokąt, koło albo kapsuła. Pozycja i obrót dotyczą początku układu lokalnego kształtu.
+public struct RigidBodyDescriptor: Equatable, Sendable {
     public let id: ObjectID
-    public let geometry: PolygonGeometry
+    public let shape: RigidShape
     public let position: WorldPoint
     /// Obrót i prędkość kątowa w radianach i radianach na sekundę.
     public let rotation: Float
     public let velocity: WorldPoint
     public let angularVelocity: Float
     public let mass: Float
-    public let momentOfInertia: Float
+    /// `nil` oznacza moment liczony z kształtu i masy (`resolvedMomentOfInertia`).
+    public let momentOfInertia: Float?
     public let motionRole: MotionRole
     public let regionExitPolicy: RegionExitPolicy
     public let physicsMaterialID: PhysicsMaterialID
@@ -171,20 +229,24 @@ public struct PolygonDescriptor: Equatable, Sendable {
     public var properties: PhysicsBodyProperties { PhysicsBodyProperties(filter: filter, eventInterest: eventInterest) }
     public let presentation: PresentationParameters
 
-    public init(id: ObjectID, vertices: [WorldPoint], position: WorldPoint = .zero,
+    /// Moment bezwładności, który widzi solver: podany przez grę albo liczony z kształtu.
+    public var resolvedMomentOfInertia: Float { momentOfInertia ?? shape.momentOfInertia(mass: mass) }
+
+    public init(id: ObjectID, shape: RigidShape, position: WorldPoint = .zero,
                 rotation: Float = 0, velocity: WorldPoint = .zero, angularVelocity: Float = 0,
-                mass: Float = 1, momentOfInertia: Float = 1, motionRole: MotionRole = .static,
+                mass: Float = 1, momentOfInertia: Float? = nil, motionRole: MotionRole = .static,
                 regionExitPolicy: RegionExitPolicy = .remove, physicsMaterialID: PhysicsMaterialID,
                 renderStyleID: RenderStyleID, eventInterest: EventInterest = [],
                 presentation: PresentationParameters = .empty, filter: CollisionFilter = .default) throws {
-        self.geometry = try PolygonGeometry(vertices: vertices)
-        try requireFinite(position, "polygon.position")
-        try requireFinite(rotation, "polygon.rotation")
-        try requireFinite(velocity, "polygon.velocity")
-        try requireFinite(angularVelocity, "polygon.angularVelocity")
-        try requirePositive(mass, "polygon.mass")
-        try requirePositive(momentOfInertia, "polygon.momentOfInertia")
+        try shape.validate()
+        try requireFinite(position, "rigidBody.position")
+        try requireFinite(rotation, "rigidBody.rotation")
+        try requireFinite(velocity, "rigidBody.velocity")
+        try requireFinite(angularVelocity, "rigidBody.angularVelocity")
+        try requirePositive(mass, "rigidBody.mass")
+        if let momentOfInertia { try requirePositive(momentOfInertia, "rigidBody.momentOfInertia") }
         self.id = id
+        self.shape = shape
         self.position = position
         self.rotation = rotation
         self.velocity = velocity
@@ -198,6 +260,22 @@ public struct PolygonDescriptor: Equatable, Sendable {
         self.eventInterest = eventInterest
         self.filter = filter
         self.presentation = presentation
+        // Moment liczony z kształtu może w `Float` zejść do zera przy skrajnie małej bryle.
+        try requirePositive(resolvedMomentOfInertia, "rigidBody.momentOfInertia")
+    }
+
+    /// Skrót dla wielokąta o podanych wierzchołkach lokalnych.
+    public init(id: ObjectID, vertices: [WorldPoint], position: WorldPoint = .zero,
+                rotation: Float = 0, velocity: WorldPoint = .zero, angularVelocity: Float = 0,
+                mass: Float = 1, momentOfInertia: Float? = nil, motionRole: MotionRole = .static,
+                regionExitPolicy: RegionExitPolicy = .remove, physicsMaterialID: PhysicsMaterialID,
+                renderStyleID: RenderStyleID, eventInterest: EventInterest = [],
+                presentation: PresentationParameters = .empty, filter: CollisionFilter = .default) throws {
+        try self.init(id: id, shape: .polygon(PolygonGeometry(vertices: vertices)), position: position,
+                      rotation: rotation, velocity: velocity, angularVelocity: angularVelocity, mass: mass,
+                      momentOfInertia: momentOfInertia, motionRole: motionRole, regionExitPolicy: regionExitPolicy,
+                      physicsMaterialID: physicsMaterialID, renderStyleID: renderStyleID,
+                      eventInterest: eventInterest, presentation: presentation, filter: filter)
     }
 }
 

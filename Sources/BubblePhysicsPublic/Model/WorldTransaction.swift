@@ -2,14 +2,14 @@ import Foundation
 
 public enum WorldObject: Equatable, Sendable {
     case bubble(BubbleDescriptor)
-    case polygon(PolygonDescriptor)
+    case rigidBody(RigidBodyDescriptor)
     case forceField(ForceFieldDescriptor)
     case sensor(SensorDescriptor)
 
     public var id: ObjectID {
         switch self {
         case .bubble(let object): return object.id
-        case .polygon(let object): return object.id
+        case .rigidBody(let object): return object.id
         case .forceField(let object): return object.id
         case .sensor(let object): return object.id
         }
@@ -65,7 +65,9 @@ public enum WorldOperation: Equatable, Sendable {
     case startTransition(ParameterTransition)
     case mergeBubbles([ObjectID], BubbleResult)
     case splitBubble(ObjectID, BubbleSplitPart, BubbleSplitPart)
-    case replacePolygons([ObjectID], [PolygonDescriptor])
+    case replaceRigidBodies([ObjectID], [RigidBodyDescriptor])
+    case addJoint(Joint)
+    case removeJoint(JointID)
 }
 
 /// Wartościowy builder. Każda metoda zwraca kopię; operacje zachowują kolejność dodania.
@@ -93,5 +95,8 @@ public struct WorldTransaction: Equatable, Sendable {
     public func startTransition(_ transition: ParameterTransition) -> Self { appending(.startTransition(transition)) }
     public func mergeBubbles(_ sources: [ObjectID], result: BubbleResult) -> Self { appending(.mergeBubbles(sources, result)) }
     public func splitBubble(_ source: ObjectID, first: BubbleSplitPart, second: BubbleSplitPart) -> Self { appending(.splitBubble(source, first, second)) }
-    public func replacePolygons(_ sources: [ObjectID], with results: [PolygonDescriptor]) -> Self { appending(.replacePolygons(sources, results)) }
+    public func replaceRigidBodies(_ sources: [ObjectID], with results: [RigidBodyDescriptor]) -> Self { appending(.replaceRigidBodies(sources, results)) }
+    /// Więz dodany do ciał, które istnieją w chwili tej operacji; usunięcie któregokolwiek ciała usuwa też więz.
+    public func addJoint(_ joint: Joint) -> Self { appending(.addJoint(joint)) }
+    public func removeJoint(_ id: JointID) -> Self { appending(.removeJoint(id)) }
 }

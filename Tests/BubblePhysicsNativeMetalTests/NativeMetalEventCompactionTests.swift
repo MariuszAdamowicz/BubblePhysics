@@ -124,11 +124,11 @@ final class NativeMetalEventCompactionTests: XCTestCase {
         let sensor = NativePublicObject(descriptor: .sensor(try SensorDescriptor(id: ObjectID(rawValue: 9),
             position: .zero, geometry: RangeGeometry.polygon(vertices: [[-2, -2], [2, -2], [2, 2], [-2, 2]]),
             renderStyleID: style, eventInterest: [.enteredSensor, .exitedSensor])))
-        var body = NativePublicObject(descriptor: .polygon(try PolygonDescriptor(id: ObjectID(rawValue: 3),
+        var body = NativePublicObject(descriptor: .rigidBody(try RigidBodyDescriptor(id: ObjectID(rawValue: 3),
             vertices: [[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]],
             physicsMaterialID: polygonMaterial, renderStyleID: style)))
         func run() async throws -> NativePublicFrame {
-            try await world.step(objects: [body, sensor], materials: [polygonMaterial: PhysicsMaterial(kind: .polygon)],
+            try await world.step(objects: [body, sensor], materials: [polygonMaterial: PhysicsMaterial(kind: .rigid)],
                 styles: [style: RenderStyle()], region: WorldRectangle(min: [-20, -20], max: [20, 20]),
                 duration: 1.0 / 60.0)
         }
@@ -148,11 +148,11 @@ final class NativeMetalEventCompactionTests: XCTestCase {
         let sensor = NativePublicObject(descriptor: .sensor(try SensorDescriptor(id: sensorID,
             position: .zero, geometry: RangeGeometry.circle(radius: 3), renderStyleID: style,
             eventInterest: [.enteredSensor, .exitedSensor])))
-        let body = NativePublicObject(descriptor: .polygon(try PolygonDescriptor(id: bodyID,
+        let body = NativePublicObject(descriptor: .rigidBody(try RigidBodyDescriptor(id: bodyID,
             vertices: [[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]],
             physicsMaterialID: polygonMaterial, renderStyleID: style)))
         func run(_ objects: [NativePublicObject]) async throws -> NativePublicFrame {
-            try await world.step(objects: objects, materials: [polygonMaterial: PhysicsMaterial(kind: .polygon)],
+            try await world.step(objects: objects, materials: [polygonMaterial: PhysicsMaterial(kind: .rigid)],
                 styles: [style: RenderStyle()], region: WorldRectangle(min: [-20, -20], max: [20, 20]),
                 duration: 1.0 / 60.0)
         }
@@ -180,11 +180,11 @@ final class NativeMetalEventCompactionTests: XCTestCase {
         let sensor = NativePublicObject(descriptor: .sensor(try SensorDescriptor(id: ObjectID(rawValue: 9),
             position: .zero, geometry: RangeGeometry.polygon(vertices: [[-2, -2], [2, -2], [2, 2], [-2, 2]]),
             renderStyleID: style, eventInterest: .enteredSensor)))
-        let body = NativePublicObject(descriptor: .polygon(try PolygonDescriptor(id: ObjectID(rawValue: 3),
+        let body = NativePublicObject(descriptor: .rigidBody(try RigidBodyDescriptor(id: ObjectID(rawValue: 3),
             vertices: [[-0.5, -2], [0.5, -2], [0, -1]], position: [7, 0],
             physicsMaterialID: polygonMaterial, renderStyleID: style)))
         let frame = try await world.step(objects: [body, sensor],
-            materials: [polygonMaterial: PhysicsMaterial(kind: .polygon)],
+            materials: [polygonMaterial: PhysicsMaterial(kind: .rigid)],
             styles: [style: RenderStyle()], region: WorldRectangle(min: [-20, -20], max: [20, 20]),
             duration: 1.0 / 60.0)
         XCTAssertTrue(frame.events.isEmpty)

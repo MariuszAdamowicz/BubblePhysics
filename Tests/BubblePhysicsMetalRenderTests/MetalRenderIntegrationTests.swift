@@ -197,9 +197,9 @@ final class MetalRenderIntegrationTests: XCTestCase {
             simulationRegion: WorldRectangle(min: [-10, -10], max: [10, 10]), fixedTimeStep: 1.0 / 60), device: device)
         let channel = ParameterID(rawValue: "level")
         world.submit(WorldTransaction()
-            .updatePhysicsMaterial(.init(rawValue: 2), material: try PhysicsMaterial(kind: .polygon))
+            .updatePhysicsMaterial(.init(rawValue: 2), material: try PhysicsMaterial(kind: .rigid))
             .updateRenderStyle(.init(rawValue: 2), style: try RenderStyle(shader: .custom("polygon"), channels: [channel: 0.6]))
-            .add(.polygon(try PolygonDescriptor(id: .init(rawValue: 2),
+            .add(.rigidBody(try RigidBodyDescriptor(id: .init(rawValue: 2),
                 vertices: [[-1,-1], [1,-1], [1,1], [-1,1]],
                 physicsMaterialID: .init(rawValue: 2), renderStyleID: .init(rawValue: 2)))))
         _ = await world.advance(by: 1.0 / 60)

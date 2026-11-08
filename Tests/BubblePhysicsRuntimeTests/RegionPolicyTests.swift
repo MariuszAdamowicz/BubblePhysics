@@ -43,13 +43,13 @@ final class RegionPolicyTests: XCTestCase {
         XCTAssertEqual(next.velocity, .zero)
     }
 
-    func testDrivenPolygonDescriptorsAreAcceptedWithoutStallingWorld() async throws {
+    func testDrivenRigidBodyDescriptorsAreAcceptedWithoutStallingWorld() async throws {
         for role in [MotionRole.pathDriven, .playerDriven] {
             let world = try BubbleWorld(configuration: initial(policy: .remove).configuration)
             world.submit(try WorldTransaction()
                 .updateRenderStyle(.init(rawValue: 1), style: RenderStyle())
-                .updatePhysicsMaterial(.init(rawValue: 2), material: PhysicsMaterial(kind: .polygon))
-                .add(.polygon(PolygonDescriptor(id: .init(rawValue: 3), vertices: [[0, 0], [1, 0], [0, 1]],
+                .updatePhysicsMaterial(.init(rawValue: 2), material: PhysicsMaterial(kind: .rigid))
+                .add(.rigidBody(RigidBodyDescriptor(id: .init(rawValue: 3), vertices: [[0, 0], [1, 0], [0, 1]],
                     position: [3, 3], motionRole: role, physicsMaterialID: .init(rawValue: 2), renderStyleID: .init(rawValue: 1)))))
             let frame = await world.advance(by: 0.25)
             XCTAssertEqual(frame.stepIndex, 1)

@@ -10,7 +10,7 @@ final class NativeMetalRigidPolygonTests: XCTestCase {
     private func polygon(role: MotionRole = .dynamic, position: WorldPoint = .zero,
                          velocity: WorldPoint = .zero, angular: Float = 0,
                          vertices: [WorldPoint] = [[-1,-1],[1,-1],[1,1],[-1,1]]) throws -> NativePublicObject {
-        NativePublicObject(descriptor: .polygon(try PolygonDescriptor(id: polygonID,
+        NativePublicObject(descriptor: .rigidBody(try RigidBodyDescriptor(id: polygonID,
             vertices: vertices, position: position, velocity: velocity, angularVelocity: angular,
             mass: 2, momentOfInertia: 2, motionRole: role,
             physicsMaterialID: .init(rawValue: 2), renderStyleID: .init(rawValue: 1))))
@@ -22,7 +22,7 @@ final class NativeMetalRigidPolygonTests: XCTestCase {
     }
     private func step(_ world: NativePublicWorld, _ objects: [NativePublicObject], dt: Double = 1.0/60) async throws -> NativePublicFrame {
         try await world.step(objects: objects,
-            materials: [.init(rawValue: 1): PhysicsMaterial(kind: .bubble), .init(rawValue: 2): PhysicsMaterial(kind: .polygon)],
+            materials: [.init(rawValue: 1): PhysicsMaterial(kind: .bubble), .init(rawValue: 2): PhysicsMaterial(kind: .rigid)],
             styles: [.init(rawValue: 1): RenderStyle()], region: WorldRectangle(min: [-100,-100], max: [100,100]), duration: dt)
     }
 
@@ -64,7 +64,7 @@ final class NativeMetalRigidPolygonTests: XCTestCase {
 
     func testPolygonContactPreservesFiniteStateAndDoesNotMoveThroughStaticWall() async throws {
         let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
-        let wall = NativePublicObject(descriptor: .polygon(try PolygonDescriptor(id: .init(rawValue: 3),
+        let wall = NativePublicObject(descriptor: .rigidBody(try RigidBodyDescriptor(id: .init(rawValue: 3),
             vertices: [[2,-10],[2.25,-10],[2.25,10],[2,10]],
             physicsMaterialID: .init(rawValue: 2), renderStyleID: .init(rawValue: 1))))
         var frame = try await step(world, [polygon(velocity: [8,0], angular: 0.5), wall])
@@ -107,7 +107,7 @@ final class NativeMetalRigidPolygonTests: XCTestCase {
 
     func testBubbleCannotPushPolygonThroughStaticWall() async throws {
         let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
-        let wall = NativePublicObject(descriptor: .polygon(try PolygonDescriptor(id: .init(rawValue: 3),
+        let wall = NativePublicObject(descriptor: .rigidBody(try RigidBodyDescriptor(id: .init(rawValue: 3),
             vertices: [[1,-10],[1.1,-10],[1.1,10],[1,10]],
             physicsMaterialID: .init(rawValue: 2), renderStyleID: .init(rawValue: 1))))
         var frame = try await step(world, [polygon(), bubble(position: [-1.6,0], velocity: [60,0]), wall])
@@ -121,7 +121,7 @@ final class NativeMetalRigidPolygonTests: XCTestCase {
 
     func testRemovingEarlierPolygonPreservesRemainingGPUVelocity() async throws {
         let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
-        let earlier = NativePublicObject(descriptor: .polygon(try PolygonDescriptor(id: .init(rawValue: 3),
+        let earlier = NativePublicObject(descriptor: .rigidBody(try RigidBodyDescriptor(id: .init(rawValue: 3),
             vertices: [[-1,-1],[1,-1],[1,1],[-1,1]], position: [-10,0],
             physicsMaterialID: .init(rawValue: 2), renderStyleID: .init(rawValue: 1))))
         var frame = try await step(world, [polygon(velocity: [2,0]), earlier], dt: 0.25)
@@ -160,7 +160,7 @@ final class NativeMetalRigidPolygonTests: XCTestCase {
     func testFastDynamicPolygonsCannotSwapPositionsWithoutContact() async throws {
         let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         let left = try polygon(position: [-3,0], velocity: [360,0])
-        let right = NativePublicObject(descriptor: .polygon(try PolygonDescriptor(id: .init(rawValue: 3),
+        let right = NativePublicObject(descriptor: .rigidBody(try RigidBodyDescriptor(id: .init(rawValue: 3),
             vertices: [[-1,-1],[1,-1],[1,1],[-1,1]], position: [3,0], velocity: [-360,0],
             mass: 2, momentOfInertia: 2, motionRole: .dynamic,
             physicsMaterialID: .init(rawValue: 2), renderStyleID: .init(rawValue: 1))))
@@ -176,7 +176,7 @@ final class NativeMetalRigidPolygonTests: XCTestCase {
     // P-B-7: prepare nie może porównywać prefiksów list przy każdym ciele (O(k²)).
     private func input(_ index: Int, x: Float = 0) throws -> NativeRigidPolygonInput {
         let id = ObjectID(rawValue: UInt64(1000 + index))
-        let object = NativePublicObject(descriptor: .polygon(try PolygonDescriptor(id: id,
+        let object = NativePublicObject(descriptor: .rigidBody(try RigidBodyDescriptor(id: id,
             vertices: [[0,0],[1,0],[1,1],[0,1]], position: [Float(index) * 3 + x, 0],
             mass: 2, momentOfInertia: 2, motionRole: .static,
             physicsMaterialID: .init(rawValue: 2), renderStyleID: .init(rawValue: 1))))

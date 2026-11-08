@@ -20,7 +20,7 @@ enum SceneBuilders {
     static func baseTransaction(friction: Float = 0) throws -> WorldTransaction {
         try WorldTransaction()
             .updatePhysicsMaterial(bubbleMaterial, material: PhysicsMaterial(kind: .bubble, friction: friction))
-            .updatePhysicsMaterial(polygonMaterial, material: PhysicsMaterial(kind: .polygon, friction: friction))
+            .updatePhysicsMaterial(polygonMaterial, material: PhysicsMaterial(kind: .rigid, friction: friction))
             .updateRenderStyle(style, style: RenderStyle())
     }
 
@@ -36,7 +36,7 @@ enum SceneBuilders {
                     velocity: WorldPoint = .zero, filter: CollisionFilter = .default,
                     interest: EventInterest = []) throws -> WorldObject {
         let width = 2 * half.x, height = 2 * half.y
-        return .polygon(try PolygonDescriptor(id: ObjectID(rawValue: id),
+        return .rigidBody(try RigidBodyDescriptor(id: ObjectID(rawValue: id),
             vertices: [[-half.x, -half.y], [half.x, -half.y], [half.x, half.y], [-half.x, half.y]], position: center,
             velocity: velocity, mass: 1, momentOfInertia: (width * width + height * height) / 12, motionRole: role,
             physicsMaterialID: polygonMaterial, renderStyleID: style, eventInterest: interest, filter: filter))
