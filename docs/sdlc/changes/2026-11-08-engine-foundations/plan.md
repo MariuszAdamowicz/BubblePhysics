@@ -6,7 +6,7 @@
 **Artifact:** plan
 **Design:** [change-design.md](change-design.md)
 **References:** tag `v1.0.0`; tag `archive/magentic-2026-10-25-2kbubbles-engine-owned`; `docs/superpowers/specs/2026-10-15-public-api-design.md`
-**Strategy:** all at once
+**Strategy:** slices
 **Test command:** `swift test`
 **Status:** Draft
 **Template version:** default/0.3.3
@@ -77,12 +77,12 @@ Przepływ transakcja → staging → krok GPU i render w jednym buforze → publ
 Pliki w stanie końcowym całej zmiany. `+` to plik nowy albo zmieniony, `-` usunięty lub przeniesiony.
 
 ```diff
-+ Package.swift                                  # 2.0.0; + .library BubblePhysicsAssets; NativeMetalDiagnostics w BubblePhysicsBenchmarkSupport; + PerfGuard; NativeMetal bez Reference
++ Package.swift                                  # 2.0.0; + .library BubblePhysicsAssets; NativeMetalDiagnostics w BubblePhysicsBenchmarkSupport; + cel BubblePhysicsPerfGuard z testami; NativeMetal bez Reference
   Sources/
     BubblePhysicsPublic/
 +     BubbleWorld.swift                          # objects w klatce, zapytania, hitTest async, polityka czasu, pauza, stan „zawiódł”
 +     Diagnostics.swift                          # odrzucony backlog, zaległość, przepełnienie kandydatów, powód „zawiódł”
-+     LifecycleEventSource.swift                 # NEW wstrzykiwane źródło zdarzeń cyklu życia; domyślnie UIKit na iOS
++     LifecycleEventSource.swift                 # NEW (etap 6) wstrzykiwane źródło zdarzeń cyklu życia; domyślnie UIKit na iOS
       Model/
 +       Objects.swift                            # PhysicsBodyProperties; PolygonDescriptor → RigidBodyDescriptor(shape: RigidShape); auto inercja
 +       Motion.swift                             # MotionRole.kinematic, KinematicDrive (prędkość, ścieżka, cel na krok)
@@ -101,19 +101,19 @@ Pliki w stanie końcowym całej zmiany. `+` to plik nowy albo zmieniony, `-` usu
 +     MotionControllers.swift                    # KinematicDrive → narzucona prędkość na krok
 +     EventCompactor.swift                       # contactBegan przed mergeContact; contactEnded przy rozłączeniu i usunięciu
 +     StructuralOperations.swift                 # naklejka wyniku; usunięcie więzów baniek źródłowych
-+     QueryIndex.swift                           # NEW siatka przestrzenna raz na publikację
-    BubblePhysicsAssets/                         # NEW moduł
++     QueryIndex.swift                           # NEW (etap 4) siatka przestrzenna raz na publikację
+    BubblePhysicsAssets/                         # NEW moduł (etap 5; SDF i atlas w etapie 6)
 +     AssetRegistry.swift                        # rejestr per MTLDevice: CGImage | MTLTexture → TextureID
 +     SDFAtlasGenerator.swift                    # Core Text → atlas SDF, 1× = glif 32 px
 +     GlyphAtlas.swift                           # import gotowego atlasu z metrykami
     BubblePhysicsNativeMetal/
-+     NativeSolverInput.swift                    # NEW neutralne wejście i wynik solvera (NativeSolverInput, NativeSolverFrame)
++     NativeSolverInput.swift                    # NEW (etap 1) neutralne wejście i wynik solvera (NativeSolverInput, NativeSolverFrame)
 +     NativePublicWorld.swift                    # step(input:) bez ReferenceWorld; zdarzenia regionu przez słownik, nie first(where:)
 +     NativeMetalSolver.swift                    # executeFrame(input:) zastępuje executePublicFrame(world:) i executeFrame(world:); nowe etapy kerneli; pamięć O(n·k)
 +     NativeMetalBackend.swift                   # bez @_exported import BubblePhysicsReference
 +     NativeMetalBufferLayout.swift              # NativeMetalSnapshot(input:); AABB w NativeMetalBubble; filtr, rola, kształt
 +     NativeRigidPolygonState.swift              # koło, kapsuła, kinematyka (odwrotna masa 0); prepare O(k)
-+     NativeJointState.swift                     # NEW rekordy i bufory więzów
++     NativeJointState.swift                     # NEW (etap 3) rekordy i bufory więzów
 +     NativeMetalRenderHandoff.swift             # kontury t−1 i t; dane wierzchołka dla materiałów
 +     Shaders/NativeGeometryKernels.metal-source # filtr w kandydatach, siatka brył, limit k, hit-test konturu
 +     Shaders/NativeXPBDKernels.metal-source     # więzy XPBD, kinematyka, licznik przepełnienia
@@ -124,30 +124,32 @@ Pliki w stanie końcowym całej zmiany. `+` to plik nowy albo zmieniony, `-` usu
 -     VisualSimulationDriver.swift              # → NativeMetalDiagnostics
 -     NativeMetalVisualReplay.swift             # → NativeMetalDiagnostics
 -     NativeMetalQualityEnvelope.swift          # → NativeMetalDiagnostics
-    BubblePhysicsNativeMetalDiagnostics/         # NEW moduł: 5 plików powyżej + adapter
+    BubblePhysicsNativeMetalDiagnostics/         # NEW (etap 1) moduł: 5 plików powyżej + adapter
 +     ReferenceSolverInputAdapter.swift          # ReferenceWorld → NativeSolverInput, NativeSolverFrame → typy Reference
     BubblePhysicsMetalRender/
 +     BubblePhysicsMetalRender.swift             # encode: tło → warstwy (4 grupy) → punkty zaczepienia → nakładka
-+     MaterialPipelines.swift                    # NEW pipeline per tryb mieszania i format
-+     DecalRenderer.swift                        # NEW instancjonowane czworokąty naklejek z przycięciem
-+     RenderHooks.swift                          # NEW domknięcia gry: afterBackground, afterLayer(n), overlay
++     MaterialPipelines.swift                    # NEW (etap 5) pipeline per tryb mieszania i format
++     DecalRenderer.swift                        # NEW (etap 6) instancjonowane czworokąty naklejek z przycięciem
++     RenderHooks.swift                          # NEW (etap 6) domknięcia gry: afterBackground, afterLayer(n), overlay
 -     RenderStylePipeline.swift                 # usunięty razem z customPipelines
 +     PublicWorldStressBenchmark.swift           # API v2; sceny stress-300, mieszana, akceptacyjna
-+     PerfGuard.swift                            # NEW pomiar p95, mediana z 5, porównanie z punktem odniesienia, skalowanie 600/300
   Benchmarks/
-+   macOS/BubblePhysicsPerfGuard/main.swift      # NEW strażnik: swift run -c release BubblePhysicsPerfGuard
++   macOS/BubblePhysicsPerfGuard/main.swift      # NEW (etap 1) strażnik: swift run -c release BubblePhysicsPerfGuard
++   macOS/BubblePhysicsPerfGuard/PerfGuard.swift # NEW (etap 1) p95, mediana z 5, porównanie z punktem odniesienia, skalowanie 600/300, --record
 +   macOS/BubblePhysicsReferenceBench/main.swift # import NativeMetalDiagnostics zamiast NativeMetal
-+   iOS/BubblePhysicsBench/App/*                 # wybór sceny, scena akceptacyjna
-  Examples/BubblePhysicsShowcase/                # NEW project.yml + .xcodeproj, sceny baniek i brył, host MTKView
++   iOS/BubblePhysicsBench/App/*                 # (etap 7) wybór sceny, scena akceptacyjna
++   iOS/BubblePhysicsBench/project.yml           # (etap 7) + BubblePhysicsAssets; .xcodeproj regenerowany przez xcodegen
+  Examples/BubblePhysicsShowcase/                # NEW (etap 7) project.yml + .xcodeproj z xcodegen, sceny baniek i brył, host MTKView
   Tests/
 +   BubblePhysicsNativeMetalDiagnosticsTests/    # NEW 17 plików przeniesionych z BubblePhysicsNativeMetalTests (lista pod drzewem)
-+   BubblePhysicsAssetsTests/                    # NEW rejestr, SDF, atlas
-+   BubblePhysicsMetalRenderTests/Support/OffscreenRenderHarness.swift # NEW wspólny render 256×256 i próbkowanie pikseli
++   BubblePhysicsAssetsTests/                    # NEW rejestr (etap 5), SDF i atlas (etap 6)
++   BubblePhysicsPerfGuardTests/                 # NEW (etap 1) logika porównania strażnika, @testable import celu wykonywalnego
++   BubblePhysicsMetalRenderTests/Support/OffscreenRenderHarness.swift # NEW (etap 5) wspólny render 256×256 i próbkowanie pikseli
 +   BubblePhysicsPublicTests/, BubblePhysicsRuntimeTests/, BubblePhysicsNativeMetalTests/, BubblePhysicsMetalRenderTests/ # API v2 i nowe testy
   docs/
-+   MIGRATION-v2.md                              # NEW zamiennik każdego symbolu v1
-+   integration-guide.md                         # NEW fragmenty z oznaczonych regionów przykładu
-+   benchmarks/perf-guard.json                   # NEW punkty odniesienia strażnika
++   MIGRATION-v2.md                              # NEW (etap 7) zamiennik każdego symbolu v1
++   integration-guide.md                         # NEW (etap 7) fragmenty z oznaczonych regionów przykładu
++   benchmarks/perf-guard.json                   # NEW (etap 1) punkty odniesienia strażnika; nowy punkt po każdym etapie, który poprawił wynik
 + README.md                                      # v2
 ```
 
@@ -174,7 +176,7 @@ BubbleWorld.advance(by:commandBuffer:encodeRender:)
 └── publikacja WorldFrame → QueryIndex.rebuild → wyniki hitTest
 ```
 
-Do `BubblePhysicsNativeMetalDiagnosticsTests` przechodzi 17 plików, które budują wejście przez `ReferenceWorld`. Testy narzędzi: `NativeMetalBenchmarkTests`, `NativeMetalQualityEnvelopeTests`, `NativeMetalVisualReplayTests`, `VisualSimulationDriverTests`, `NativeMetalWorldRunnerTests`, `NativeMetalPerceptualProbeTests`, `NativeMetalRestDampingTests`, `NativeMetalStageDiagnosticsTests`. Testy solvera przez adapter: `NativeMetalBroadPhaseTests`, `NativeMetalContactCacheTests`, `NativeMetalContactPipelineTests`, `NativeMetalContainmentParallelTests`, `NativeMetalContourTests`, `NativeMetalParallelCacheProfileTests`, `NativeMetalSafetyTests`, `NativeMetalSolverLifecycleTests`, `NativeMetalXPBDTests`. Pozostałe 8 plików testuje ścieżkę `NativePublicWorld` i zostaje.
+Do `BubblePhysicsNativeMetalDiagnosticsTests` przechodzi 17 plików, które budują wejście przez `ReferenceWorld`. Testy narzędzi: `NativeMetalBenchmarkTests`, `NativeMetalQualityEnvelopeTests`, `NativeMetalVisualReplayTests`, `VisualSimulationDriverTests`, `NativeMetalWorldRunnerTests`, `NativeMetalPerceptualProbeTests`, `NativeMetalRestDampingTests`, `NativeMetalStageDiagnosticsTests`. Testy solvera przez adapter: `NativeMetalBroadPhaseTests`, `NativeMetalContactCacheTests`, `NativeMetalContactPipelineTests`, `NativeMetalContainmentParallelTests`, `NativeMetalContourTests`, `NativeMetalParallelCacheProfileTests`, `NativeMetalSafetyTests`, `NativeMetalSolverLifecycleTests`, `NativeMetalXPBDTests`. Pozostałe 8 plików testuje ścieżkę `NativePublicWorld` i zostaje. Przeniesione testy solvera dalej sprawdzają produkcyjne kernele, tylko przez adapter `ReferenceWorld`. Każda późniejsza zmiana kerneli musi je utrzymać na zielono, więc kryterium ukończenia etapu to pełne `swift test`, nie tylko testy produkcyjne.
 
 Stan przejściowy: zadanie 5 dodaje `executeFrame(input:)` obok starych wejść, które do zadania 7 tłumaczą `ReferenceWorld` na `NativeSolverInput` wewnątrz NativeMetal. Zadanie 6 przenosi to tłumaczenie do adaptera diagnostycznego, a zadanie 7 usuwa stare wejścia.
 
@@ -182,9 +184,9 @@ Typy, które czytelnik musi znać: `ObjectState`, `NativeSolverInput`, `RigidSha
 
 Miejsce do przeczytania dwa razy: granica `NativeSolverInput` w `NativeMetalSolver.executeFrame`. Od niej zależy wydajność kroku, adapter diagnostyczny i każdy późniejszy kernel.
 
-Dwa fakty, które plan zostawia etapom:
-- Projekt zostawia planowi wybór metody przycinania naklejek konturem bańki: stencil ze wspólną wartością albo maska w shaderze fragmentu. Wybierze go pierwsze zadanie etapu naklejek, sonda mierzona strażnikiem.
-- `xcodegen` nie jest zainstalowany na tej maszynie (`command -v xcodegen` nic nie zwraca), a `.xcodeproj` benchmarku jest w repo. Etap przykładu musi albo dostać `xcodegen` od właściciela, albo zapisać `.xcodeproj` w repo, tak jak benchmark.
+Dwa fakty o narzędziach i wyborach:
+- **Przycinanie naklejek.** Projekt zostawia planowi wybór metody przycinania naklejek konturem bańki: stencil ze wspólną wartością albo maska w shaderze fragmentu. Pierwsze zadanie etapu 6 to sonda mierzona strażnikiem, a jej wynik i wybór dopisuje się tutaj.
+- **xcodegen.** `xcodegen` 2.46.0 jest zainstalowany (`/opt/homebrew/bin/xcodegen`). Próbna regeneracja `Benchmarks/iOS/BubblePhysicsBench` z `project.yml` dała tylko kosmetyczne różnice w `project.pbxproj`: nazwę folderu pakietu i grupę `Signing.xcconfig`. Oba projekty Xcode, benchmark i przykład, powstają z `project.yml`, a wygenerowany `.xcodeproj` trafia do repo. Projekt Xcode ma jawną listę plików, więc każdy nowy plik w `App/` wymaga regeneracji.
 
 ### R3 — Behaviour
 
@@ -199,9 +201,9 @@ Dwa fakty, które plan zostawia etapom:
 | <a id="p-b-5"></a>P-B-5 | Stress-300, stan porównany z `debugContourSnapshot()` | Środek bańki w granicach 1% promienia od centroidu konturu; AABB zawiera cały kontur | [G2-AC2](change-design.md#g2-ac2) |
 | <a id="p-b-6"></a>P-B-6 | Obiekt usunięty transakcją; odczyt `frame.objects` | Obiektu nie ma w stanie tej klatki; `contourCPUReadbacks` = 0 | [G2-AC3](change-design.md#g2-ac3) |
 | <a id="p-b-7"></a>P-B-7 | Strażnik mierzy przygotowanie i publikację kroku dla 300 i 600 obiektów | Stosunek ≤ 2,5, inaczej strażnik kończy się błędem | [G12-AC1](change-design.md#g12-ac1) |
-| <a id="p-b-8"></a>P-B-8 | Strażnik: mediana z 5 przebiegów po 300 klatek, p95 kroku i renderu | Wynik > punkt odniesienia z `perf-guard.json` + 10% kończy się błędem; wstrzyknięte spowolnienie o 20% kończy się błędem | [G12-AC3](change-design.md#g12-ac3) |
+| <a id="p-b-8"></a>P-B-8 | Strażnik: mediana z 5 przebiegów po 300 klatek, p95 kroku i renderu | Wynik > punkt odniesienia z `perf-guard.json` + 10% kończy się błędem; wstrzyknięte spowolnienie o 20% kończy się błędem; punkt odniesienia odpowiada stanowi po ostatnim ukończonym etapie | [G12-AC3](change-design.md#g12-ac3) |
 | <a id="p-b-9"></a>P-B-9 | Ta sama scena (stress-300, a od etapu brył mieszana) dwa razy po 300 kroków | Identyczny hash stanu obiektów; przebieg ze wzrostem licznika przepełnienia jest zwolniony z porównania od tego kroku | [G10-AC5](change-design.md#g10-ac5) |
-| <a id="p-b-10"></a>P-B-10 | Lista publicznych symboli z `swift-api-digester` dla `v1.0.0` i dla HEAD | Każdy usunięty lub zmieniony symbol ma zamiennik w `docs/MIGRATION-v2.md`; README podaje 2.0.0 (tag `v2.0.0` zakłada właściciel w zadaniu 51) | [G1-AC1](change-design.md#g1-ac1) |
+| <a id="p-b-10"></a>P-B-10 | Lista publicznych symboli z `swift-api-digester` dla `v1.0.0` i dla HEAD | Każdy usunięty lub zmieniony symbol ma zamiennik w `docs/MIGRATION-v2.md`; README podaje 2.0.0 (tag `v2.0.0` zakłada właściciel w etapie 7) | [G1-AC1](change-design.md#g1-ac1) |
 
 **Kolizje, kontakty, kinematyka i pamięć kontaktów**
 
@@ -253,6 +255,7 @@ Dwa fakty, które plan zostawia etapom:
 | <a id="p-b-39"></a>P-B-39 | Nieobsługiwany format obrazu; transakcja z niezarejestrowanym `TextureID`; rejestr innego `MTLDevice` | Błąd w wywołaniu rejestracji; odrzucenie transakcji bez zmiany wyglądu; błąd przy tworzeniu świata lub renderera | [G3-AC5](change-design.md#g3-ac5) |
 | <a id="p-b-40"></a>P-B-40 | Bańka na warstwie wyższej nad bryłą; bańka i bryła w tej samej warstwie | Wyższa warstwa przykrywa; w tej samej warstwie bryła przykrywa bańkę | [G4-AC1](change-design.md#g4-ac1) |
 | <a id="p-b-41"></a>P-B-41 | Ustawienie, a potem usunięcie tła | Tło rozciągnięte na region, pod wszystkimi warstwami; po usunięciu znika | [G4-AC2](change-design.md#g4-ac2) |
+| <a id="p-b-62"></a>P-B-62 | Transakcja `setLayer` zmienia warstwę istniejącego obiektu | Nowa kolejność rysowania w pierwszej klatce z potwierdzeniem; odrzucona transakcja jej nie zmienia | [G4-AC1](change-design.md#g4-ac1) |
 | <a id="p-b-42"></a>P-B-42 | Nakładka z alfą 0,8 | Piksel = 0,8·nakładka + 0,2·spód, ±2/255 | [G4-AC3](change-design.md#g4-ac3) |
 
 **Naklejki**
@@ -304,78 +307,64 @@ flowchart TD
 |---|---|---|
 | Unit (CPU: model, stager, `FixedStepDriver`, fałszywy `CompleteStepper`, `LifecycleEventSource`) | Walidacja, odrzucenia, polityka czasu i stany `advance` bez GPU | [P-B-17](#p-b-17), [P-B-26](#p-b-26), [P-B-49](#p-b-49), [P-B-53](#p-b-53), [P-B-55](#p-b-55)–[P-B-58](#p-b-58) |
 | Integracja GPU (Mac, `BubbleWorld` lub `NativePublicWorld`) | Krok solvera daje właściwy stan, kontakty, kolizje, więzy i wyniki zapytań | [P-B-4](#p-b-4)–[P-B-6](#p-b-6), [P-B-9](#p-b-9), [P-B-11](#p-b-11)–[P-B-16](#p-b-16), [P-B-18](#p-b-18)–[P-B-25](#p-b-25), [P-B-27](#p-b-27)–[P-B-34](#p-b-34) |
-| Test obrazu Metal (`OffscreenRenderHarness`, 256×256) | Piksele renderu odpowiadają materiałom, warstwom, naklejkom, interpolacji i punktom zaczepienia | [P-B-35](#p-b-35)–[P-B-48](#p-b-48), [P-B-50](#p-b-50)–[P-B-52](#p-b-52), [P-B-54](#p-b-54) |
+| Test obrazu Metal (`OffscreenRenderHarness`, 256×256) | Piksele renderu odpowiadają materiałom, warstwom, naklejkom, interpolacji i punktom zaczepienia | [P-B-35](#p-b-35)–[P-B-48](#p-b-48), [P-B-62](#p-b-62), [P-B-50](#p-b-50)–[P-B-52](#p-b-52), [P-B-54](#p-b-54) |
 | Static check (test w `swift test`) | Graf zależności, migracja, zgodność przewodnika ze źródłami | [P-B-1](#p-b-1), [P-B-10](#p-b-10), [P-B-60](#p-b-60) |
 | Diagnostyka (moduł diagnostyczny, `BubblePhysicsReferenceBench`) | Ścieżka pomiaru solvera działa po podziale modułu | [P-B-2](#p-b-2), [P-B-3](#p-b-3) |
 | Strażnik wydajności (`swift run -c release BubblePhysicsPerfGuard`, nie `swift test`) | Brak regresji > 10% i liniowe skalowanie CPU | [P-B-7](#p-b-7), [P-B-8](#p-b-8) |
 | Build Xcode | Przykład się kompiluje bez podpisu | [P-B-59](#p-b-59) |
 | Urządzenie (właściciel, raz na końcu) | 60 FPS na iPhonie X przy 300 obiektach | [P-B-61](#p-b-61) |
 
-Determinizm ([P-B-9](#p-b-9)) i strażnik ([P-B-8](#p-b-8)) działają od pierwszego etapu i przechodzą po każdym kolejnym. Projekt zakłada determinizm solvera bez potwierdzenia, więc nowe kernele (więzy, begin/end kontaktu) nie mogą używać redukcji atomowych o niedeterministycznej kolejności, a test determinizmu to wychwyci.
+Każdy etap kończy się pełnym `swift test`, strażnikiem i testem determinizmu ([P-B-9](#p-b-9)). Strażnik ([P-B-8](#p-b-8)) porównuje z poprzednim stanem: gdy etap poprawił wynik, nowy punkt odniesienia trafia do `perf-guard.json` w osobnym commicie z uzasadnieniem. Tak samo trafia tam zamierzony wzrost kosztu ([G12-AC3](change-design.md#g12-ac3)). Projekt zakłada determinizm solvera bez potwierdzenia, więc nowe kernele (więzy, begin/end kontaktu) nie mogą używać redukcji atomowych o niedeterministycznej kolejności, a test determinizmu to wychwyci.
 
-**Where:** `Tests/BubblePhysicsPublicTests`, `Tests/BubblePhysicsRuntimeTests`, `Tests/BubblePhysicsNativeMetalTests`, `Tests/BubblePhysicsNativeMetalDiagnosticsTests` (nowy), `Tests/BubblePhysicsMetalRenderTests` (ze wspólnym `Support/OffscreenRenderHarness.swift`), `Tests/BubblePhysicsAssetsTests` (nowy); strażnik w `Benchmarks/macOS/BubblePhysicsPerfGuard`. Testy GPU wymagają Maca z Metal (`XCTUnwrap(MTLCreateSystemDefaultDevice())`, jak dziś).
+**Where:** `Tests/BubblePhysicsPublicTests`, `Tests/BubblePhysicsRuntimeTests`, `Tests/BubblePhysicsNativeMetalTests`, `Tests/BubblePhysicsNativeMetalDiagnosticsTests` (nowy), `Tests/BubblePhysicsMetalRenderTests` (ze wspólnym `Support/OffscreenRenderHarness.swift`), `Tests/BubblePhysicsAssetsTests` (nowy); strażnik w `Benchmarks/macOS/BubblePhysicsPerfGuard`, jego testy w `Tests/BubblePhysicsPerfGuardTests` (nowy). Testy GPU wymagają Maca z Metal (`XCTUnwrap(MTLCreateSystemDefaultDevice())`, jak dziś).
 
 **Test command:** `swift test`
 
-## Tasks
+## Slice Status
 
-Każde `verify` uruchamia się z katalogu głównego repozytorium. Zadania idą w kolejności z projektu ([CD-D-20](change-design.md#cd-d-20)): porządki i stan, model danych GPU, zapytania i czas, render, przykład. Zadanie „testy” dodaje testy, które kompilują się na zaślepkach nowego API i nie przechodzą. Zadanie, które po nim następuje, sprawia, że przechodzą.
+| Slice | Name | Delivers | Seams | Behaviours | Status |
+|-------|------|----------|-------|------------|--------|
+| 1 | Fundament, stan obiektów, strażnik | Krok bez `ReferenceWorld` i pętli O(n²); gra odczytuje `frame.objects`; strażnik i test determinizmu działają ([G1-AC2](change-design.md#g1-ac2)–[G1-AC4](change-design.md#g1-ac4), [G2](change-design.md#g2-ac1), [G12-AC1](change-design.md#g12-ac1), [G12-AC3](change-design.md#g12-ac3), [G10-AC5](change-design.md#g10-ac5)) | `NativeSolverInput.swift`, `NativePublicWorld.swift`, `NativeMetalSolver.swift`, `NativeMetalBackend.swift`, `NativeMetalBufferLayout.swift`, `NativeRigidPolygonState.swift`, `NativeCompleteStepper.swift`, `WorldFrame.swift`, moduł `BubblePhysicsNativeMetalDiagnostics(Tests)`, `BubblePhysicsPerfGuard(Tests)`, `perf-guard.json`, `Package.swift` | [P-B-1](#p-b-1)–[P-B-9](#p-b-9) | todo |
+| 2 | Filtry, kontakty, kinematyka, pamięć kontaktów | Gra filtruje kolizje, dostaje `contactBegan`/`contactEnded` i ma rolę `kinematic`; pamięć kontaktów O(n·k) ([G7](change-design.md#g7-ac1), [G6](change-design.md#g6-ac1), [G12-AC2](change-design.md#g12-ac2)) | `Objects.swift`, `Identifiers.swift`, `Motion.swift`, `WorldFrame.swift`, `MotionControllers.swift`, `EventCompactor.swift`, kernele kandydatów, XPBD i begin/end, `PublicWorldStressBenchmark.swift` | [P-B-11](#p-b-11)–[P-B-21](#p-b-21) | unplanned |
+| 3 | Bryły, więzy, scena mieszana | Koło, kapsuła, więzy, CCD bryła–bryła, limity prędkości, automatyczna inercja; scena mieszana w strażniku i teście determinizmu ([G11](change-design.md#g11-ac1)) | `Objects.swift`, `Joints.swift`, `WorldTransaction.swift`, `NativeRigidPolygonState.swift`, `NativeJointState.swift`, `StructuralOperations.swift`, kernele | [P-B-22](#p-b-22)–[P-B-28](#p-b-28) | unplanned |
+| 4 | Czas, zapytania, hit-test | Limit backlogu, stan „zawiódł”, klatka odrzucana po błędzie gry; zapytania CPU i asynchroniczny hit-test ([G10-AC2](change-design.md#g10-ac2), [G10-AC4](change-design.md#g10-ac4), [G9-AC2](change-design.md#g9-ac2), [G8](change-design.md#g8-ac1)) | `FixedStepDriver.swift`, `BubbleWorld.swift`, `Diagnostics.swift`, `Queries.swift`, `QueryIndex.swift`, kernel hit-testu | [P-B-29](#p-b-29)–[P-B-34](#p-b-34), [P-B-53](#p-b-53), [P-B-55](#p-b-55), [P-B-57](#p-b-57), [P-B-58](#p-b-58) | unplanned |
+| 5 | Materiały, warstwy, tło | Tekstury gry w materiałach, dwa tryby na bańce, warstwy z `setLayer`, tło, mieszanie ([G3](change-design.md#g3-ac1), [G4](change-design.md#g4-ac1)) | moduł `BubblePhysicsAssets` (rejestr), `Resources.swift`, `BubblePhysicsMetalRender.swift`, `MaterialPipelines.swift`, `NativeRenderKernels.metal-source`, `OffscreenRenderHarness.swift`; usunięcie `RenderStylePipeline.swift` | [P-B-35](#p-b-35)–[P-B-42](#p-b-42), [P-B-62](#p-b-62) | unplanned |
+| 6 | Naklejki, interpolacja, cykl życia, punkty zaczepienia | Tekst SDF, atlas i obraz na obiektach; płynny obraz 120 Hz; pauza w tle; rysowanie gry w passie ([G5](change-design.md#g5-ac1), [G10-AC1](change-design.md#g10-ac1), [G10-AC3](change-design.md#g10-ac3), [G9-AC1](change-design.md#g9-ac1)) | `SDFAtlasGenerator.swift`, `GlyphAtlas.swift`, `Decals.swift`, `DecalRenderer.swift`, `NativeMetalRenderHandoff.swift`, `LifecycleEventSource.swift`, `RenderHooks.swift` | [P-B-43](#p-b-43)–[P-B-52](#p-b-52), [P-B-54](#p-b-54), [P-B-56](#p-b-56) | unplanned |
+| 7 | Przykład, dokumentacja, wydanie 2.0.0 | Przykładowa aplikacja, przewodnik, migracja, scena akceptacyjna w benchmarku iOS i pomiar na iPhonie X ([G13](change-design.md#g13-ac1), [G1-AC1](change-design.md#g1-ac1), [G12-AC4](change-design.md#g12-ac4)) | `Examples/BubblePhysicsShowcase`, `Benchmarks/iOS/BubblePhysicsBench`, `docs/integration-guide.md`, `docs/MIGRATION-v2.md`, `README.md` | [P-B-10](#p-b-10), [P-B-59](#p-b-59)–[P-B-61](#p-b-61) | unplanned |
 
-1. Dodaj `PerfGuard` w `BubblePhysicsMetalRender` (p95 kroku i renderu, mediana z 5 przebiegów po 300 klatek, porównanie z punktem odniesienia +10%) i `PerfGuardTests` z wstrzykniętym spowolnieniem o 20%, covering [P-B-8](#p-b-8) · verify: `swift test --list-tests | grep -q PerfGuardTests && swift test --filter PerfGuardTests`
-2. Dodaj cel `BubblePhysicsPerfGuard` i zapisz punkt odniesienia stress-300 na niezmienionym kroku w `docs/benchmarks/perf-guard.json`, covering [P-B-8](#p-b-8) · verify: `swift run -c release BubblePhysicsPerfGuard --record stress-300 && grep -q stress-300 docs/benchmarks/perf-guard.json`
-3. Sonda: dodaj `PublishedStateDeterminismTests` (hash stanu po 300 krokach stress-300, dwa przebiegi) i potwierdź założenie o determinizmie solvera, covering [P-B-9](#p-b-9) · verify: `swift test --list-tests | grep -q PublishedStateDeterminismTests && swift test --filter PublishedStateDeterminismTests`
+Każdy etap kończy się zielonym pełnym `swift test`, strażnikiem i testem determinizmu. Gdy wynik się poprawił, etap zapisuje też nowy punkt odniesienia w osobnym commicie. Dzięki temu każdy etap można scalić osobno, a następny zaczyna od zmierzonego stanu.
+- **Etap 1** daje szybszy krok i stan obiektów. Gra nie ma jeszcze nowych funkcji fizyki ani renderu.
+- **Etapy 2 i 3** kończą model danych GPU, więc render z etapów 5 i 6 opiera się na stałym ABI. Do tego czasu obraz wygląda jak w `v1`.
+- **Etap 4** daje grze zapytania i jawne stany błędu. Brakuje jeszcze interpolacji i pauzy w tle z etapu 6.
+- **Etap 7** to jedyny etap, który wymaga właściciela: pomiaru na urządzeniu i tagu `v2.0.0`.
+
+## Slice 1: Fundament, stan obiektów, strażnik
+
+**Delivers:** Krok fizyki nie zależy od `BubblePhysicsReference` i nie ma pętli O(n²). Gra odczytuje stan obiektów w każdej klatce, a strażnik wydajności i test determinizmu pilnują kolejnych etapów.
+
+Każde `verify` uruchamia się z katalogu głównego repozytorium. Zadanie „testy” dodaje testy, które kompilują się na zaślepkach nowego API i jeszcze nie przechodzą. Później zadanie sprawia, że przechodzą.
+
+1. Dodaj cel wykonywalny `BubblePhysicsPerfGuard` z `PerfGuard.swift` (p95 kroku i renderu na scenie `PublicWorldStressBenchmark`, mediana z 5 przebiegów po 300 klatek, porównanie z punktem odniesienia +10%, tryb `--record`) i `BubblePhysicsPerfGuardTests` ze wstrzykniętym spowolnieniem o 20%, covering [P-B-8](#p-b-8) · verify: `swift test --list-tests | grep -q PerfGuardTests && swift test --filter PerfGuardTests`
+2. Zapisz punkt odniesienia stress-300 na niezmienionym kroku w `docs/benchmarks/perf-guard.json`, covering [P-B-8](#p-b-8) · verify: `swift run -c release BubblePhysicsPerfGuard --record stress-300 && grep -q stress-300 docs/benchmarks/perf-guard.json`
+3. Sonda: dodaj `PublishedStateDeterminismTests` (hash stanu po 300 krokach stress-300, dwa przebiegi). Gdy hashe się różnią, zatrzymaj etap i dopisz wiersz `gap` w `## Implementation deviations` do decyzji właściciela, covering [P-B-9](#p-b-9) · verify: `swift test --list-tests | grep -q PublishedStateDeterminismTests && swift test --filter PublishedStateDeterminismTests`
 4. Testy: `PackageGraphTests` (graf z `swift package dump-package`) i `ObjectStateTests` (stan, centroid, AABB, usunięcie, licznik odczytów), covering [P-B-1](#p-b-1), [P-B-4](#p-b-4)–[P-B-6](#p-b-6) · verify: `swift build --build-tests && ! swift test --filter 'PackageGraphTests|ObjectStateTests'`
 5. Dodaj `NativeSolverInput` i `NativeSolverFrame` oraz `executeFrame(input:)` i `NativeMetalSnapshot(input:)`; stare wejścia `executePublicFrame(world:)` i `executeFrame(world:)` tymczasowo tłumaczą `ReferenceWorld` na nowe wejście · verify: `swift build && grep -q "func executeFrame(input" Sources/BubblePhysicsNativeMetal/NativeMetalSolver.swift`
-6. Przenieś 5 narzędzi i 17 plików testów z listy w R2 do `BubblePhysicsNativeMetalDiagnostics(Tests)` z `ReferenceSolverInputAdapter`, dodaj moduł do `BubblePhysicsBenchmarkSupport`, `BubblePhysicsReferenceBench` importuje nowy moduł, covering [P-B-2](#p-b-2), [P-B-3](#p-b-3) · verify: `test -d Sources/BubblePhysicsNativeMetalDiagnostics && ! test -e Sources/BubblePhysicsNativeMetal/NativeMetalBenchmarkRunner.swift && swift test --filter BubblePhysicsNativeMetalDiagnosticsTests && swift build --product BubblePhysicsReferenceBench`
-7. Buduj `NativeSolverInput` liniowo w `NativeCompleteStepper`, usuń `ReferenceWorld`, `BruteForceBroadPhase`, `first(where:)` i `@_exported import BubblePhysicsReference` z NativeMetal oraz zależność w `Package.swift`, covering [P-B-1](#p-b-1) · verify: `swift test --filter PackageGraphTests && ! grep -rq "BubblePhysicsReference\|executePublicFrame" Sources/BubblePhysicsNativeMetal`
-8. Usuń porównania O(k²) w `NativeRigidPolygonState.prepare` i O(s²) w strukturach, dodaj pomiar skalowania 600/300 do strażnika (linia `scaling 600/300:` w wyjściu), covering [P-B-7](#p-b-7) · verify: `set -o pipefail; swift run -c release BubblePhysicsPerfGuard | grep -q "scaling 600/300"`
-9. Dodaj AABB zdeformowanego konturu do `NativeMetalBubble` w kernelu konturów (z sondą ABI) i publikuj `WorldFrame.objects: [ObjectID: ObjectState]`, covering [P-B-4](#p-b-4)–[P-B-6](#p-b-6) · verify: `swift test --filter 'ObjectStateTests|NativeMetalShaderABITests'`
-10. Testy: `CollisionFilterTests` i `ContactEventTests` (każdy rodzaj pary, kolejność z `mergeContact`, koniec przy rozłączeniu i usunięciu, mały bufor), covering [P-B-11](#p-b-11)–[P-B-15](#p-b-15) · verify: `swift build --build-tests && ! swift test --filter 'CollisionFilterTests|ContactEventTests'`
-11. Dodaj `PhysicsBodyProperties` (warstwa, `CollisionFilter`, zainteresowania) zamiast powielonych pól deskryptorów i `BubbleResult`, `EventInterest.contact`, `contactBegan`/`contactEnded`; przepisz istniejące testy na nowe pola · verify: `grep -q "struct PhysicsBodyProperties" Sources/BubblePhysicsPublic/Model/Objects.swift && swift test --filter 'ModelValidationTests|WorldTransactionTests|TransactionStagerTests'`
-12. Sprawdzaj kategorię i maskę w kernelach kandydatów (bańki, segmenty, bryły), covering [P-B-11](#p-b-11) · verify: `swift test --filter CollisionFilterTests`
-13. Wykrywaj początek i koniec kontaktu przez trwały cache kontaktów (punkt ważony wnikaniem, impuls ze skumulowanego mnożnika, redukcja o ustalonej kolejności) i porządkuj zdarzenia w `EventCompactor`, covering [P-B-12](#p-b-12)–[P-B-15](#p-b-15) · verify: `swift test --filter 'ContactEventTests|PublishedStateDeterminismTests'`
-14. Testy: `KinematicMotionTests` (pchanie 20 baniek, platforma, przejście przez statyczną, blokada `pathDriven`, odrzucenie kinematycznej bańki), covering [P-B-16](#p-b-16)–[P-B-19](#p-b-19) · verify: `swift build --build-tests && ! swift test --filter KinematicMotionTests`
-15. Dodaj `MotionRole.kinematic` i `KinematicDrive`, prędkość narzucaną w `MotionControllers`, odwrotną masę 0 i pomijanie par kinematyczna–statyczna w solverze, odrzucenie bańki w stagerze, covering [P-B-16](#p-b-16)–[P-B-19](#p-b-19) · verify: `swift test --filter 'KinematicMotionTests|NativeMetalMotionRoleTests'`
-16. Testy: `ContactCapacityTests` (pamięć buforów dla 300 i 1200 obiektów, zapas k w stress-300, mieszanej i akceptacyjnej, wymuszone przepełnienie), covering [P-B-20](#p-b-20), [P-B-21](#p-b-21) · verify: `swift build --build-tests && ! swift test --filter ContactCapacityTests`
-17. Zastąp pojemność `count*(count+segments)` siatką brył i stałym limitem k kandydatów na obiekt z licznikiem przepełnienia w `WorldDiagnostics`; dodaj fizyczną część sceny akceptacyjnej do `PublicWorldStressBenchmark`, covering [P-B-20](#p-b-20), [P-B-21](#p-b-21) · verify: `swift test --filter ContactCapacityTests && swift run -c release BubblePhysicsPerfGuard`
-18. Testy: `RigidShapeTests` z metodami `testShapePairs`, `testInertia`, `testTunnelling`, `testVelocityLimits`, covering [P-B-22](#p-b-22), [P-B-23](#p-b-23), [P-B-27](#p-b-27), [P-B-28](#p-b-28) · verify: `swift build --build-tests && ! swift test --filter RigidShapeTests`
-19. Dodaj `RigidShape` (wielokąt, koło, kapsuła) w `RigidBodyDescriptor`, automatyczny moment bezwładności i kontakty koła i kapsuły w kernelach, covering [P-B-22](#p-b-22), [P-B-23](#p-b-23) · verify: `swift test --list-tests | grep -q RigidShapeTests.testShapePairs && swift test --filter 'RigidShapeTests.testShapePairs|RigidShapeTests.testInertia|NativeMetalShaderABITests'`
-20. Dodaj CCD bryła–bryła i limit prędkości liniowej i kątowej w integracji, covering [P-B-27](#p-b-27), [P-B-28](#p-b-28) · verify: `swift test --filter RigidShapeTests`
-21. Testy: `JointTests` (wahadło, zawias z zakresem i silnikiem, spaw, bańka na więzie dystansowym, więz bańka–bańka, odrzucenia, usunięcie przy usunięciu ciała, scaleniu i podziale), covering [P-B-24](#p-b-24)–[P-B-26](#p-b-26) · verify: `swift build --build-tests && ! swift test --filter JointTests`
-22. Dodaj `Joint` i operacje transakcji, `NativeJointState` i więzy XPBD w pętli iteracji (bańka zaczepiona w środku masy), usuwanie więzów w `StructuralOperations` i potwierdzeniu, sondy ABI rekordów więzów, covering [P-B-24](#p-b-24)–[P-B-26](#p-b-26) · verify: `swift test --filter 'JointTests|PublishedStateDeterminismTests|NativeMetalShaderABITests'`
-23. Dodaj scenę mieszaną (200 baniek, 60 brył, 10 więzów, 5 kinematycznych) do benchmarku, testu determinizmu i strażnika; punkt odniesienia w osobnym commicie z uzasadnieniem, covering [P-B-9](#p-b-9) · verify: `grep -q '"mixed"' docs/benchmarks/perf-guard.json && swift test --filter PublishedStateDeterminismTests && swift run -c release BubblePhysicsPerfGuard`
-24. Testy: `TimePolicyTests` i rozszerzone `BubbleWorldCompletionTests` (limit backlogu, stan „zawiódł” po błędzie GPU i wartościach nieskończonych, odrzucenie klatki po błędzie `encodeRender`), covering [P-B-53](#p-b-53), [P-B-55](#p-b-55), [P-B-57](#p-b-57), [P-B-58](#p-b-58) · verify: `swift build --build-tests && ! swift test --filter 'TimePolicyTests|BubbleWorldCompletionTests'`
-25. Dodaj `maximumBacklog` w `FixedStepDriver` i stan końcowy „zawiódł” w `BubbleWorld` z powodem w diagnostyce; błąd kodowania zostawia kolejkę, covering [P-B-53](#p-b-53), [P-B-55](#p-b-55), [P-B-57](#p-b-57), [P-B-58](#p-b-58) · verify: `swift test --filter 'TimePolicyTests|BubbleWorldCompletionTests'`
-26. Testy: `SpatialQueryTests` (punkt, prostokąt, koło, raycast dla każdego kształtu, filtr, licznik odczytów), covering [P-B-29](#p-b-29), [P-B-30](#p-b-30), [P-B-34](#p-b-34) · verify: `swift build --build-tests && ! swift test --filter SpatialQueryTests`
-27. Dodaj `Queries.swift`, `QueryIndex` budowany raz na publikację i zapytania synchroniczne w `BubbleWorld`, covering [P-B-29](#p-b-29), [P-B-30](#p-b-30), [P-B-34](#p-b-34) · verify: `swift test --filter SpatialQueryTests`
-28. Testy: `HitTestTests` (wnętrze, krawędź, wgłębienie, pustka, bryła, nakładanie, usunięcie, pauza, „zawiódł”, anulowanie), covering [P-B-31](#p-b-31)–[P-B-33](#p-b-33) · verify: `swift build --build-tests && ! swift test --filter HitTestTests`
-29. Przenieś kernel `nativeSelectDeformedContour` z tagu `magentic`, dodaj bryły, priorytet warstwa→`ObjectID` i kolejkę `hitTest(at:) async` w `BubbleWorld`, covering [P-B-31](#p-b-31)–[P-B-34](#p-b-34) · verify: `swift test --filter 'HitTestTests|SpatialQueryTests'`
-30. Wydziel `OffscreenRenderHarness` (256×256, próbkowanie, ±2/255) z `MetalRenderIntegrationTests` i dodaj `MaterialRenderTests` oraz `AssetRegistryTests`, covering [P-B-35](#p-b-35)–[P-B-39](#p-b-39) · verify: `swift build --build-tests && ! swift test --filter 'MaterialRenderTests|AssetRegistryTests'`
-31. Dodaj moduł i produkt `.library` `BubblePhysicsAssets` z `AssetRegistry` (CGImage, MTLTexture, błąd formatu, kontrola `MTLDevice`), dopisz go do `PackageGraphTests` i przekaż rejestr do świata i renderera, covering [P-B-39](#p-b-39) · verify: `swift test --filter 'AssetRegistryTests|PackageGraphTests'`
-32. Zastąp `RenderStyle`/`RenderShader` przez `RenderMaterial`, usuń `RenderStylePipeline` i `customPipelines`, dodaj `MaterialPipelines` per tryb mieszania · verify: `swift build && ! grep -rq "customPipelines\|RenderShader" Sources`
-33. Dodaj do wierzchołka uv, współrzędne lokalne, środek i promień; tryb przyklejony, pod maską i UV brył (wielokąt, koło, kapsuła), odrzucenie nieznanego `TextureID`, covering [P-B-35](#p-b-35)–[P-B-39](#p-b-39) · verify: `swift test --filter 'MaterialRenderTests|NativeMetalShaderABITests'`
-34. Testy: `LayerRenderTests` (warstwy, bryła nad bańką w warstwie, tło, alfa 0,8), covering [P-B-40](#p-b-40)–[P-B-42](#p-b-42) · verify: `swift build --build-tests && ! swift test --filter LayerRenderTests`
-35. Rysuj warstwami w grupach jednym wywołaniem z instancjami, dodaj operację tła i rysowanie tła pod warstwami, covering [P-B-40](#p-b-40)–[P-B-42](#p-b-42) · verify: `swift test --filter LayerRenderTests && swift run -c release BubblePhysicsPerfGuard`
-36. Sonda: zmierz strażnikiem przycinanie naklejek stencilem ze wspólną wartością i maską w shaderze fragmentu na scenie akceptacyjnej, wynik i wybór zapisz w tym planie jako wiersz `Przycinanie naklejek` w `## Implementation deviations` · verify: `grep -q "Przycinanie naklejek" docs/sdlc/changes/2026-11-08-engine-foundations/plan.md`
-37. Testy: `GlyphAtlasTests` (SDF 32 px, krawędź w 3 skalach, gotowy atlas) i `DecalRenderTests` (obraz, kotwica, obrót, przycięcia, kolejność w warstwie; metody `testPublication` dla publikacji z potwierdzeniem i scalenia oraz `testRejection` dla znaku spoza zestawu), covering [P-B-43](#p-b-43)–[P-B-49](#p-b-49) · verify: `swift build --build-tests && ! swift test --filter 'GlyphAtlasTests|DecalRenderTests'`
-38. Dodaj `SDFAtlasGenerator` (Core Text) i import `GlyphAtlas` w `BubblePhysicsAssets`, covering [P-B-43](#p-b-43), [P-B-44](#p-b-44) · verify: `swift test --filter GlyphAtlasTests`
-39. Dodaj `Decal` i operację naklejki w transakcji, walidację znaków w stagerze i naklejkę wyniku scalenia i podziału, covering [P-B-48](#p-b-48), [P-B-49](#p-b-49) · verify: `swift test --list-tests | grep -q DecalRenderTests.testRejection && swift test --filter 'DecalRenderTests.testPublication|DecalRenderTests.testRejection'`
-40. Dodaj `DecalRenderer` z metodą przycinania wybraną w sondzie i grupami naklejek w warstwie, covering [P-B-45](#p-b-45)–[P-B-47](#p-b-47) · verify: `swift test --filter DecalRenderTests && swift run -c release BubblePhysicsPerfGuard`
-41. Testy: `InterpolationRenderTests` (120 Hz, α = 1 przy zaległości, obiekty bez interpolacji) i `LifecycleTests` (wstrzyknięte źródło zdarzeń, pauza, wznowienie, opcja wyłączenia), covering [P-B-50](#p-b-50)–[P-B-52](#p-b-52), [P-B-56](#p-b-56) · verify: `swift build --build-tests && ! swift test --filter 'InterpolationRenderTests|LifecycleTests'`
-42. Rysuj klatkę bez kroku, licz α obcięte do [0, 1], dodaj bufor konturów t−1 w `NativeMetalRenderHandoff`, interpolację w shaderze i flagę „bez interpolacji”, covering [P-B-50](#p-b-50)–[P-B-52](#p-b-52) · verify: `swift test --filter InterpolationRenderTests && swift run -c release BubblePhysicsPerfGuard`
-43. Dodaj `LifecycleEventSource` (domyślnie UIKit na iOS) i pauzę w `BubbleWorld` z odrzuceniem czasu po wznowieniu i opcją `automaticPause`, covering [P-B-56](#p-b-56) · verify: `swift test --filter LifecycleTests`
-44. Testy: `RenderHookTests` (prostokąt gry po tle, po warstwie n i w nakładce; rzucające domknięcie, potem udana klatka), covering [P-B-54](#p-b-54), [P-B-58](#p-b-58) · verify: `swift build --build-tests && ! swift test --filter RenderHookTests`
-45. Dodaj `RenderHooks` (po tle, po warstwie n, nakładka) do `BubblePhysicsMetalRender.encode`, covering [P-B-54](#p-b-54), [P-B-58](#p-b-58) · verify: `swift test --filter 'RenderHookTests|BubbleWorldCompletionTests'`
-46. Dodaj scenę akceptacyjną z teksturami, naklejkami i warstwami oraz wybór sceny w `Benchmarks/iOS/BubblePhysicsBench` · verify: `grep -rq "acceptance" Benchmarks/iOS/BubblePhysicsBench/App && xcodebuild -project Benchmarks/iOS/BubblePhysicsBench/BubblePhysicsBench.xcodeproj -scheme BubblePhysicsBench -configuration Release -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build`
-47. Dodaj `Examples/BubblePhysicsShowcase` (`project.yml` i `.xcodeproj` w repo; `xcodegen` musi dostarczyć właściciel albo projekt powstaje według wzorca benchmarku) z dwiema scenami i oznaczonymi regionami, covering [P-B-59](#p-b-59) · verify: `xcodebuild -project Examples/BubblePhysicsShowcase/BubblePhysicsShowcase.xcodeproj -scheme BubblePhysicsShowcase -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build`
-48. Napisz `docs/integration-guide.md` z fragmentami z regionów i `IntegrationGuideSnippetTests`, covering [P-B-60](#p-b-60) · verify: `swift test --list-tests | grep -q IntegrationGuideSnippetTests && swift test --filter IntegrationGuideSnippetTests`
-49. Zapisz listy symboli publicznych `v1.0.0` i HEAD (`swift-api-digester`), napisz `docs/MIGRATION-v2.md`, zaktualizuj README na 2.0.0 i dodaj `MigrationGuideTests`, covering [P-B-10](#p-b-10) · verify: `swift test --list-tests | grep -q MigrationGuideTests && swift test --filter MigrationGuideTests`
-50. Uruchom pełne sprawdzenie: `swift test`, strażnik i oba buildy `xcodebuild`, covering [P-B-1](#p-b-1)–[P-B-60](#p-b-60) · verify: `swift test && swift run -c release BubblePhysicsPerfGuard && xcodebuild -project Benchmarks/iOS/BubblePhysicsBench/BubblePhysicsBench.xcodeproj -scheme BubblePhysicsBench -configuration Release -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build && xcodebuild -project Examples/BubblePhysicsShowcase/BubblePhysicsShowcase.xcodeproj -scheme BubblePhysicsShowcase -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build`
-51. Właściciel: pomiar Release na iPhonie X (scena akceptacyjna, 30 + 300 klatek), zapis w `docs/benchmarks/`, potem tag `v2.0.0`; wymaga urządzenia i konta właściciela, covering [P-B-61](#p-b-61) · verify: `ls docs/benchmarks | grep -q "iphone-x-v2-acceptance"`
+6. Przenieś 5 narzędzi i 17 plików testów z listy w R2 do `BubblePhysicsNativeMetalDiagnostics(Tests)` z `ReferenceSolverInputAdapter`, dodaj moduł do `BubblePhysicsBenchmarkSupport`; `BubblePhysicsReferenceBench` importuje nowy moduł, covering [P-B-2](#p-b-2), [P-B-3](#p-b-3) · verify: `test -d Sources/BubblePhysicsNativeMetalDiagnostics && ! test -e Sources/BubblePhysicsNativeMetal/NativeMetalBenchmarkRunner.swift && swift test --filter BubblePhysicsNativeMetalDiagnosticsTests && swift build --product BubblePhysicsReferenceBench`
+7. Buduj `NativeSolverInput` liniowo w `NativeCompleteStepper`; usuń z NativeMetal `ReferenceWorld`, `BruteForceBroadPhase`, `first(where:)`, stare wejścia i `@_exported import BubblePhysicsReference` oraz zależność w `Package.swift`, covering [P-B-1](#p-b-1) · verify: `swift test --filter PackageGraphTests && ! grep -rq "BubblePhysicsReference\|executePublicFrame" Sources/BubblePhysicsNativeMetal`
+8. Usuń porównania O(k²) w `NativeRigidPolygonState.prepare` i O(s²) w strukturach; dodaj do strażnika pomiar skalowania 600/300 (linia `scaling 600/300:` w wyjściu), covering [P-B-7](#p-b-7) · verify: `set -o pipefail; swift run -c release BubblePhysicsPerfGuard | grep -q "scaling 600/300"`
+9. Dodaj AABB zdeformowanego konturu do `NativeMetalBubble` w kernelu konturów, z sondą ABI, i publikuj `WorldFrame.objects: [ObjectID: ObjectState]`, covering [P-B-4](#p-b-4)–[P-B-6](#p-b-6) · verify: `swift test --filter 'ObjectStateTests|NativeMetalShaderABITests'`
+10. Zapisz nowy punkt odniesienia stress-300 po usunięciu O(n²) w osobnym commicie „perf-guard: punkt odniesienia po etapie 1” z uzasadnieniem w treści, covering [P-B-8](#p-b-8) · verify: `git log --format=%s -- docs/benchmarks/perf-guard.json | grep -q "po etapie 1"`
+11. Sprawdź etap: pełne `swift test` (z determinizmem i testami diagnostycznymi) i strażnik, covering [P-B-1](#p-b-1)–[P-B-9](#p-b-9) · verify: `swift test && swift run -c release BubblePhysicsPerfGuard`
 
 ## Deviations from Design
 
 None.
+
+## Replan log
+
+| Slice | Assumed | Found | Plan change | Date |
+|-------|---------|-------|-------------|------|
+|       |         |       |             |      |
 
 ## Implementation deviations
 
