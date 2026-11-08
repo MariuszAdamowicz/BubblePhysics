@@ -86,4 +86,25 @@ final class RigidCCDTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(result.frame.objects[ObjectID(rawValue: 2)]).position, [300, 300],
                        "kinematyczna nie cofa się ani nie przesuwa")
     }
+
+    // CCD obejmuje też koło i kapsułę (rdzeń z promieniem): szybkie koło nie przechodzi przez cienką bryłę dynamiczną,
+    // a dwie szybkie kapsuły naprzeciw siebie nie mijają się.
+    func testFastCircleAndCapsulesDoNotTunnel() async throws {
+        let world = try makeWorld()
+        world.submit(try B.baseTransaction()
+            .add(B.box(2, at: [300, 300], half: [2, 60], role: .dynamic))
+            .add(B.circle(1, at: [120, 300], radius: 2, velocity: [speed, 0]))
+            .add(B.capsule(3, at: [100, 100], halfLength: 5, radius: 2, role: .dynamic, velocity: [speed, 0]))
+            .add(B.capsule(4, at: [220, 100], halfLength: 5, radius: 2, role: .dynamic, velocity: [-speed, 0])))
+        var circleRightOfBox = false, capsulesCrossed = false
+        let result = await B.advance(world, steps: 60) { _, frame in
+            if let c = frame.objects[ObjectID(rawValue: 1)], let b = frame.objects[ObjectID(rawValue: 2)], c.position.x > b.position.x { circleRightOfBox = true }
+            if let a = frame.objects[ObjectID(rawValue: 3)], let b = frame.objects[ObjectID(rawValue: 4)], a.position.x > b.position.x { capsulesCrossed = true }
+        }
+        XCTAssertNil(world.diagnostics.lastAdvanceIssue, "klatka nie może się nie udać")
+        XCTAssertFalse(circleRightOfBox, "koło nie może minąć cienkiej bryły")
+        XCTAssertFalse(capsulesCrossed, "kapsuły nie mogą się minąć")
+        XCTAssertLessThan(try XCTUnwrap(result.frame.objects[ObjectID(rawValue: 3)]).position.x,
+                          try XCTUnwrap(result.frame.objects[ObjectID(rawValue: 4)]).position.x)
+    }
 }

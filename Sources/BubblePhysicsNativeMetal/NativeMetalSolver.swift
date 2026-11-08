@@ -723,6 +723,10 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         if hasRigidBodies {
             dispatch("nativeRigidEmitCandidates", buffers: [rigidState.bodies, state.workingBubbles, inputPositions,
                 rigidState.control, rigidState.candidates, rigidState.rowCounts, state.candidateOverflow], threads: rigidState.count)
+            // CCD bryła–bryła po wierszach kandydatów, przed pętlą: faza 1 liczy czas uderzenia, faza 2 cofa bryły.
+            dispatch("nativeRigidResolveCCD", buffers: [rigidState.bodies, rigidState.vertices, rigidState.triangles,
+                rigidState.control, rigidState.candidates, rigidState.rowCounts], threads: rigidState.count)
+            dispatch("nativeRigidApplyCCD", buffers: [rigidState.bodies, rigidState.control], threads: rigidState.count)
         }
         for _ in 0..<configuration.solverIterationCount {
             dispatchContacts("nativeUpdateContactMultipliers", buffers: [state.workingBubbles, state.workingSegments,
@@ -1208,7 +1212,8 @@ enum NativeMetalPipelineCache {
         "nativeCompactSensorEvents",
         "nativeCompactPolygonSensorEvents",
         "nativeCompactMissingSensorEvents",
-        "nativeRigidPredict", "nativeRigidEmitCandidates", "nativeRigidContacts", "nativeRigidApplyBubbles", "nativeRigidApplyBodies", "nativeRigidGuardWalls", "nativeRigidFinish"]
+        "nativeRigidPredict", "nativeRigidEmitCandidates", "nativeRigidContacts", "nativeRigidApplyBubbles", "nativeRigidApplyBodies", "nativeRigidGuardWalls", "nativeRigidFinish",
+        "nativeRigidResolveCCD", "nativeRigidApplyCCD"]
 
     static func pipelines(for device: MTLDevice) throws -> Compiled {
         if let cached = compiled[device.registryID] { return cached }

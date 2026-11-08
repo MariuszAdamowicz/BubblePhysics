@@ -495,6 +495,72 @@ kernel void nativeRigidFinish(device NativeRigidBody *bodies [[buffer(0)]],
     bodies[index]=b;
 }
 
+// CCD bryła–bryła. Poza w chwili t kroku to interpolacja od pozy z początku kroku (previous, pose.w) do końcowej.
+// Nakładanie to wnikanie głębsze niż 1e-3, czyli tyle, ile kontakt jeszcze toleruje bez korekty.
+bool nativeRigidOverlapAt(NativeRigidBody a, NativeRigidBody b, float t, device float2 *vertices, device uint4 *triangles) {
+    a.pose.xy = mix(a.previous.xy, a.pose.xy, t); a.pose.z = mix(a.pose.w, a.pose.z, t);
+    b.pose.xy = mix(b.previous.xy, b.pose.xy, t); b.pose.z = mix(b.pose.w, b.pose.z, t);
+    float2 normal, point; float depth;
+    return nativeRigidPairContact(a, b, vertices, triangles, normal, depth, point) && depth > 1e-3f;
+}
+
+// Najpóźniejsza chwila przed pierwszym nakładaniem pary na torze kroku (bisekcja tuż przy styku, żeby kontakt nie migał);
+// 2 oznacza brak ruchu przez kształt. Para nakładająca się już na początku kroku jest w kontakcie, więc jej CCD nie dotyczy
+// (rozwiązuje ją solver kontaktów). Wołane z a < b, więc obie bryły pary liczą dokładnie to samo.
+float nativeRigidTimeOfImpact(NativeRigidBody a, NativeRigidBody b, device float2 *vertices, device uint4 *triangles) {
+    float travel = length((a.pose.xy - a.previous.xy) - (b.pose.xy - b.previous.xy))
+        + abs(a.pose.z - a.pose.w) * a.physical.z + abs(b.pose.z - b.pose.w) * b.physical.z;
+    if (!(travel > 0.5f)) return 2;
+    if (nativeRigidOverlapAt(a, b, 0, vertices, triangles)) return 2;
+    uint steps = min(64u, max(2u, uint(ceil(travel / 0.5f))));
+    float last = 0;
+    for (uint step = 1; step <= steps; ++step) {
+        float t = float(step) / float(steps);
+        if (!nativeRigidOverlapAt(a, b, t, vertices, triangles)) { last = t; continue; }
+        float low = last, high = t;
+        for (uint bisection = 0; bisection < 12; ++bisection) {
+            float middle = 0.5f * (low + high);
+            if (nativeRigidOverlapAt(a, b, middle, vertices, triangles)) high = middle; else low = middle;
+        }
+        return low;
+    }
+    return 2;
+}
+
+// Faza 1: każda ruchoma bryła wylicza najwcześniejszy czas uderzenia ze swojego wiersza bryła–bryła i zapisuje go tylko
+// we własnym `limits.z` (1 + t; 0 = brak), nie ruszając póz, które czytają sąsiedzi. Bryły nieruchome i kinematyczne
+// (nativeRigidImmovable) się nie cofają: są przeszkodami.
+kernel void nativeRigidResolveCCD(device NativeRigidBody *bodies [[buffer(0)]],
+    device float2 *vertices [[buffer(1)]], device uint4 *triangles [[buffer(2)]],
+    constant uint4 &counts [[buffer(3)]], device NativeCandidate *rows [[buffer(4)]],
+    device uint2 *rowCounts [[buffer(5)]], uint index [[thread_position_in_grid]]) {
+    if (index >= counts.x) return;
+    NativeRigidBody body = bodies[index];
+    float earliest = 2;
+    if (!nativeRigidImmovable(body)) {
+        for (uint slot = rowCounts[index].y; slot < rowCounts[index].x; ++slot) {
+            NativeCandidate candidate = rows[index * counts.z + slot];
+            if (candidate.metadata.x != 3) continue;
+            earliest = min(earliest, nativeRigidTimeOfImpact(bodies[candidate.metadata.y], bodies[candidate.metadata.z], vertices, triangles));
+        }
+    }
+    bodies[index].limits.z = earliest <= 1 ? 1 + earliest : 0;
+}
+
+// Faza 2: bryła wraca na swoim torze do wyliczonej chwili, a znacznik wraca na zero (rekordy bywają kopiowane między krokami).
+kernel void nativeRigidApplyCCD(device NativeRigidBody *bodies [[buffer(0)]],
+    constant uint4 &counts [[buffer(1)]], uint index [[thread_position_in_grid]]) {
+    if (index >= counts.x) return;
+    NativeRigidBody body = bodies[index];
+    if (body.limits.z >= 1) {
+        float t = body.limits.z - 1;
+        body.pose.xy = mix(body.previous.xy, body.pose.xy, t);
+        body.pose.z = mix(body.pose.w, body.pose.z, t);
+    }
+    body.limits.z = 0;
+    bodies[index] = body;
+}
+
 struct NativeContourControl { uint4 counts; float4 shape; };
 
 float nativeContourRayLimit(float2 center, float2 direction, float2 a, float2 b,

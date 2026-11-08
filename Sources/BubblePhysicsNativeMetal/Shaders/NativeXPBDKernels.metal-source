@@ -673,24 +673,15 @@ kernel void nativeRigidContacts(device NativeRigidBody *bodies [[buffer(0)]],
         // Kandydat bryła–bryła zawsze niesie ai<bi, więc ai>=bi jest tylko zabezpieczeniem, a nie deduplikacją:
         // para jest rozwiązywana w wierszach obu ciał celowo (determinizm bez atomików).
         if(ai>=bi || (nativeRigidImmovable(a)&&nativeRigidImmovable(b))){corrections[index]=result;return;}
-        float2 start=a.previous.xy-b.previous.xy,end=a.pose.xy-b.pose.xy,travel=end-start;
-        float travelSquared=dot(travel,travel);
-        float t=travelSquared>FLT_MIN ? clamp(-dot(start,travel)/travelSquared,0.0f,1.0f) : 0.0f;
+        float2 end=a.pose.xy-b.pose.xy;
         float radius=a.physical.z+b.physical.z,radiusSquared=radius*radius;
-        float2 closest=start+t*travel;
-        // Para z kołem lub kapsułą nie ma dawnej ścieżki odrzucania klatki; tunelowanie obsługuje CCD (nativeRigidResolveCCD).
-        bool sweptPair=!(nativeRigidIsRound(a)||nativeRigidIsRound(b)) && t>0 && t<1 && dot(closest,closest)<=radiusSquared;
-        if(dot(end,end)>radiusSquared){
-            if(sweptPair)atomic_fetch_or_explicit(safety+3,2u,memory_order_relaxed);
-            corrections[index]=result;return;
-        }
+        // Tunelowanie pary brył zatrzymuje CCD (nativeRigidResolveCCD) jeszcze przed pętlą iteracji, więc przemijanie
+        // zasięgu bez nakładania kształtów nie odrzuca już klatki.
+        if(dot(end,end)>radiusSquared){corrections[index]=result;return;}
         float2 pairNormal,pairPoint;float pairDepth;
         bool found=nativeRigidPairContact(a,b,vertices,triangles,pairNormal,pairDepth,pairPoint);
-        if(found){depth=pairDepth;n=pairNormal;point=pairPoint;}
-        if(!found){
-            if(sweptPair)atomic_fetch_or_explicit(safety+3,2u,memory_order_relaxed);
-            corrections[index]=result;return;
-        }
+        if(!found){corrections[index]=result;return;}
+        depth=pairDepth;n=pairNormal;point=pairPoint;
         wa=a.physical.x;wb=b.physical.x;ia=a.physical.y;ib=b.physical.y;
         ra=point-a.pose.xy;rb=point-b.pose.xy;va=a.motion.xy;vb=b.motion.xy;spinA=a.motion.z;spinB=b.motion.z;
         frictionA=a.physical.w;frictionB=b.physical.w;restitutionA=as_type<float>(a.flags.w);restitutionB=as_type<float>(b.flags.w);
