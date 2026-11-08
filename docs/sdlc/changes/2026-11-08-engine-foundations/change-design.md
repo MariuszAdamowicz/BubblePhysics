@@ -25,7 +25,7 @@ BubblePhysics ma być silnikiem dla wielu gier. Pierwszą jest odnowione 2KBubbl
 
 Zmiana wprowadza wersję `v2.0.0` z celowo łamanym API. Elementy wersji:
 - publiczny stan obiektów publikowany z każdą ukończoną klatką;
-- model materiału renderu z teksturami, dwoma trybami nakładania na bańkę, warstwami i blendingiem;
+- model materiału renderu z teksturami rejestrowanymi przez grę, dwoma trybami nakładania na bańkę, warstwami i blendingiem;
 - naklejki przypięte do obiektów (tekst SDF z czcionki, tekst z atlasu gry, obraz);
 - rola `kinematic`;
 - kategorie i maski kolizji oraz zdarzenia kontaktu;
@@ -87,26 +87,25 @@ flowchart LR
 - [ ] G1-AC3 — Moduły produkcyjne (`BubblePhysics`, `BubblePhysicsMetalRender` i ich zależności) nie zależą od `BubblePhysicsReference`, `BubblePhysicsReferenceMetal`, `BubblePhysicsLegacy`, `BubblePhysicsCore` ani `BubblePhysicsMetal`. · `verify: swift package show-dependencies / analiza Package.swift w teście`
 
 **G2: Gra odczytuje stan obiektów**
-- [ ] G2-AC1 — Każda opublikowana klatka udostępnia dla każdej istniejącej bańki i bryły: pozycję, prędkość, obrót, prędkość kątową i osiowy prostokąt otaczający. Bańka ma dodatkowo efektywny promień, a bryła typ kształtu. · `verify: test publicznego API po N krokach`
+- [ ] G2-AC1 — Każda opublikowana klatka udostępnia dla każdej istniejącej bańki i bryły: pozycję, prędkość, obrót, prędkość kątową i osiowy prostokąt otaczający. Bańka ma dodatkowo efektywny promień, a bryła typ kształtu. Prostokąt bańki obejmuje zdeformowany kontur i jest liczony na GPU w istniejącym rekordzie bańki odczytywanym po kroku (+16 B na bańkę), a nie z kopii konturu. · `verify: test publicznego API po N krokach`
 - [ ] G2-AC2 — Środek bańki w stanie zgadza się ze środkiem konturu z `debugContourSnapshot()` z dokładnością do 1% promienia. Prostokąt otaczający zawiera cały kontur. · `verify: test porównawczy na scenie stress-300`
 - [ ] G2-AC3 — Obiekt usunięty w danej klatce nie występuje w jej stanie, a odczyt stanu nie zwiększa licznika odczytów konturów (`contourCPUReadbacks` = 0). · `verify: test usunięcia i licznika`
 
 **G3: Materiał renderu z teksturą**
-- [ ] G3-AC1 — Gra rejestruje teksturę z `CGImage` albo z gotowego `MTLTexture` i przypisuje ją do materiału razem z kolorem (RGBA), trybem mieszania (nieprzezroczysty, alfa, addytywny) oraz obrysem (kolor, szerokość). Render offscreen pokazuje teksturę z tymi parametrami. · `verify: test obrazu Metal (próbkowanie pikseli)`
-- [ ] G3-AC2 — Tryb „przyklejony”: tekstura deformuje się i obraca razem z bańką. Punkt tekstury przypisany do punktu konturu zostaje przy nim po deformacji. · `verify: test obrazu z wymuszoną deformacją i obrotem`
+- [ ] G3-AC1 — Gra rejestruje teksturę synchronicznym wywołaniem (poza transakcją) z `CGImage` albo z gotowego `MTLTexture` i dostaje `TextureID`. Materiał wskazuje ją przez ten identyfikator do materiału razem z kolorem (RGBA), trybem mieszania (nieprzezroczysty, alfa, addytywny) oraz obrysem (kolor, szerokość). Render offscreen pokazuje teksturę z tymi parametrami. · `verify: test obrazu Metal (próbkowanie pikseli)`
+- [ ] G3-AC2 — Tryb „przyklejony”: tekstura deformuje się i obraca razem z bańką. Punkt tekstury przypisany do punktu konturu zostaje przy nim po deformacji, z błędem najwyżej 1 piksel w renderze 256×256. · `verify: test obrazu z wymuszoną deformacją i obrotem`
 - [ ] G3-AC3 — Tryb „pod maską”: tekstura jest kołem wokół środka bańki, obraca się z nią i nie deformuje się, a zdeformowany kontur ją przycina. · `verify: test obrazu z wymuszoną deformacją`
 - [ ] G3-AC4 — Bryły (wielokąt, koło, kapsuła) mają współrzędne tekstury liczone ze współrzędnych lokalnych, z przesunięciem i skalą z materiału, więc tekstura obraca się razem z bryłą. · `verify: test obrazu obróconej bryły`
-- [ ] G3-AC5 — Gra może zarejestrować własny shader (klucz i funkcja fragmentu), który dostaje udokumentowany zestaw danych wierzchołka: pozycja świata, współrzędne tekstury, współrzędne lokalne, środek, promień i identyfikator instancji. Zgodność układu sprawdza test ABI. · `verify: test ABI Swift↔MSL i test obrazu z własnym shaderem`
-- [ ] G3-AC6 — Brak tekstury albo jej odrzucenie, np. przez nieobsługiwany format, odrzuca transakcję jawnym powodem i nie zmienia wyglądu istniejących obiektów. · `verify: test odrzucenia`
+- [ ] G3-AC5 — Rejestracja obrazu w nieobsługiwanym formacie zgłasza błąd od razu, w wywołaniu rejestracji. Transakcja, która wskazuje niezarejestrowany `TextureID`, jest odrzucana jawnym powodem i nie zmienia wyglądu istniejących obiektów. · `verify: test błędu rejestracji i odrzucenia transakcji`
 
 **G4: Warstwy, kolejność i tło**
 - [ ] G4-AC1 — Każdy obiekt ma całkowitą warstwę. Obiekty rysują się rosnąco według warstwy, a w obrębie warstwy rosnąco według `ObjectID`, niezależnie od tego, czy to bańka, czy bryła. · `verify: test obrazu: bańka na warstwie wyższej przykrywa bryłę`
-- [ ] G4-AC2 — Świat może mieć teksturę tła rysowaną pod wszystkimi warstwami, w trybie rozciągnięcia albo powielenia. · `verify: test obrazu`
-- [ ] G4-AC3 — Materiał z trybem alfa daje poprawne przenikanie: piksel nakładki o alfie 0,8 jest mieszanką kolorów warstw. · `verify: test obrazu z tolerancją`
+- [ ] G4-AC2 — Operacja transakcji ustawia albo usuwa teksturę tła (zarejestrowany `TextureID`). Tło jest rozciągnięte na prostokąt regionu symulacji i rysowane pod wszystkimi warstwami. · `verify: test obrazu przed i po zmianie tła`
+- [ ] G4-AC3 — Materiał z trybem alfa daje poprawne przenikanie: piksel nakładki o alfie 0,8 ma kolor 0,8·nakładka + 0,2·spód, z tolerancją ±2/255 na kanał. · `verify: test obrazu`
 
 **G5: Naklejki przypięte do obiektów**
-- [ ] G5-AC1 — Gra rejestruje czcionkę (nazwę czcionki systemowej albo dołączonej) z zestawem znaków. Silnik generuje z niej raz atlas SDF, a naklejka tekstowa z tego atlasu renderuje się ostro przy skali 0,25–4×. · `verify: test obrazu w dwóch skalach`
-- [ ] G5-AC2 — Gra może zamiast tego zarejestrować gotowy atlas glifów (tekstura i metryki) i użyć go w naklejce tekstowej. · `verify: test obrazu z atlasem testowym`
+- [ ] G5-AC1 — Gra rejestruje czcionkę (nazwę czcionki systemowej albo dołączonej) z zestawem znaków. Rejestracja jest synchroniczna (poza transakcją) i raz generuje atlas SDF. Naklejka tekstowa z tego atlasu ma przejście krawędzi glifu najwyżej 1,5 piksela szerokości w każdej skali od 0,25× do 4×. · `verify: test obrazu w skalach 0,25×, 1× i 4× (pomiar szerokości krawędzi)`
+- [ ] G5-AC2 — Gra może zamiast tego zarejestrować synchronicznie gotowy atlas glifów (tekstura i metryki) i użyć go w naklejce tekstowej. · `verify: test obrazu z atlasem testowym`
 - [ ] G5-AC3 — Naklejka obrazowa wyświetla wskazany fragment tekstury gry. · `verify: test obrazu`
 - [ ] G5-AC4 — Naklejka jest zakotwiczona w środku obiektu, obraca się z nim i skaluje względem jego efektywnego promienia. Zdeformowany kontur bańki ją przycina, ale sama naklejka się nie deformuje. · `verify: test obrazu z deformacją i obrotem`
 - [ ] G5-AC5 — Zmiana naklejki (tekst, obraz, kolor) to operacja transakcji, a scalenie i podział baniek przyjmują naklejkę wyniku. Nowa naklejka jest widoczna w pierwszej klatce zawierającej potwierdzenie transakcji, a odrzucona transakcja jej nie zmienia. · `verify: test publikacji klatka/potwierdzenie`
@@ -119,7 +118,7 @@ flowchart LR
 
 **G7: Filtr kolizji i zdarzenia kontaktu**
 - [ ] G7-AC1 — Każdy obiekt fizyczny ma 32-bitową kategorię i maskę. Dwa obiekty kolidują tylko wtedy, gdy kategoria każdego z nich jest w masce drugiego. Domyślne wartości dają kolizję wszystkiego ze wszystkim. · `verify: test par z rozłącznymi maskami (brak kontaktu) i domyślnych (kontakt)`
-- [ ] G7-AC2 — Obiekt z zainteresowaniem kontaktem dostaje zdarzenie rozpoczęcia kontaktu, z punktem, normalną i impulsem normalnym, w pierwszym kroku styku. Zdarzenie końca kontaktu przychodzi w pierwszym kroku po rozłączeniu. Przy trwającym styku zdarzenia się nie powtarzają. · `verify: test zderzenia dwóch obiektów i trwałego styku`
+- [ ] G7-AC2 — Zdarzenia kontaktu obejmują każdą parę, która fizycznie się zderza: bańka–bańka, bańka–bryła i bryła–bryła, także ze statycznymi i kinematycznymi. Para, w której choć jeden obiekt ma zainteresowanie kontaktem, dostaje zdarzenie rozpoczęcia kontaktu, z punktem, normalną i impulsem normalnym, w pierwszym kroku styku. Zdarzenie końca kontaktu przychodzi w pierwszym kroku po rozłączeniu. Przy trwającym styku zdarzenia się nie powtarzają. · `verify: test zderzenia i trwałego styku dla każdego rodzaju pary`
 - [ ] G7-AC3 — Przepełnienie bufora zdarzeń jest raportowane w `eventOverflow`, a żadne zdarzenie końca nie przychodzi bez wcześniejszego rozpoczęcia. · `verify: test z małym buforem`
 
 **G8: Zapytania przestrzenne**
@@ -129,13 +128,13 @@ flowchart LR
 
 **G9: Punkty zaczepienia dla rysowania gry**
 - [ ] G9-AC1 — Gra może przekazać do renderu domknięcia wywoływane z encoderem bieżącego passu i macierzą świat→ekran w trzech miejscach: po tle, po wskazanej warstwie i na końcu (nakładka). To, co narysują, pojawia się we właściwej kolejności. · `verify: test obrazu z prostokątem gry w każdym miejscu`
-- [ ] G9-AC2 — Błąd zgłoszony przez domknięcie gry kończy klatkę tak samo jak błąd renderu, czyli zachowuje poprzednią opublikowaną klatkę. · `verify: test rzucającego domknięcia`
+- [ ] G9-AC2 — Błąd zgłoszony przez domknięcie gry albo przez kodowanie renderu odrzuca tę klatkę: krok nie jest publikowany, poprzednia klatka zostaje, kolejka transakcji czeka na następne `advance`, a świat nie przechodzi w stan „zawiódł”. · `verify: test rzucającego domknięcia, a potem udanej klatki`
 
 **G10: Czas, cykl życia i błędy**
-- [ ] G10-AC1 — Każde wywołanie renderu z buforem poleceń rysuje klatkę, także wtedy, gdy nie wypada krok fizyki. Położenie obiektów, konturów i naklejek jest interpolowane między dwoma ostatnimi krokami według ułamka zaległego czasu. · `verify: test: przy 120 Hz i kroku 1/60 każda klatka ma render, a pozycja w klatce pośredniej leży między krokami`
+- [ ] G10-AC1 — Poza pauzą każde wywołanie `advance` z buforem poleceń rysuje klatkę, także wtedy, gdy nie wypada krok fizyki. Położenie obiektów, konturów i naklejek jest interpolowane między dwoma ostatnimi krokami według ułamka zaległego czasu. · `verify: test: przy 120 Hz i kroku 1/60 każda klatka ma render, a pozycja w klatce pośredniej leży między krokami`
 - [ ] G10-AC2 — Zaległy czas (backlog) ma górny limit, domyślnie 0,25 s. Nadmiar jest odrzucany i raportowany w diagnostyce, więc symulacja nie nadrabia długich przerw. · `verify: test advance(by: 10)`
-- [ ] G10-AC3 — Na iOS świat sam przechodzi w pauzę przy wejściu aplikacji w tło i nie wysyła wtedy pracy na GPU. Po powrocie wznawia się od tego samego stanu bez skoku czasu. Wyłączenie tego zachowania jest jawną opcją konfiguracji. · `verify: test z symulowanymi powiadomieniami cyklu życia`
-- [ ] G10-AC4 — Nieudany krok GPU, np. przez błąd bufora poleceń lub wartości nieskończone, przełącza świat w jawny stan końcowy „zawiódł”: diagnostyka podaje powód, kolejne `advance` zwracają ostatnią klatkę bez prób ponawiania, a gra rozpoczyna rozgrywkę od nowa. · `verify: test z wstrzykniętym błędem kroku`
+- [ ] G10-AC3 — Na iOS świat sam przechodzi w pauzę przy wejściu aplikacji w tło i nie wysyła wtedy pracy na GPU. W pauzie `advance` zwraca ostatnią klatkę i zostawia bufor poleceń niezatwierdzony, więc gra nie prezentuje drawable. Po powrocie świat wznawia się od tego samego stanu bez skoku czasu. Wyłączenie tego zachowania jest jawną opcją konfiguracji. · `verify: test z symulowanymi powiadomieniami cyklu życia`
+- [ ] G10-AC4 — Nieudane wykonanie bufora poleceń na GPU albo wartości nieskończone w stanie przełączają świat w jawny stan końcowy „zawiódł”. Diagnostyka podaje powód, kolejka transakcji jest porzucana, a kolejne `advance` i `submit` nic nie robią i zwracają ostatnią klatkę. Jedyną drogą dalej jest utworzenie nowego `BubbleWorld`. · `verify: test z wstrzykniętym błędem kroku`
 - [ ] G10-AC5 — Ta sama scena z tymi samymi transakcjami, uruchomiona dwa razy na tym samym urządzeniu, daje identyczny stan obiektów po 300 krokach. · `verify: test determinizmu (hash stanu) na Macu`
 
 **G11: Bryły, więzy i ograniczenia ruchu**
@@ -146,15 +145,15 @@ flowchart LR
   - zawias: opcjonalny zakres kąta i silnik;
   - spaw.
 
-  Więzy dodaje się i usuwa transakcją. · `verify: testy wahadła (okres w granicach 2% wzoru), zakresu zawiasu, spawu`
-- [ ] G11-AC4 — Szybka bryła (prędkość 3× grubość przeszkody na krok) nie przenika przez cienką bryłę ani przez inną szybką bryłę. · `verify: test tunelowania bryła–bryła`
+  Więzy dodaje się i usuwa transakcją. Usunięcie ciała usuwa też jego więzy, a potwierdzenie transakcji wymienia usunięte więzy. · `verify: testy wahadła (okres w granicach 2% wzoru), zakresu zawiasu, spawu, usunięcia ciała z więzem`
+- [ ] G11-AC4 — Bryła o grubości 4 jednostek, lecąca z prędkością 12 jednostek na krok, nie przenika przez statyczną bryłę o grubości 4 jednostek. Dwie takie bryły lecące naprzeciw siebie, każda z tą prędkością, nie przenikają przez siebie nawzajem. · `verify: test tunelowania bryła–bryła w obu wariantach`
 - [ ] G11-AC5 — Materiał może ograniczać maksymalną prędkość liniową i kątową, a żaden obiekt z takim materiałem jej nie przekracza. · `verify: test pod silną siłą globalną`
 
 **G12: Wydajność**
-- [ ] G12-AC1 — Krok nie tworzy `ReferenceWorld` ani `BruteForceBroadPhase`, a praca CPU na krok rośnie liniowo z liczbą obiektów. Czas przygotowania kroku dla 600 obiektów jest najwyżej 2,5× dłuższy niż dla 300. · `verify: test skalowania na Macu`
-- [ ] G12-AC2 — Kontakty par bryła–bryła i bańka–bryła przechodzą przez wstępne filtrowanie przestrzenne, a pamięć kontaktów na GPU jest ograniczona przez O(n·k), gdzie k to stały limit kandydatów na obiekt, a nie przez O(n²). · `verify: test pamięci buforów dla 300 i 1200 obiektów`
-- [ ] G12-AC3 — Po każdym etapie automatyczny strażnik na Macu porównuje p95 kroku i renderu scen stress-300 i mieszanej z poprzednim stanem gałęzi. Regresja powyżej 5% zatrzymuje etap. · `verify: test/benchmark strażnika w swift test lub skrypcie CI z zapisem wyników w repo`
-- [ ] G12-AC4 — Na końcu gałęzi, w buildzie Release na iPhonie X, p95 pełnej klatki (fizyka i render, ścieżka `BubbleWorld`) wynosi najwyżej 16,67 ms w scenie z 300 obiektami. Nieudanych klatek, klatek z wartościami nieskończonymi i odczytów konturów jest 0. Wynik jest zapisany w `docs/benchmarks/`. · `verify: aplikacja benchmarku na urządzeniu (uruchamia właściciel)`
+- [ ] G12-AC1 — Praca CPU na krok rośnie liniowo z liczbą obiektów: czas przygotowania i publikacji kroku dla 600 obiektów jest najwyżej 2,5× dłuższy niż dla 300. · `verify: test skalowania na Macu`
+- [ ] G12-AC2 — Kontakty par bryła–bryła i bańka–bryła przechodzą przez wstępne filtrowanie przestrzenne, a pamięć kontaktów na GPU jest ograniczona przez O(n·k), gdzie k to stały limit kandydatów na obiekt, a nie przez O(n²). W scenach stress-300 i mieszanej limit nie jest przekraczany. Wymuszone przekroczenie, np. 300 baniek ściśniętych w małym obszarze, zwiększa licznik przepełnienia kandydatów w diagnostyce i nie daje wartości nieskończonych. · `verify: test pamięci buforów dla 300 i 1200 obiektów oraz test wymuszonego przepełnienia`
+- [ ] G12-AC3 — Strażnik wydajności na Macu mierzy p95 klatki (krok i render) scen stress-300 i mieszanej jako medianę z 5 przebiegów po 300 klatek. Kończy się błędem, gdy wynik jest o ponad 5% gorszy od punktu odniesienia zapisanego w repo. Zamierzony wzrost kosztu, np. przez nową funkcję, wymaga jawnej aktualizacji punktu odniesienia w osobnym commicie z uzasadnieniem. · `verify: uruchomienie strażnika; test, że sztuczne spowolnienie o 10% kończy go błędem`
+- [ ] G12-AC4 — Na końcu gałęzi, w buildzie Release na iPhonie X, p95 pełnej klatki (fizyka i render, ścieżka `BubbleWorld`) wynosi najwyżej 16,67 ms w scenie z 300 obiektami. Nieudanych klatek, klatek z wartościami nieskończonymi i odczytów konturów jest 0. Pomiar obejmuje 30 klatek rozgrzewki i 300 klatek mierzonych, a wynik jest zapisany w `docs/benchmarks/`. · `verify: aplikacja benchmarku na urządzeniu (uruchamia właściciel)`
 
 **G13: Przykładowa aplikacja i dokumentacja integracji**
 - [ ] G13-AC1 — W repo jest przykładowa aplikacja iOS z `MTKView`, która używa wyłącznie publicznego API i ma dwie sceny. Pierwsza: bańki z teksturami, naklejkami, scalaniem i chwytem palcem. Druga: bryły, więzy i platforma kinematyczna. Buduje się poleceniem `xcodebuild` bez podpisu. · `verify: xcodebuild CODE_SIGNING_ALLOWED=NO build`
@@ -166,7 +165,7 @@ flowchart LR
   - zapytania;
   - obsługę zdarzeń.
 
-  Każdy fragment kodu w przewodniku kompiluje się w przykładowej aplikacji. · `verify: przegląd + build przykładu`
+  Każdy fragment kodu w przewodniku jest identyczny z oznaczonym regionem źródeł przykładowej aplikacji, więc kompiluje się razem z nią. · `verify: test porównujący bloki kodu przewodnika z oznaczonymi regionami źródeł + build przykładu`
 
 ### Non-goals
 
@@ -175,6 +174,8 @@ flowchart LR
 - System cząstek i efekty pełnoekranowe (wstrząs, rozmycie, poświata). Gra może je rysować przez punkty zaczepienia z G9.
 - Więzy poza dystansem, zawiasem i spawem: prowadnica, koło pojazdu, lina, bloczek.
 - Wielokąty z dziurami.
+- Własne shadery gry: `RenderShader.custom` znika w `v2`. Wygląd opisują wyłącznie materiały i naklejki, a ewentualny własny shader to późniejsze rozszerzenie addytywne.
+- Tło powielane (kafelki); tło jest tylko rozciągane.
 - Dane gry przy obiekcie (user data). Gra mapuje własne dane po `ObjectID`.
 - Logika i zasoby 2KBubbles: spawn, reguła scalania „ta sama liczba”, punktacja, wygląd. Gra powstaje w osobnym repo na publicznym API `v2`.
 - Aplikacja hosta na macOS i dostępność (accessibility), która należy do UI gry.
@@ -187,23 +188,22 @@ Zmiana zachowuje obecny przepływ: transakcja → walidacja na granicy kroku →
    - Wspólne `PhysicsBodyProperties` dla baniek i brył: warstwa, kategoria i maska kolizji, zainteresowania zdarzeniami. Zastępują pola powielone w deskryptorach.
    - `RigidShape`: wielokąt, koło, kapsuła.
    - `MotionRole.kinematic` ze sterowaniem `KinematicDrive` (prędkość, ścieżka albo cel na krok).
-   - `RenderMaterial`, który zastępuje `RenderStyle`. Zawiera:
-     - teksturę;
+   - `RenderMaterial`, który zastępuje `RenderStyle` i `RenderShader`. Zawiera:
+     - teksturę (`TextureID`);
      - kolor;
      - tryb mieszania;
      - obrys;
      - tryb nakładania na bańkę („przyklejony” albo „pod maską”);
-     - przesunięcie i skalę współrzędnych tekstury;
-     - opcjonalny klucz własnego shadera.
+     - przesunięcie i skalę współrzędnych tekstury.
    - `Decal`: tekst z czcionką lub atlasem albo fragment obrazu, z kolorem i skalą.
    - `Joint`: dystans, zawias, spaw.
-   - Nowe operacje `WorldTransaction`: rejestracja zasobów graficznych, ustawienie naklejki i warstwy, dodanie i usunięcie więzu, sterowanie kinematyczne.
-2. **Zasoby graficzne (nowy moduł `BubblePhysicsAssets`)**:
-   - rejestr tekstur z `CGImage` (dekodowany raz do `MTLTexture`) albo z gotowego `MTLTexture`;
-   - generator atlasu SDF z czcionki przez Core Text, uruchamiany raz przy rejestracji;
+   - Nowe operacje `WorldTransaction`: ustawienie naklejki, warstwy i tła, dodanie i usunięcie więzu, sterowanie kinematyczne. Zasoby graficzne nie są operacjami transakcji, transakcje tylko wskazują ich identyfikatory.
+2. **Zasoby graficzne (nowy moduł `BubblePhysicsAssets`)**: rejestr zasobów przypisany do `MTLDevice`, z synchronicznym API wywoływanym poza klatką:
+   - tekstury z `CGImage` (dekodowane raz do `MTLTexture`) albo z gotowego `MTLTexture`;
+   - generator atlasu SDF z czcionki przez Core Text;
    - import gotowego atlasu glifów.
 
-   Tekstury żyją w module renderu, a model publiczny zna tylko ich identyfikatory.
+   Rejestr przechowuje `MTLTexture` i zwraca identyfikatory. Model publiczny i transakcje znają tylko identyfikatory, a renderer czyta tekstury z rejestru. Świat dostaje rejestr przy tworzeniu, więc stager może odrzucić nieznany identyfikator.
 3. **Runtime (`Sources/BubblePhysicsRuntime`)**:
    - stan obiektów publikowany jako `WorldFrame.objects` ze słownikiem `ObjectID → ObjectState`, który wypełniają dane już odczytywane po kroku;
    - zapytania synchroniczne na opublikowanym stanie, z siatką przestrzenną budowaną raz na publikację;
@@ -212,20 +212,21 @@ Zmiana zachowuje obecny przepływ: transakcja → walidacja na granicy kroku →
    - obserwator cyklu życia aplikacji na iOS.
 4. **Solver (`Sources/BubblePhysicsNativeMetal`)**:
    - Bezpośrednia budowa wejścia GPU z `RuntimeState`. To usuwa `ReferenceWorld`, `BruteForceBroadPhase` i pętle O(n²), a NativeMetal przestaje zależeć od `BubblePhysicsReference`.
+   - Prostokąt otaczający zdeformowany kontur liczony w istniejącym kernelu po kroku i dopisany do rekordu bańki.
    - Kategorie i maski kolizji sprawdzane w kernelach kandydatów.
    - Kinematyka jako odwrotna masa 0 z narzuconą prędkością.
    - Sztywne koło i kapsuła w kernelach kontaktu.
    - Więzy jako dodatkowe ograniczenia XPBD w tej samej pętli iteracji.
    - CCD bryła–bryła.
    - Limit prędkości w integracji.
-   - Siatka przestrzenna dla brył i stały limit kandydatów na obiekt zamiast pamięci O(n²).
+   - Siatka przestrzenna dla brył i stały limit kandydatów na obiekt zamiast pamięci O(n²), z licznikiem przepełnienia w diagnostyce.
    - Wykrywanie początku i końca kontaktu przez porównanie z trwałym cache kontaktów.
    - Kernel hit-testu konturu (przeniesiony z `magentic`).
    - Bufor konturów z poprzedniego kroku do interpolacji.
 5. **Renderer (`Sources/BubblePhysicsMetalRender`)**:
-   - lista rysowania posortowana według warstwy i `ObjectID`, budowana przyrostowo, nie od nowa;
+   - lista rysowania posortowana według warstwy i `ObjectID`;
    - pipeline'y per tryb mieszania;
-   - przekazywanie przez shader wierzchołka współrzędnych tekstury, współrzędnych lokalnych, środka, promienia, identyfikatora instancji i współczynnika interpolacji;
+   - wewnętrzny shader wierzchołka z współrzędnymi tekstury, współrzędnymi lokalnymi, środkiem, promieniem i współczynnikiem interpolacji (układ sprawdza test ABI);
    - naklejki jako instancjonowane czworokąty przycinane szablonem (stencil) konturu bańki;
    - tło;
    - punkty zaczepienia gry.
@@ -251,36 +252,37 @@ Etapy wdrożenia ustala plan. Wymaganie z tego dokumentu: najpierw porządki wyd
 - **`Package.swift`** — wersja 2.0.0, nowy moduł `BubblePhysicsAssets`, usunięcie zależności produkcji od modułów diagnostycznych, cel przykładowej aplikacji.
 - **`Sources/BubblePhysicsPublic/Model/Objects.swift`** — `PhysicsBodyProperties`, `RigidShape` (wielokąt, koło, kapsuła), opcjonalny moment bezwładności liczony automatycznie.
 - **`Sources/BubblePhysicsPublic/Model/Motion.swift`** — `MotionRole.kinematic`, `KinematicDrive`.
-- **`Sources/BubblePhysicsPublic/Model/Resources.swift`** — `RenderMaterial` (zastępuje `RenderStyle`/`RenderShader`), limity prędkości w `PhysicsMaterial`.
+- **`Sources/BubblePhysicsPublic/Model/Resources.swift`** — `RenderMaterial` (zastępuje `RenderStyle` i `RenderShader`, bez własnych shaderów), limity prędkości w `PhysicsMaterial`.
 - **`Sources/BubblePhysicsPublic/Model/Decals.swift`** (nowy) — `Decal`, `FontID`, `TextureID`, `GlyphAtlasID`.
 - **`Sources/BubblePhysicsPublic/Model/Joints.swift`** (nowy) — `Joint` (dystans, zawias, spaw), `JointID`.
 - **`Sources/BubblePhysicsPublic/Model/Identifiers.swift`** — `CollisionFilter` (kategoria, maska), nowe `EventInterest` dla kontaktu.
-- **`Sources/BubblePhysicsPublic/Model/WorldTransaction.swift`** — nowe operacje, `BubbleResult` z naklejką i warstwą.
+- **`Sources/BubblePhysicsPublic/Model/WorldTransaction.swift`** — nowe operacje (naklejka, warstwa, tło, więzy, kinematyka), `BubbleResult` z naklejką i warstwą, potwierdzenie z usuniętymi więzami.
 - **`Sources/BubblePhysicsPublic/Model/WorldFrame.swift`** — `objects: [ObjectID: ObjectState]`, zdarzenia `contactBegan`/`contactEnded`.
-- **`Sources/BubblePhysicsPublic/Model/WorldConfiguration.swift`** — limit backlogu, przełącznik automatycznej pauzy, tło.
+- **`Sources/BubblePhysicsPublic/Model/WorldConfiguration.swift`** — limit backlogu, przełącznik automatycznej pauzy.
 - **`Sources/BubblePhysicsPublic/Model/Queries.swift`** (nowy) — typy zapytań i wyników.
-- **`Sources/BubblePhysicsPublic/BubbleWorld.swift`** — zapytania synchroniczne, asynchroniczny hit-test, stan końcowy „zawiódł”, interpolacja, cykl życia.
+- **`Sources/BubblePhysicsPublic/BubbleWorld.swift`** — zapytania synchroniczne, asynchroniczny hit-test, stan końcowy „zawiódł”, interpolacja, cykl życia, licznik przepełnienia kandydatów w diagnostyce.
 - **`Sources/BubblePhysicsRuntime/*`** — staging nowych operacji, siatka zapytań, polityka czasu, sterowanie kinematyczne, cykl życia.
 - **`Sources/BubblePhysicsNativeMetal/NativePublicWorld.swift`** — budowa wejścia GPU bez `ReferenceWorld`, liniowa.
 - **`Sources/BubblePhysicsNativeMetal/NativeMetalSolver.swift`, `NativeMetalBufferLayout.swift`, `NativeRigidPolygonState.swift`, `*.metal-source`** — filtry, kinematyka, kształty, więzy, CCD, broadphase, kontakty begin/end, hit-test, poprzednie kontury.
 - **`Sources/BubblePhysicsAssets/*`** (nowy) — rejestr tekstur, generator SDF (Core Text), import atlasu.
-- **`Sources/BubblePhysicsMetalRender/BubblePhysicsMetalRender.swift`, `RenderStylePipeline.swift`, shadery renderu** — materiały, warstwy, mieszanie, naklejki, tło, punkty zaczepienia, interpolacja.
+- **`Sources/BubblePhysicsMetalRender/BubblePhysicsMetalRender.swift`, shadery renderu** — materiały, warstwy, mieszanie, naklejki, tło, punkty zaczepienia, interpolacja. `RenderStylePipeline.swift` i ścieżka `customPipelines` są usuwane.
 - **`Examples/BubblePhysicsShowcase/*`** (nowy) — przykładowa aplikacja iOS.
 - **`Benchmarks/iOS/BubblePhysicsBench/*`** — host `MTKView` i benchmark rundy z `magentic` w wersji ogólnej, scena mieszana.
-- **`docs/MIGRATION-v2.md`, `docs/integration-guide.md`, `README.md`** — migracja i integracja.
+- **`docs/MIGRATION-v2.md`, `docs/integration-guide.md`, `README.md`** — migracja i integracja. Fragmenty kodu przewodnika pochodzą z oznaczonych regionów źródeł przykładu.
 - **`Tests/*`** — testy dla każdego kryterium akceptacji, testy obrazu Metal, test ABI dla nowych struktur, strażnik wydajności.
 
 ## Error handling
 
-- **Odrzucenia transakcji:** brakujące zasoby graficzne, znak spoza atlasu, więz z nieistniejącym ciałem i niepoprawny kształt odrzucają całą transakcję. Każdy taki przypadek ma nowy przypadek `TransactionRejectionReason`. Stan i wygląd zostają bez zmian, zgodnie z obecną atomowością transakcji.
-- **Usunięcie ciała połączonego więzem:** usuwa też więz. Zdarzenie usunięcia więzu jest raportowane, jeśli gra je zamówiła.
+- **Odrzucenia transakcji:** niezarejestrowany identyfikator zasobu graficznego, znak spoza atlasu, więz z nieistniejącym ciałem i niepoprawny kształt odrzucają całą transakcję. Każdy taki przypadek ma nowy przypadek `TransactionRejectionReason`. Stan i wygląd zostają bez zmian, zgodnie z obecną atomowością transakcji.
+- **Zmiana względem `v1` przy błędzie GPU:** `v1` zachowywała kolejkę i próbowała ponownie w następnym `advance`. `v2` rozróżnia dwa przypadki. Błąd kodowania renderu albo domknięcia gry odrzuca tylko klatkę (G9-AC2). Błąd wykonania na GPU i wartości nieskończone są końcowe (G10-AC4).
 - **Wynik hit-testu:** asynchroniczny hit-test dla obiektu usuniętego przed publikacją zwraca `nil`.
-- **Generowanie atlasu SDF:** jest synchroniczne przy rejestracji czcionki. Brak czcionki zgłasza błąd rejestracji natychmiast, zamiast w klatce.
+- **Rejestracja zasobów:** jest synchroniczna i odbywa się poza klatką. Brak czcionki albo nieobsługiwany obraz zgłasza błąd od razu w wywołaniu rejestracji. Generowanie SDF nigdy nie trafia na ścieżkę klatki.
+- **Przepełnienie kandydatów kontaktu:** kontakty ponad limit k są pomijane w tym kroku, a licznik w diagnostyce rośnie. Limit dobiera się tak, by sceny akceptacyjne go nie przekraczały (G12-AC2).
 
 ## Testing & verification
 
-- **Testy obrazu Metal:** render offscreen 256×256 z próbkowaniem pikseli i tolerancją. Wspólna infrastruktura dla G3, G4, G5, G9 i G10.
-- **Strażnik wydajności (G12-AC3):** stały zestaw scen (stress-300, mieszana: 200 baniek, 60 brył, 10 więzów, 5 kinematycznych), stała liczba klatek, wyniki zapisane w repo. Porównuje z ostatnim zapisanym wynikiem gałęzi. Pierwszy zapis powstaje przed zmianami, na `feature/engine-foundations` od `fix/audit-local-fixes`.
+- **Testy obrazu Metal:** render offscreen 256×256 z próbkowaniem pikseli, z tolerancją ±2/255 na kanał, o ile kryterium nie podaje innej. Wspólna infrastruktura dla G3, G4, G5, G9 i G10.
+- **Strażnik wydajności (G12-AC3):** stały zestaw scen (stress-300, mieszana: 200 baniek, 60 brył, 10 więzów, 5 kinematycznych), wyniki zapisane w `docs/benchmarks/perf-guard.json`. Pierwszy punkt odniesienia powstaje przed zmianami, na `feature/engine-foundations` od `fix/audit-local-fixes`, dla sceny stress-300. Scena mieszana dostaje punkt odniesienia w etapie, w którym jej elementy zaczynają istnieć.
 - **Pomiar na iPhonie X (G12-AC4):** jedyny krok wymagający właściciela, wykonywany raz na końcu gałęzi.
 
 ## Decisions 🔍
@@ -294,24 +296,28 @@ Etapy wdrożenia ustala plan. Wymaganie z tego dokumentu: najpierw porządki wyd
 | CD-D-5 | Tekstura na bańce | Bańka deformuje się i obraca | przyklejona; pod maską; oba | Oba jako tryb materiału, domyślnie przyklejona; naklejki zawsze pod maską | Galareta dla baniek, czytelność dla obrazów; koszt to jeden przełącznik | user | G3-AC2, G3-AC3, G5-AC4 | Współrzędne tekstury z kształtu spoczynkowego per wierzchołek konturu |
 | CD-D-6 | Kinematyka | `pathDriven` ma skończoną masę | nowa rola; zastąpić `pathDriven`; przełącznik | Nowa rola `kinematic`; `pathDriven` zostaje blokowalny | Dwie różne fizyki; standard Box2D/Chipmunk | user | G6 | Nowy wariant w solverze (odwrotna masa 0) |
 | CD-D-7 | 120 Hz | Klatki bez kroku są dziś puste | interpolacja; krok = odświeżanie; ekstrapolacja | Interpolacja renderu między dwoma krokami | Koszt fizyki bez zmian; opóźnienie ≤ 1 krok | user | G10-AC1 | Bufor konturów z poprzedniego kroku |
-| CD-D-8 | Save/load | Przerwanie gry | pełny stan; bez konturów; brak | Brak w `v2`; przerwany świat = nowa gra; automatyczna pauza w tle, limit backlogu, jawny stan „zawiódł” | Założenie właściciela: silnik nie jest przerywany | user | G10-AC2..AC4, Non-goals | Determinizm tylko jako właściwość testowa (G10-AC5) |
+| CD-D-8 | Save/load | Przerwanie gry | pełny stan; bez konturów; brak | Brak w `v2`; przerwany świat = nowa gra; automatyczna pauza w tle, limit backlogu, jawny stan „zawiódł” | Założenie właściciela: silnik nie jest przerywany | user | G10-AC2..AC4, Non-goals | Determinizm na tym samym urządzeniu jest wymagany (G10-AC5) i służy testom; nie jest funkcją replay dla gier |
 | CD-D-9 | Więzy | Mechanizmy w kolejnych grach | dystans+sprężyna; trzy podstawowe; pełny zestaw Box2D | Dystans (z wiotkością), zawias (zakres, silnik), spaw; wspólny model rozszerzalny | Pokrywa większość mechanizmów; fundament otwarty | user | G11-AC3 | Ograniczenia XPBD w pętli solvera |
 | CD-D-10 | Zapytania | Kontury baniek są tylko na GPU | wszystko async GPU; sync CPU + async dokładny; sync CPU z kopią konturów | Synchroniczne na CPU (bańki jako koło) + asynchroniczny dokładny hit-test na GPU | Logika gry potrzebuje odpowiedzi od razu; kopia konturów kosztowałaby wydajność | user | G8 | Kernel hit-testu przeniesiony z `magentic` |
 | CD-D-11 | Efekty | Cząstki i efekty | punkty zaczepienia; prosty system cząstek; pełny system | Tylko punkty zaczepienia i tło w silniku | Brak gry, która dziś ich potrzebuje; fundament wystarcza do późniejszego dodania | user | G4-AC2, G9, Non-goals | Cząstki to osobna, późniejsza zmiana |
 | CD-D-12 | Gałąź `magentic` | Zawiera semantykę 2KBubbles w silniku | scalić; przerobić; zamknąć i przenieść ogólne części | Zamknąć (tag archiwalny), przenieść hit-test GPU, środek/promień w danych wierzchołka, host `MTKView`, benchmark rundy | Semantyka gry w silniku przeczy celowi „gra daje dane” | user | G8-AC2, G13, Non-goals | `BubblePresentation.value`, paleta, `ArenaPreset` nie wchodzą |
 | CD-D-13 | Filtr kolizji | Kolejne gry potrzebują selektywnych kolizji | kategoria i maska 32-bit; grupy; reguły par | Kategoria i maska 32-bit, warunek obustronny | Standard (Box2D), tani test w kernelu kandydatów | auto (praktyka silników 2D, koszt w kernelu) | G7-AC1 | `MergeGroupSet` zostaje osobno dla scalania |
 | CD-D-14 | Dane gry przy obiekcie | Analiza wskazała brak user data | pole user data; mapowanie po `ObjectID` | Brak pola; gra mapuje po `ObjectID` | `ObjectID` nadaje gra, więc pole byłoby duplikatem (YAGNI) | auto (Identifiers.swift: ID nadaje gra) | Non-goals | Mniejsze rekordy |
-| CD-D-15 | Własne shadery | Cel „gra daje dane” vs przyszłe gry | tylko materiały; materiały + własny shader | Materiały jako ścieżka podstawowa + własna funkcja fragmentu z udokumentowanym ABI | `v1` już miała `.custom`; ABI zabezpiecza test ABI | auto (Resources.swift `RenderShader.custom`, NativeMetalShaderABITests) | G3-AC5 | Zmiana ABI wierzchołka staje się zmianą łamiącą |
+| CD-D-15 | Własne shadery | Cel „gra daje dane” vs przyszłe gry | tylko materiały; materiały + własny shader | Tylko materiały i naklejki; `RenderShader.custom` usunięty w `v2` | Publiczne ABI wierzchołka byłoby łamliwym kontraktem bez konsumenta (YAGNI); własny shader da się dodać później addytywnie | auto (cel „gra daje dane”, uwaga recenzji) | G3, Non-goals | ABI wierzchołka zostaje wewnętrzne, test ABI nadal je pilnuje |
 | CD-D-16 | Forma tekstur | Skąd silnik bierze tekstury | `CGImage`; `MTLTexture`; nazwa zasobu | `CGImage` (silnik tworzy `MTLTexture`) albo gotowe `MTLTexture` | `CGImage` nie wymaga od gry Metal; `MTLTexture` dla zaawansowanych | auto (cel „gra daje dane”) | G3-AC1 | Rejestr tekstur w `BubblePhysicsAssets` |
 | CD-D-17 | Zależności produkcji | NativeMetal zależy od `BubblePhysicsReference` | zostawić; odciąć | Odciąć: wejście GPU budowane bezpośrednio z `RuntimeState` | `ReferenceWorld` + BruteForce w każdym kroku to koszt O(n²) | auto (NativePublicWorld.swift:93-94, Package.swift:32) | G1-AC3, G12-AC1 | Moduły diagnostyczne zostają tylko dla testów i benchmarków |
 | CD-D-18 | Przykładowa aplikacja | Gra 2KBubbles powstaje osobno | 2KBubbles w repo; ogólny przykład | Ogólny przykład w `Examples/` z dwiema scenami | Silnik nie może zawierać semantyki jednej gry | auto (CD-D-12) | G13 | 2KBubbles to osobne repo na API `v2` |
 | CD-D-19 | Baza gałęzi | PR #1 z poprawkami audytu nie jest scalony | od `main`; od `fix/audit-local-fixes` | `feature/engine-foundations` od `fix/audit-local-fixes` | Poprawki dotykają solvera i renderera, unikamy konfliktów | auto (stan repo) | none | Po scaleniu PR #1 gałąź przebazować na `main` |
+| CD-D-21 | Zakres jednej zmiany | Recenzja sugerowała wydzielenie G11 (bryły, więzy, CCD) do `v2.x` | jedna zmiana z etapami; wydzielenie G11 | Jedna zmiana, którą plan tnie na etapy | Właściciel polecił zrealizować wszystkie punkty analizy na jednej gałęzi; kolejne gry z bryłami i kinematyką są celem silnika | user | G11, wszystkie | Plan musi mieć niezależnie weryfikowalne etapy; strażnik po każdym |
+| CD-D-22 | Rejestracja zasobów | Transakcje wykonują się na granicy kroku | operacja transakcji; synchroniczne API rejestru | Synchroniczne API rejestru per `MTLDevice`; transakcje tylko wskazują identyfikatory | Generowanie SDF i dekodowanie obrazów nie mogą trafić na ścieżkę klatki (G12) | auto (budżet klatki, uwaga recenzji) | G3-AC1, G3-AC5, G5-AC1, G5-AC2 | Świat dostaje rejestr przy tworzeniu |
+| CD-D-23 | Skutki błędów | `v1` ponawia po każdym błędzie kroku | wszystko końcowe; wszystko ponawiane; rozróżnienie | Błąd kodowania renderu lub domknięcia gry odrzuca klatkę; błąd wykonania GPU i wartości nieskończone są końcowe | Błąd gry jest przejściowy i naprawialny; uszkodzony stan GPU nie jest, a właściciel przyjął nową grę po przerwaniu (CD-D-8) | auto (CD-D-8, BubbleWorld.swift:236) | G9-AC2, G10-AC4 | Gra musi obsłużyć stan „zawiódł” tworząc nowy świat |
 | CD-D-20 | Kolejność etapów | Strażnik potrzebuje punktu odniesienia | dowolna; porządki → dane GPU → render | Porządki wydajności i stan → model danych GPU → render → przykład | Najpierw tani zysk i punkt odniesienia; ABI GPU ustalone przed renderem | auto (zależności między celami) | G12-AC3 | Plan tnie zmianę na etapy w tej kolejności |
 
 ## Key facts & assumptions
 
 - **Niezmiennik:** świat publikuje wyłącznie ukończone klatki, a krok fizyki i render mieszczą się w jednym buforze poleceń. Żadna nowa funkcja nie wprowadza odczytu konturów na CPU w normalnej ścieżce (`contourCPUReadbacks` = 0).
-- **Fakt:** stan obiektów (pozycja, prędkość, obrót, efektywny promień) jest już po każdym kroku na CPU (`NativePublicWorld.swift:170-177`). Publikacja G2 nie dodaje transferu z GPU.
+- **Fakt:** stan obiektów (pozycja, prędkość, obrót, efektywny promień) jest już po każdym kroku na CPU (`NativePublicWorld.swift:170-177`). Publikacja G2 dodaje tylko 16 B prostokąta otaczającego do istniejącego rekordu bańki, bez nowego rodzaju transferu.
+- **Zasada, którą trzeba pamiętać:** render jest interpolowany między krokami t−1 i t, więc pokazuje stan opóźniony najwyżej o jeden krok. Zapytania i hit-test działają na opublikowanym kroku t. Ta rozbieżność, najwyżej jeden krok (16,7 ms), jest akceptowana także dla chwytu palcem.
 - **Fakt:** jedyny pomiar urządzeniowy (10,46 ms p95, stress-300) dotyczy ścieżki `NativeMetalBenchmarkRunner`, nie `BubbleWorld` z rendererem.
-- **Założenie, niepotwierdzone i nieblokujące:** solver GPU jest deterministyczny na tym samym urządzeniu (benchmark z 2026-10-14 pokazał identyczny hash). Jeśli więzy albo kontakty begin/end złamią determinizm, G10-AC5 wymusi deterministyczną kolejność redukcji.
+- **Założenie, niepotwierdzone i blokujące dla G10-AC5:** solver GPU jest dziś deterministyczny na tym samym urządzeniu (benchmark z 2026-10-14 pokazał identyczny hash). Jeśli nowe kernele, np. więzy albo kontakty begin/end, użyją niedeterministycznych redukcji atomowych, trzeba je zastąpić redukcjami o ustalonej kolejności. Plan musi to uwzględnić w etapach tych kerneli.
 - **Założenie, niepotwierdzone i nieblokujące:** przycinanie naklejek szablonem konturu mieści się w budżecie 16,67 ms dla 300 baniek. Alternatywa to maska w shaderze fragmentu z odległości od środka. Wybór należy do planu, na podstawie strażnika.
