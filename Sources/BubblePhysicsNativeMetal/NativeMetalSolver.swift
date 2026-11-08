@@ -75,12 +75,12 @@ final class NativeMetalPersistentState {
     let diagnosticPostSolverPositions: MTLBuffer?
     let diagnosticPostGuardPositions: MTLBuffer?
     let adjacency: MTLBuffer
-    let adjacencySlots: MTLBuffer
+    /// uint4 na krok: x = pary odrzucone przez limit k lub pojemność, y = największe zapotrzebowanie na obiekt.
+    let candidateOverflow: MTLBuffer
     let adjacencyCounts: MTLBuffer
     let contactEndpoints: MTLBuffer
     let contactCorrections: MTLBuffer
     let solverControl: MTLBuffer
-    let fastCandidates: MTLBuffer
     let guardedBubbles: MTLBuffer
     let safetyControl: MTLBuffer
     let containmentRepairActive: MTLBuffer
@@ -146,7 +146,8 @@ final class NativeMetalPersistentState {
         segmentsPong = try buffer("segments.pong", segmentCapacity, MemoryLayout<NativeMetalSegment>.stride)
         segmentUpdates = try buffer("segmentUpdates", segmentCapacity, MemoryLayout<NativeMetalSegment>.stride)
         let (rowStride, strideOverflow) = bubbleCapacity.addingReportingOverflow(segmentCapacity)
-        let (rowCapacity, rowOverflow) = bubbleCapacity.multipliedReportingOverflow(by: rowStride)
+        // Wiersz kandydatów i wiersz sąsiedztwa ma stałą długość k na obiekt, więc pamięć kontaktów rośnie liniowo.
+        let (rowCapacity, rowOverflow) = bubbleCapacity.multipliedReportingOverflow(by: NativeMetalSolver.candidateLimitPerObject)
         guard !strideOverflow, !rowOverflow, rowCapacity <= Int(UInt32.max) else { throw NativeMetalSolverError.allocationFailed }
         contactCapacity = max(1, candidateCapacity ?? rowCapacity)
         guard contactCapacity <= Int(UInt32.max) else { throw NativeMetalSolverError.allocationFailed }
@@ -188,12 +189,11 @@ final class NativeMetalPersistentState {
             diagnosticPostGuardPositions = nil
         }
         adjacency = try buffer("solver.adjacency", rowCapacity, MemoryLayout<SIMD4<UInt32>>.stride)
-        adjacencySlots = try buffer("solver.adjacencySlots", rowCapacity, MemoryLayout<SIMD4<UInt32>>.stride)
+        candidateOverflow = try buffer("candidateOverflow", 1, MemoryLayout<SIMD4<UInt32>>.stride)
         adjacencyCounts = try buffer("solver.adjacencyCounts", bubbleCapacity, MemoryLayout<UInt32>.stride)
         contactEndpoints = try buffer("solver.endpoints", contactCapacity, MemoryLayout<SIMD4<UInt32>>.stride)
         contactCorrections = try buffer("solver.corrections", contactCapacity, MemoryLayout<SIMD4<Float>>.stride)
         solverControl = try buffer("solver.control", 1, MemoryLayout<NativeMetalSolverControl>.stride)
-        fastCandidates = try buffer("safety.fastCandidates", rowCapacity, MemoryLayout<UInt32>.stride)
         guardedBubbles = try buffer("safety.guardedBubbles", bubbleCapacity, MemoryLayout<UInt32>.stride)
         safetyControl = try buffer("safety.control", 1, MemoryLayout<NativeMetalSafetyControl>.stride)
         containmentRepairActive = try buffer("safety.containmentRepairActive", 9, MemoryLayout<UInt32>.stride)
@@ -257,8 +257,8 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
     var contactMemoryBytes: Int {
         guard let s = persistentState else { return 0 }
         let buffers: [MTLBuffer] = [s.cachePing, s.cachePong, s.contacts, s.candidates, s.candidateRows, s.activeContacts,
-            s.mergedCache, s.scanValues, s.scanOffsets, s.adjacency, s.adjacencySlots, s.contactEndpoints,
-            s.contactCorrections, s.fastCandidates]
+            s.mergedCache, s.scanValues, s.scanOffsets, s.adjacency, s.contactEndpoints,
+            s.contactCorrections]
         return buffers.reduce(0) { $0 + $1.length }
     }
     var rigidContactMemoryBytes: Int { rigidState.contactMemoryBytes }
@@ -416,11 +416,12 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         }
         let contactParameters = NativeMetalContactControl(
             limits: SIMD4(nextFrame, UInt32(clamping: configuration.cacheExpiryFrames), UInt32(state.contactCapacity), UInt32(state.publishedCacheCount)),
-            counts: .zero, cache: SIMD4(0, 0, UInt32(invalidationRecords.count), UInt32(count + segmentCount)),
+            counts: .zero, cache: SIMD4(0, 0, UInt32(invalidationRecords.count), UInt32(Self.candidateLimitPerObject)),
             thresholds: SIMD4(configuration.teleportDistanceMultiplier, configuration.ccdVelocityMultiplier,
                               snapshot.configuration.contactTolerance, snapshot.configuration.separationTolerance), cellWidth: .zero)
         state.contactControl.contents().storeBytes(of: contactParameters, as: NativeMetalContactControl.self)
         memset(state.dispatchStatistics.contents(), 0, state.dispatchStatistics.length)
+        memset(state.candidateOverflow.contents(), 0, state.candidateOverflow.length)
         state.eventCount.contents().storeBytes(of: UInt32(0), as: UInt32.self)
         state.dispatchStatistics.contents().advanced(by: 16).storeBytes(of: SIMD4<UInt32>(collectDispatchStatistics ? 1 : 0, 0, 0, 0), as: SIMD4<UInt32>.self)
 
@@ -646,6 +647,7 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
             for (i, b) in [state.scanOffsets, state.control, state.contactControl].enumerated() { encoder.setBuffer(b, offset: 0, index: i) }
             var parameters = SIMD2(mode, UInt32(0))
             encoder.setBytes(&parameters, length: MemoryLayout<SIMD2<UInt32>>.stride, index: 3)
+            encoder.setBuffer(state.candidateOverflow, offset: 0, index: 4)
             encoder.dispatchThreads(.init(width: 1, height: 1, depth: 1), threadsPerThreadgroup: .init(width: 1, height: 1, depth: 1))
         }
         if hasRigidBodies {
@@ -671,12 +673,13 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
             size *= 2
         }
         dispatch("nativeEmitCandidates", buffers: [state.workingBubbles, state.control, state.contactControl,
-            state.grid, state.workingSegments, state.candidateRows, state.candidateRowCounts], threads: count)
+            state.grid, state.workingSegments, state.candidateRows, state.candidateRowCounts, state.candidateOverflow], threads: count)
         dispatch("nativePrepareCandidateCounts", buffers: [state.control, state.candidateRowCounts, state.scanValues], threads: count * 2)
         scan(mode: 0, maximum: max(1, count * 2))
         prepareIndirectArguments()
         dispatch("nativeCompactCandidates", buffers: [state.control, state.contactControl, state.candidateRows,
-            state.candidateRowCounts, state.candidates, state.scanOffsets, state.dispatchStatistics], threads: count * (count + segmentCount))
+            state.candidateRowCounts, state.candidates, state.scanOffsets, state.dispatchStatistics],
+            threads: count * Self.candidateLimitPerObject)
         dispatchContacts("nativeBuildContacts", buffers: [state.workingBubbles, state.workingSegments, state.contactControl,
             state.candidates, state.contacts], argument: 0)
         dispatchContacts("nativePrepareContactFlags", buffers: [state.contacts, state.contactControl, state.scanValues], argument: 0)
@@ -693,11 +696,12 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         dispatchContacts("nativeCompactContactCache", buffers: [state.mergedCache, state.workingCache, state.contactControl,
             state.scanValues, state.scanOffsets, state.dispatchStatistics], argument: 2)
         prepareIndirectArguments()
-        dispatch("nativeClearAdjacency", buffers: [state.control, state.adjacencySlots], threads: count * (count + segmentCount))
+        dispatch("nativeClearAdjacency", buffers: [state.control, state.adjacencyCounts], threads: count)
         dispatchContacts("nativeEmitAdjacency", buffers: [state.workingBubbles, state.workingSegments, state.workingCache,
-            state.control, state.contactControl, state.adjacencySlots, state.contactEndpoints, state.dispatchStatistics], argument: 3)
+            state.control, state.contactControl, state.adjacency, state.contactEndpoints, state.dispatchStatistics,
+            state.adjacencyCounts, state.candidateOverflow], argument: 3)
         dispatch("nativeBuildAdjacency", buffers: [state.control, state.contactControl,
-            state.adjacencySlots, state.adjacency, state.adjacencyCounts], threads: count)
+            state.adjacency, state.adjacencyCounts, state.candidateOverflow], threads: count)
         dispatchContacts("nativePrepareSolverContacts", buffers: [state.workingBubbles, state.workingSegments, state.workingCache,
             state.control, state.contactControl, state.contactEndpoints, state.adjacencyCounts], argument: 3)
         dispatch("nativeApplyWarmStart", buffers: [state.workingBubbles, state.workingCache, state.control,
@@ -736,12 +740,12 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
             dispatch("nativeCapturePositions", buffers: [inputPositions, diagnosticPostSolver, state.control], threads: count)
         }
         dispatch("nativeFindFastCandidates", buffers: [state.workingBubbles, state.workingSegments,
-            state.control, state.contactControl, state.fastCandidates, state.guardedBubbles, state.safetyControl], threads: count)
+            state.control, state.contactControl, state.guardedBubbles, state.safetyControl], threads: count)
         dispatch("nativeResolveCCD", buffers: [state.workingBubbles, state.workingSegments, inputPositions,
-            state.control, state.fastCandidates, state.guardedBubbles, state.safetyControl, state.dispatchStatistics], threads: count)
+            state.control, state.contactControl, state.guardedBubbles, state.safetyControl, state.dispatchStatistics], threads: count)
         dispatch("nativeApplyCenterGuards", buffers: [state.workingBubbles, state.workingSegments, inputPositions,
-            state.control, state.contactControl, state.guardedBubbles, state.safetyControl, state.dispatchStatistics,
-            state.fastCandidates], threads: count)
+            state.control, state.contactControl, state.guardedBubbles, state.safetyControl, state.dispatchStatistics],
+            threads: count)
         // Bounded GPU repair of pairs introduced by CCD/obstacle projection.
         // Every repair rechecks obstacle invariants, in the same command buffer.
         for pass in 0..<8 {
@@ -760,8 +764,8 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
             }
             swap(&inputPositions, &outputPositions)
             dispatch("nativeReapplyCenterGuards", buffers: [state.workingBubbles, state.workingSegments, inputPositions,
-                state.control, state.contactControl, state.guardedBubbles, state.safetyControl, state.dispatchStatistics,
-                state.fastCandidates], threads: count)
+                state.control, state.contactControl, state.guardedBubbles, state.safetyControl, state.dispatchStatistics],
+                threads: count)
         }
         dispatch("nativeValidateBubbleContainment", buffers: [state.workingBubbles, inputPositions,
             state.control, state.solverControl, state.safetyControl], threads: count * count)
@@ -922,7 +926,6 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         func rejectSafety(_ reason: NativeMetalWorldError) -> NativeMetalSafetyFailure {
             .init(reason: reason, telemetry: diagnostics, profile: profile)
         }
-        guard contactResult.counts.w == 0 else { throw NativeMetalSolverError.capacityOverflow }
         guard safetyResult.counts.w & 1 == 0 else { throw rejectSafety(.nonFinite) }
         guard safetyResult.counts.w & 2 == 0 else { throw rejectSafety(.guardFailure) }
         guard safetyResult.counts.w & 4 == 0 else { throw rejectSafety(.invalidFrame) }
@@ -1039,6 +1042,9 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
                 cacheInvalidationCount: Int(safetyResult.counts.z)),
             profile: profile, contours: contours, renderData: renderData,
             effectiveRadii: effectiveRadii, bubbleBounds: bubbleBounds, isComplete: true)
+        let overflowCounters = state.candidateOverflow.contents().load(as: SIMD4<UInt32>.self)
+        frame.contactCandidateOverflowCount = Int(overflowCounters.x)
+        frame.maximumContactCandidatesPerObject = Int(overflowCounters.y)
         if snapshot.publicSettings != nil {
             let total = Int(state.eventCount.contents().load(as: UInt32.self))
             let publishedCount = min(total, requestedEventCapacity)

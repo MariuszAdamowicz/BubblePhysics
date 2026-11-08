@@ -88,7 +88,7 @@ final class PublishedStateDeterminismTests: XCTestCase {
         var published = 0
     }
 
-    /// 300 baniek na siatce (kroki 1-10 bez kontaktów), potem transakcja `replace` ściska je w kwadracie 30×30,
+    /// 300 baniek na siatce (kroki 1-10 bez kontaktów), potem transakcja `replace` ściska je w kwadracie 15×15,
     /// gdzie wiersz kandydatów przekracza limit k.
     private func squeezeRun(steps: Int, device: MTLDevice) async throws -> SqueezeRun {
         let material = PhysicsMaterialID(rawValue: 1), style = RenderStyleID(rawValue: 1)
@@ -117,7 +117,7 @@ final class PublishedStateDeterminismTests: XCTestCase {
                 var squeeze = WorldTransaction()
                 for id in 1...300 {
                     squeeze = squeeze.replace(ObjectID(rawValue: UInt64(id)),
-                        with: try descriptor(id, [335 + unit() * 30, 235 + unit() * 30], radius: 2))
+                        with: try descriptor(id, [342 + unit() * 15, 242 + unit() * 15], radius: 2))
                 }
                 world.submit(squeeze)
             }

@@ -185,9 +185,17 @@ bool nativeKeyLess(NativeCandidate a, NativeCandidate b) {
     return a.participants.y < b.participants.y;
 }
 
-// Każdy wątek zapisuje własny wiersz; porządek nie zależy od kolejności wykonania.
-void nativeInsertCandidate(device NativeCandidate *row, thread uint &count, NativeCandidate value) {
-    uint location = count++;
+// Każdy wątek zapisuje własny wiersz o stałej długości `limit` (k); porządek nie zależy od kolejności wykonania.
+// Pełny wiersz zachowuje `limit` najmniejszych kluczy; reszta odpada i zwiększa licznik `dropped`.
+void nativeInsertCandidate(device NativeCandidate *row, thread uint &count, thread uint &dropped,
+                           uint limit, NativeCandidate value) {
+    uint location;
+    if (count < limit) location = count++;
+    else {
+        ++dropped;
+        if (!nativeKeyLess(value, row[limit - 1])) return;
+        location = limit - 1;
+    }
     while (location > 0 && nativeKeyLess(value, row[location - 1])) {
         row[location] = row[location - 1]; --location;
     }
@@ -198,15 +206,16 @@ kernel void nativeEmitCandidates(device NativeBubble *bubbles [[buffer(0)]],
     constant NativeControl &control [[buffer(1)]], device NativeContactControl &contacts [[buffer(2)]],
     device NativeGridEntry *grid [[buffer(3)]], device NativeSegment *segments [[buffer(4)]],
     device NativeCandidate *rows [[buffer(5)]], device uint *rowCounts [[buffer(6)]],
-    uint index [[thread_position_in_grid]]) {
+    device atomic_uint *overflow [[buffer(7)]], uint index [[thread_position_in_grid]]) {
     if (index >= control.counts.x) return;
     NativeBubble a = bubbles[index];
     if (!all(isfinite(a.position))) {
         rowCounts[index * 2] = 0; rowCounts[index * 2 + 1] = 0; return;
     }
     long2 cell = long2(floor(a.position.xy / contacts.cellWidth.x));
-    device NativeCandidate *row = rows + index * contacts.cache.w;
-    uint count = 0;
+    uint limit = contacts.cache.w;
+    device NativeCandidate *row = rows + index * limit;
+    uint count = 0, dropped = 0;
     for (int dx = -1; dx <= 1; ++dx) for (int dy = -1; dy <= 1; ++dy) {
         long2 target = cell + long2(dx, dy);
         uint low = 0, high = control.counts.x;
@@ -223,11 +232,10 @@ kernel void nativeEmitCandidates(device NativeBubble *bubbles [[buffer(0)]],
             float reach = a.physical.z + b.physical.z + contacts.thresholds.w;
             if (all(abs(a.position.xy - b.position.xy) <= reach)) {
                 NativeCandidate candidate = { long2(a.identity.x, b.identity.x), uint4(0, index, j, 1) };
-                nativeInsertCandidate(row, count, candidate);
+                nativeInsertCandidate(row, count, dropped, limit, candidate);
             }
         }
     }
-    uint bubbleCount = count;
     for (uint j = 0; j < control.counts.y; ++j) {
         NativeSegment s = segments[j];
         float reach = a.physical.z + contacts.thresholds.w;
@@ -235,11 +243,16 @@ kernel void nativeEmitCandidates(device NativeBubble *bubbles [[buffer(0)]],
         float2 upper = max(s.current.xy, s.current.zw) + reach;
         if (all(a.position.xy >= lower) && all(a.position.xy <= upper)) {
             NativeCandidate candidate = { long2(a.identity.x, s.identity.x), uint4(1, index, j, 1) };
-            nativeInsertCandidate(row, count, candidate);
+            nativeInsertCandidate(row, count, dropped, limit, candidate);
         }
     }
+    // Klucz zaczyna się od rodzaju pary, więc wiersz po obcięciu nadal trzyma najpierw pary baniek.
+    uint bubbleCount = 0;
+    while (bubbleCount < count && row[bubbleCount].metadata.x == 0) ++bubbleCount;
     rowCounts[index * 2] = bubbleCount;
     rowCounts[index * 2 + 1] = count - bubbleCount;
+    if (dropped) atomic_fetch_add_explicit(overflow, dropped, memory_order_relaxed);
+    atomic_fetch_max_explicit(overflow + 1, count + dropped, memory_order_relaxed);
 }
 
 float nativeCross(float2 a, float2 b) { return a.x * b.y - a.y * b.x; }
@@ -320,6 +333,8 @@ kernel void nativeCompactCandidates(constant NativeControl &control [[buffer(0)]
     uint row = kind * control.counts.x + bubble;
     uint offset = row == 0 ? 0 : offsets[row - 1].x;
     uint local = kind == 0 ? slot : slot - rowCounts[bubble * 2];
+    // Nadmiar ponad pojemność listy kandydatów odpada na końcu (licznik w nativeFinishScan).
+    if (offset + local >= contacts.limits.z) return;
     candidates[offset + local] = rows[index];
     nativeCountWork(statistics, 3);
 }

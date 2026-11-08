@@ -23,7 +23,7 @@ final class NativeMetalParallelCacheProfileTests: XCTestCase {
             if dense {
                 // Profil przepustowości cache wymaga gęstego grafu, ale nie
                 // wymusza pełnego zawarcia mniejszych kół w większych. Równe
-                // promienie zachowują wszystkie 44 850 par i 600 kontaktów ścian.
+                // promienie zachowują wszystkie 44 850 par i 600 kontaktów ścian przed obcięciem wierszy do k.
                 let radius = try XCTUnwrap(world.bubbles.map(\.targetRadius).max())
                 for var bubble in world.bubbles {
                     bubble.center = .zero; bubble.previousCenter = .zero
@@ -38,8 +38,10 @@ final class NativeMetalParallelCacheProfileTests: XCTestCase {
                 let frame = try await solver.executeFrame(snapshot: .init(world: world), scenarioStep: step)
                 if step >= 5 { fullTimes.append(frame.telemetry.gpuMilliseconds) }
             }
-            XCTAssertEqual(solver.candidateKeys.count, dense ? 45_450 : 233)
-            XCTAssertEqual(solver.cachedContacts.count, dense ? 45_450 : 219)
+            // Wiersz bańki i trzyma najwyżej k kluczy: 299 − i par baniek (i < j) i 2 odcinki ścian, bańki przed odcinkami.
+            let denseKept = (0..<300).reduce(0) { $0 + min(NativeMetalSolver.candidateLimitPerObject, 299 - $1 + 2) }
+            XCTAssertEqual(solver.candidateKeys.count, dense ? denseKept : 233)
+            XCTAssertEqual(solver.cachedContacts.count, dense ? denseKept : 219)
             let state = try XCTUnwrap(solver.persistentState)
             var matchTimes: [Double] = []
             for _ in 0..<8 {

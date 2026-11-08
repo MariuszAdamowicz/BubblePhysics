@@ -116,7 +116,8 @@ package final class NativeCompleteStepper: CompleteStepper {
             feedback: feedback, state: state, previousBlockers: previousBlockers)
         previousBlockers = discrete.blockers
         return .init(state: state, events: discrete.events, eventOverflow: discrete.overflow,
-            driveFeedback: feedback)
+            driveFeedback: feedback, contactCandidateOverflowCount: frame.contactCandidateOverflowCount,
+            maximumContactCandidatesPerObject: frame.maximumContactCandidatesPerObject)
     }
 }
 

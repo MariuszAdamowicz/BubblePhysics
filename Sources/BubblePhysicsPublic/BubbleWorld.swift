@@ -37,6 +37,9 @@ public final class BubbleWorld {
     private var isAdvancing = false
     private var stepsInLastAdvance = 0
     private var lastAdvanceIssue: WorldAdvanceIssue?
+    /// Narastający licznik odrzuconych kandydatów kontaktu i maksimum na obiekt z ostatniego ukończonego kroku.
+    private var contactCandidateOverflow = 0
+    private var maximumContactCandidatesPerObject = 0
     private var pendingRenderState: BubbleWorldRenderState?
 
     public convenience init(configuration: WorldConfiguration,
@@ -74,7 +77,8 @@ public final class BubbleWorld {
             stepsInLastAdvance: stepsInLastAdvance, pendingTransactionCount: pending.count,
             isPaused: isPaused, isAdvancing: isAdvancing, lastAdvanceIssue: lastAdvanceIssue,
             eventOverflow: lastFrame.eventOverflow,
-            contactCandidateOverflow: 0, maximumContactCandidatesPerObject: 0)
+            contactCandidateOverflow: contactCandidateOverflow,
+            maximumContactCandidatesPerObject: maximumContactCandidatesPerObject)
     }
 
     /// Stały limit k kandydatów kontaktu na obiekt, wspólny dla wszystkich rodzajów par.
@@ -233,6 +237,8 @@ public final class BubbleWorld {
                 receipts += batch.frame.transactionReceipts
                 events += batch.frame.events + complete.events
                 droppedEvents += complete.eventOverflow.droppedCount
+                contactCandidateOverflow += complete.contactCandidateOverflowCount
+                maximumContactCandidatesPerObject = complete.maximumContactCandidatesPerObject
                 lastFrame = WorldFrame(stepIndex: clock.completedSteps, simulationTime: clock.simulationTime,
                     transactionReceipts: receipts, events: events,
                     eventOverflow: WorldEventOverflow(droppedCount: droppedEvents), driveFeedback: complete.driveFeedback,

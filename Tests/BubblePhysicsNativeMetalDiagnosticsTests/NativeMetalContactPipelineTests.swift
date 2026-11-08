@@ -75,12 +75,14 @@ final class NativeMetalContactPipelineTests: XCTestCase {
         let state = try XCTUnwrap(solver.persistentState)
         let degrees = state.adjacencyCounts.contents().bindMemory(to: UInt32.self, capacity: 3)
         XCTAssertEqual(Array(UnsafeBufferPointer(start: degrees, count: 3)), [2, 3, 2])
-        let edges = state.adjacency.contents().bindMemory(to: SIMD4<UInt32>.self, capacity: 12)
-        // x = cache index, y = neighbor index, z = kind, w = normal sign.
+        // Wiersz obiektu ma stałą długość k (dawniej n + S slotów).
+        let stride = NativeMetalSolver.candidateLimitPerObject
+        let edges = state.adjacency.contents().bindMemory(to: SIMD4<UInt32>.self, capacity: 3 * stride)
+        // x = cache index, y = neighbor index, z = kind, w = normal sign; wiersz posortowany po (rodzaj, sąsiad).
         XCTAssertEqual((0..<2).map { edges[$0].y }, [1, 0])
-        XCTAssertEqual((0..<3).map { edges[4 + $0].y }, [0, 2, 0])
-        XCTAssertEqual((0..<2).map { edges[8 + $0].y }, [1, 0])
-        XCTAssertEqual((0..<3).map { edges[4 + $0].z }, [0, 0, 1])
+        XCTAssertEqual((0..<3).map { edges[stride + $0].y }, [0, 2, 0])
+        XCTAssertEqual((0..<2).map { edges[2 * stride + $0].y }, [1, 0])
+        XCTAssertEqual((0..<3).map { edges[stride + $0].z }, [0, 0, 1])
         XCTAssertEqual(frame.profile.stageGPUWorkItemCounts["adjacencyRecords"], 5)
         var moved = world.bubbles[1]
         moved.center.x = 100; moved.previousCenter.x = 100

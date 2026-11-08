@@ -236,6 +236,8 @@ package final class NativePublicWorld {
         nextSegmentID = candidateNextSegmentID
         publishedProfile = frame.profile
         return NativePublicFrame(objects: result, presentation: presentation, profile: frame.profile,
-            contacts: contacts, events: discreteEvents, eventOverflow: WorldEventOverflow(droppedCount: dropped))
+            contacts: contacts, events: discreteEvents, eventOverflow: WorldEventOverflow(droppedCount: dropped),
+            contactCandidateOverflowCount: frame.contactCandidateOverflowCount,
+            maximumContactCandidatesPerObject: frame.maximumContactCandidatesPerObject)
     }
 }

@@ -16,28 +16,29 @@ kernel void nativeCapturePositions(device float4 *source [[buffer(0)]],
     if (index < control.counts.x) destination[index] = source[index].xy;
 }
 
-kernel void nativeFindFastCandidates(device NativeBubble *bubbles [[buffer(0)]],
-    device NativeSegment *segments [[buffer(1)]], constant NativeControl &control [[buffer(2)]],
-    device NativeContactControl &contacts [[buffer(3)]], device uint *candidates [[buffer(4)]],
-    device uint *changed [[buffer(5)]], device atomic_uint *safety [[buffer(6)]],
-    uint i [[thread_position_in_grid]]) {
-    if (i >= control.counts.x) return;
-    changed[i] = 0;
-    NativeBubble b = bubbles[i];
+// Szybka bańka względem odcinka: ruch względny ponad próg CCD i zachodzące otoczki ruchu. Wynik zależy tylko od
+// bańki i odcinka sprzed solvera, więc kernele CCD i guardu liczą go na nowo zamiast czytać macierz n × S.
+bool nativeFastCandidate(NativeBubble b, NativeSegment s, constant NativeControl &control,
+                         device NativeContactControl &contacts) {
     float2 movement = b.motion.xy * control.physics.x;
     float2 lower = min(b.position.zw, b.position.xy) - b.physical.z;
     float2 upper = max(b.position.zw, b.position.xy) + b.physical.z;
-    for (uint j = 0; j < control.counts.y; ++j) {
-        NativeSegment s = segments[j];
-        float relative = max(length(movement - (s.current.xy - s.previous.xy)),
-                             length(movement - (s.current.zw - s.previous.zw)));
-        float2 segmentLower = min(min(s.previous.xy, s.previous.zw), min(s.current.xy, s.current.zw));
-        float2 segmentUpper = max(max(s.previous.xy, s.previous.zw), max(s.current.xy, s.current.zw));
-        bool fast = relative > contacts.thresholds.y * b.physical.z
-            && all(lower <= segmentUpper) && all(upper >= segmentLower);
-        candidates[i * control.counts.y + j] = fast ? 1 : 0;
-        if (fast) nativeSafetyEvent(safety, 0);
-    }
+    float relative = max(length(movement - (s.current.xy - s.previous.xy)),
+                         length(movement - (s.current.zw - s.previous.zw)));
+    float2 segmentLower = min(min(s.previous.xy, s.previous.zw), min(s.current.xy, s.current.zw));
+    float2 segmentUpper = max(max(s.previous.xy, s.previous.zw), max(s.current.xy, s.current.zw));
+    return relative > contacts.thresholds.y * b.physical.z && all(lower <= segmentUpper) && all(upper >= segmentLower);
+}
+
+kernel void nativeFindFastCandidates(device NativeBubble *bubbles [[buffer(0)]],
+    device NativeSegment *segments [[buffer(1)]], constant NativeControl &control [[buffer(2)]],
+    device NativeContactControl &contacts [[buffer(3)]], device uint *changed [[buffer(4)]],
+    device atomic_uint *safety [[buffer(5)]], uint i [[thread_position_in_grid]]) {
+    if (i >= control.counts.x) return;
+    changed[i] = 0;
+    NativeBubble b = bubbles[i];
+    for (uint j = 0; j < control.counts.y; ++j)
+        if (nativeFastCandidate(b, segments[j], control, contacts)) nativeSafetyEvent(safety, 0);
 }
 
 float2 nativeReturnToOriginalSide(float2 start, float2 end, NativeSegment s, float margin) {
@@ -97,7 +98,7 @@ bool nativePossibleCenterCrossing(float2 start, float2 end, NativeSegment s) {
 
 kernel void nativeResolveCCD(device NativeBubble *bubbles [[buffer(0)]],
     device NativeSegment *segments [[buffer(1)]], device float4 *positions [[buffer(2)]],
-    constant NativeControl &control [[buffer(3)]], device uint *candidates [[buffer(4)]],
+    constant NativeControl &control [[buffer(3)]], device NativeContactControl &contacts [[buffer(4)]],
     device uint *changed [[buffer(5)]], device atomic_uint *safety [[buffer(6)]],
     device atomic_uint *statistics [[buffer(7)]],
     uint i [[thread_position_in_grid]]) {
@@ -105,8 +106,8 @@ kernel void nativeResolveCCD(device NativeBubble *bubbles [[buffer(0)]],
     if (bubbles[i].publicFlags.x && bubbles[i].publicFlags.y) return;
     float2 start = bubbles[i].position.zw, end = positions[i].xy;
     for (uint j = 0; j < control.counts.y; ++j) {
-        if (!candidates[i * control.counts.y + j]) continue;
         NativeSegment s = segments[j];
+        if (!nativeFastCandidate(bubbles[i], s, control, contacts)) continue;
         if (!nativeCenterPathFinite(start, end, s, statistics)) { nativeSafetyFailure(safety, 1); continue; }
         if (!nativeForbiddenCenterCrossing(start, end, s, segments, control.counts.y, statistics, false)) continue;
         float2 corrected = nativeReturnToOriginalSide(start, end, s, bubbles[i].physical.z);
@@ -134,15 +135,14 @@ bool nativeInsideOwner(float2 p, device NativeSegment *segments, uint count, lon
 
 void nativeGuardCenter(device NativeBubble *bubbles, device NativeSegment *segments,
     device float4 *positions, constant NativeControl &control, device NativeContactControl &contacts,
-    device uint *changed, device atomic_uint *safety, device atomic_uint *statistics,
-    device uint *candidates, uint i) {
+    device uint *changed, device atomic_uint *safety, device atomic_uint *statistics, uint i) {
     if (bubbles[i].publicFlags.x && bubbles[i].publicFlags.y) return;
     float2 start = bubbles[i].position.zw, end = positions[i].xy;
     float margin = max(contacts.thresholds.z * 2, 1e-5f);
     for (uint j = 0; j < control.counts.y; ++j) {
         NativeSegment s = segments[j];
         float2 corrected = end;
-        if (candidates[i * control.counts.y + j] || nativePossibleCenterCrossing(start, end, s)) {
+        if (nativeFastCandidate(bubbles[i], s, control, contacts) || nativePossibleCenterCrossing(start, end, s)) {
             if (!nativeCenterPathFinite(start, end, s, statistics)) { nativeSafetyFailure(safety, 1); continue; }
             if (nativeForbiddenCenterCrossing(start, end, s, segments, control.counts.y, statistics, true))
                 corrected = nativeReturnToOriginalSide(start, end, s, margin);
@@ -182,7 +182,7 @@ void nativeGuardCenter(device NativeBubble *bubbles, device NativeSegment *segme
     if (!all(isfinite(end))) nativeSafetyFailure(safety, 1);
     for (uint j = 0; j < control.counts.y; ++j) {
         NativeSegment s = segments[j];
-        if (candidates[i * control.counts.y + j] || nativePossibleCenterCrossing(start, end, s)) {
+        if (nativeFastCandidate(bubbles[i], s, control, contacts) || nativePossibleCenterCrossing(start, end, s)) {
             if (!nativeCenterPathFinite(start, end, s, statistics)) nativeSafetyFailure(safety, 1);
             else if (nativeForbiddenCenterCrossing(start, end, s, segments, control.counts.y, statistics, true))
                 nativeSafetyFailure(safety, 2);
@@ -198,10 +198,10 @@ kernel void nativeApplyCenterGuards(device NativeBubble *bubbles [[buffer(0)]],
     device NativeSegment *segments [[buffer(1)]], device float4 *positions [[buffer(2)]],
     constant NativeControl &control [[buffer(3)]], device NativeContactControl &contacts [[buffer(4)]],
     device uint *changed [[buffer(5)]], device atomic_uint *safety [[buffer(6)]],
-    device atomic_uint *statistics [[buffer(7)]], device uint *candidates [[buffer(8)]],
+    device atomic_uint *statistics [[buffer(7)]],
     uint i [[thread_position_in_grid]]) {
     if (i >= control.counts.x) return;
-    nativeGuardCenter(bubbles, segments, positions, control, contacts, changed, safety, statistics, candidates, i);
+    nativeGuardCenter(bubbles, segments, positions, control, contacts, changed, safety, statistics, i);
 }
 
 // The contact graph was built before obstacle projection. Scan the current
@@ -262,10 +262,10 @@ kernel void nativeReapplyCenterGuards(device NativeBubble *bubbles [[buffer(0)]]
     device NativeSegment *segments [[buffer(1)]], device float4 *positions [[buffer(2)]],
     constant NativeControl &control [[buffer(3)]], device NativeContactControl &contacts [[buffer(4)]],
     device uint *changed [[buffer(5)]], device atomic_uint *safety [[buffer(6)]],
-    device atomic_uint *statistics [[buffer(7)]], device uint *candidates [[buffer(8)]],
+    device atomic_uint *statistics [[buffer(7)]],
     uint i [[thread_position_in_grid]]) {
     if (i >= control.counts.x || positions[i].z == 0) return;
-    nativeGuardCenter(bubbles, segments, positions, control, contacts, changed, safety, statistics, candidates, i);
+    nativeGuardCenter(bubbles, segments, positions, control, contacts, changed, safety, statistics, i);
 }
 
 // This final validator runs AFTER the last obstacle projection. It must never

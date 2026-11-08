@@ -93,30 +93,26 @@ final class NativeMetalContactCacheTests: XCTestCase {
         XCTAssertEqual(frame.telemetry.cacheResetCount, 0)
     }
 
-    func testCacheOverflowPreservesPreviouslyPublishedRecords() async throws {
+    // P-B-21: przepełnienie pojemności cache nie odrzuca klatki; nadmiar odpada od końca klucza, a licznik rośnie.
+    func testCacheOverflowRaisesCounterKeepsRecordsWithinCapacityAndPublishesFrame() async throws {
         let solver = try NativeMetalSolver(device: XCTUnwrap(MTLCreateSystemDefaultDevice()),
             configuration: .init(teleportDistanceMultiplier: 100), candidateCapacity: 1)
         var world = try cacheWorld()
         var fourth = world.bubbles[3]; fourth.center.x = 25; world.updateBubble(fourth)
         _ = try await solver.executeFrame(snapshot: .init(world: world), scenarioStep: 1)
         let state = try XCTUnwrap(solver.persistentState)
-        let publishedCache = state.contactCache
-        let originalRecords = solver.cachedContacts
+        XCTAssertLessThanOrEqual(solver.cachedContacts.count, state.contactCapacity)
         var second = world.bubbles[1]; second.center.x = 5; world.updateBubble(second)
         fourth.center.x = 21.5; world.updateBubble(fourth)
-        do {
-            _ = try await solver.executeFrame(snapshot: .init(world: world), scenarioStep: 2)
-            XCTFail("Zachowany stary kontakt i nowy kontakt przekraczają cache")
-        } catch NativeMetalSolverError.capacityOverflow {}
-        XCTAssertTrue(state.contactCache === publishedCache)
-        XCTAssertEqual(solver.cachedContacts, originalRecords)
-        XCTAssertEqual(state.contactCache.contents().load(as: NativeContactCacheRecord.self), originalRecords[0])
-        // Ponowienie identycznego wejścia po błędzie ma identyczny wynik i nie publikuje scratcha.
-        do {
-            _ = try await solver.executeFrame(snapshot: .init(world: world), scenarioStep: 3)
-            XCTFail("Ponowienie overflow musi ponownie odrzucić klatkę")
-        } catch NativeMetalSolverError.capacityOverflow {}
-        XCTAssertEqual(solver.cachedContacts, originalRecords)
+        let frame = try await solver.executeFrame(snapshot: .init(world: world), scenarioStep: 2)
+        XCTAssertGreaterThan(frame.contactCandidateOverflowCount, 0, "stary i nowy kontakt przekraczają pojemność 1")
+        XCTAssertLessThanOrEqual(solver.cachedContacts.count, state.contactCapacity)
+        XCTAssertTrue(frame.bubbles.allSatisfy { $0.center.x.isFinite && $0.center.y.isFinite })
+        XCTAssertEqual(solver.publishedFrame?.bubbles.count, 4, "klatka po przepełnieniu jest opublikowana")
+        // Ponowienie identycznego wejścia daje ten sam licznik i nie psuje cache.
+        let again = try await solver.executeFrame(snapshot: .init(world: world), scenarioStep: 3)
+        XCTAssertGreaterThan(again.contactCandidateOverflowCount, 0)
+        XCTAssertLessThanOrEqual(solver.cachedContacts.count, state.contactCapacity)
     }
 
     func testReturningContactWithinExpiryRetainsLambda() async throws {
@@ -157,12 +153,15 @@ final class NativeMetalContactCacheTests: XCTestCase {
         }
         _ = try await solver.executeFrame(snapshot: .init(world: world), scenarioStep: 1)
         let frame = try await solver.executeFrame(snapshot: .init(world: world), scenarioStep: 2)
-        XCTAssertEqual(solver.cachedContacts.count, 44_850)
-        XCTAssertEqual(frame.telemetry.cacheHitCount, 44_850)
-        XCTAssertEqual(frame.profile.stageGPUWorkItemCounts["cacheMatch"], 44_850)
-        XCTAssertEqual(frame.profile.stageGPUWorkItemCounts["cacheRetain"], 44_850)
-        XCTAssertEqual(frame.profile.stageGPUWorkItemCounts["cacheCompaction"], 44_850)
-        XCTAssertEqual(frame.profile.stageGPUWorkItemCounts["candidateCompaction"], 44_850)
+        // Wiersz każdej bańki trzyma najwyżej k najmniejszych kluczy z jej 299 − i par (i < j).
+        let limit = NativeMetalSolver.candidateLimitPerObject
+        let kept = (0..<300).reduce(0) { $0 + min(299 - $1, limit) }
+        XCTAssertEqual(solver.cachedContacts.count, kept)
+        XCTAssertEqual(frame.telemetry.cacheHitCount, kept)
+        XCTAssertEqual(frame.profile.stageGPUWorkItemCounts["cacheMatch"], kept)
+        XCTAssertEqual(frame.profile.stageGPUWorkItemCounts["cacheRetain"], kept)
+        XCTAssertEqual(frame.profile.stageGPUWorkItemCounts["cacheCompaction"], kept)
+        XCTAssertEqual(frame.profile.stageGPUWorkItemCounts["candidateCompaction"], kept)
         XCTAssertEqual(solver.cachedContacts.map(\.key), solver.cachedContacts.map(\.key).sorted())
         XCTAssertTrue(solver.cachedContacts.allSatisfy { $0.age == 2 })
     }
