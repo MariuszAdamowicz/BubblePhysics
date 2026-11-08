@@ -32,23 +32,44 @@ final class NativeMetalBroadPhaseTests: XCTestCase {
         }
     }
 
-    func testCapacityOverflowRejectsFrameBeforePublication() async throws {
+    // P-B-21: przepełnienie nie odrzuca klatki (dawniej `capacityOverflow`), tylko zwiększa licznik.
+    func testCapacityOverflowRaisesCounterAndPublishesFrame() async throws {
         let solver = try NativeMetalSolver(device: XCTUnwrap(MTLCreateSystemDefaultDevice()), candidateCapacity: 1)
         var world = ReferenceWorld(configuration: .default, broadPhase: BruteForceBroadPhase())
         world.addBubble(try .init(id: .init(rawValue: 1), center: .zero, mass: 1, targetRadius: 1))
-        _ = try await solver.executeFrame(world: world, scenarioStep: 1)
-        let state = try XCTUnwrap(solver.persistentState)
-        let published = state.publishedBubbles
+        let first = try await solver.executeFrame(world: world, scenarioStep: 1)
+        XCTAssertEqual(first.contactCandidateOverflowCount, 0)
         for id in 2...3 {
             world.addBubble(try .init(id: .init(rawValue: id), center: .zero, mass: 1, targetRadius: 1))
         }
-        do {
-            _ = try await solver.executeFrame(world: world, scenarioStep: 2)
-            XCTFail("Overflow musi odrzucić całą klatkę")
-        } catch NativeMetalSolverError.capacityOverflow {}
-        XCTAssertTrue(state.publishedBubbles === published)
-        XCTAssertEqual(solver.publishedFrame?.bubbles.count, 1)
-        XCTAssertEqual(solver.cachedContacts.count, 0)
+        let frame = try await solver.executeFrame(world: world, scenarioStep: 2)
+        XCTAssertGreaterThan(frame.contactCandidateOverflowCount, 0, "3 pary przy pojemności 1 muszą zwiększyć licznik")
+        XCTAssertEqual(solver.publishedFrame?.bubbles.count, 3, "klatka po przepełnieniu jest opublikowana")
+        XCTAssertTrue(frame.bubbles.allSatisfy { $0.center.x.isFinite && $0.center.y.isFinite })
+    }
+
+    // Wiersz obiektu trzyma najwyżej k kandydatów; nadmiar odpada po kluczu, więc zostaje k najmniejszych kluczy na obiekt.
+    func testDenseCandidatesMatchBruteForceTruncatedToSmallestKeysPerObject() async throws {
+        let limit = NativeMetalSolver.candidateLimitPerObject
+        var world = ReferenceWorld(configuration: .init(linearDamping: 0), broadPhase: BruteForceBroadPhase())
+        let count = limit + 12
+        for i in 0..<count {
+            world.addBubble(try .init(id: .init(rawValue: i + 1),
+                center: .init(x: Float(i % 8) * 0.1, y: Float(i / 8) * 0.1), mass: 1, targetRadius: 1))
+        }
+        let solver = try NativeMetalSolver(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
+        let frame = try await solver.executeFrame(world: world, scenarioStep: 1)
+        var expected: [NativeContactKey] = []
+        var dropped = 0
+        for i in 0..<count {
+            let row = ((i + 1)..<count).map { NativeContactKey.bubblePair(Int64(i + 1), Int64($0 + 1)) }.sorted()
+            expected += row.prefix(limit)
+            dropped += max(0, row.count - limit)
+        }
+        XCTAssertGreaterThan(dropped, 0, "scena musi przepełniać wiersze")
+        XCTAssertEqual(solver.candidateKeys, expected.sorted())
+        XCTAssertGreaterThan(frame.contactCandidateOverflowCount, 0)
+        XCTAssertGreaterThanOrEqual(frame.maximumContactCandidatesPerObject, limit)
     }
 
     func testSegmentCandidatesAndNarrowPhaseUseGPUWorldGeometry() async throws {

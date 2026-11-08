@@ -17,6 +17,8 @@ struct NativeMetalWorldFrame {
     var regionWraps: Set<ReferenceBubbleID> = []
     var events: [WorldEvent] = []
     var eventOverflow = WorldEventOverflow()
+    var contactCandidateOverflowCount = 0
+    var maximumContactCandidatesPerObject = 0
 }
 
 /// Publikuje atomowo pełną klatkę GPU albo wykonuje pełny krok CPU.

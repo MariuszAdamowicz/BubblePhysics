@@ -73,8 +73,12 @@ public final class BubbleWorld {
             consecutiveBackloggedAdvances: clock.consecutiveBackloggedAdvances,
             stepsInLastAdvance: stepsInLastAdvance, pendingTransactionCount: pending.count,
             isPaused: isPaused, isAdvancing: isAdvancing, lastAdvanceIssue: lastAdvanceIssue,
-            eventOverflow: lastFrame.eventOverflow)
+            eventOverflow: lastFrame.eventOverflow,
+            contactCandidateOverflow: 0, maximumContactCandidatesPerObject: 0)
     }
+
+    /// Stały limit k kandydatów kontaktu na obiekt, wspólny dla wszystkich rodzajów par.
+    package static var contactCandidateLimit: Int { NativeMetalSolver.candidateLimitPerObject }
 
     /// Renderer widzi tylko opublikowany uchwyt i kanały prezentacyjne.
     package var renderState: BubbleWorldRenderState? {

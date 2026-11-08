@@ -9,6 +9,32 @@ final class BubbleWorldCompletionTests: XCTestCase {
             WorldRectangle(min: [-10, -10], max: [10, 10]), fixedTimeStep: 0.125), stepper: stepper)
     }
 
+    // P-B-21, P-B-64: licznik przepełnienia kandydatów narasta z kroku na krok, a maksimum na obiekt dotyczy ostatniego kroku.
+    func testDiagnosticsAccumulateCandidateOverflowAndReportLastStepMaximum() async throws {
+        let stepper = ScriptedCandidateStepper(script: [(overflow: 3, maximum: 7), (overflow: 0, maximum: 5), (overflow: 2, maximum: 9)])
+        let world = try world(stepper: stepper)
+        XCTAssertEqual(world.diagnostics.contactCandidateOverflow, 0)
+        _ = await world.advance(by: 0.125)
+        XCTAssertEqual(world.diagnostics.contactCandidateOverflow, 3)
+        XCTAssertEqual(world.diagnostics.maximumContactCandidatesPerObject, 7)
+        _ = await world.advance(by: 0.125)
+        XCTAssertEqual(world.diagnostics.contactCandidateOverflow, 3, "krok bez przepełnienia nie zeruje licznika")
+        XCTAssertEqual(world.diagnostics.maximumContactCandidatesPerObject, 5)
+        _ = await world.advance(by: 0.125)
+        XCTAssertEqual(world.diagnostics.contactCandidateOverflow, 5)
+        XCTAssertEqual(world.diagnostics.maximumContactCandidatesPerObject, 9)
+    }
+
+    func testFailedStepDoesNotChangeCandidateOverflowCounter() async throws {
+        let world = try world(stepper: ScriptedCandidateStepper(script: [(overflow: 4, maximum: 6)], failOnSecondCall: true))
+        _ = await world.advance(by: 0.125)
+        XCTAssertEqual(world.diagnostics.contactCandidateOverflow, 4)
+        _ = await world.advance(by: 0.125)
+        XCTAssertEqual(world.diagnostics.lastAdvanceIssue, .stepFailed)
+        XCTAssertEqual(world.diagnostics.contactCandidateOverflow, 4)
+        XCTAssertEqual(world.diagnostics.maximumContactCandidatesPerObject, 6)
+    }
+
     func testFailedStepPreservesFrameTimeStateAndQueuedTransactionForRetry() async throws {
         let stepper = FailingStepper(failureCall: 1)
         let world = try world(stepper: stepper)
@@ -128,3 +154,21 @@ private final class SuspendedStepper: CompleteStepper {
     }
     func release() { continuation?.resume(); continuation = nil }
 }
+
+private final class ScriptedCandidateStepper: CompleteStepper {
+    private let script: [(overflow: Int, maximum: Int)]
+    private let failOnSecondCall: Bool
+    private var calls = 0
+    init(script: [(overflow: Int, maximum: Int)], failOnSecondCall: Bool = false) {
+        self.script = script; self.failOnSecondCall = failOnSecondCall
+    }
+    func completeStep(_ batch: StagedTransactionBatch, duration: Double) async throws -> CompletedRuntimeStep {
+        defer { calls += 1 }
+        if failOnSecondCall && calls == 1 { throw ScriptedFailure.failed }
+        let entry = script[min(calls, script.count - 1)]
+        return CompletedRuntimeStep(state: batch.state, contactCandidateOverflowCount: entry.overflow,
+            maximumContactCandidatesPerObject: entry.maximum)
+    }
+}
+
+private enum ScriptedFailure: Error { case failed }

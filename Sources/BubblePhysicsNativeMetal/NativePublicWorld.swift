@@ -48,6 +48,8 @@ package struct NativePublicFrame {
     package var contacts: [ObjectID: [DriveBlockingContact]] = [:]
     package var events: [WorldEvent] = []
     package var eventOverflow = WorldEventOverflow()
+    package var contactCandidateOverflowCount = 0
+    package var maximumContactCandidatesPerObject = 0
 }
 
 struct NativePublicProperties: Equatable, Sendable {
@@ -84,6 +86,10 @@ package final class NativePublicWorld {
     package var publishedContourCPUReadbackCount: Int { solver.publishedContourCPUReadbackCount }
     package var publishedTelemetry: NativeMetalFrameTelemetry? { solver.publishedSolverFrame?.telemetry }
     package var lastPublishedProfile: NativeMetalFrameProfile? { publishedProfile }
+    /// Bajty buforów kontaktów solvera (kandydaci, cache, sąsiedztwo); szew testów pamięci O(n·k).
+    package var contactMemoryBytes: Int { solver.contactMemoryBytes }
+    /// Bajty pamięci kontaktów brył; szew testów pamięci O(n·k).
+    package var rigidContactMemoryBytes: Int { solver.rigidContactMemoryBytes }
 
     package func step(objects: [NativePublicObject], materials: [PhysicsMaterialID: PhysicsMaterial],
                       styles: [RenderStyleID: RenderStyle], region: WorldRectangle, duration: Double,

@@ -21,4 +21,8 @@ public struct WorldDiagnostics: Equatable, Sendable {
     public let isAdvancing: Bool
     public let lastAdvanceIssue: WorldAdvanceIssue?
     public let eventOverflow: WorldEventOverflow
+    /// Narastający licznik par kandydatów kontaktu, które nie zmieściły się w wierszu k obiektu (etap 2).
+    public let contactCandidateOverflow: Int
+    /// Największa liczba kandydatów kontaktu na jeden obiekt w ostatnim ukończonym kroku (etap 2).
+    public let maximumContactCandidatesPerObject: Int
 }

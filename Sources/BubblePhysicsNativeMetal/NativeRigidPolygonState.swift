@@ -98,6 +98,8 @@ final class NativeRigidPolygonState {
     var triangles: MTLBuffer { buffers["triangles"]! }
     var contacts: MTLBuffer { buffers["contacts"]! }
     var control: MTLBuffer { buffers["control"]! }
+    /// Bajty pamięci kontaktów brył (dziś sloty P·n + P²).
+    var contactMemoryBytes: Int { buffers["contacts"]?.length ?? 0 }
 
     init(device: MTLDevice) { self.device = device }
 

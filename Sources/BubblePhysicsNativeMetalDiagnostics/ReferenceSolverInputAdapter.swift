@@ -102,7 +102,8 @@ extension NativeMetalWorldFrame {
             effectiveRadii: Dictionary(uniqueKeysWithValues: frame.effectiveRadii.map { (bubbleID($0.key), $0.value) }),
             isComplete: frame.isComplete, regionRemovals: Set(frame.regionRemovals.map(bubbleID)),
             regionWraps: Set(frame.regionWraps.map(bubbleID)), events: frame.events,
-            eventOverflow: frame.eventOverflow)
+            eventOverflow: frame.eventOverflow, contactCandidateOverflowCount: frame.contactCandidateOverflowCount,
+            maximumContactCandidatesPerObject: frame.maximumContactCandidatesPerObject)
     }
 }
 

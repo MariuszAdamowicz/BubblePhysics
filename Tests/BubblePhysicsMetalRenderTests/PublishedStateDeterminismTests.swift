@@ -79,4 +79,85 @@ final class PublishedStateDeterminismTests: XCTestCase {
         XCTAssertNotEqual(early.hash, late.hash)
         XCTAssertNotEqual(early.objectHash, late.objectHash)
     }
+
+    // MARK: - Zwolnienie po przepełnieniu kandydatów (P-B-64, G10-AC5)
+
+    private struct SqueezeRun {
+        var overflow: [Int] = []
+        var hashes: [UInt64] = []
+        var published = 0
+    }
+
+    /// 300 baniek na siatce (kroki 1-10 bez kontaktów), potem transakcja `replace` ściska je w kwadracie 30×30,
+    /// gdzie wiersz kandydatów przekracza limit k.
+    private func squeezeRun(steps: Int, device: MTLDevice) async throws -> SqueezeRun {
+        let material = PhysicsMaterialID(rawValue: 1), style = RenderStyleID(rawValue: 1)
+        let world = try BubbleWorld.makeBenchmarkWorld(configuration: WorldConfiguration(
+            simulationRegion: WorldRectangle(min: [0, 0], max: [700, 500]), fixedTimeStep: 1.0 / 60),
+            device: device, solverIterationLimit: 4)
+        func descriptor(_ id: Int, _ position: WorldPoint, radius: Float) throws -> WorldObject {
+            .bubble(try BubbleDescriptor(id: ObjectID(rawValue: UInt64(id)), position: position, targetRadius: radius,
+                physicsMaterialID: material, renderStyleID: style))
+        }
+        var initial = try WorldTransaction()
+            .updatePhysicsMaterial(material, material: PhysicsMaterial(kind: .bubble))
+            .updateRenderStyle(style, style: RenderStyle())
+        for index in 0..<300 {
+            initial = initial.add(try descriptor(index + 1, [Float(index % 20) * 30 + 40, Float(index / 20) * 30 + 40], radius: 5))
+        }
+        world.submit(initial)
+        var seed: UInt64 = 0x2B60F5
+        func unit() -> Float {
+            seed = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+            return Float(seed >> 40) / Float(1 << 24)
+        }
+        var run = SqueezeRun()
+        for index in 0..<steps {
+            if index == 10 {
+                var squeeze = WorldTransaction()
+                for id in 1...300 {
+                    squeeze = squeeze.replace(ObjectID(rawValue: UInt64(id)),
+                        with: try descriptor(id, [335 + unit() * 30, 235 + unit() * 30], radius: 2))
+                }
+                world.submit(squeeze)
+            }
+            let frame = await world.advance(by: 1.0 / 60)
+            run.published += frame.stepIndex == UInt64(index + 1) ? 1 : 0
+            run.overflow.append(world.diagnostics.contactCandidateOverflow)
+            var hash: UInt64 = 0xCBF2_9CE4_8422_2325
+            for id in frame.objects.keys.sorted(by: { $0.rawValue < $1.rawValue }) {
+                guard let object = frame.objects[id] else { continue }
+                fnv1a([UInt32(truncatingIfNeeded: id.rawValue), object.position.x.bitPattern, object.position.y.bitPattern,
+                       object.velocity.x.bitPattern, object.velocity.y.bitPattern], into: &hash)
+            }
+            run.hashes.append(hash)
+        }
+        return run
+    }
+
+    /// Krok, w którym licznik po raz pierwszy wzrósł (indeks od 0), albo `nil`.
+    private func firstOverflowStep(_ overflow: [Int]) -> Int? {
+        var previous = 0
+        for (index, value) in overflow.enumerated() {
+            if value > previous { return index }
+            previous = value
+        }
+        return nil
+    }
+
+    func testStateIsComparedOnlyBeforeCandidateOverflowStep() async throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let steps = 40
+        let first = try await squeezeRun(steps: steps, device: device)
+        let second = try await squeezeRun(steps: steps, device: device)
+        XCTAssertEqual(first.published, steps, "klatka po przepełnieniu jest opublikowana")
+        XCTAssertEqual(second.published, steps)
+        let overflowStep = [firstOverflowStep(first.overflow), firstOverflowStep(second.overflow)].compactMap { $0 }.min()
+        let step = try XCTUnwrap(overflowStep, "ściśnięcie 300 baniek musi zwiększyć licznik przepełnienia kandydatów")
+        XCTAssertGreaterThanOrEqual(step, 10, "przed ściśnięciem nie ma przepełnienia")
+        // Kroki przed pierwszym przepełnieniem muszą być identyczne; od niego porównanie jest pominięte.
+        for index in 0..<step {
+            XCTAssertEqual(first.hashes[index], second.hashes[index], "stan po kroku \(index + 1) różni się, a przepełnienia jeszcze nie było")
+        }
+    }
 }

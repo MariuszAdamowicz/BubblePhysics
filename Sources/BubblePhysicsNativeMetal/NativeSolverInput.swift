@@ -205,6 +205,10 @@ package struct NativeSolverFrame {
     package var regionWraps: Set<NativeSolverBubbleID> = []
     package var events: [WorldEvent] = []
     package var eventOverflow = WorldEventOverflow()
+    /// Pary kandydatów odrzucone przez limit k obiektu w tym kroku (etap 2).
+    package var contactCandidateOverflowCount = 0
+    /// Największa liczba kandydatów na obiekt w tym kroku (etap 2).
+    package var maximumContactCandidatesPerObject = 0
 }
 
 /// Szew między solverem a jego użytkownikami (runner diagnostyczny, fałszywe wykonawcy w testach).

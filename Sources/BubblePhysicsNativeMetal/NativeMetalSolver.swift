@@ -250,6 +250,19 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
     private(set) var publishedContourCPUReadbackCount = 0
     private(set) var stageDiagnostics: NativeMetalStageDiagnostics?
 
+    /// Limit k kandydatów kontaktu na obiekt, wspólny dla baniek, odcinków i brył (pomiar zadania 14: k = 48).
+    package static let candidateLimitPerObject = 48
+
+    /// Suma długości buforów związanych z kontaktami; 0 przed pierwszym krokiem.
+    var contactMemoryBytes: Int {
+        guard let s = persistentState else { return 0 }
+        let buffers: [MTLBuffer] = [s.cachePing, s.cachePong, s.contacts, s.candidates, s.candidateRows, s.activeContacts,
+            s.mergedCache, s.scanValues, s.scanOffsets, s.adjacency, s.adjacencySlots, s.contactEndpoints,
+            s.contactCorrections, s.fastCandidates]
+        return buffers.reduce(0) { $0 + $1.length }
+    }
+    var rigidContactMemoryBytes: Int { rigidState.contactMemoryBytes }
+
     package init(device: MTLDevice, commandExecutor: (any NativeMetalCommandExecuting)? = nil,
          configuration: NativeMetalConfiguration = .default, candidateCapacity: Int? = nil,
          collectDispatchStatistics: Bool = false, collectStageDiagnostics: Bool = false) throws {
