@@ -38,7 +38,10 @@ final class PackageGraphTests: XCTestCase {
         reader.async { data = output.fileHandleForReading.readDataToEndOfFile(); read.signal() }
         guard finished.wait(timeout: .now() + 120) == .success else {
             process.terminate()
-            throw XCTSkip("dump-package nie zakończył się w 120 s")
+            struct DumpPackageTimeout: Error {}
+            // Przekroczenie czasu ma oblać test G1-AC4, a nie go pominąć.
+            XCTFail("dump-package nie zakończył się w 120 s")
+            throw DumpPackageTimeout()
         }
         read.wait()
         XCTAssertEqual(process.terminationStatus, 0)

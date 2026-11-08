@@ -1,4 +1,4 @@
-@testable import BubblePhysics
+import BubblePhysics
 import BubblePhysicsMetalRender
 import Metal
 import XCTest

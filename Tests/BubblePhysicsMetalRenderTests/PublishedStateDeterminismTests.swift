@@ -5,12 +5,16 @@ import XCTest
 
 /// Sonda determinizmu (G10-AC5, P-B-9): ta sama scena z tymi samymi transakcjami, dwa razy na tym samym
 /// urządzeniu, daje identyczny opublikowany stan. Hashuje bity liczb, więc różnica o 1 ULP zostaje wykryta.
+/// Hash obejmuje `frame.objects` (bańki i bryły: pozycja, prędkość, obrót, prędkość kątowa, AABB, promień)
+/// oraz kontury baniek.
 @MainActor
 final class PublishedStateDeterminismTests: XCTestCase {
     private struct Run {
         let hash: UInt64
         let completedSteps: UInt64
         let bubbleCount: Int
+        let objectCount: Int
+        let objectHash: UInt64
     }
 
     private func fnv1a(_ values: some Sequence<UInt32>, into hash: inout UInt64) {
@@ -25,10 +29,24 @@ final class PublishedStateDeterminismTests: XCTestCase {
         let world = try BubbleWorld.makeBenchmarkWorld(configuration: try Stress300Scene.configuration(),
             device: device, solverIterationLimit: 4)
         world.submit(try Stress300Scene.initialTransaction())
-        var completed: UInt64 = 0
+        var frame = WorldFrame(transactionReceipts: [], events: [])
         for index in 0..<steps {
             if index > 0 { world.submit(try Stress300Scene.triangleReplacement(step: index)) }
-            completed = await world.advance(by: 1.0 / 60).stepIndex
+            frame = await world.advance(by: 1.0 / 60)
+        }
+        var objectHash: UInt64 = 0xCBF2_9CE4_8422_2325
+        for id in frame.objects.keys.sorted(by: { $0.rawValue < $1.rawValue }) {
+            guard let object = frame.objects[id] else { continue }
+            let kind: [UInt32]
+            switch object.kind {
+            case .bubble(let radius): kind = [1, radius.bitPattern]
+            case .polygon: kind = [2, 0]
+            }
+            fnv1a([UInt32(truncatingIfNeeded: id.rawValue), UInt32(truncatingIfNeeded: id.rawValue >> 32)] + kind
+                + [object.position.x, object.position.y, object.velocity.x, object.velocity.y,
+                   object.rotation, object.angularVelocity,
+                   object.bounds.min.x, object.bounds.min.y, object.bounds.max.x, object.bounds.max.y]
+                    .map(\.bitPattern), into: &objectHash)
         }
         var hash: UInt64 = 0xCBF2_9CE4_8422_2325
         let contours = world.debugContourSnapshot()
@@ -36,7 +54,8 @@ final class PublishedStateDeterminismTests: XCTestCase {
             fnv1a([UInt32(truncatingIfNeeded: id.rawValue)], into: &hash)
             for point in contours[id] ?? [] { fnv1a([point.x.bitPattern, point.y.bitPattern], into: &hash) }
         }
-        return Run(hash: hash, completedSteps: completed, bubbleCount: contours.count)
+        return Run(hash: hash, completedSteps: frame.stepIndex, bubbleCount: contours.count,
+                   objectCount: frame.objects.count, objectHash: objectHash)
     }
 
     func testStress300PublishedStateIsIdenticalAcrossTwoRunsOf300Steps() async throws {
@@ -45,7 +64,12 @@ final class PublishedStateDeterminismTests: XCTestCase {
         let second = try await run(steps: 300, device: device)
         XCTAssertEqual(first.completedSteps, 300)
         XCTAssertEqual(first.bubbleCount, 300)
-        XCTAssertEqual(first.hash, second.hash, "stan po 300 krokach różni się między przebiegami")
+        // 300 baniek, 4 ściany i trójkąt.
+        XCTAssertEqual(first.objectCount, 305)
+        XCTAssertEqual(second.objectCount, 305)
+        XCTAssertEqual(first.hash, second.hash, "kontury po 300 krokach różnią się między przebiegami")
+        XCTAssertEqual(first.objectHash, second.objectHash,
+                       "stan obiektów (frame.objects) po 300 krokach różni się między przebiegami")
     }
 
     func testHashReactsToStateChange() async throws {
@@ -53,5 +77,6 @@ final class PublishedStateDeterminismTests: XCTestCase {
         let early = try await run(steps: 1, device: device)
         let late = try await run(steps: 300, device: device)
         XCTAssertNotEqual(early.hash, late.hash)
+        XCTAssertNotEqual(early.objectHash, late.objectHash)
     }
 }

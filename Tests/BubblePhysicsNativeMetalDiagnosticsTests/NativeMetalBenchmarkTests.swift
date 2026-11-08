@@ -125,6 +125,19 @@ final class NativeMetalBenchmarkTests: XCTestCase {
               iterationLimits: [4], backend: .nativeMetal)
     }
 
+    // G1-AC3: ścieżka natywna mierzy scenę stress-300, nie tylko małą scenę interaktywną.
+    func testNativeRunnerMeasuresStress300OnMetal() async throws {
+        let config = ReferenceBenchmarkMatrixConfiguration(scene: .stress300, warmupSteps: 1,
+            measuredSteps: 2, iterationLimits: [4], backend: .nativeMetal)
+        _ = try XCTUnwrap(MTLCreateSystemDefaultDevice(), "stress-300 wymaga urządzenia Metal")
+        let matrix = try await NativeMetalBenchmarkRunner.measure(configuration: config)
+        let run = try XCTUnwrap(matrix.runs.first)
+        XCTAssertEqual(run.backend, .nativeMetal)
+        XCTAssertGreaterThan(run.metalFrameCount, 0)
+        XCTAssertGreaterThan(run.solver.p95Milliseconds, 0)
+        XCTAssertTrue(run.solver.p95Milliseconds.isFinite)
+    }
+
     func testMixedRunKeepsOnlyPublishedNativeFramesInGPUProfile() async throws {
         let executor = FailSecondNativeBenchmarkFrame(solver: try NativeMetalSolver(
             device: XCTUnwrap(MTLCreateSystemDefaultDevice()), configuration: .init(solverIterationCount: 4)))

@@ -131,7 +131,9 @@ extension RuntimeState {
             switch object.descriptor {
             case .bubble:
                 kind = .bubble(effectiveRadius: object.effectiveRadius)
-                let r = object.effectiveRadius
+                // `effectiveRadius` to minimalna odległość konturu od środka, więc nie obejmuje zdeformowanego konturu;
+                // bez AABB z solvera obwiednię daje większy z promieni kolizji i docelowego.
+                let r = max(object.collisionRadius, object.targetRadius)
                 bounds = object.bounds ?? WorldRectangle(uncheckedMin: object.position - SIMD2(r, r),
                                                          max: object.position + SIMD2(r, r))
             case .polygon(let polygon):

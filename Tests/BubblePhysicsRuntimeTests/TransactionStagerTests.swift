@@ -63,6 +63,23 @@ final class TransactionStagerTests: XCTestCase {
         XCTAssertEqual(boundary.state.objects[id(1)]?.velocity, .zero)
     }
 
+    // Bez AABB z solvera (bańka jeszcze nie policzona) obwiednia musi objąć kontur o promieniu kolizji,
+    // także gdy `effectiveRadius` (minimalny promień konturu) jest od niego mniejszy.
+    func testPublishedBubbleBoundsFallbackEnclosesCollisionAndTargetRadius() throws {
+        var staged = try TransactionStager.stage(resources().add(.bubble(bubble(1, position: [10, 20]))),
+                                                 against: state()).state
+        staged.objects[id(1)]?.effectiveRadius = 1
+        staged.objects[id(1)]?.collisionRadius = 3
+        staged.objects[id(1)]?.targetRadius = 2
+        XCTAssertNil(staged.objects[id(1)]?.bounds)
+        let published = try XCTUnwrap(staged.publishedObjectStates()[id(1)])
+        XCTAssertEqual(published.bounds.min, [7, 17])
+        XCTAssertEqual(published.bounds.max, [13, 23])
+        staged.objects[id(1)]?.collisionRadius = 1
+        let shrunk = try XCTUnwrap(staged.publishedObjectStates()[id(1)])
+        XCTAssertEqual(shrunk.bounds.min, [8, 18], "przy mniejszym promieniu kolizji obejmuje promień docelowy")
+    }
+
     func testMissingAndIncompatibleResourcesAreRejected() throws {
         assertRejected(WorldTransaction().add(.bubble(try bubble(1))), reason: .physicsMaterialNotFound(materialID))
         assertRejected(try resources().updatePhysicsMaterial(materialID, material: PhysicsMaterial(kind: .polygon))

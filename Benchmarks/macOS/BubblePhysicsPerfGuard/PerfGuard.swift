@@ -216,6 +216,11 @@ enum PerfGuard {
 
     /// Jeden przebieg sceny o `bubbleCount` bańkach; zwraca p95 czasu klatki po stronie CPU (poza czasem GPU),
     /// czyli przygotowania wejścia, kodowania i publikacji kroku.
+    ///
+    /// To górne ograniczenie kosztu przygotowania i publikacji kroku: `hostNonGPUP95Milliseconds` to czas klatki
+    /// minus czas GPU, więc zawiera też kodowanie renderu i oczekiwanie na GPU, których kryterium nie obejmuje.
+    /// Wystarcza, bo strażnik ma wykryć wzrost kosztu hosta; jeśli górne ograniczenie mieści się w limicie,
+    /// to koszt samego przygotowania i publikacji (składnik tej sumy) tym bardziej.
     @MainActor
     static func measureHostCPU(device: MTLDevice, bubbleCount: Int, warmupFrames: Int,
                                measuredFrames: Int) async throws -> Double {
