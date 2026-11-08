@@ -8,7 +8,7 @@
 
 **Plugin version:** 0.7.7
 **Agent Sessions:** claude-code: 649434fc-a9e6-4308-b627-6edb14908e5b
-**Self-review:** pętla 1: CAP_REACHED — round-2 findings fixed, not re-reviewed; pętla 2 (po uwagach właściciela): CAP_REACHED — round-2 findings fixed, not re-reviewed; patrz „Self-review record”
+**Self-review:** pętla 1: CAP_REACHED — round-2 findings fixed, not re-reviewed; pętla 2 (po uwagach właściciela): CAP_REACHED — round-2 findings fixed, not re-reviewed; pętla 3: APPROVED w rundzie 1; patrz „Self-review record”
 
 ---
 
@@ -361,3 +361,5 @@ Pętla 2, runda 2: 2 uwagi naniesione bez ponownej recenzji (CAP_REACHED — rou
 2. „Sprzeczność między G8-AC2 a Key facts” — hit-test na kroku t+1 daje rozbieżność do dwóch kroków; Key facts ujednolicone.
 
 Pętla 3, po drugiej liście uwag właściciela: brak interpolacji w kroku zawinięcia, utworzenia, scalenia, podziału i zastąpienia; kolejność w warstwie bańki → naklejki baniek → bryły → naklejki brył; wyjątek determinizmu dla całego przebiegu; pary więzów z bańką i więzy przy scaleniu i podziale; impuls jako skumulowany mnożnik; kolejność zdarzeń kontaktu i `mergeContact`; przycięcie naklejki do koła odniesienia; cel 10,4568 ms jako czas GPU solvera; kolejność tabeli decyzji.
+
+Pętla 3, runda 1: APPROVED.
