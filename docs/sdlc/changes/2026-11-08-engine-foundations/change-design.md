@@ -8,7 +8,7 @@
 
 **Plugin version:** 0.7.7
 **Agent Sessions:** claude-code: 649434fc-a9e6-4308-b627-6edb14908e5b
-**Self-review:** pętla 1: CAP_REACHED — round-2 findings fixed, not re-reviewed; pętla 2 po uwagach właściciela: patrz „Self-review record”
+**Self-review:** pętla 1: CAP_REACHED — round-2 findings fixed, not re-reviewed; pętla 2 (po uwagach właściciela): CAP_REACHED — round-2 findings fixed, not re-reviewed; patrz „Self-review record”
 
 ---
 
@@ -85,7 +85,7 @@ flowchart LR
 **G1: Wersja 2.0.0 z jawną migracją**
 - [ ] G1-AC1 — Pakiet jest oznaczony jako `2.0.0`, a `docs/MIGRATION-v2.md` dla każdego usuniętego lub zmienionego publicznego symbolu z `v1` wskazuje jego zamiennik. · `verify: przegląd listy symboli publicznych v1 (swift-api-digester lub grep public) względem dokumentu`
 - [ ] G1-AC2 — Testy modułów produkcyjnych (Public, Runtime, NativeMetal, MetalRender, Assets) oraz `PublicWorldStressBenchmark` używają wyłącznie API `v2`. Testy narzędzi diagnostycznych przeniesione do `BubblePhysicsNativeMetalDiagnosticsTests` (CD-D-26) dalej testują ścieżki oparte na `ReferenceWorld`. Cały `swift test` przechodzi z 0 błędów, łącznie z testami modułów diagnostycznych, które dalej testują swoje moduły. · `verify: swift test`
-- [ ] G1-AC3 — Diagnostyczny pomiar solvera (`NativeMetalBenchmarkRunner`, scena stress-300 z limitem 4 iteracji, cel 10,4568 ms) nadal da się uruchomić z `BubblePhysicsReferenceBench` i z aplikacji benchmarku iOS. · `verify: uruchomienie runnera na Macu w teście diagnostycznym`
+- [ ] G1-AC3 — Diagnostyczny pomiar solvera (`NativeMetalBenchmarkRunner`, scena stress-300 z limitem 4 iteracji, cel 10,4568 ms) nadal da się uruchomić z `BubblePhysicsReferenceBench` na Macu. Aplikacja benchmarku iOS mierzy wyłącznie ścieżkę publiczną. · `verify: uruchomienie runnera na Macu w teście diagnostycznym`
 - [ ] G1-AC4 — Moduły produkcyjne (`BubblePhysics`, `BubblePhysicsMetalRender` i ich zależności) nie zależą od `BubblePhysicsReference`, `BubblePhysicsReferenceMetal`, `BubblePhysicsLegacy`, `BubblePhysicsCore` ani `BubblePhysicsMetal`. · `verify: swift package show-dependencies / analiza Package.swift w teście`
 
 **G2: Gra odczytuje stan obiektów**
@@ -327,7 +327,7 @@ Etapy wdrożenia ustala plan. Wymaganie z tego dokumentu: najpierw porządki wyd
 
 - **Niezmiennik:** świat publikuje wyłącznie ukończone klatki, a krok fizyki i render mieszczą się w jednym buforze poleceń. Żadna nowa funkcja nie wprowadza odczytu konturów na CPU w normalnej ścieżce (`contourCPUReadbacks` = 0).
 - **Fakt:** stan obiektów (pozycja, prędkość, obrót, efektywny promień) jest już po każdym kroku na CPU (`NativePublicWorld.swift:170-177`). Publikacja G2 dodaje tylko 16 B prostokąta otaczającego do istniejącego rekordu bańki, bez nowego rodzaju transferu.
-- **Zasada, którą trzeba pamiętać:** render jest interpolowany między krokami t−1 i t, więc pokazuje stan opóźniony najwyżej o jeden krok. Zapytania i hit-test działają na opublikowanym kroku t. Ta rozbieżność, najwyżej jeden krok (16,7 ms), jest akceptowana także dla chwytu palcem.
+- **Zasada, którą trzeba pamiętać:** render jest interpolowany między krokami t−1 i t, więc pokazuje stan opóźniony najwyżej o jeden krok. Zapytania synchroniczne działają na opublikowanym kroku t, więc rozbieżność z obrazem wynosi najwyżej jeden krok (16,7 ms). Asynchroniczny hit-test jest liczony na kroku t+1 (G8-AC2), więc jego rozbieżność z obrazem wynosi najwyżej dwa kroki (33,3 ms). Obie rozbieżności są akceptowane, także dla chwytu palcem.
 - **Fakt:** jedyny pomiar urządzeniowy (10,46 ms p95, stress-300) dotyczy ścieżki `NativeMetalBenchmarkRunner`, nie `BubbleWorld` z rendererem.
 - **Założenie, niepotwierdzone i blokujące dla G10-AC5:** solver GPU jest dziś deterministyczny na tym samym urządzeniu (benchmark z 2026-10-14 pokazał identyczny hash). Jeśli nowe kernele, np. więzy albo kontakty begin/end, użyją niedeterministycznych redukcji atomowych, trzeba je zastąpić redukcjami o ustalonej kolejności. Plan musi to uwzględnić w etapach tych kerneli.
 - **Założenie, niepotwierdzone i nieblokujące:** przycinanie naklejek konturem bańki mieści się w budżecie sceny akceptacyjnej (G12-AC4). Możliwe metody to bufor szablonu (stencil) albo maska w shaderze fragmentu. Wybór należy do planu, na podstawie strażnika. Jeśli wypadnie stencil, przewodnik wymaga formatu szablonu w passie (G13-AC2). 8-bitowy szablon nie da 300 baniom unikalnych wartości odniesienia. Plan awaryjny: bańki zapisują w szablonie jedną wspólną wartość „wnętrze bańki”, a naklejka jest przycinana do sumy wnętrz. Naklejki mieszczą się w promieniu swojej bańki, więc ewentualne wejście w sąsiada jest marginalne i akceptowane.
@@ -355,3 +355,7 @@ Drobne:
 Pętla 2, runda 1: 1 uwaga (diagnostyka w NativeMetal i zależność całego modułu od Reference), naniesiona jako CD-D-26 i G1-AC3.
 
 Pętla 2, po uwagach właściciela z 2026-11-08: interpolacja przy jednym kroku na bufor (CD-D-24), więzy z bańką, definicja kontaktu wielopunktowego, kolejność rysowania (CD-D-25), projekt Xcode przykładu, przepełnienie a determinizm, próg strażnika 10%, centroid konturu, pomiar skalowania w strażniku, kolejność wierszy decyzji.
+
+Pętla 2, runda 2: 2 uwagi naniesione bez ponownej recenzji (CAP_REACHED — round-2 findings fixed, not re-reviewed):
+1. „G1-AC3 zakłada coś, czego już nie ma” — aplikacja iOS nie uruchamia `NativeMetalBenchmarkRunner` od commita 6882795, więc kryterium ograniczono do `BubblePhysicsReferenceBench` na Macu.
+2. „Sprzeczność między G8-AC2 a Key facts” — hit-test na kroku t+1 daje rozbieżność do dwóch kroków; Key facts ujednolicone.
