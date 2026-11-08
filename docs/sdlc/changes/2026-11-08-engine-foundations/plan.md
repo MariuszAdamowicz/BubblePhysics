@@ -8,7 +8,7 @@
 **References:** tag `v1.0.0`; tag `archive/magentic-2026-10-25-2kbubbles-engine-owned`; `docs/superpowers/specs/2026-10-15-public-api-design.md`
 **Strategy:** slices
 **Test command:** `swift test`
-**Status:** Draft
+**Status:** Approved
 **Template version:** default/0.3.3
 
 **Plugin version:** 0.7.7
