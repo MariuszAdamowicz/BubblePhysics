@@ -281,7 +281,7 @@ Etapy wdrożenia ustala plan. Wymaganie z tego dokumentu: najpierw porządki wyd
 ## Error handling
 
 - **Odrzucenia transakcji:** niezarejestrowany identyfikator zasobu graficznego, znak spoza atlasu, więz z nieistniejącym ciałem i niepoprawny kształt odrzucają całą transakcję. Każdy taki przypadek ma nowy przypadek `TransactionRejectionReason`. Stan i wygląd zostają bez zmian, zgodnie z obecną atomowością transakcji.
-- **Zmiana względem `v1` przy błędzie GPU:** `v1` zachowywała kolejkę i próbowała ponownie w następnym `advance`. `v2` rozróżnia dwa przypadki. Błąd kodowania renderu albo domknięcia gry odrzuca tylko klatkę (G9-AC2). Błąd wykonania na GPU i wartości nieskończone są końcowe (G10-AC4).
+- **Zmiana względem `v1` przy błędzie GPU:** `v1` zachowywała kolejkę i próbowała ponownie w następnym `advance`. `v2` rozróżnia dwa przypadki. Błąd kodowania renderu albo domknięcia gry odrzuca tylko klatkę (G9-AC2). Błąd wykonania na GPU i wartości nieskończone są końcowe (G10-AC4). Pozostałe błędy kroku solvera (naruszenie strażnika, niepoprawna klatka lub migawka, klatka w toku) nie są końcowe: krok nie jest publikowany, kolejka transakcji czeka na następne `advance`, a powód trafia do diagnostyki, jak w `v1`.
 - **Więzy ciała, które opuściło region:** usunięcie po wyjściu z regionu nie jest transakcją, więc jego więzy są usuwane bez potwierdzenia. Gra dostaje `didExitSimulationRegion` i sama wie, jakie więzy miał obiekt.
 - **Wynik hit-testu:** zachowanie przy usunięciu obiektu, pauzie, stanie „zawiódł” i anulowaniu określa G8-AC2.
 - **Rejestracja zasobów:** jest synchroniczna i odbywa się poza klatką. Brak czcionki albo nieobsługiwany obraz zgłasza błąd od razu w wywołaniu rejestracji. Generowanie SDF nigdy nie trafia na ścieżkę klatki.
