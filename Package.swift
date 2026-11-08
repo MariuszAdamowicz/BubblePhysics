@@ -15,12 +15,17 @@ let package = Package(
             "BubblePhysicsLegacy", "BubblePhysicsCore", "BubblePhysicsMetal",
             "BubblePhysicsReference", "BubblePhysicsReferenceMetal", "BubblePhysicsNativeMetal"
         ]),
-        .executable(name: "BubblePhysicsReferenceBench", targets: ["BubblePhysicsReferenceBench"])
+        .executable(name: "BubblePhysicsReferenceBench", targets: ["BubblePhysicsReferenceBench"]),
+        .executable(name: "BubblePhysicsPerfGuard", targets: ["BubblePhysicsPerfGuard"])
     ],
     targets: [
         .executableTarget(name: "BubblePhysicsReferenceBench",
                           dependencies: ["BubblePhysicsReference", "BubblePhysicsReferenceMetal", "BubblePhysicsNativeMetal"],
                           path: "Benchmarks/macOS/BubblePhysicsReferenceBench"),
+        // Strażnik wydajności na Macu; uruchamiany `swift run -c release BubblePhysicsPerfGuard`, nie przez `swift test`.
+        .executableTarget(name: "BubblePhysicsPerfGuard",
+                          dependencies: ["BubblePhysics", "BubblePhysicsMetalRender"],
+                          path: "Benchmarks/macOS/BubblePhysicsPerfGuard"),
         .target(name: "BubblePhysics", dependencies: ["BubblePhysicsRuntime", "BubblePhysicsModel", "BubblePhysicsNativeMetal"],
                 path: "Sources/BubblePhysicsPublic", exclude: ["Model"]),
         .target(name: "BubblePhysicsMetalRender", dependencies: ["BubblePhysics", "BubblePhysicsNativeMetal", "BubblePhysicsModel"]),
@@ -40,6 +45,7 @@ let package = Package(
             resources: [.copy("Shaders/BubblePhysicsKernels.metal"), .copy("Shaders/LBVHKernels.metal"), .copy("Shaders/ContactKernels.metal"), .copy("Shaders/ContourContactKernels.metal"), .copy("Shaders/RemeshKernels.metal"), .copy("Shaders/PolygonKernels.metal"), .copy("Shaders/InteractionKernels.metal"), .copy("Shaders/RenderKernels.metal"), .copy("Shaders/RadialBubbleKernels.metal"), .copy("Shaders/RadialContactKernels.metal"), .copy("Shaders/RadialWorldKernels.metal"), .copy("Shaders/RadialWorldPairKernels.metal")]
         ),
         .testTarget(name: "BubblePhysicsPublicTests", dependencies: ["BubblePhysics"]),
+        .testTarget(name: "BubblePhysicsPerfGuardTests", dependencies: ["BubblePhysicsPerfGuard"]),
         .testTarget(name: "BubblePhysicsMetalRenderTests", dependencies: ["BubblePhysics", "BubblePhysicsMetalRender"]),
         .testTarget(name: "BubblePhysicsRuntimeTests", dependencies: ["BubblePhysics", "BubblePhysicsRuntime"]),
         .testTarget(name: "BubblePhysicsTests", dependencies: ["BubblePhysicsLegacy"]),

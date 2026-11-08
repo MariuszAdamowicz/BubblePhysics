@@ -1,0 +1,217 @@
+import BubblePhysicsMetalRender
+import Foundation
+import Metal
+
+/// Punkt odniesienia jednej sceny: p95 pełnej klatki (krok fizyki i render) jako mediana z kilku przebiegów.
+struct PerfGuardScenePoint: Codable, Equatable {
+    var p95Milliseconds: Double
+    var runs: [Double]
+    var recordedAt: String
+    var note: String
+}
+
+/// Zawartość `docs/benchmarks/perf-guard.json`. Punkty odniesienia mają sens tylko na tym samym urządzeniu.
+struct PerfGuardBaseline: Codable, Equatable {
+    var device: String
+    var scenes: [String: PerfGuardScenePoint]
+
+    static func load(from url: URL) throws -> PerfGuardBaseline {
+        try JSONDecoder().decode(PerfGuardBaseline.self, from: Data(contentsOf: url))
+    }
+
+    static func loadIfPresent(from url: URL) throws -> PerfGuardBaseline? {
+        FileManager.default.fileExists(atPath: url.path) ? try load(from: url) : nil
+    }
+
+    func write(to url: URL) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try (encoder.encode(self) + Data("\n".utf8)).write(to: url, options: .atomic)
+    }
+
+    func recording(scene: String, runs: [Double], recordedAt: String, note: String) -> PerfGuardBaseline {
+        var copy = self
+        copy.scenes[scene] = PerfGuardScenePoint(p95Milliseconds: PerfGuard.median(runs), runs: runs,
+            recordedAt: recordedAt, note: note)
+        return copy
+    }
+}
+
+struct PerfGuardSceneResult: Equatable {
+    let scene: String
+    let runs: [Double]
+    let medianP95Milliseconds: Double
+    let baselineMilliseconds: Double?
+    let passed: Bool
+    let detail: String
+}
+
+struct PerfGuardReport {
+    let results: [PerfGuardSceneResult]
+    var passed: Bool { results.allSatisfy(\.passed) }
+    var text: String {
+        results.map { "\($0.passed ? "PASS" : "FAIL") \($0.scene): \($0.detail)" }.joined(separator: "\n")
+    }
+}
+
+struct PerfGuardOptions: Equatable {
+    var recordScene: String?
+    var runs = 5
+    var warmupFrames = 30
+    var measuredFrames = 300
+    var baselinePath = "docs/benchmarks/perf-guard.json"
+    var injectedSlowdown = 0.0
+    var note = "punkt odniesienia zapisany ręcznie przez --record"
+
+    enum ParseError: Error, CustomStringConvertible, Equatable {
+        case invalidArgument(String)
+        var description: String {
+            switch self { case .invalidArgument(let value): return "Nieprawidłowy argument: \(value)" }
+        }
+    }
+
+    static let usage = "Użycie: BubblePhysicsPerfGuard [--record <scena>] [--runs N] [--warmup N] [--measured N] [--baseline ścieżka] [--inject-slowdown ułamek] [--note tekst]\nSceny: \(PerfGuard.scenes.joined(separator: ", "))"
+
+    static func parse(_ arguments: [String]) throws -> PerfGuardOptions {
+        var result = PerfGuardOptions()
+        var index = 0
+        while index < arguments.count {
+            let option = arguments[index]
+            guard index + 1 < arguments.count else { throw ParseError.invalidArgument(option) }
+            let value = arguments[index + 1]
+            switch option {
+            case "--record":
+                guard PerfGuard.scenes.contains(value) else { throw ParseError.invalidArgument(value) }
+                result.recordScene = value
+            case "--runs", "--warmup", "--measured":
+                guard let count = Int(value), count >= (option == "--warmup" ? 0 : 1) else {
+                    throw ParseError.invalidArgument(value)
+                }
+                switch option {
+                case "--runs": result.runs = count
+                case "--warmup": result.warmupFrames = count
+                default: result.measuredFrames = count
+                }
+            case "--baseline": result.baselinePath = value
+            case "--inject-slowdown":
+                guard let fraction = Double(value), fraction.isFinite, fraction >= 0 else {
+                    throw ParseError.invalidArgument(value)
+                }
+                result.injectedSlowdown = fraction
+            case "--note": result.note = value
+            default: throw ParseError.invalidArgument(option)
+            }
+            index += 2
+        }
+        return result
+    }
+}
+
+enum PerfGuard {
+    /// Sceny, które strażnik umie zmierzyć. Scena mieszana dojdzie z etapem 3.
+    static let scenes = ["stress-300"]
+    /// Dopuszczalne pogorszenie względem punktu odniesienia (G12-AC3).
+    static let regressionTolerance = 0.10
+
+    static func median(_ values: [Double]) -> Double {
+        let sorted = values.sorted()
+        guard !sorted.isEmpty else { return .infinity }
+        let middle = sorted.count / 2
+        return sorted.count % 2 == 1 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2
+    }
+
+    /// Mierzy każdą scenę `runs` razy; wynik sceny to mediana p95 z przebiegów.
+    /// `injectedSlowdown` (ułamek, np. 0,2) mnoży zmierzone czasy i służy do sprawdzenia, że strażnik reaguje.
+    @MainActor
+    static func check(scenes: [String], baseline: PerfGuardBaseline?, device: String, runs: Int,
+                      injectedSlowdown: Double = 0,
+                      measure: @MainActor (String) async throws -> Double) async throws -> PerfGuardReport {
+        var results: [PerfGuardSceneResult] = []
+        for scene in scenes {
+            var samples: [Double] = []
+            for _ in 0..<runs { samples.append(try await measure(scene) * (1 + injectedSlowdown)) }
+            results.append(evaluate(scene: scene, runs: samples, baseline: baseline, device: device))
+        }
+        return PerfGuardReport(results: results)
+    }
+
+    static func evaluate(scene: String, runs: [Double], baseline: PerfGuardBaseline?,
+                         device: String) -> PerfGuardSceneResult {
+        let measured = median(runs)
+        func result(_ passed: Bool, _ reference: Double?, _ detail: String) -> PerfGuardSceneResult {
+            PerfGuardSceneResult(scene: scene, runs: runs, medianP95Milliseconds: measured,
+                baselineMilliseconds: reference, passed: passed, detail: detail)
+        }
+        let measuredText = String(format: "%.4f", measured)
+        guard measured.isFinite else { return result(false, nil, "pomiar nie jest skończony") }
+        guard let baseline else {
+            return result(false, nil, "brak punktu odniesienia (p95 \(measuredText) ms); zapisz go przez --record \(scene)")
+        }
+        guard baseline.device == device else {
+            return result(false, nil, "punkt odniesienia pochodzi z innego urządzenia (\(baseline.device)), a pomiar z \(device); zapisz nowy przez --record \(scene)")
+        }
+        guard let point = baseline.scenes[scene] else {
+            return result(false, nil, "brak punktu odniesienia (p95 \(measuredText) ms); zapisz go przez --record \(scene)")
+        }
+        let limit = point.p95Milliseconds * (1 + regressionTolerance)
+        let ratio = measured / point.p95Milliseconds
+        let detail = "p95 \(measuredText) ms, punkt odniesienia \(String(format: "%.4f", point.p95Milliseconds)) ms, limit \(String(format: "%.4f", limit)) ms (\(String(format: "%+.1f", (ratio - 1) * 100))%)"
+        return result(measured <= limit + 1e-9, point.p95Milliseconds, detail)
+    }
+
+    /// Jeden przebieg stress-300 przez `BubbleWorld` i bezpośredni renderer; zwraca p95 pełnej klatki.
+    @MainActor
+    static func measureStress300(device: MTLDevice, warmupFrames: Int, measuredFrames: Int) async throws -> Double {
+        let report = try await PublicWorldStressBenchmark.run(device: device, warmupFrames: warmupFrames,
+            measuredFrames: measuredFrames, progress: { _, _ in })
+        guard report.safetyPassed else {
+            throw PerfGuardError.unsafeRun("stress-300: nieudane klatki=\(report.failedFrames), wartości nieskończone=\(report.nonFiniteFrames), odczyty konturów=\(report.contourCPUReadbacks)")
+        }
+        return report.p95Milliseconds
+    }
+
+    @MainActor
+    static func measure(scene: String, device: MTLDevice, options: PerfGuardOptions) async throws -> Double {
+        switch scene {
+        case "stress-300":
+            return try await measureStress300(device: device, warmupFrames: options.warmupFrames,
+                measuredFrames: options.measuredFrames)
+        default: throw PerfGuardOptions.ParseError.invalidArgument(scene)
+        }
+    }
+
+    /// Punkt wejścia z `main.swift`; zwraca kod wyjścia procesu.
+    @MainActor
+    static func run(arguments: [String]) async -> Int32 {
+        do {
+            let options = try PerfGuardOptions.parse(arguments)
+            guard let device = MTLCreateSystemDefaultDevice() else {
+                print("Brak urządzenia Metal")
+                return 2
+            }
+            let url = URL(fileURLWithPath: options.baselinePath)
+            let existing = try PerfGuardBaseline.loadIfPresent(from: url)
+            if let scene = options.recordScene {
+                var runs: [Double] = []
+                for _ in 0..<options.runs { runs.append(try await measure(scene: scene, device: device, options: options)) }
+                let base = existing?.device == device.name ? existing! : PerfGuardBaseline(device: device.name, scenes: [:])
+                let stamp = ISO8601DateFormatter().string(from: Date())
+                try base.recording(scene: scene, runs: runs, recordedAt: stamp, note: options.note).write(to: url)
+                print("Zapisano punkt odniesienia \(scene): p95 \(String(format: "%.4f", median(runs))) ms (\(device.name)) w \(options.baselinePath)")
+                return 0
+            }
+            let report = try await check(scenes: scenes, baseline: existing, device: device.name,
+                runs: options.runs, injectedSlowdown: options.injectedSlowdown) { scene in
+                try await measure(scene: scene, device: device, options: options)
+            }
+            print(report.text)
+            return report.passed ? 0 : 1
+        } catch {
+            print("Błąd strażnika: \(error)")
+            print(PerfGuardOptions.usage)
+            return 2
+        }
+    }
+}
+
+enum PerfGuardError: Error { case unsafeRun(String) }
