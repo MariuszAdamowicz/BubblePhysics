@@ -47,6 +47,14 @@ public struct RGBA: Equatable, Hashable, Sendable {
         self.red = red; self.green = green; self.blue = blue; self.alpha = alpha
     }
     public static let white = RGBA(1, 1, 1, 1)
+
+    /// Składowe skończone i w [0, 1].
+    fileprivate func validate(_ name: String) throws {
+        for component in [red, green, blue, alpha] {
+            try requireFinite(component, name)
+            guard (0...1).contains(component) else { throw ModelValidationError.valueOutOfRange(name) }
+        }
+    }
 }
 
 /// Sposób składania obiektu z tym, co pod nim.
@@ -86,6 +94,12 @@ public struct RenderMaterial: Equatable, Sendable {
     public init(texture: TextureID? = nil, color: RGBA = .white, blend: RenderBlendMode = .opaque,
                 outline: RenderOutline = .none, bubbleMapping: BubbleTextureMapping = .attached,
                 uvOffset: SIMD2<Float> = .zero, uvScale: SIMD2<Float> = SIMD2(1, 1)) throws {
+        try color.validate("renderMaterial.color")
+        try outline.color.validate("renderMaterial.outline.color")
+        try requireNonnegative(outline.width, "renderMaterial.outline.width")
+        try requireFinite(uvOffset.x, "renderMaterial.uvOffset"); try requireFinite(uvOffset.y, "renderMaterial.uvOffset")
+        try requireFinite(uvScale.x, "renderMaterial.uvScale"); try requireFinite(uvScale.y, "renderMaterial.uvScale")
+        guard uvScale.x != 0, uvScale.y != 0 else { throw ModelValidationError.valueOutOfRange("renderMaterial.uvScale") }
         self.texture = texture
         self.color = color
         self.blend = blend

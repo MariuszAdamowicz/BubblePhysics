@@ -48,20 +48,31 @@ public final class BubbleWorld {
     private var queryIndexCache: QueryIndex?
     private var queryIndexBuilds = 0
 
-    /// Rejestr tekstur świata; `nil`, gdy świat nie ma urządzenia.
+    /// Rejestr tekstur świata: gra rejestruje w nim obrazy poza klatką, a transakcje wskazują je przez `TextureID`.
+    /// `nil` tylko wtedy, gdy świat nie ma urządzenia.
     public let assets: AssetRegistry?
 
+    /// `assets == nil` daje pusty rejestr urządzenia świata. Rejestr innego urządzenia (albo rejestr przy świecie bez
+    /// urządzenia) to `AssetError.deviceMismatch`.
     public convenience init(configuration: WorldConfiguration,
                             device: MTLDevice? = MTLCreateSystemDefaultDevice(),
                             assets: AssetRegistry? = nil) throws {
-        self.init(configuration: configuration, stepper: try NativeCompleteStepper(device: device))
+        let registry: AssetRegistry?
+        if let assets {
+            guard let device, device.registryID == assets.deviceRegistryID else { throw AssetError.deviceMismatch }
+            registry = assets
+        } else {
+            registry = device.map { AssetRegistry(device: $0) }
+        }
+        self.init(configuration: configuration, stepper: try NativeCompleteStepper(device: device), assets: registry)
     }
 
     /// Konstruktor wyłącznie dla diagnostycznego harnessu; limit nie jest parametrem API gry.
     package static func makeBenchmarkWorld(configuration: WorldConfiguration, device: MTLDevice,
                                            solverIterationLimit: Int) throws -> BubbleWorld {
         try BubbleWorld(configuration: configuration, stepper: NativeCompleteStepper(device: device,
-            configuration: NativeMetalConfiguration(solverIterationCount: solverIterationLimit)))
+            configuration: NativeMetalConfiguration(solverIterationCount: solverIterationLimit)),
+            assets: AssetRegistry(device: device))
     }
 
     package var benchmarkTelemetry: NativeMetalFrameTelemetry? {
@@ -74,9 +85,9 @@ public final class BubbleWorld {
         (stepper as? NativeCompleteStepper)?.publishedContourCPUReadbackCount ?? 0
     }
 
-    internal init(configuration: WorldConfiguration, stepper: any CompleteStepper) {
+    internal init(configuration: WorldConfiguration, stepper: any CompleteStepper, assets: AssetRegistry? = nil) {
         self.configuration = configuration
-        self.assets = nil
+        self.assets = assets
         self.state = RuntimeState(configuration: configuration)
         self.clock = FixedStepDriver(fixedTimeStep: configuration.fixedTimeStep,
                                      maximumBacklog: configuration.maximumBacklog)
@@ -309,7 +320,8 @@ public final class BubbleWorld {
             let transactionCount = pending.count
             // Punkty przekazane temu krokowi; zapytania złożone w czasie kroku czekają na następny.
             let hitTestBatch = pendingHitTests
-            let batch = TransactionStager.stageBatch(pending, against: state, validate: stepper.validate)
+            let batch = TransactionStager.stageBatch(pending, against: state, validate: stepper.validate,
+                textureExists: { [assets] texture in assets?.contains(texture) ?? false })
             do {
                 let beforeCommit: ((NativeMetalRenderHandoff?, RuntimeState) throws -> Void)? = encode.map { encode in
                     { [self] handoff, prepared in

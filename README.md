@@ -7,6 +7,7 @@
 | Produkt | Przeznaczenie |
 |---|---|
 | `BubblePhysics` | API gry: `BubbleWorld`, `WorldTransaction`, `WorldFrame`, typy modelu i diagnostyka. |
+| `BubblePhysicsAssets` | `AssetRegistry`: rejestr tekstur gry (`CGImage` albo `MTLTexture`) per urządzenie Metal; świat dostaje go przy tworzeniu. |
 | `BubblePhysicsMetalRender` | Renderuje opublikowaną klatkę świata bezpośrednio z buforów GPU do command buffera aplikacji. |
 | `BubblePhysicsBenchmarkSupport` | Wyłącznie moduły diagnostyczne (solvery referencyjne, historyczne eksperymenty). Nie są częścią API gry. |
 | `BubblePhysicsReferenceBench` | Runner benchmarków dla macOS z linii poleceń. |
@@ -17,6 +18,7 @@ Produkty dla gry działają na backendzie `native-metal` (trwały stan na GPU, t
 
 ```swift
 import BubblePhysics
+import BubblePhysicsAssets
 import BubblePhysicsMetalRender
 import Metal
 
@@ -25,11 +27,15 @@ let configuration = try WorldConfiguration(
     fixedTimeStep: 1.0 / 60)
 let world = try BubbleWorld(configuration: configuration)
 
+// Tekstury rejestruje się synchronicznie, poza klatką; transakcje wskazują je przez `TextureID`.
+// Świat bez własnego rejestru ma pusty rejestr swojego urządzenia: `world.assets`.
+let texture = try world.assets!.register(cgImage)   // `CGImage` albo gotowa `MTLTexture`
+
 let material = PhysicsMaterialID(rawValue: 1)
 let look = RenderMaterialID(rawValue: 1)
 world.submit(WorldTransaction()
     .updatePhysicsMaterial(material, material: try PhysicsMaterial(kind: .bubble))
-    .updateRenderMaterial(look, material: try RenderMaterial())
+    .updateRenderMaterial(look, material: try RenderMaterial(texture: texture, color: RGBA(1, 0.8, 0.9, 1)))
     .add(.bubble(try BubbleDescriptor(id: ObjectID(rawValue: 1), position: [187, 350],
                                       targetRadius: 20, mass: 8,
                                       physicsMaterialID: material, renderMaterialID: look))))

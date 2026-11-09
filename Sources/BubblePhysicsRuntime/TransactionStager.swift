@@ -10,6 +10,7 @@ package struct RuntimeState: Equatable, Sendable {
     package var transitions: [TransitionTarget: ParameterTransition] = [:]
     package var joints: [JointID: Joint] = [:]
     package var renderMaterials: [RenderMaterialID: RenderMaterial] = [:]
+    /// Tekstura tła rozciągnięta na region symulacji; `nil` oznacza brak tła.
     package var background: TextureID?
     package var globalForce: WorldPoint
     package var nextDriveID: UInt64 = 1
@@ -40,6 +41,7 @@ package struct RuntimeObject: Equatable, Sendable {
     package var kinematicDrive: KinematicDrive?
     /// Poza kinematycznej (x, y, obrót) liczona w podwójnej precyzji, żeby błąd `Float` nie narastał z krokami toru.
     package var kinematicExactPose: SIMD3<Double>?
+    /// Warstwa rysowania i hit-testu: startuje z deskryptora, a `setLayer` zmienia tylko to pole (deskryptory mają pola `let`).
     package var layer: Int32 = 0
     package var targetRadius: Float = 0
     package var collisionRadius: Float = 0
@@ -67,6 +69,11 @@ package struct RuntimeObject: Equatable, Sendable {
         case .sensor(let value): position = value.position; rotation = value.rotation; angularVelocity = 0
         }
         previousPosition = position
+        switch descriptor {
+        case .bubble(let value): layer = value.layer
+        case .rigidBody(let value): layer = value.layer
+        case .forceField, .sensor: break
+        }
         if case .bubble(let bubble) = descriptor {
             targetRadius = bubble.targetRadius; collisionRadius = bubble.targetRadius; effectiveRadius = bubble.targetRadius
         }
@@ -75,6 +82,14 @@ package struct RuntimeObject: Equatable, Sendable {
         switch descriptor {
         case .bubble(let value): return (value.physicsMaterialID, .bubble)
         case .rigidBody(let value): return (value.physicsMaterialID, .rigid)
+        case .forceField, .sensor: return nil
+        }
+    }
+    /// Materiał renderu obiektu; czujnik i pole sił nie są rysowane, więc go nie mają.
+    var renderMaterialID: RenderMaterialID? {
+        switch descriptor {
+        case .bubble(let value): return value.renderMaterialID
+        case .rigidBody(let value): return value.renderMaterialID
         case .forceField, .sensor: return nil
         }
     }
@@ -123,9 +138,10 @@ package struct StagedTransactionBatch: Sendable {
 }
 
 package enum TransactionStager {
+    /// `textureExists` mówi, czy tekstura jest w rejestrze zasobów świata; Runtime nie zna rejestru.
     package static func stage(_ transaction: WorldTransaction, against state: RuntimeState,
-        textureExists: (TextureID) -> Bool = { _ in false }) throws -> StagedWorldChange {
-        var candidate = StagingContext(state: state)
+        textureExists: @escaping (TextureID) -> Bool = { _ in false }) throws -> StagedWorldChange {
+        var candidate = StagingContext(state: state, textureExists: textureExists)
         for (index, operation) in transaction.operations.enumerated() {
             do { try candidate.apply(operation) }
             catch let error as TransactionRejectionReason {
@@ -144,14 +160,14 @@ package enum TransactionStager {
     /// To tylko staging: nie wykonuje kroku fizyki ani nie publikuje stanu na zewnątrz.
     package static func stageBatch(_ pending: [PendingTransaction], against state: RuntimeState,
         validate: ((StagedWorldChange) throws -> Void)? = nil,
-        textureExists: (TextureID) -> Bool = { _ in false }) -> StagedTransactionBatch {
+        textureExists: @escaping (TextureID) -> Bool = { _ in false }) -> StagedTransactionBatch {
         var candidate = state
         var changes: [StagedWorldChange] = []
         var receipts: [TransactionReceipt] = []
         var events: [WorldEvent] = []
         for submission in pending {
             do {
-                let change = try stage(submission.transaction, against: candidate)
+                let change = try stage(submission.transaction, against: candidate, textureExists: textureExists)
                 try validate?(change)
                 candidate = change.state
                 changes.append(change)
@@ -175,6 +191,7 @@ package enum TransactionStager {
 
 private struct StagingContext {
     var state: RuntimeState
+    let textureExists: (TextureID) -> Bool
     var created: [ObjectID] = []
     var removed: [ObjectID] = []
     var replaced: [ObjectID] = []
@@ -201,8 +218,20 @@ private struct StagingContext {
             for objectID in state.objects.keys.sorted(by: { $0.rawValue < $1.rawValue }) {
                 if let existing = state.objects[objectID], existing.material?.0 == id { try validate(existing) }
             }
-        // Zaślepki etapu 5: operacje przyjęte bez skutku, dopóki rejestr, materiały, warstwy i tło nie wejdą do `RuntimeState`.
-        case .updateRenderMaterial, .setLayer, .setBackground: break
+        case .updateRenderMaterial(let id, let material):
+            try requireTexture(material.texture)
+            state.renderMaterials[id] = material
+        case .setLayer(let id, let layer):
+            var existing = try object(id)
+            switch existing.descriptor {
+            case .bubble, .rigidBody: break
+            case .forceField, .sensor: throw TransactionRejectionReason.layerNotSupported(id)
+            }
+            existing.layer = layer
+            state.objects[id] = existing
+        case .setBackground(let texture):
+            try requireTexture(texture)
+            state.background = texture
         case .setMotion(let id, let role):
             var existing = try physicalObject(id)
             guard role != .playerDriven || existing.playerDriveTarget != nil else {
@@ -299,6 +328,9 @@ private struct StagingContext {
         }
     }
 
+    func requireTexture(_ texture: TextureID?) throws {
+        if let texture, !textureExists(texture) { throw TransactionRejectionReason.textureNotFound(texture) }
+    }
     func object(_ id: ObjectID) throws -> RuntimeObject {
         guard let existing = state.objects[id] else { throw TransactionRejectionReason.objectNotFound(id) }
         return existing
@@ -378,6 +410,9 @@ private struct StagingContext {
         if let (id, kind) = object.material {
             guard let material = state.physicsMaterials[id] else { throw TransactionRejectionReason.physicsMaterialNotFound(id) }
             guard material.kind == kind else { throw TransactionRejectionReason.incompatiblePhysicsMaterial(id, object.descriptor.id) }
+        }
+        if let id = object.renderMaterialID, state.renderMaterials[id] == nil {
+            throw TransactionRejectionReason.renderMaterialNotFound(id)
         }
         switch object.descriptor {
         case .bubble(let value):
