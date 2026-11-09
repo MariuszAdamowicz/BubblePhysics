@@ -7,7 +7,7 @@ import simd
 
 /// Wynik kompletnej ścieżki publicznego świata i bezpośredniego renderera.
 public struct PublicWorldStressReport: Sendable {
-    /// Nazwa zmierzonej sceny: `stress-300` albo `mixed`.
+    /// Nazwa zmierzonej sceny: `stress-300`, `mixed`, `decals` albo `acceptance`.
     public let scene: String
     public let deviceName: String
     public let warmupFrames: Int
@@ -28,13 +28,16 @@ public struct PublicWorldStressReport: Sendable {
     public let fallbackFrames: Int
     public let failedFrames: Int
     public let contourCPUReadbacks: Int
-    /// Rozmiar celu renderu w pikselach (zaślepka zadania 67).
+    /// Rozmiar celu renderu w pikselach.
     public let renderWidth: Int
     public let renderHeight: Int
-    /// Zaślepka zadania 67: pola liczników kandydatów i bramki sceny.
+    /// Suma kandydatów kontaktu odrzuconych przez limit wiersza w całym przebiegu; bezpieczna scena ma 0.
     public let contactCandidateOverflow: Int
+    /// Największa liczba kandydatów kontaktu na jeden obiekt w którymkolwiek kroku przebiegu.
     public let maximumCandidatesPerObject: Int
+    /// Limit kandydatów na obiekt (k); zapas wymaga `maximumCandidatesPerObject` ≤ k/2.
     public let candidateLimit: Int
+    /// Próg p95 pełnej klatki dla zmierzonej sceny w milisekundach.
     public let gateMilliseconds: Double
 
     /// Kontrola bezpieczeństwa; geometryczna obwiednia referencyjna wymaga osobnego porównania.
@@ -43,13 +46,14 @@ public struct PublicWorldStressReport: Sendable {
             && contourCPUReadbacks == 0
     }
 
-    public var passesP95Gate: Bool { p95Milliseconds <= PublicWorldStressBenchmark.p95GateMilliseconds }
+    public var passesP95Gate: Bool { p95Milliseconds <= gateMilliseconds }
 
     public var text: String {
         """
         path=public BubbleWorld + BubblePhysicsMetalRender, same command buffer
         device=\(deviceName)
         scene=\(scene); solver_iteration_limit=\(solverIterationLimit)
+        render_px=\(renderWidth)x\(renderHeight)
         warmup=\(warmupFrames); measured=\(measuredFrames)
         p95_ms=\(String(format: "%.4f", p95Milliseconds)); max_ms=\(String(format: "%.4f", maximumMilliseconds))
         gpu_p95_ms=\(String(format: "%.4f", gpuP95Milliseconds)); host_non_gpu_p95_ms=\(String(format: "%.4f", hostNonGPUP95Milliseconds))
@@ -57,9 +61,10 @@ public struct PublicWorldStressReport: Sendable {
         guard_corrections=\(guardCorrections); non_finite_frames=\(nonFiniteFrames)
         fallback_frames=\(fallbackFrames); failed_frames=\(failedFrames)
         contour_cpu_readbacks=\(contourCPUReadbacks)
+        contact_candidate_overflow=\(contactCandidateOverflow); max_candidates_per_object=\(maximumCandidatesPerObject); candidate_limit=\(candidateLimit)
         safety=\(safetyPassed ? "pass" : "fail")
         native_quality_envelope=not_evaluated_by_this_harness
-        p95_gate_ms=\(String(format: "%.4f", PublicWorldStressBenchmark.p95GateMilliseconds)); p95_gate=\(passesP95Gate ? "pass" : "fail")
+        p95_gate_ms=\(String(format: "%.4f", gateMilliseconds)); p95_gate=\(passesP95Gate ? "pass" : "fail")
         """
     }
 }
@@ -71,11 +76,16 @@ public enum PublicWorldStressBenchmark {
     /// (docs/benchmarks/native-metal-bubble-solver-2026-10-14.md).
     public nonisolated static let p95GateMilliseconds = 10.4568
 
-    /// Wymaga fizycznego urządzenia dla wyniku akceptacyjnego. Koduje oba etapy do jednego bufora.
+    /// Próg p95 pełnej klatki sceny akceptacyjnej w natywnej rozdzielczości urządzenia: budżet 60 FPS.
+    public nonisolated static let acceptanceGateMilliseconds = 16.67
+
+    /// Wymaga fizycznego urządzenia dla wyniku akceptacyjnego. Koduje oba etapy do jednego bufora i renderuje poza ekranem
+    /// w `renderSize` pikseli (`nil`: 375 × wysokość regionu sceny).
     public static func measure(device: MTLDevice, scene: Scene, renderSize: CGSize? = nil,
                                progress: @escaping @MainActor (Int, Int) -> Void = { _, _ in }) async throws
         -> PublicWorldStressReport {
-        try await run(device: device, scene: scene, warmupFrames: 30, measuredFrames: 300, progress: progress)
+        try await run(device: device, scene: scene, renderSize: renderSize, warmupFrames: 30, measuredFrames: 300,
+                      progress: progress)
     }
 
     /// Scena mierzona przez `run(scene:)`.
@@ -84,7 +94,8 @@ public enum PublicWorldStressBenchmark {
         case mixed
         /// stress-300 z teksturą przyklejoną i naklejką tekstową na każdej bańce; mierzy koszt naklejek i przycinania maską.
         case decals
-        /// Zaślepka zadania 67: scena akceptacyjna.
+        /// Scena akceptacyjna iPhone'a X: stress-300 z teksturą przyklejoną i naklejką tekstową, kinematycznym trójkątem
+        /// z `KinematicDrive` i połową baniek na warstwie 1; oba materiały baniek mieszają alfą.
         case acceptance
 
         package static let stress300 = Scene.stress(bubbleCount: Stress300Scene.defaultBubbleCount)
@@ -96,6 +107,11 @@ public enum PublicWorldStressBenchmark {
             case .decals: return "decals"
             case .acceptance: return "acceptance"
             }
+        }
+
+        /// Próg p95 pełnej klatki sceny.
+        package var gateMilliseconds: Double {
+            self == .acceptance ? PublicWorldStressBenchmark.acceptanceGateMilliseconds : PublicWorldStressBenchmark.p95GateMilliseconds
         }
 
         var regionHeight: Float {
@@ -123,7 +139,7 @@ public enum PublicWorldStressBenchmark {
                 let texture = try assets.register(Self.decalTextureImage())
                 let font = try assets.register(font: "Helvetica-Bold", characters: "0123456789")
                 return try Stress300Scene.initialTransaction(bubbleCount: Stress300Scene.defaultBubbleCount,
-                    decorations: .init(texture: texture, font: font))
+                    decorations: .init(texture: texture, font: font, acceptance: self == .acceptance))
             }
         }
 
@@ -147,7 +163,9 @@ public enum PublicWorldStressBenchmark {
         /// Transakcja przed krokiem `step` (numer od 0) albo `nil`, gdy scena nic wtedy nie zmienia.
         func stepTransaction(step: Int) throws -> WorldTransaction? {
             switch self {
-            case .stress, .decals, .acceptance: return step > 0 ? try Stress300Scene.triangleReplacement(step: step) : nil
+            case .stress, .decals: return step > 0 ? try Stress300Scene.triangleReplacement(step: step) : nil
+            // Trójkąt jedzie sam według `KinematicDrive` z transakcji początkowej.
+            case .acceptance: return nil
             case .mixed: return try MixedScene.stepTransaction(step: step)
             }
         }
@@ -160,6 +178,8 @@ public enum PublicWorldStressBenchmark {
                       measuredFrames: measuredFrames, progress: progress)
     }
 
+    /// `renderSize` w pikselach celu renderu; `nil` daje 375 × wysokość regionu sceny. Viewport pokrywa region sceny
+    /// w całości przy proporcjach celu, więc wynik w natywnej rozdzielczości nie jest rozciągnięty.
     package static func run(device: MTLDevice, scene: Scene = .stress300, renderSize: CGSize? = nil,
                             warmupFrames: Int, measuredFrames: Int,
                             progress: @escaping @MainActor (Int, Int) -> Void) async throws
@@ -170,8 +190,14 @@ public enum PublicWorldStressBenchmark {
         guard let assets = world.assets else { throw StressBenchmarkError.metalUnavailable }
         let renderer = try BubblePhysicsMetalRender(device: device, assets: assets)
         world.submit(try scene.initialTransaction(assets: assets))
+        let pixelWidth = renderSize.map { Int($0.width) } ?? 375
+        let pixelHeight = renderSize.map { Int($0.height) } ?? Int(height.rounded(.up))
+        guard pixelWidth > 0, pixelHeight > 0 else { throw StressBenchmarkError.metalUnavailable }
+        let aspect = Float(pixelWidth) / Float(pixelHeight)
+        let viewWidth = max(375, height * aspect)
+        let viewport = try Viewport(center: [187.5, height / 2], size: [viewWidth, viewWidth / aspect])
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm,
-            width: 375, height: Int(height.rounded(.up)), mipmapped: false)
+            width: pixelWidth, height: pixelHeight, mipmapped: false)
         descriptor.usage = .renderTarget
         descriptor.storageMode = .private
         guard let texture = device.makeTexture(descriptor: descriptor),
@@ -190,6 +216,7 @@ public enum PublicWorldStressBenchmark {
         var nonFiniteFrames = 0
         var fallbackFrames = 0
         var failedFrames = 0
+        var maximumCandidates = 0
         let total = warmupFrames + measuredFrames
         for index in 0..<total {
             try Task.checkCancellation()
@@ -197,7 +224,7 @@ public enum PublicWorldStressBenchmark {
             guard let command = queue.makeCommandBuffer() else { throw StressBenchmarkError.metalUnavailable }
             let start = DispatchTime.now().uptimeNanoseconds
             let frame = await world.advance(by: 1.0 / 60, commandBuffer: command) {
-                try renderer.encode(world: world, viewport: Viewport(center: [187.5, height / 2], size: [375, height]),
+                try renderer.encode(world: world, viewport: viewport,
                     commandBuffer: command, renderPassDescriptor: pass)
             }
             let elapsed = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
@@ -216,6 +243,7 @@ public enum PublicWorldStressBenchmark {
                     } else { failedFrames += 1 }
                 }
             } else { failedFrames += 1 }
+            maximumCandidates = max(maximumCandidates, world.diagnostics.maximumContactCandidatesPerObject)
             if index >= warmupFrames { measured.append(elapsed) }
             progress(index + 1, total)
             // BubbleWorld i renderer są celowo izolowane do MainActor. Bez tego
@@ -238,8 +266,10 @@ public enum PublicWorldStressBenchmark {
             hostWaitingP95Milliseconds: p95(hostWaitingMeasured),
             maximumMilliseconds: measured.last ?? .infinity, guardCorrections: guardCorrections,
             nonFiniteFrames: nonFiniteFrames, fallbackFrames: fallbackFrames, failedFrames: failedFrames,
-            contourCPUReadbacks: world.benchmarkContourCPUReadbackCount, renderWidth: 0, renderHeight: 0,
-            contactCandidateOverflow: 0, maximumCandidatesPerObject: 0, candidateLimit: 0, gateMilliseconds: 0)
+            contourCPUReadbacks: world.benchmarkContourCPUReadbackCount, renderWidth: pixelWidth,
+            renderHeight: pixelHeight, contactCandidateOverflow: world.diagnostics.contactCandidateOverflow,
+            maximumCandidatesPerObject: maximumCandidates, candidateLimit: BubbleWorld.contactCandidateLimit,
+            gateMilliseconds: scene.gateMilliseconds)
     }
 }
 
@@ -264,6 +294,8 @@ package enum Stress300Scene {
     struct Decorations {
         let texture: TextureID
         let font: FontID
+        /// Scena akceptacyjna: materiały alfa, połowa baniek na warstwie 1 i trójkąt kinematyczny z `KinematicDrive`.
+        var acceptance = false
     }
 
     /// Materiały, 300 baniek, ściany i trójkąt w pozycji początkowej.
@@ -278,10 +310,18 @@ package enum Stress300Scene {
         let materialID = PhysicsMaterialID(rawValue: 1)
         let polygonMaterialID = PhysicsMaterialID(rawValue: 2)
         let styleID = RenderMaterialID(rawValue: 1)
+        let upperStyleID = RenderMaterialID(rawValue: 2)
         var transaction = WorldTransaction()
             .updatePhysicsMaterial(materialID, material: try PhysicsMaterial(kind: .bubble))
             .updatePhysicsMaterial(polygonMaterialID, material: try PhysicsMaterial(kind: .rigid))
-            .updateRenderMaterial(styleID, material: try RenderMaterial(texture: decorations?.texture, bubbleMapping: .attached))
+            .updateRenderMaterial(styleID, material: try RenderMaterial(texture: decorations?.texture,
+                color: decorations?.acceptance == true ? RGBA(1, 1, 1, 0.9) : .white,
+                blend: decorations?.acceptance == true ? .alpha : .opaque, bubbleMapping: .attached))
+        if decorations?.acceptance == true {
+            transaction = transaction.updateRenderMaterial(upperStyleID,
+                material: try RenderMaterial(texture: decorations?.texture, color: RGBA(0.8, 0.9, 1, 0.7), blend: .alpha,
+                                             bubbleMapping: .attached))
+        }
         var random = StressLCG(seed: 0x2B_60_F5)
         let horizontalSpacing: Float = 345 / 15
         let verticalSpacing: Float = 33.5
@@ -291,12 +331,14 @@ package enum Stress300Scene {
             let jitterX = (random.nextUnit() - 0.5) * horizontalSpacing * 0.12
             let jitterY = (random.nextUnit() - 0.5) * verticalSpacing * 0.12
             let radius = baseRadius * (0.78 + random.nextUnit() * 0.44)
+            let upper = decorations?.acceptance == true && index % 2 == 1
             transaction = transaction.add(.bubble(try BubbleDescriptor(
                 id: ObjectID(rawValue: UInt64(index + 1)),
                 position: [15 + (Float(column) + 0.5) * horizontalSpacing + jitterX,
                            15 + (Float(row) + 0.5) * verticalSpacing + jitterY],
                 targetRadius: radius, mass: max(1, radius * radius * 0.02),
-                physicsMaterialID: materialID, renderMaterialID: styleID,
+                physicsMaterialID: materialID, renderMaterialID: upper ? upperStyleID : styleID,
+                layer: upper ? 1 : 0,
                 decal: try decorations.map { try Decal.text(String(index % 100), source: .font($0.font)) })))
         }
         let walls: [[WorldPoint]] = [
@@ -310,28 +352,39 @@ package enum Stress300Scene {
                 id: ObjectID(rawValue: UInt64(10_001 + index)), vertices: vertices,
                 physicsMaterialID: polygonMaterialID, renderMaterialID: styleID)))
         }
-        transaction = transaction.add(.rigidBody(try triangle(step: 0)))
+        let kinematic = decorations?.acceptance == true
+        transaction = transaction.add(.rigidBody(try triangle(step: 0, kinematic: kinematic)))
+        if kinematic { transaction = transaction.setKinematicDrive(triangleID, drive: .path(try trianglePath())) }
         return transaction
     }
 
     /// Zastępuje trójkąt jego pozycją na kroku `step` (tor po pięciu punktach, 40 kroków na odcinek).
     package static func triangleReplacement(step: Int) throws -> WorldTransaction {
-        WorldTransaction().replace(ObjectID(rawValue: 10_000), with: .rigidBody(try triangle(step: step)))
+        WorldTransaction().replace(triangleID, with: .rigidBody(try triangle(step: step)))
     }
 
-    private static func triangle(step: Int) throws -> RigidBodyDescriptor {
+    private static let triangleID = ObjectID(rawValue: 10_000)
+    private static let triangleWaypoints: [WorldPoint] = [[187.5,350], [65,105], [310,595], [310,105], [65,595]]
+
+    /// Tor kinematycznego trójkąta sceny akceptacyjnej: te same punkty co w stress-300, dwa okrążenia, 200 jednostek na sekundę.
+    private static func trianglePath() throws -> PathDrive {
+        let lap = Array(triangleWaypoints.dropFirst()) + [triangleWaypoints[0]]
+        return try PathDrive(points: lap + lap, speed: 200)
+    }
+
+    private static func triangle(step: Int, kinematic: Bool = false) throws -> RigidBodyDescriptor {
         let polygonMaterialID = PhysicsMaterialID(rawValue: 2)
         let styleID = RenderMaterialID(rawValue: 1)
         let triangleVertices: [WorldPoint] = [[-46,34], [46,34], [0,-52]]
-        let waypoints: [WorldPoint] = [[187.5,350], [65,105], [310,595], [310,105], [65,595]]
+        let waypoints = triangleWaypoints
         let leg = (step / 40) % waypoints.count
         let next = (leg + 1) % waypoints.count
         let t = Float(step % 40) / 40
         let center = WorldPoint(
             waypoints[leg].x + (waypoints[next].x - waypoints[leg].x) * t,
             waypoints[leg].y + (waypoints[next].y - waypoints[leg].y) * t)
-        return try RigidBodyDescriptor(id: ObjectID(rawValue: 10_000), vertices: triangleVertices,
-            position: center, physicsMaterialID: polygonMaterialID, renderMaterialID: styleID)
+        return try RigidBodyDescriptor(id: triangleID, vertices: triangleVertices,
+            position: center, motionRole: kinematic ? .kinematic : .static, physicsMaterialID: polygonMaterialID, renderMaterialID: styleID)
     }
 }
 
