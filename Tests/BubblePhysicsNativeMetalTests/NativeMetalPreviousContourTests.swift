@@ -116,6 +116,8 @@ final class NativeMetalPreviousContourTests: XCTestCase {
         let publishedContours = published.debugContourSnapshot()
         XCTAssertTrue(published.previousContoursValid)
         XCTAssertEqual(published.debugPreviousContourSnapshot(), firstContours)
+        // Renderer czyta słownik indeksów t−1 już w klatce bez kroku, przed nieudanym krokiem; wynik nie może zostać w pamięci podręcznej.
+        XCTAssertEqual(published.previousBubbleIndexByID, [id(1): 0], "przed nieudanym krokiem strona t−1 jest ważna")
 
         executor.failNext = true
         do {
@@ -126,6 +128,7 @@ final class NativeMetalPreviousContourTests: XCTestCase {
         XCTAssertEqual(published.debugContourSnapshot(), publishedContours, "strona t jest nietknięta")
         XCTAssertNotEqual(published.debugPreviousContourSnapshot(), firstContours, "strona t−1 jest nadpisana")
         XCTAssertFalse(published.previousContoursValid, "uchwyt wie, że jego strona t−1 jest nieważna")
+        XCTAssertTrue(published.previousBubbleIndexByID.isEmpty, "indeksy t−1 nie przeżywają unieważnienia strony t−1")
 
         frame = try await next(world, frame)
         let recovered = try XCTUnwrap(world.publishedRenderHandoff)

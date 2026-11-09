@@ -29,9 +29,13 @@ package final class NativeMetalRenderHandoff {
     package private(set) lazy var bubbleIndexByID: [ObjectID: Int] = Dictionary(
         uniqueKeysWithValues: bubbleIDs.enumerated().map { ($0.element, $0.offset) })
 
+    /// Indeks rekordów stron t−1 budowany raz na uchwyt; słownik nie niesie ważności, bo ta zmienia się w czasie życia uchwytu.
+    private lazy var previousIndexByID: [ObjectID: Int] = Dictionary(
+        uniqueKeysWithValues: previousBubbleIDs.enumerated().map { ($0.element, $0.offset) })
+
     /// Indeks rekordu bańki na stronie t−1; pusty, gdy nie ma ważnej strony t−1 (wtedy bańka rysuje się bez interpolacji).
-    package private(set) lazy var previousBubbleIndexByID: [ObjectID: Int] = previousContoursValid ? Dictionary(
-        uniqueKeysWithValues: previousBubbleIDs.enumerated().map { ($0.element, $0.offset) }) : [:]
+    /// Ważność jest sprawdzana przy każdym odczycie: krok bez publikacji może ją zgasić po pierwszym użyciu uchwytu.
+    package var previousBubbleIndexByID: [ObjectID: Int] { previousContoursValid ? previousIndexByID : [:] }
 
     init(points: MTLBuffer, counts: MTLBuffer, bubbles: MTLBuffer,
          bubbleIDs: [ObjectID], contourStride: Int,
