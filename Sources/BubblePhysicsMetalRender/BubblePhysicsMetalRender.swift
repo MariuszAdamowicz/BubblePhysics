@@ -90,7 +90,7 @@ public final class BubblePhysicsMetalRender {
     }
 
     public func encode(world: BubbleWorld, viewport: Viewport, commandBuffer: MTLCommandBuffer,
-                       renderPassDescriptor: MTLRenderPassDescriptor) throws {
+                       renderPassDescriptor: MTLRenderPassDescriptor, hooks: RenderHooks = .none) throws {
         guard commandBuffer.device === device, world.assets === assets else { throw BubblePhysicsMetalRenderError.deviceMismatch }
         guard let color = renderPassDescriptor.colorAttachments[0].texture else {
             throw BubblePhysicsMetalRenderError.missingColorTarget

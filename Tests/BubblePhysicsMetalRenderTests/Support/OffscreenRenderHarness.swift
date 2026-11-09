@@ -41,9 +41,11 @@ final class OffscreenRenderHarness {
     func makeCommandBuffer() throws -> MTLCommandBuffer { try XCTUnwrap(queue.makeCommandBuffer()) }
 
     /// Rysuje opublikowany stan świata do celu i czeka na koniec bufora.
-    func render(world: BubbleWorld, renderer: BubblePhysicsMetalRender, viewport: Viewport) async throws {
+    func render(world: BubbleWorld, renderer: BubblePhysicsMetalRender, viewport: Viewport,
+                hooks: RenderHooks = .none) async throws {
         let command = try makeCommandBuffer()
-        try renderer.encode(world: world, viewport: viewport, commandBuffer: command, renderPassDescriptor: makePass())
+        try renderer.encode(world: world, viewport: viewport, commandBuffer: command, renderPassDescriptor: makePass(),
+                            hooks: hooks)
         command.commit()
         await command.completed()
         XCTAssertEqual(command.status, .completed)
@@ -118,8 +120,8 @@ struct RenderTestScene {
     @discardableResult
     func step() async -> WorldFrame { await world.advance(by: SceneBuilders.step) }
 
-    func render(viewport: Viewport? = nil) async throws {
-        try await harness.render(world: world, renderer: renderer, viewport: viewport ?? Self.viewport)
+    func render(viewport: Viewport? = nil, hooks: RenderHooks = .none) async throws {
+        try await harness.render(world: world, renderer: renderer, viewport: viewport ?? Self.viewport, hooks: hooks)
     }
 
     func assertPixel(_ point: WorldPoint, _ expected: RGBA, _ message: String = "", viewport: Viewport? = nil,
