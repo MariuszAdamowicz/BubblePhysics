@@ -1,6 +1,8 @@
 # BubblePhysics
 
-`BubblePhysics` to pakiet Swift z silnikiem fizycznym GPU dla deformowalnych baniek 2D, sztywnych wielokątów, sensorów i pól sił. Działa na iOS 16+ i macOS 13+ (GPU Apple z Metal).
+`BubblePhysics` to pakiet Swift z silnikiem fizycznym GPU dla deformowalnych baniek 2D, sztywnych brył (wielokąty, koła, kapsuły), więzów, sensorów i pól sił. Działa na iOS 16+ i macOS 13+ (GPU Apple z Metal).
+
+**Wersja 2.0.0** zmienia publiczne API względem 1.x. Przejście z `v1.0.0` opisuje [docs/MIGRATION-v2.md](docs/MIGRATION-v2.md), a integrację z `MTKView`, rejestrację zasobów, zapytania i zdarzenia [docs/integration-guide.md](docs/integration-guide.md).
 
 ## Produkty
 
