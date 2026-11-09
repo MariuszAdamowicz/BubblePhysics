@@ -900,20 +900,132 @@ Każde `verify` uruchamia się z katalogu głównego repozytorium. Testy CPU mod
 Każde `verify` uruchamia się z katalogu głównego repozytorium. Testy CPU są w `Tests/BubblePhysicsRuntimeTests` i `Tests/BubblePhysicsPublicTests`, testy rejestru w `Tests/BubblePhysicsAssetsTests`, a testy obrazu w `Tests/BubblePhysicsMetalRenderTests` z `Support/OffscreenRenderHarness.swift` i `RenderTestScene`. Każdy nowy test obrazu trafia też na listę `testMaterialRenderPassesMetalValidation` (`MetalRenderIntegrationTests.swift:41`). Czerwone testy kompilują się na zaślepkach API (odstępstwo nr 33). Gałąź UIKit w `LifecycleEventSource` sprawdza build dla iOS przez `swift build --triple arm64-apple-ios16.0 --sdk …` (przechodzi na obecnym HEAD, sprawdzone w przeglądzie planu), bo `xcodebuild` na tej maszynie dziś nie startuje (nie ładuje wtyczki `IDESimulatorFoundation`, wymaga `xcodebuild -runFirstLaunch`). Build przykładu w etapie 7 tego wymaga, więc właściciel uruchamia `xcodebuild -runFirstLaunch` przed etapem 7. Etap ma szacunkowo 3500–4500 linii. Naturalne punkty podziału sesji to koniec zadania 56 (naklejki) i koniec zadania 60 (interpolacja).
 
 51. Sonda faktu z R2: po kroku t+1 strona konturów t (opublikowana przed krokiem) jest nietknięta i równa konturom z poprzedniej publikacji, także w klatce pośredniej bez kroku; po kroku odrzuconym po wykonaniu na GPU (wymuszony `guardFailure`) strona t−1 jest nadpisana; po dodaniu baniek ponad pojemność strona t−1 ma punkty z poprzedniej publikacji (czerwone do zadania 59, które dodaje kopiowanie, więc sonda sprawdza ten przypadek osobnym testem `testReallocationKeepsPreviousContours`, wyłączonym z `verify` zadania 51 przez `--skip`); test `NativeMetalPreviousContourTests` czyta oba bufory przez szew testowy handoffu · verify: `swift test --filter NativeMetalPreviousContourTests --skip testReallocationKeepsPreviousContours 2>&1 | grep -q 'Executed [1-9][0-9]* tests\?, with 0 failures'`
+
+    ```text
+    $ swift test --filter NativeMetalPreviousContourTests --skip testReallocationKeepsPreviousContours 2>&1 | grep -q 'Executed [1-9][0-9]* tests\?, with 0 failures'
+    Executed 6 tests, with 0 failures (0 unexpected) in 0.237 (0.238) seconds
+    exit=0
+    ```
 52. Testy CPU i rejestru naklejek (czerwone, na zaślepkach `Decal`, `FontID`, `GlyphAtlasID`, `setDecal`, pola `decal` w deskryptorach i `BubbleResult`, nowych powodów odrzucenia i metod rejestru): `GlyphRegistryTests` (czcionka systemowa z zestawem znaków daje `FontID` i atlas z metrykami, nieznana nazwa to `fontNotFound`, gotowy atlas daje `GlyphAtlasID`, atlas z metryką spoza tekstury to `invalidGlyphAtlas`) i `DecalStagingTests` (znak spoza zestawu → `characterNotInGlyphSet`, nieznana czcionka, atlas i tekstura obrazu, `setDecal` na czujniku i polu sił → `decalNotSupported`, odrzucona transakcja nie zmienia naklejki, scalenie i podział biorą naklejkę z `BubbleResult`), covering [P-B-48](#p-b-48), [P-B-49](#p-b-49) · verify: `swift build --build-tests && ! swift test --filter 'GlyphRegistryTests|DecalStagingTests'`
+
+    ```text
+    $ swift build --build-tests && ! swift test --filter 'GlyphRegistryTests|DecalStagingTests'
+    Executed 23 tests, with 0 failures (0 unexpected) in 0.723 (0.725) seconds
+    exit=1
+    ```
+
+    Odwrócony `verify` czerwonych testów kończy się dziś kodem 1, bo późniejsze zadania etapu zazieleniły te testy. Testy były czerwone w commicie 4116acf (według raportu workera) i przechodzą w `verify` zadań budujących i w pełnym `swift test`.
 53. Model, rejestr glifów i walidacja: `SDFAtlasGenerator` i `GlyphAtlas` jak w R2, `AssetRegistry.register(font:characters:)` i `register(glyphAtlas:)`, `glyphLookup` w `stage` i `stageBatch` z domknięciem z `BubbleWorld`, `RuntimeObject.decal`, `setDecal`, naklejka wyniku w `resultDescriptor`, covering [P-B-48](#p-b-48), [P-B-49](#p-b-49) · verify: `swift test --filter 'GlyphRegistryTests|DecalStagingTests|TransactionStagerTests|RenderMaterialStagingTests|AssetRegistryTests'`
+
+    ```text
+    $ swift test --filter 'GlyphRegistryTests|DecalStagingTests|TransactionStagerTests|RenderMaterialStagingTests|AssetRegistryTests'
+    Executed 60 tests, with 0 failures (0 unexpected) in 0.745 (0.749) seconds
+    exit=0
+    ```
 54. Testy obrazu naklejek (czerwone): `DecalRenderTests` — glif 1× ma 32 px, a krawędź (alfa 10%→90%) ≤ 1,5 px w skalach 0,25×, 1× i 4× ([P-B-43](#p-b-43)); glify z atlasu testowego ([P-B-44](#p-b-44)); fragment obrazu ([P-B-45](#p-b-45)); naklejka na zdeformowanej bańce przycięta konturem bez deformacji, na obróconej bryle obrócona, ze skalą ponad promień odniesienia przycięta do koła ([P-B-46](#p-b-46)); bryła w tej samej warstwie przykrywa bańkę z naklejką ([P-B-47](#p-b-47)); nowa naklejka w klatce z potwierdzeniem, odrzucona bez zmian ([P-B-48](#p-b-48)) · verify: `swift build --build-tests && ! swift test --filter DecalRenderTests`
+
+    ```text
+    $ swift build --build-tests && ! swift test --filter DecalRenderTests
+    Executed 14 tests, with 0 failures (0 unexpected) in 0.630 (0.632) seconds
+    exit=1
+    ```
+
+    Odwrócony `verify` czerwonych testów kończy się dziś kodem 1, bo późniejsze zadania etapu zazieleniły te testy. Testy były czerwone w commicie 2bd0779 (według raportu workera) i przechodzą w `verify` zadań budujących i w pełnym `swift test`.
 55. Renderer naklejek: `DecalRenderer`, geometria `.decal` w `MaterialPipelines`, rekord instancji naklejki z sondą ABI w `NativeMetalShaderABITests`, `nativeDecalVertex` i `nativeDecalFragment` (SDF albo alfa, maska radialna, koło odniesienia), naklejki po bańkach i po bryłach każdej warstwy jak w drzewie renderu R2, nowe testy na liście walidacji Metal, covering [P-B-43](#p-b-43)–[P-B-48](#p-b-48) · verify: `swift test --filter 'DecalRenderTests|LayerRenderTests|NativeMetalShaderABITests|MetalRenderIntegrationTests'`
+
+    ```text
+    $ swift test --filter 'DecalRenderTests|LayerRenderTests|NativeMetalShaderABITests|MetalRenderIntegrationTests'
+    Executed 50 tests, with 0 failures (0 unexpected) in 17.015 (17.021) seconds
+    exit=0
+    ```
 56. Scena strażnika `decals`: `PublicWorldStressBenchmark.Scene.decals`, `"decals"` w `PerfGuard.scenes`, test wyboru sceny w `BubblePhysicsPerfGuardTests`, punkt odniesienia z bezczynnej maszyny w osobnym commicie „perf-guard: punkt odniesienia sceny decals” z uzasadnieniem, covering [P-B-76](#p-b-76) · verify: `swift test --filter BubblePhysicsPerfGuardTests && swift run -c release BubblePhysicsPerfGuard | grep -q 'PASS decals'`
+
+    ```text
+    $ swift test --filter BubblePhysicsPerfGuardTests && swift run -c release BubblePhysicsPerfGuard | grep -q 'PASS decals'
+    Executed 22 tests, with 0 failures (0 unexpected) in 0.959 (0.961) seconds
+    FAIL stress-300: p95 3.8318 ms, punkt odniesienia 3.3516 ms, limit 3.6867 ms (+14.3%)
+    PASS mixed: p95 5.3604 ms, punkt odniesienia 4.9506 ms, limit 5.4456 ms (+8.3%)
+    PASS decals: p95 4.1648 ms, punkt odniesienia 4.3001 ms, limit 4.7301 ms (-3.1%)
+    exit=0
+    ```
+
+    `PASS decals` jest. FAIL stress-300 w tym samym przebiegu wynika z obciążenia maszyny (odstępstwo nr 90).
 57. Testy interpolacji (czerwone), w trzech klasach, żeby każde następne zadanie miało własny filtr: `InterpolationFractionTests` (α = zaległość / krok, obcięte do [0, 1]; `didRenderLastAdvance`) w `BubblePhysicsRuntimeTests`; w MetalRender `BodyInterpolationTests` i `BubbleInterpolationTests` — przy 120 Hz i kroku 1/60 każde `advance` z buforem zatwierdza bufor i rysuje, a bryła i bańka w klatce pośredniej leżą między krokami ([P-B-50](#p-b-50)), przy zaległości ponad krok α = 1 i jeden krok ([P-B-51](#p-b-51)); `SnapRenderTests` — obiekt utworzony, zawinięty (przy krawędzi docelowej), scalony z istniejącym ID, podzielony i zastąpiony rysuje się w stanie bieżącego kroku ([P-B-52](#p-b-52)); klatka pośrednia po odrzuconym kroku rysuje opublikowane t, a nie stan odrzucony; klatka pośrednia po dodaniu baniek ponad pojemność rysuje istniejące bańki w miejscu, a nie przesunięte od początku układu · verify: `swift build --build-tests && ! swift test --filter 'InterpolationFractionTests|BodyInterpolationTests|BubbleInterpolationTests|SnapRenderTests'`
+
+    ```text
+    $ swift build --build-tests && ! swift test --filter 'InterpolationFractionTests|BodyInterpolationTests|BubbleInterpolationTests|SnapRenderTests'
+    Executed 36 tests, with 0 failures (0 unexpected) in 1.254 (1.259) seconds
+    exit=1
+    ```
+
+    Odwrócony `verify` czerwonych testów kończy się dziś kodem 1, bo późniejsze zadania etapu zazieleniły te testy. Testy były czerwone w commicie 7360bb2 (według raportu workera) i przechodzą w `verify` zadań budujących i w pełnym `swift test`.
 58. Klatka bez kroku i interpolacja brył: `FixedStepDriver.interpolationFraction`, gałąź bez kroku w `advanceImpl` jak w drzewie kroku R2 (render, zatwierdzenie z oczekiwaniem, status ≠ `completed` → „zawiódł”, błąd gry → `.frameRejected`, bez publikacji), `didRenderLastAdvance`, pozy t−1 zapamiętane przy publikacji, `makeRenderState` z α dla wierzchołków brył i kotwic naklejek, README i komentarz `advance` jak w R2, covering [P-B-50](#p-b-50), [P-B-51](#p-b-51) (bryły) · verify: `swift test --filter 'InterpolationFractionTests|FixedStepDriverTests|BubbleWorldTimeTests|BubbleWorldCompletionTests|BodyInterpolationTests'`
+
+    ```text
+    $ swift test --filter 'InterpolationFractionTests|FixedStepDriverTests|BubbleWorldTimeTests|BubbleWorldCompletionTests|BodyInterpolationTests'
+    Executed 63 tests, with 0 failures (0 unexpected) in 0.633 (0.638) seconds
+    exit=0
+    ```
 59. Interpolacja konturów: strona t−1, `bubbleIDs` t−1 i flaga `previousContoursValid` w handoffie, kopiowanie opublikowanych punktów konturów przy ponownym przydzieleniu stanu, `previousBubbleIndexByID`, `NativeRenderInstance` 16 B z sondą ABI, mieszanie punktów w `nativeBubbleVertex`, covering [P-B-50](#p-b-50), [P-B-51](#p-b-51) (bańki) · verify: `swift test --filter 'BubbleInterpolationTests|NativeMetalPreviousContourTests|NativeMetalShaderABITests|NativeMetalRenderHandoffTests|MaterialTextureRenderTests'`
+
+    ```text
+    $ swift test --filter 'BubbleInterpolationTests|NativeMetalPreviousContourTests|NativeMetalShaderABITests|NativeMetalRenderHandoffTests|MaterialTextureRenderTests'
+    Executed 38 tests, with 0 failures (0 unexpected) in 1.200 (1.204) seconds
+    exit=0
+    ```
 60. Obiekty bez interpolacji: `wrappedObjectIDs` w `NativePublicFrame` niezależnie od `didWrap`, `CompletedRuntimeStep.snappedObjectIDs` z zawinięć i z operacji partii, indeks t−1 0xFFFFFFFF i poza t−1 brył dla tych ID, a dla wszystkich baniek przy zgaszonej `previousContoursValid` (krok bez publikacji), covering [P-B-52](#p-b-52) · verify: `swift test --filter 'SnapRenderTests|BodyInterpolationTests|BubbleInterpolationTests|RegionPolicyTests|NativeMetalPublicObjectTests'`
+
+    ```text
+    $ swift test --filter 'SnapRenderTests|BodyInterpolationTests|BubbleInterpolationTests|RegionPolicyTests|NativeMetalPublicObjectTests'
+    Executed 55 tests, with 0 failures (0 unexpected) in 1.998 (2.004) seconds
+    exit=0
+    ```
 61. Testy cyklu życia (czerwone, na zaślepce `LifecycleEventSource` i `automaticPause`): `LifecycleTests` w `BubblePhysicsRuntimeTests` z fałszywym źródłem i fałszywym stepperem — po przejściu w tło `advance` zwraca ostatnią klatkę, nie woła steppera i zostawia bufor niezatwierdzony; po powrocie pierwszy przyrost czasu jest odrzucony, a stan ten sam; `automaticPause = false` wyłącza zachowanie ([P-B-56](#p-b-56)); ręczna `pause()` przetrwa powrót z tła ([P-B-77](#p-b-77)) · verify: `swift build --build-tests && ! swift test --filter LifecycleTests`
+
+    ```text
+    $ swift build --build-tests && ! swift test --filter LifecycleTests
+    Executed 23 tests, with 0 failures (0 unexpected) in 0.456 (0.458) seconds
+    exit=1
+    ```
+
+    Odwrócony `verify` czerwonych testów kończy się dziś kodem 1, bo późniejsze zadania etapu zazieleniły te testy. Testy były czerwone w commicie 8a917f6 (według raportu workera) i przechodzą w `verify` zadań budujących i w pełnym `swift test`.
 62. Cykl życia: `LifecycleEventSource` z domyślnym źródłem UIKit pod `canImport(UIKit)`, `WorldConfiguration.automaticPause`, parametr `lifecycle:` w obu `init` `BubbleWorld`, osobna flaga pauzy automatycznej i `discardNextAdvance()`, `isPaused` w diagnostyce jako suma obu pauz, covering [P-B-56](#p-b-56), [P-B-77](#p-b-77) · verify: `swift test --filter 'LifecycleTests|BubbleWorldTimeTests|BubbleWorldCompletionTests|HitTestTests' && swift build --triple arm64-apple-ios16.0 --sdk "$(xcrun --sdk iphoneos --show-sdk-path)" --target BubblePhysics --scratch-path .build-ios`
+
+    ```text
+    $ swift test --filter 'LifecycleTests|BubbleWorldTimeTests|BubbleWorldCompletionTests|HitTestTests' && swift build --triple arm64-apple-ios16.0 --sdk "$(xcrun --sdk iphoneos --show-sdk-path)" --target BubblePhysics --scratch-path .build-ios
+    Executed 78 tests, with 0 failures (0 unexpected) in 1.124 (1.131) seconds
+    exit=0
+    ```
 63. Testy punktów zaczepienia (czerwone): `RenderHookTests` — prostokąt gry z haka `afterBackground` leży pod warstwą 0, z `afterLayer(0)` nad warstwą 0 i pod warstwą 1, z `overlay` nad wszystkim, a macierz przenosi punkt świata na właściwy piksel ([P-B-54](#p-b-54)); hak `afterLayer(5)` dla warstwy bez obiektów oraz `afterBackground` i `overlay` w świecie bez obiektów i przed pierwszym krokiem też rysują; hak rzucający błąd odrzuca klatkę `.frameRejected`, a następna klatka się udaje · verify: `swift build --build-tests && ! swift test --filter RenderHookTests`
+
+    ```text
+    $ swift build --build-tests && ! swift test --filter RenderHookTests
+    Executed 5 tests, with 0 failures (0 unexpected) in 0.141 (0.141) seconds
+    exit=1
+    ```
+
+    Odwrócony `verify` czerwonych testów kończy się dziś kodem 1, bo późniejsze zadania etapu zazieleniły te testy. Testy były czerwone w commicie 7c05411 (według raportu workera) i przechodzą w `verify` zadań budujących i w pełnym `swift test`.
 64. Punkty zaczepienia: `RenderHooks`, `encode(…, hooks:)` bez wczesnych wyjść przed hakami (`BubblePhysicsMetalRender.swift:97-99`), warstwy z sumy listy rysowania i kluczy haków, zakres ciągów na warstwę w `buildFrame`, macierz świat→clip z `Viewport` zgodna z `nativeClip`, ponowne wiązanie buforów po haku, nowe testy na liście walidacji Metal, covering [P-B-54](#p-b-54) · verify: `swift test --filter 'RenderHookTests|LayerRenderTests|DecalRenderTests|MetalRenderIntegrationTests'`
+
+    ```text
+    $ swift test --filter 'RenderHookTests|LayerRenderTests|DecalRenderTests|MetalRenderIntegrationTests'
+    Executed 48 tests, with 0 failures (0 unexpected) in 17.130 (17.136) seconds
+    exit=0
+    ```
 65. Sprawdź etap: pełne `swift test` (z determinizmem) i strażnik na bezczynnej maszynie; gdy wynik stress-300 albo sceny mieszanej się poprawił albo interpolacja zamierzenie podniosła koszt, zapisz punkt odniesienia w osobnym commicie „perf-guard: punkt odniesienia po etapie 6” z uzasadnieniem, covering [P-B-43](#p-b-43)–[P-B-52](#p-b-52), [P-B-54](#p-b-54), [P-B-56](#p-b-56), [P-B-76](#p-b-76), [P-B-77](#p-b-77) · verify: `swift test && swift run -c release BubblePhysicsPerfGuard`
+
+    ```text
+    $ swift test && swift run -c release BubblePhysicsPerfGuard
+    Executed 1184 tests, with 1 test skipped and 0 failures (0 unexpected) in 425.042 (425.158) seconds
+    FAIL stress-300: p95 3.7853 ms, punkt odniesienia 3.3516 ms, limit 3.6867 ms (+12.9%)
+    PASS mixed: p95 5.4217 ms, punkt odniesienia 4.9506 ms, limit 5.4456 ms (+9.5%)
+    PASS decals: p95 4.2066 ms, punkt odniesienia 4.3001 ms, limit 4.7301 ms (-2.2%)
+    scaling 600/300: 1.76 (limit 2.50) PASS; CPU poza GPU p95 300: 2.4625 ms, 600: 4.3330 ms
+    load averages: 3,95 3,42 2,82
+    exit=1
+    ```
+
+    `swift test` przechodzi: 1184 testy, 1 pominięty, 0 porażek. Strażnik daje FAIL stress-300 (+12,9%) na maszynie pod obciążeniem (średnia 3,95); mixed, decals i skalowanie mają PASS. Punktu odniesienia nie zapisano, bo wymaga przebiegu na bezczynnej maszynie (odstępstwo nr 90).
 
 ## Deviations from Design
 
