@@ -1,0 +1,372 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		146CECAB7E71F1C1E9C2FCFD /* MetalHostView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2401BADB45FD9B182AB2BFEC /* MetalHostView.swift */; };
+		2D40A4F46FFCD86831460D2F /* BubblePhysicsAssets in Frameworks */ = {isa = PBXBuildFile; productRef = C34F6C58A3D8C59E70DEC487 /* BubblePhysicsAssets */; };
+		4A06A611375A61EB4C78A4BD /* BubblePhysics in Frameworks */ = {isa = PBXBuildFile; productRef = A2AFA339F797D2A48F358F5A /* BubblePhysics */; };
+		70F69036EF792B257073A5D1 /* BubblePhysicsMetalRender in Frameworks */ = {isa = PBXBuildFile; productRef = 749F61F46F412CF590007882 /* BubblePhysicsMetalRender */; };
+		DB4A668356B1BDC7AC39DA80 /* RigidScene.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6D2231DE85CB21A9733F8BF /* RigidScene.swift */; };
+		DEB3125A7369605AAFBD94DF /* ShowcaseScene.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6921F3233C233C5B5F2D3FAC /* ShowcaseScene.swift */; };
+		EB07A97DFA52F7A3AD332145 /* BubbleScene.swift in Sources */ = {isa = PBXBuildFile; fileRef = 402BBEDE5DFC6CECBC3B4498 /* BubbleScene.swift */; };
+		F028C015EA21B631F5E07E0E /* ShowcaseApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 972E71DD0206EAA190719195 /* ShowcaseApp.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		2401BADB45FD9B182AB2BFEC /* MetalHostView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalHostView.swift; sourceTree = "<group>"; };
+		402BBEDE5DFC6CECBC3B4498 /* BubbleScene.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BubbleScene.swift; sourceTree = "<group>"; };
+		45BC387F85D3690B031BD0A2 /* bubble_phisics */ = {isa = PBXFileReference; lastKnownFileType = folder; name = bubble_phisics; path = ../..; sourceTree = SOURCE_ROOT; };
+		6921F3233C233C5B5F2D3FAC /* ShowcaseScene.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowcaseScene.swift; sourceTree = "<group>"; };
+		972E71DD0206EAA190719195 /* ShowcaseApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowcaseApp.swift; sourceTree = "<group>"; };
+		D12DCF4FECA22C6E2E04B43B /* BubblePhysicsShowcase.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = BubblePhysicsShowcase.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		EE5E7A99B349AE8010432582 /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
+		F6D2231DE85CB21A9733F8BF /* RigidScene.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RigidScene.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		C8D04ED772585CDEB276F171 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4A06A611375A61EB4C78A4BD /* BubblePhysics in Frameworks */,
+				70F69036EF792B257073A5D1 /* BubblePhysicsMetalRender in Frameworks */,
+				2D40A4F46FFCD86831460D2F /* BubblePhysicsAssets in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		1187CF6CFED180B7E20C0B9B = {
+			isa = PBXGroup;
+			children = (
+				9306ED5026A0C71408070CE1 /* App */,
+				C322F6012F113EF196230627 /* BubblePhysicsShowcase */,
+				851CEF76FED98D807438BFE7 /* Packages */,
+				59801DE6E7A3BCCF16AA9F1C /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		59801DE6E7A3BCCF16AA9F1C /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				D12DCF4FECA22C6E2E04B43B /* BubblePhysicsShowcase.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		851CEF76FED98D807438BFE7 /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				45BC387F85D3690B031BD0A2 /* bubble_phisics */,
+			);
+			name = Packages;
+			sourceTree = "<group>";
+		};
+		9306ED5026A0C71408070CE1 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				402BBEDE5DFC6CECBC3B4498 /* BubbleScene.swift */,
+				2401BADB45FD9B182AB2BFEC /* MetalHostView.swift */,
+				F6D2231DE85CB21A9733F8BF /* RigidScene.swift */,
+				972E71DD0206EAA190719195 /* ShowcaseApp.swift */,
+				6921F3233C233C5B5F2D3FAC /* ShowcaseScene.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		C322F6012F113EF196230627 /* BubblePhysicsShowcase */ = {
+			isa = PBXGroup;
+			children = (
+				EE5E7A99B349AE8010432582 /* Signing.xcconfig */,
+			);
+			name = BubblePhysicsShowcase;
+			path = .;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		F6DE540E13462FD87EABF40A /* BubblePhysicsShowcase */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 6204FF95469AD60F517E002A /* Build configuration list for PBXNativeTarget "BubblePhysicsShowcase" */;
+			buildPhases = (
+				4A0AD4EAA6F8ECC81BB5C686 /* Sources */,
+				C8D04ED772585CDEB276F171 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = BubblePhysicsShowcase;
+			packageProductDependencies = (
+				A2AFA339F797D2A48F358F5A /* BubblePhysics */,
+				749F61F46F412CF590007882 /* BubblePhysicsMetalRender */,
+				C34F6C58A3D8C59E70DEC487 /* BubblePhysicsAssets */,
+			);
+			productName = BubblePhysicsShowcase;
+			productReference = D12DCF4FECA22C6E2E04B43B /* BubblePhysicsShowcase.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		411F8E131946B6CBAFFC6345 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					F6DE540E13462FD87EABF40A = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = BF7287ADD0A5F2155D3EC4D3 /* Build configuration list for PBXProject "BubblePhysicsShowcase" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 1187CF6CFED180B7E20C0B9B;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				0938FD48580312599F820805 /* XCLocalSwiftPackageReference "../.." */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 59801DE6E7A3BCCF16AA9F1C /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				F6DE540E13462FD87EABF40A /* BubblePhysicsShowcase */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		4A0AD4EAA6F8ECC81BB5C686 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				EB07A97DFA52F7A3AD332145 /* BubbleScene.swift in Sources */,
+				146CECAB7E71F1C1E9C2FCFD /* MetalHostView.swift in Sources */,
+				DB4A668356B1BDC7AC39DA80 /* RigidScene.swift in Sources */,
+				F028C015EA21B631F5E07E0E /* ShowcaseApp.swift in Sources */,
+				DEB3125A7369605AAFBD94DF /* ShowcaseScene.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		8D9FDAB11748DB6514E68364 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = EE5E7A99B349AE8010432582 /* Signing.xcconfig */;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		8DBAF7CA46063223F3B5EFC4 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		9C915A7CED7274C4699492C7 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		D821F0BDCAC303FCC73F4309 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = EE5E7A99B349AE8010432582 /* Signing.xcconfig */;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		6204FF95469AD60F517E002A /* Build configuration list for PBXNativeTarget "BubblePhysicsShowcase" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D821F0BDCAC303FCC73F4309 /* Debug */,
+				8D9FDAB11748DB6514E68364 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		BF7287ADD0A5F2155D3EC4D3 /* Build configuration list for PBXProject "BubblePhysicsShowcase" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				8DBAF7CA46063223F3B5EFC4 /* Debug */,
+				9C915A7CED7274C4699492C7 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		0938FD48580312599F820805 /* XCLocalSwiftPackageReference "../.." */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../..;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		749F61F46F412CF590007882 /* BubblePhysicsMetalRender */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = BubblePhysicsMetalRender;
+		};
+		A2AFA339F797D2A48F358F5A /* BubblePhysics */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = BubblePhysics;
+		};
+		C34F6C58A3D8C59E70DEC487 /* BubblePhysicsAssets */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = BubblePhysicsAssets;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 411F8E131946B6CBAFFC6345 /* Project object */;
+}

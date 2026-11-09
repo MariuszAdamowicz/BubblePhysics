@@ -8,3 +8,6 @@ xcuserdata/
 
 # Lokalne ustawienia podpisu hosta benchmarku iOS
 Benchmarks/iOS/BubblePhysicsBench/Signing.local.xcconfig
+
+# Lokalne ustawienia podpisu przykładowej aplikacji iOS
+Examples/BubblePhysicsShowcase/Signing.local.xcconfig
