@@ -107,4 +107,5 @@ Bramka sceny akceptacyjnej to p95 pełnej klatki nie większe niż 16,67 ms (`Pu
 - `Sources/BubblePhysicsReference` — referencyjny solver CPU i deterministyczne scenariusze benchmarków.
 - `Sources/BubblePhysicsReferenceMetal` — referencyjny solver Newton/PCG na GPU (diagnostyczny).
 - `Sources/BubblePhysics` (`BubblePhysicsLegacy`), `Sources/BubblePhysicsCore`, `Sources/BubblePhysicsMetal` — historyczne eksperymenty zachowane do porównań.
+- `Examples/BubblePhysicsShowcase` — przykładowa aplikacja iOS z `MTKView` i dwiema scenami (bańki; bryły z więzami); jej oznaczone regiony są blokami kodu w [docs/integration-guide.md](docs/integration-guide.md). Build bez podpisu: `xcodebuild -project Examples/BubblePhysicsShowcase/BubblePhysicsShowcase.xcodeproj -scheme BubblePhysicsShowcase -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build`.
 - `docs/benchmarks` — pomiary na urządzeniu i Macu; `docs/superpowers` — specyfikacje i plany implementacji.
