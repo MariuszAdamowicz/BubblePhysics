@@ -47,11 +47,11 @@ public final class BubblePhysicsMetalRender {
     }
 
     /// Ciąg sąsiednich obiektów jednego rodzaju geometrii o tym samym trybie mieszania i teksturze; `first` i `count` dotyczą
-    /// bufora instancji baniek albo bufora wierzchołków brył.
+    /// bufora instancji baniek albo bufora wierzchołków brył i naklejek.
     private struct Run {
         let geometry: MaterialPipelines.Geometry
         let blend: RenderBlendMode
-        let texture: TextureID?
+        let texture: DecalTexture?
         var first: Int
         var count: Int
     }
@@ -62,6 +62,8 @@ public final class BubblePhysicsMetalRender {
         var materials: [NativeRenderMaterial] = []
         var vertices: [NativeRenderBodyVertex] = []
         var rings: [SIMD2<Float>] = []
+        var decalInstances: [NativeDecalInstance] = []
+        var decalVertices: [NativeDecalVertex] = []
         var runs: [Run] = []
         var materialIndices: [RenderMaterialID: UInt32] = [:]
 
@@ -74,10 +76,15 @@ public final class BubblePhysicsMetalRender {
         }
 
         mutating func extendRun(_ geometry: MaterialPipelines.Geometry, _ material: RenderMaterial, first: Int, count: Int) {
-            if let last = runs.last, last.geometry == geometry, last.blend == material.blend, last.texture == material.texture {
+            extendRun(geometry, blend: material.blend, texture: material.texture.map { .texture($0) }, first: first, count: count)
+        }
+
+        mutating func extendRun(_ geometry: MaterialPipelines.Geometry, blend: RenderBlendMode, texture: DecalTexture?,
+                                first: Int, count: Int) {
+            if let last = runs.last, last.geometry == geometry, last.blend == blend, last.texture == texture {
                 runs[runs.count - 1].count += count
             } else {
-                runs.append(Run(geometry: geometry, blend: material.blend, texture: material.texture, first: first, count: count))
+                runs.append(Run(geometry: geometry, blend: blend, texture: texture, first: first, count: count))
             }
         }
     }
@@ -104,7 +111,12 @@ public final class BubblePhysicsMetalRender {
             encoder.setRenderPipelineState(try pipelines.pipeline(run.geometry, blend: run.blend, format: color.pixelFormat))
             // Stager odrzuca transakcje z nieznaną teksturą, więc brak tekstury w rejestrze jest nieosiągalny; biała tekstura
             // jest tylko zabezpieczeniem, które nie ma zepsuć klatki w buildzie bez asercji.
-            let registered = run.texture.flatMap { assets.texture(for: $0) }
+            let registered: MTLTexture?
+            switch run.texture {
+            case .texture(let id)?: registered = assets.texture(for: id)
+            case .atlas(let source)?: registered = assets.atlas(for: source)?.texture
+            case nil: registered = nil
+            }
             assert(run.texture == nil || registered != nil, "tekstura \(String(describing: run.texture)) nie jest w rejestrze")
             encoder.setFragmentTexture(registered ?? whiteTexture, index: 0)
             switch run.geometry {
@@ -127,6 +139,19 @@ public final class BubblePhysicsMetalRender {
                 }
                 encoder.drawPrimitives(type: .triangle, vertexStart: run.first, vertexCount: run.count)
                 lastDrawCallCount += 1
+            case .decal:
+                if boundGeometry != .decal {
+                    if let handoff = published.handoff {
+                        handoff.bindDecals(encoder, viewport: viewport, vertices: arena.buffer, vertexOffset: arena.decalVertices,
+                                           instances: arena.buffer, instanceOffset: arena.decalInstances)
+                    } else {
+                        NativeMetalRenderHandoff.bindDecalsWithoutBubbles(encoder, viewport: viewport, vertices: arena.buffer,
+                            vertexOffset: arena.decalVertices, instances: arena.buffer, instanceOffset: arena.decalInstances)
+                    }
+                    boundGeometry = .decal
+                }
+                encoder.drawPrimitives(type: .triangle, vertexStart: run.first, vertexCount: run.count)
+                lastDrawCallCount += 1
             }
         }
     }
@@ -135,6 +160,7 @@ public final class BubblePhysicsMetalRender {
     /// lokalnymi współrzędnymi i pierścieniami konturu oraz ciągi o wspólnym trybie mieszania i teksturze.
     private func buildFrame(_ state: BubbleWorldRenderState) -> FrameData {
         var frame = FrameData()
+        let decals = DecalRenderer(assets: assets)
         if let background = state.background { appendBackground(background, region: state.region, to: &frame) }
         for layer in state.layers {
             if let handoff = state.handoff {
@@ -143,6 +169,11 @@ public final class BubblePhysicsMetalRender {
                     let material = frame.materialIndex(bubble.materialID, bubble.material)
                     frame.extendRun(.bubble, bubble.material, first: frame.instances.count, count: 1)
                     frame.instances.append(NativeRenderInstance(bubble: UInt32(index), material: material))
+                }
+                // Naklejki baniek po wszystkich bańkach warstwy; kotwica i promień odniesienia z rekordu bańki w shaderze.
+                for bubble in layer.bubbles {
+                    guard let decal = bubble.decal, let index = handoff.bubbleIndexByID[bubble.id] else { continue }
+                    appendDecal(decal, placement: .zero, bubbleIndex: UInt32(index), renderer: decals, to: &frame)
                 }
             }
             for shape in layer.shapes {
@@ -161,8 +192,25 @@ public final class BubblePhysicsMetalRender {
                     frame.vertices.append(NativeRenderBodyVertex(world: SIMD2(world.x, world.y), uv: uv, info: info))
                 }
             }
+            // Naklejki brył po wszystkich bryłach warstwy; obracają się z bryłą wokół jej początku układu.
+            for shape in layer.shapes {
+                guard let decal = shape.decal else { continue }
+                let placement = SIMD4(shape.position.x, shape.position.y, shape.referenceRadius, shape.rotation)
+                appendDecal(decal, placement: placement, bubbleIndex: NativeDecalInstance.noBubble, renderer: decals, to: &frame)
+            }
         }
         return frame
+    }
+
+    private func appendDecal(_ decal: Decal, placement: SIMD4<Float>, bubbleIndex: UInt32, renderer: DecalRenderer,
+                             to frame: inout FrameData) {
+        let instanceIndex = UInt32(frame.decalInstances.count)
+        guard let layout = renderer.layout(decal, placement: placement, bubbleIndex: bubbleIndex, instanceIndex: instanceIndex)
+        else { return }
+        frame.decalInstances.append(layout.instance)
+        frame.extendRun(.decal, blend: .alpha, texture: layout.texture, first: frame.decalVertices.count,
+                        count: layout.vertices.count)
+        frame.decalVertices += layout.vertices
     }
 
     /// Tło to czworokąt regionu z teksturą rozciągniętą na cały region, rysowany przed warstwami w trybie nieprzezroczystym.
@@ -183,7 +231,7 @@ public final class BubblePhysicsMetalRender {
 
     private struct Arena {
         let buffer: MTLBuffer
-        let instances: Int, materials: Int, vertices: Int, rings: Int
+        let instances: Int, materials: Int, vertices: Int, rings: Int, decalInstances: Int, decalVertices: Int
     }
 
     /// Jeden bufor współdzielony na klatkę z czterema blokami; żyje do końca bufora poleceń.
@@ -194,8 +242,10 @@ public final class BubblePhysicsMetalRender {
         let vertices = aligned(materials + frame.materials.count * MemoryLayout<NativeRenderMaterial>.stride)
         let rings = aligned(vertices + frame.vertices.count * MemoryLayout<NativeRenderBodyVertex>.stride)
         // Każdy blok musi mieć przesunięcie mniejsze od długości bufora (walidacja Metal), także pusty blok pierścieni
-        // (klatka z samym tłem), więc rezerwujemy w nim co najmniej jeden element.
-        let length = aligned(rings + max(frame.rings.count, 1) * MemoryLayout<SIMD2<Float>>.stride)
+        // (klatka z samym tłem) i bloki naklejek, więc rezerwujemy w nich co najmniej jeden element.
+        let decalInstances = aligned(rings + max(frame.rings.count, 1) * MemoryLayout<SIMD2<Float>>.stride)
+        let decalVertices = aligned(decalInstances + max(frame.decalInstances.count, 1) * MemoryLayout<NativeDecalInstance>.stride)
+        let length = aligned(decalVertices + max(frame.decalVertices.count, 1) * MemoryLayout<NativeDecalVertex>.stride)
         // Bufor jest przydzielany co klatkę (zawartość zależy od klatki i musi przeżyć jej bufor poleceń); pierścień
         // buforów byłby optymalizacją, której ta klatka jeszcze nie wymaga.
         guard let buffer = device.makeBuffer(length: length, options: .storageModeShared) else {
@@ -209,9 +259,11 @@ public final class BubblePhysicsMetalRender {
         }
         copy(frame.instances, to: instances); copy(frame.materials, to: materials)
         copy(frame.vertices, to: vertices); copy(frame.rings, to: rings)
+        copy(frame.decalInstances, to: decalInstances); copy(frame.decalVertices, to: decalVertices)
         let retained = RetainedFrameBuffer(buffer)
         commandBuffer.addCompletedHandler { _ in withExtendedLifetime(retained) {} }
-        return Arena(buffer: buffer, instances: instances, materials: materials, vertices: vertices, rings: rings)
+        return Arena(buffer: buffer, instances: instances, materials: materials, vertices: vertices, rings: rings,
+                     decalInstances: decalInstances, decalVertices: decalVertices)
     }
 
     /// Indeksy trójkątów i prostokąt otaczający zależą tylko od lokalnego pierścienia, więc są używane ponownie między klatkami.

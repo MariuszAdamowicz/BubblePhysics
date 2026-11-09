@@ -48,6 +48,19 @@ final class MetalRenderIntegrationTests: XCTestCase {
         try assertPassesUnderMetalValidation(
             "MaterialTextureRenderTests/testBackgroundStretchesOverRegionBelowAllLayersAndDisappearsWhenRemoved")
     }
+
+    /// Naklejki (tekst SDF, gotowy atlas, obraz; bańki i bryły; maska radialna) bez błędów walidacji Metal.
+    func testDecalRenderPassesMetalValidation() throws {
+        try assertPassesUnderMetalValidation("DecalRenderTests/testGlyphAtOneTimesHasThirtyTwoPixelLineHeightAndSharpEdgesAtEveryScale")
+        try assertPassesUnderMetalValidation("DecalRenderTests/testTextFromAReadyAtlasDrawsItsGlyphsInTheTintColor")
+        try assertPassesUnderMetalValidation("DecalRenderTests/testImageDecalShowsTheChosenRegionOfTheTexture")
+        try assertPassesUnderMetalValidation(
+            "DecalRenderTests/testDecalOnADeformedBubbleKeepsItsShapeAndIsClippedToTheEffectiveRadiusCircle")
+        try assertPassesUnderMetalValidation("DecalRenderTests/testDecalOnARotatedBodyRotatesWithIt")
+        try assertPassesUnderMetalValidation("DecalRenderTests/testBodyDecalIsDrawnInAWorldWithoutBubbles")
+        try assertPassesUnderMetalValidation("DecalRenderTests/testRigidBodyInTheSameLayerCoversABubbleTogetherWithItsDecal")
+        try assertPassesUnderMetalValidation("DecalRenderTests/testMergeAndSplitResultsCarryTheDecalFromTheOperation")
+    }
 #endif
 
     func testRendererAcceptsViewportAndCallerCommandBuffer() async throws {

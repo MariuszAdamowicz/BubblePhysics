@@ -40,6 +40,21 @@ struct NativeRenderBodyVertex {
     uint4 info;          // materiał, początek pierścienia, liczba punktów pierścienia, reserved
 };
 
+// Instancja naklejki; lustro `NativeDecalInstance` w Swift (sonda ABI).
+struct NativeDecalInstance {
+    float4 color;        // kolor naklejki, RGBA w [0, 1]
+    float4 placement;    // bryła: kotwica xy, promień odniesienia, obrót; bańka: z rekordu bańki w uchwycie (pole nieużywane)
+    uint4 info;          // indeks bańki w uchwycie (0xFFFFFFFF dla bryły), tryb (0 obraz, 1 alfa atlasu, 2 SDF), reserved x2
+};
+
+// Wierzchołek czworokąta glifu albo obrazu: położenie względem kotwicy w jednostkach promienia odniesienia (przed obrotem),
+// współrzędne tekstury (wiersz 0 u góry) i indeks instancji naklejki.
+struct NativeDecalVertex {
+    float2 local;
+    float2 uv;
+    uint4 info;          // indeks instancji, reserved x3
+};
+
 struct BubbleVertexOutput {
     float4 position [[position]];
     float2 worldPosition;
@@ -59,6 +74,17 @@ struct BodyVertexOutput {
     uint material [[flat]];
     uint ringStart [[flat]];
     uint ringCount [[flat]];
+};
+
+struct DecalVertexOutput {
+    float4 position [[position]];
+    float2 worldPosition;
+    float2 uv;
+    float2 anchor [[flat]];
+    float radius [[flat]];
+    float4 color [[flat]];
+    uint bubble [[flat]];
+    uint mode [[flat]];
 };
 
 float2 nativeClip(float2 point, float4 viewport) { return (point - viewport.xy) * 2.0 / viewport.zw; }
@@ -185,4 +211,93 @@ fragment float4 nativeBodyFragment(BodyVertexOutput in [[stage_in]],
     }
     float4 texel = texture.sample(nativeTextureSampler, in.uv * material.uv.zw + material.uv.xy);
     return nativeShade(material, outline, texel);
+}
+
+// Naklejka: czworokąt glifu albo obrazu w układzie kotwicy. Dla bańki kotwica i promień odniesienia (efektywny) idą z rekordu
+// bańki w uchwycie, więc naklejka nie zna ich na CPU; dla bryły z instancji. Bańka nie ma obrotu.
+vertex DecalVertexOutput nativeDecalVertex(
+    uint vertexID [[vertex_id]],
+    device const NativeDecalVertex *vertices [[buffer(0)]],
+    device const NativeDecalInstance *instances [[buffer(1)]],
+    constant float4 &viewport [[buffer(2)]],
+    device const RenderBubble *bubbles [[buffer(4)]]) {
+    DecalVertexOutput result;
+    NativeDecalVertex source = vertices[vertexID];
+    NativeDecalInstance instance = instances[source.info.x];
+    float2 anchor = instance.placement.xy;
+    float radius = instance.placement.z;
+    float angle = instance.placement.w;
+    result.color = instance.color;
+    result.bubble = instance.info.x;
+    result.mode = instance.info.y;
+    result.uv = source.uv;
+    if (instance.info.x != 0xFFFFFFFFu) {
+        RenderBubble bubble = bubbles[instance.info.x];
+        if (bubble.publicFlags.w == 1) {
+            result.position = float4(2, 2, 0, 1);
+            result.worldPosition = float2(0);
+            result.anchor = float2(0);
+            result.radius = 0;
+            return result;
+        }
+        anchor = bubble.position.xy;
+        radius = bubble.deformation.y;
+        angle = 0;
+    }
+    radius = max(radius, 1e-6f);
+    float2 offset = source.local * radius;
+    float cosine = cos(angle), sine = sin(angle);
+    float2 world = anchor + float2(cosine * offset.x - sine * offset.y, sine * offset.x + cosine * offset.y);
+    float2 clip = nativeClip(world, viewport);
+    result.position = float4(clip.x, clip.y, 0, 1);
+    result.worldPosition = world;
+    result.anchor = anchor;
+    result.radius = radius;
+    return result;
+}
+
+// Obraz: powiększenie bez wygładzania (jak materiały), krawędź fragmentu tekstury nie miesza się z sąsiednim wierszem.
+constexpr sampler nativeDecalImageSampler(coord::normalized, address::clamp_to_edge, mag_filter::nearest, min_filter::linear);
+// Glify: pole odległości i pokrycie wymagają filtrowania liniowego.
+constexpr sampler nativeDecalGlyphSampler(coord::normalized, address::clamp_to_edge, filter::linear);
+
+// Przycięcie maską radialną: koło o promieniu odniesienia, a na bańce także kontur (promień konturu interpolowany między
+// dwiema sąsiednimi próbkami o stałych kątach 2π·i/n względem środka). Krawędź maski ma szerokość jednego piksela.
+// Kolor wychodzi z alfą przemnożoną (potok składa `one / oneMinusSourceAlpha`).
+fragment float4 nativeDecalFragment(DecalVertexOutput in [[stage_in]],
+    device const float2 *points [[buffer(0)]], device const uint *counts [[buffer(1)]],
+    constant uint &stride [[buffer(2)]],
+    texture2d<float> texture [[texture(0)]]) {
+    float2 delta = in.worldPosition - in.anchor;
+    float distanceToAnchor = length(delta);
+    float pixel = max(fwidth(distanceToAnchor), 1e-6f);
+    float coverage = clamp((in.radius - distanceToAnchor) / pixel + 0.5f, 0.0f, 1.0f);
+    if (in.bubble != 0xFFFFFFFFu) {
+        uint count = min(counts[in.bubble], stride);
+        if (count > 2) {
+            float angle = atan2(delta.y, delta.x);
+            if (angle < 0) angle += 2.0f * M_PI_F;
+            float position = angle / (2.0f * M_PI_F) * float(count);
+            uint first = min(uint(position), count - 1);
+            float fraction = clamp(position - float(first), 0.0f, 1.0f);
+            uint base = in.bubble * stride;
+            float contour = mix(length(points[base + first] - in.anchor),
+                                length(points[base + ((first + 1) % count)] - in.anchor), fraction);
+            coverage = min(coverage, clamp((contour - distanceToAnchor) / pixel + 0.5f, 0.0f, 1.0f));
+        }
+    }
+    if (coverage <= 0.0f) discard_fragment();
+    float4 color = in.color;
+    if (in.mode == 0) {
+        float4 texel = texture.sample(nativeDecalImageSampler, in.uv);
+        return float4(color.rgb * texel.rgb * color.a, color.a * texel.a) * coverage;
+    }
+    float value = texture.sample(nativeDecalGlyphSampler, in.uv).r;
+    float alpha = value;
+    if (in.mode == 2) {
+        // Pole odległości: 0,5 na krawędzi glifu, rampa o szerokości jednego piksela na ekranie w każdej skali.
+        float width = max(fwidth(value), 1e-5f);
+        alpha = clamp((value - 0.5f) / width + 0.5f, 0.0f, 1.0f);
+    }
+    return float4(color.rgb * color.a, color.a) * (alpha * coverage);
 }

@@ -25,6 +25,8 @@ package struct BubbleWorldRenderBubble {
     package let id: ObjectID
     package let materialID: RenderMaterialID
     package let material: RenderMaterial
+    /// Naklejka rysowana po wszystkich bańkach warstwy; kotwicę i promień odniesienia (efektywny) renderer bierze z uchwytu.
+    package let decal: Decal?
 }
 
 package struct BubbleWorldRenderShape {
@@ -35,6 +37,12 @@ package struct BubbleWorldRenderShape {
     /// bo przekształcenie sztywne zachowuje orientację i zawieranie.
     package let localVertices: [WorldPoint]
     package let vertices: [WorldPoint]
+    /// Naklejka rysowana po wszystkich bryłach warstwy; jej kotwica to początek układu lokalnego bryły (`position`), obraca się z bryłą.
+    package let decal: Decal?
+    package let position: WorldPoint
+    package let rotation: Float
+    /// Promień okręgu opisanego na kształcie wokół kotwicy (promień odniesienia naklejki).
+    package let referenceRadius: Float
 }
 
 /// Jedyny właściciel świata i kolejki transakcji. Publikuje wyłącznie ukończone kroki.
@@ -146,7 +154,7 @@ public final class BubbleWorld {
             switch object.descriptor {
             case .bubble:
                 bubbles[object.layer, default: []].append(
-                    BubbleWorldRenderBubble(id: id, materialID: materialID, material: material))
+                    BubbleWorldRenderBubble(id: id, materialID: materialID, material: material, decal: object.decal))
             case .rigidBody(let body):
                 let ring = Self.rigidRing(body.shape)
                 let cosine = cos(object.rotation), sine = sin(object.rotation)
@@ -155,7 +163,9 @@ public final class BubbleWorld {
                                object.position.y + point.x * sine + point.y * cosine)
                 }
                 shapes[object.layer, default: []].append(BubbleWorldRenderShape(id: id, materialID: materialID,
-                    material: material, localVertices: ring, vertices: vertices))
+                    material: material, localVertices: ring, vertices: vertices, decal: object.decal,
+                    position: object.position, rotation: object.rotation,
+                    referenceRadius: object.decal == nil ? 0 : Self.circumscribedRadius(body.shape)))
             case .sensor, .forceField: continue
             }
         }
@@ -164,6 +174,15 @@ public final class BubbleWorld {
         }
         return BubbleWorldRenderState(handoff: handoff, background: source.background,
                                       region: source.configuration.simulationRegion, layers: layers)
+    }
+
+    /// Promień okręgu opisanego na kształcie wokół początku układu lokalnego (kotwicy naklejki).
+    private static func circumscribedRadius(_ shape: RigidShape) -> Float {
+        switch shape {
+        case .polygon(let geometry): return geometry.vertices.map { ($0 * $0).sum().squareRoot() }.max() ?? 0
+        case .circle(let radius): return radius
+        case .capsule(let halfLength, let radius): return halfLength + radius
+        }
     }
 
     /// Obrys bryły do rysowania jako pierścień; koło i kapsuła to wielokąty o 48 wierzchołkach na pełny obrót.

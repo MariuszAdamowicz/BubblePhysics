@@ -179,6 +179,22 @@ final class NativeMetalShaderABITests: XCTestCase {
         XCTAssertEqual(MemoryLayout<NativeRenderBodyVertex>.stride, 32)
     }
 
+    func testDecalRecordsMatchShaderLayouts() throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let probes = [
+            Probe(name: "decalInstance", mslSize: "NativeDecalInstance", swiftSize: MemoryLayout<NativeDecalInstance>.stride, fields: [
+                ("color", MemoryLayout<NativeDecalInstance>.offset(of: \.color)),
+                ("placement", MemoryLayout<NativeDecalInstance>.offset(of: \.placement)),
+                ("info", MemoryLayout<NativeDecalInstance>.offset(of: \.info))]),
+            Probe(name: "decalVertex", mslSize: "NativeDecalVertex", swiftSize: MemoryLayout<NativeDecalVertex>.stride, fields: [
+                ("local", MemoryLayout<NativeDecalVertex>.offset(of: \.local)),
+                ("uv", MemoryLayout<NativeDecalVertex>.offset(of: \.uv)),
+                ("info", MemoryLayout<NativeDecalVertex>.offset(of: \.info))])]
+        assertMatches(probes, try measure(probes, sources: [try source("NativeRenderKernels")], device: device))
+        XCTAssertEqual(MemoryLayout<NativeDecalInstance>.stride, 48)
+        XCTAssertEqual(MemoryLayout<NativeDecalVertex>.stride, 32)
+    }
+
     /// P-B-71: warstwa w `filter.w` to Int32 z odwróconym bitem znaku, więc porządek uint zgadza się z porządkiem Int32.
     func testLayerEncodingKeepsSignedOrderAndRoundTrips() {
         let layers: [Int32] = [.min, -70_000, -2, -1, 0, 1, 2, 70_000, .max - 1, .max]

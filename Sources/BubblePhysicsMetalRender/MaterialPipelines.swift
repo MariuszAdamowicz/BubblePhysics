@@ -6,7 +6,7 @@ import Metal
 /// ponownie między klatkami.
 @MainActor
 final class MaterialPipelines {
-    enum Geometry: Hashable { case bubble, body }
+    enum Geometry: Hashable { case bubble, body, decal }
 
     private struct Key: Hashable {
         let geometry: Geometry
@@ -27,8 +27,11 @@ final class MaterialPipelines {
         let key = Key(geometry: geometry, blend: blend, format: format)
         if let cached = pipelines[key] { return cached }
         let descriptor = MTLRenderPipelineDescriptor()
-        descriptor.vertexFunction = geometry == .bubble ? functions.bubbleVertex : functions.bodyVertex
-        descriptor.fragmentFunction = geometry == .bubble ? functions.bubbleFragment : functions.bodyFragment
+        switch geometry {
+        case .bubble: descriptor.vertexFunction = functions.bubbleVertex; descriptor.fragmentFunction = functions.bubbleFragment
+        case .body: descriptor.vertexFunction = functions.bodyVertex; descriptor.fragmentFunction = functions.bodyFragment
+        case .decal: descriptor.vertexFunction = functions.decalVertex; descriptor.fragmentFunction = functions.decalFragment
+        }
         let attachment = descriptor.colorAttachments[0]!
         attachment.pixelFormat = format
         // Fragment zwraca kolor z alfą przemnożoną (nieprzezroczysty: alfa 1), więc oba tryby z alfą składają `one + …`.

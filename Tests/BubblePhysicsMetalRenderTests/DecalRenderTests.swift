@@ -6,7 +6,8 @@ import XCTest
 
 /// P-B-43 … P-B-48: naklejki. Zasady, które sprawdzają testy:
 /// - kotwica w środku obiektu (bańka: środek, bryła: początek układu lokalnego), naklejka tekstowa wyśrodkowana w kotwicy;
-/// - promień odniesienia R: bańka to efektywny promień, bryła promień okręgu opisanego na kształcie wokół kotwicy;
+/// - promień odniesienia R: bańka to efektywny promień (najmniejsza odległość konturu od środka, więc koło R leży w całości
+///   wewnątrz konturu), bryła promień okręgu opisanego na kształcie wokół kotwicy;
 /// - skala 1 daje linię tekstu o wysokości R, a obraz w kwadracie o boku 2R (z zachowaniem proporcji fragmentu);
 /// - 1× w atlasie SDF to wysokość linii 32 teksle, więc przy R = 32 px jeden teksel to jeden piksel;
 /// - naklejka jest zawsze przycinana do koła R, na bańce także do jej konturu, ale sama się nie deformuje;
@@ -69,14 +70,31 @@ final class DecalRenderTests: XCTestCase {
         }
     }
 
-    /// Szerokość krawędzi 10%→90% liniowej rampy o tym samym polu pod krzywą: 0,8 · 4 · Σ min(a, 1 − a) wokół krawędzi.
-    /// Pomiar na próbkach w środkach pikseli nie zależy od położenia krawędzi względem siatki pikseli.
-    private func edgeWidth(_ profile: [Float], around edge: Float, window: Float = 3) -> Float {
-        var sum: Float = 0
-        for (index, value) in profile.enumerated() where abs(Float(index) + 0.5 - edge) <= window {
-            sum += min(value, 1 - value)
+    /// Szerokość krawędzi 10%→90% z funkcji rozmycia krawędzi (ESF): ta sama krawędź prosta, widziana przy wielu
+    /// podpikselowych przesunięciach kamery, daje gęsty profil `alfa(u)` z `u` w pikselach od krawędzi. Próbki w środkach
+    /// pikseli pojedynczego obrazu nie pozwalają zmierzyć rampy węższej niż ok. 1,6 px (zależnie od położenia krawędzi),
+    /// a po złożeniu przesunięć pomiar ma rozdzielczość ułamka piksela.
+    private func edgeTransitionWidth(_ profiles: [(shift: Float, samples: [Float])], edge: Float) -> Float? {
+        var points: [(u: Float, alpha: Float)] = []
+        for (shift, samples) in profiles {
+            for (index, alpha) in samples.enumerated() {
+                let u = Float(index) + 0.5 - (edge + shift)
+                if abs(u) <= 3 { points.append((u, alpha)) }
+            }
         }
-        return 0.8 * 4 * sum
+        points.sort { $0.u < $1.u }
+        // Położenie poziomu: pierwsze przecięcie gęstego, posortowanego profilu, z interpolacją liniową.
+        func position(_ level: Float) -> Float? {
+            for index in 0..<max(points.count - 1, 0) {
+                let (a, b) = (points[index], points[index + 1])
+                if a.alpha != b.alpha, (a.alpha - level) * (b.alpha - level) <= 0 {
+                    return a.u + (level - a.alpha) / (b.alpha - a.alpha) * (b.u - a.u)
+                }
+            }
+            return nil
+        }
+        guard let low = position(0.1), let high = position(0.9) else { return nil }
+        return abs(high - low)
     }
 
     /// Szerokość i wysokość ■ w tekselach atlasu: przecięcia pola odległości z 0,5 na środkowym wierszu i kolumnie komórki.
@@ -96,8 +114,7 @@ final class DecalRenderTests: XCTestCase {
 
     /// Render ■ białym kolorem na czarnej bańce o promieniu 5 jednostek; `magnification` to piksele na teksel atlasu
     /// (kamera: 6,4 · m pikseli na jednostkę, więc R = 32 · m px, a linia tekstu ma 32 · m px).
-    private func renderBlock(magnification m: Float) async throws
-        -> (scene: RenderTestScene, atlas: GlyphAtlas, metrics: GlyphMetrics, viewport: Viewport) {
+    private func makeBlockScene() async throws -> (scene: RenderTestScene, atlas: GlyphAtlas, metrics: GlyphMetrics) {
         let scene = try makeScene()
         let font = try scene.assets.register(font: blockFont, characters: String(block))
         let atlas = try XCTUnwrap(scene.assets.atlas(for: .font(font)))
@@ -105,33 +122,53 @@ final class DecalRenderTests: XCTestCase {
         scene.world.submit(try WorldTransaction().add(B.bubble(1, at: .zero, radius: 5, filter: ghost, role: .static, render: blackID,
             decal: .text(String(block), source: .font(font)))))
         await scene.step()
-        let viewport = try Viewport(center: .zero, size: [40 / m, 40 / m])
-        try await scene.render(viewport: viewport)
-        return (scene, atlas, metrics, viewport)
+        return (scene, atlas, metrics)
+    }
+
+    /// Render ■ białym kolorem na czarnej bańce o promieniu 5 jednostek; `magnification` to piksele na teksel atlasu
+    /// (kamera: 6,4 · m pikseli na jednostkę, więc R = 32 · m px, a linia tekstu ma 32 · m px). `shift` przesuwa obraz
+    /// o tyle pikseli w prawo i w dół.
+    private func renderBlock(_ scene: RenderTestScene, magnification m: Float, shift: SIMD2<Float> = .zero) async throws {
+        let pixelsPerUnit = 6.4 * m
+        // Kamera przesunięta w lewo i w górę przesuwa obraz w prawo i w dół.
+        let center = WorldPoint(-shift.x, shift.y) / pixelsPerUnit
+        try await scene.render(viewport: Viewport(center: center, size: [40 / m, 40 / m]))
     }
 
     func testGlyphAtOneTimesHasThirtyTwoPixelLineHeightAndSharpEdgesAtEveryScale() async throws {
+        let (scene, atlas, metrics) = try await makeBlockScene()
+        XCTAssertEqual(atlas.lineHeight, 32, accuracy: 1e-3)
+        let harness = scene.harness
         for magnification in [Float(0.25), 1, 4] {
-            let (scene, atlas, metrics, _) = try await renderBlock(magnification: magnification)
-            XCTAssertEqual(atlas.lineHeight, 32, accuracy: 1e-3)
-            let expected = glyphSizeInTexels(atlas, metrics) * magnification
-            let tolerance = 1 + 0.5 * magnification
-            let harness = scene.harness
-            let vertical = crossings(profile(harness, column: harness.size / 2))
+            try await renderBlock(scene, magnification: magnification)
+            let column = harness.size / 2
+            let vertical = crossings(profile(harness, column: column))
             XCTAssertEqual(vertical.count, 2, "\(magnification)×: ■ na środkowej kolumnie")
             guard let top = vertical.first, let bottom = vertical.last else { continue }
             let middle = Int(((top + bottom) / 2).rounded(.down))
             let horizontal = crossings(profile(harness, row: middle))
             XCTAssertEqual(horizontal.count, 2, "\(magnification)×: ■ na środkowym wierszu")
             guard let left = horizontal.first, let right = horizontal.last else { continue }
+            let expected = glyphSizeInTexels(atlas, metrics) * magnification
+            let tolerance = 1 + 0.5 * magnification
             XCTAssertEqual(right - left, expected.x, accuracy: tolerance, "\(magnification)×: szerokość glifu w pikselach")
             XCTAssertEqual(bottom - top, expected.y, accuracy: tolerance, "\(magnification)×: wysokość glifu w pikselach")
             if magnification == 1 {
                 XCTAssertEqual(right - left, glyphSizeInTexels(atlas, metrics).x, accuracy: 1.5, "1× to jeden teksel na piksel")
             }
-            let row = profile(harness, row: middle), column = profile(harness, column: harness.size / 2)
-            for (name, edge, samples) in [("lewa", left, row), ("prawa", right, row), ("górna", top, column), ("dolna", bottom, column)] {
-                XCTAssertLessThanOrEqual(edgeWidth(samples, around: edge), 1.5, "\(magnification)×: krawędź \(name) 10%→90%")
+            // Funkcja rozmycia krawędzi z 16 podpikselowych przesunięć w poziomie (krawędzie pionowe) i w pionie (poziome).
+            var horizontalProfiles: [(shift: Float, samples: [Float])] = [], verticalProfiles = horizontalProfiles
+            for step in 0..<16 {
+                let offset = Float(step) / 16
+                try await renderBlock(scene, magnification: magnification, shift: [offset, 0])
+                horizontalProfiles.append((offset, profile(harness, row: middle)))
+                try await renderBlock(scene, magnification: magnification, shift: [0, offset])
+                verticalProfiles.append((offset, profile(harness, column: column)))
+            }
+            for (name, edge, profiles) in [("lewa", left, horizontalProfiles), ("prawa", right, horizontalProfiles),
+                                           ("górna", top, verticalProfiles), ("dolna", bottom, verticalProfiles)] {
+                let width = try XCTUnwrap(edgeTransitionWidth(profiles, edge: edge), "\(magnification)×: krawędź \(name)")
+                XCTAssertLessThanOrEqual(width, 1.5, "\(magnification)×: krawędź \(name), alfa 10%→90%")
             }
         }
     }
@@ -203,7 +240,7 @@ final class DecalRenderTests: XCTestCase {
 
     /// Deformowalna bańka (promień 8) dociśnięta do statycznej ściany po prawej; po jednym kroku jej prawa strona jest spłaszczona.
     private func deformedBubbleScene(image: CGImage) async throws
-        -> (scene: RenderTestScene, texture: TextureID, center: WorldPoint, contour: [WorldPoint]) {
+        -> (scene: RenderTestScene, texture: TextureID, center: WorldPoint, effectiveRadius: Float, contour: [WorldPoint]) {
         let scene = try makeScene()
         let texture = try scene.assets.register(image)
         scene.world.submit(try WorldTransaction()
@@ -212,16 +249,13 @@ final class DecalRenderTests: XCTestCase {
             .add(B.bubble(1, at: [-4.8, 0], radius: 8, render: blackID, decal: .image(texture))))
         let frame = await scene.step()
         let state = try XCTUnwrap(frame.objects[id(1)])
+        guard case .bubble(let effectiveRadius) = state.kind else { throw XCTSkip("to nie bańka") }
         let contour = try XCTUnwrap(scene.world.debugContourSnapshot()[id(1)])
         try await scene.render()
-        return (scene, texture, state.position, contour)
+        return (scene, texture, state.position, effectiveRadius, contour)
     }
 
-    private func inside(_ contourPoint: WorldPoint, center: WorldPoint, by distance: Float = 0.3) -> WorldPoint {
-        let toCenter = center - contourPoint
-        return contourPoint + toCenter / (toCenter * toCenter).sum().squareRoot() * distance
-    }
-
+    /// Czy punkt leży wewnątrz wielokąta konturu (reguła parzystości).
     private func contains(_ polygon: [WorldPoint], _ point: WorldPoint) -> Bool {
         var result = false
         for index in polygon.indices {
@@ -231,31 +265,37 @@ final class DecalRenderTests: XCTestCase {
         return result
     }
 
-    func testDecalOnADeformedBubbleIsClippedByTheContourButDoesNotDeform() async throws {
-        let (rendered, _, center, contour) = try await deformedBubbleScene(image: bullseyeImage())
+    private func unit(_ vector: WorldPoint) -> WorldPoint { vector / (vector * vector).sum().squareRoot() }
+
+    func testDecalOnADeformedBubbleKeepsItsShapeAndIsClippedToTheEffectiveRadiusCircle() async throws {
+        let (scene, _, center, effective, contour) = try await deformedBubbleScene(image: bullseyeImage())
         func radius(_ point: WorldPoint) -> Float { ((point - center) * (point - center)).sum().squareRoot() }
         let flat = try XCTUnwrap(contour.min { radius($0) < radius($1) })
         let round = try XCTUnwrap(contour.min { $0.x < $1.x })
-        XCTAssertLessThan(radius(flat), 0.75 * 8, "warunek wstępny: strona ściany jest spłaszczona")
-        XCTAssertGreaterThan(radius(round), 0.97 * 8, "warunek wstępny: lewa strona nie jest zdeformowana")
-        // Obraz o rozmiarze 2R nie deformuje się: tarcza (promień 0,42·2R = 0,84R) sięga konturu tam, gdzie kontur jest bliżej.
-        rendered.assertPixel(inside(flat, center: center), blue, "spłaszczona strona: tarcza dochodzi do konturu")
-        rendered.assertPixel(inside(round, center: center), red, "okrągła strona: pierścień przy konturze")
-        rendered.assertPixel(center, blue, "środek")
-        let probe = center + [6.4, 0]
-        XCTAssertLessThan(probe.x, 0, "warunek wstępny: sonda leży na lewo od ściany")
-        XCTAssertFalse(contains(contour, probe), "warunek wstępny: sonda leży poza spłaszczonym konturem")
-        rendered.assertPixel(probe, black, "poza konturem naklejka jest przycięta, choć leży w kole odniesienia")
+        XCTAssertLessThan(effective, 0.75 * 8, "warunek wstępny: bańka jest zdeformowana, promień efektywny mniejszy od docelowego")
+        XCTAssertEqual(radius(flat), effective, accuracy: 0.05, "efektywny promień to najmniejsza odległość konturu od środka")
+        XCTAssertGreaterThan(radius(round), 1.15 * effective, "warunek wstępny: po stronie okrągłej kontur sięga daleko poza koło R")
+        // Obraz 2R ma tarczę o promieniu 0,84 R i pierścień do R, na każdej stronie tak samo: naklejka się nie deformuje.
+        scene.assertPixel(center, blue, "środek")
+        for (name, target) in [("spłaszczona strona", flat), ("okrągła strona", round)] {
+            let direction = unit(target - center)
+            scene.assertPixel(center + direction * (0.6 * effective), blue, "\(name): tarcza")
+            scene.assertPixel(center + direction * (0.93 * effective), red, "\(name): pierścień")
+        }
+        // Poza kołem R naklejki nie ma, choć po stronie okrągłej piksel leży jeszcze w bańce (kontur sięga dalej).
+        let probe = center + unit(round - center) * (1.08 * effective)
+        XCTAssertTrue(contains(contour, probe), "warunek wstępny: sonda leży wewnątrz konturu")
+        scene.assertPixel(probe, black, "poza kołem odniesienia naklejka jest przycięta")
     }
 
     func testDecalOnABubbleKeepsConstantOrientationAfterDeformationAndMovement() async throws {
-        let (rendered, quadrants, center, contour) = try await deformedBubbleScene(image: quadrantImage())
+        let (rendered, quadrants, center, effective, _) = try await deformedBubbleScene(image: quadrantImage())
+        let offset = 0.35 * effective
         for (direction, expected) in [(WorldPoint(-1, 1), red), (WorldPoint(1, 1), green),
                                       (WorldPoint(-1, -1), blue), (WorldPoint(1, -1), white)] {
-            let point = try XCTUnwrap(contour.max { lhs, rhs in cosine(lhs - center, direction) < cosine(rhs - center, direction) })
-            rendered.assertPixel(inside(point, center: center, by: 0.5), expected, "kierunek \(direction)")
+            rendered.assertPixel(center + direction * offset, expected, "kierunek \(direction)")
         }
-        // Kotwica w środku: po ruchu środek naklejki idzie za bańką.
+        // Kotwica w środku: po ruchu środek naklejki idzie za bańką, a orientacja zostaje.
         rendered.world.submit(try WorldTransaction().replace(id(1), with: B.bubble(1, at: [-3.6, 3], radius: 8,
             velocity: [4, 12], render: blackID, decal: .image(quadrants))))
         await rendered.step()
@@ -265,11 +305,6 @@ final class DecalRenderTests: XCTestCase {
         try await rendered.render()
         rendered.assertPixel(moved + [-2, 2], red); rendered.assertPixel(moved + [2, 2], green)
         rendered.assertPixel(moved + [-2, -2], blue); rendered.assertPixel(moved + [2, -2], white)
-    }
-
-    private func cosine(_ vector: WorldPoint, _ direction: WorldPoint) -> Float {
-        let length = (vector * vector).sum().squareRoot() * (direction * direction).sum().squareRoot()
-        return length > 0 ? (vector * direction).sum() / length : -1
     }
 
     func testDecalOnARotatedBodyRotatesWithIt() async throws {
@@ -290,6 +325,16 @@ final class DecalRenderTests: XCTestCase {
         await upright.step()
         try await upright.render()
         upright.assertPixel([-4, 4], red, "bez obrotu ćwiartki leżą jak w obrazie"); upright.assertPixel([4, -4], white)
+    }
+
+    func testBodyDecalIsDrawnInAWorldWithoutBubbles() async throws {
+        let scene = try makeScene()
+        let green = try scene.assets.register(solidImage([0, 255, 0, 255]))
+        scene.world.submit(try WorldTransaction().add(B.box(1, at: .zero, half: [4, 4], filter: ghost, render: blackID,
+                                                            decal: .image(green))))
+        await scene.step()
+        try await scene.render()
+        scene.assertPixel([0, 0], RGBA(0, 1, 0), "naklejka bryły, gdy w świecie nie ma żadnej bańki")
     }
 
     func testDecalIsAnchoredAtTheObjectOriginOnACapsuleToo() async throws {
@@ -396,8 +441,8 @@ final class DecalRenderTests: XCTestCase {
         let green = try scene.assets.register(solidImage([0, 255, 0, 255]))
         let white = try scene.assets.register(solidImage([255, 255, 255, 255]))
         scene.world.submit(try WorldTransaction()
-            .add(B.bubble(1, at: [-6, 0], radius: 6, filter: ghost, render: blackID, decal: .image(white)))
-            .add(B.bubble(2, at: [6, 0], radius: 6, filter: ghost, render: blackID, decal: .image(white))))
+            .add(B.bubble(1, at: [-3, 0], radius: 6, filter: ghost, render: blackID, decal: .image(white)))
+            .add(B.bubble(2, at: [3, 0], radius: 6, filter: ghost, render: blackID, decal: .image(white))))
         await scene.step()
         let merged = BubbleResult(id: id(3), physicsMaterialID: B.bubbleMaterial, renderMaterialID: blackID, filter: ghost,
                                   decal: try .image(blue))

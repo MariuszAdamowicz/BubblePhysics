@@ -57,11 +57,14 @@ package final class NativeMetalRenderHandoff {
         guard let bubbleVertex = library.makeFunction(name: "nativeBubbleVertex"),
               let bodyVertex = library.makeFunction(name: "nativeBodyVertex"),
               let bubbleFragment = library.makeFunction(name: "nativeBubbleFragment"),
-              let bodyFragment = library.makeFunction(name: "nativeBodyFragment") else {
+              let bodyFragment = library.makeFunction(name: "nativeBodyFragment"),
+              let decalVertex = library.makeFunction(name: "nativeDecalVertex"),
+              let decalFragment = library.makeFunction(name: "nativeDecalFragment") else {
             throw NativeRenderError.resourceUnavailable
         }
         let functions = NativeRenderFunctions(bubbleVertex: bubbleVertex, bodyVertex: bodyVertex,
-            bubbleFragment: bubbleFragment, bodyFragment: bodyFragment)
+            bubbleFragment: bubbleFragment, bodyFragment: bodyFragment,
+            decalVertex: decalVertex, decalFragment: decalFragment)
         compiledFunctions[device.registryID] = functions
         return functions
     }
@@ -83,6 +86,37 @@ package final class NativeMetalRenderHandoff {
         guard count > 0 else { return }
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: contourStride * 3,
                                instanceCount: count, baseInstance: first)
+    }
+
+    /// Wiąże dane naklejek: wierzchołki i instancje z areny, rekordy baniek (kotwica i promień odniesienia) w wierzchołku oraz
+    /// kontury baniek w fragmencie (maska radialna). Bez uchwytu (świat bez kroku GPU) `bindDecalsWithoutBubbles`.
+    package func bindDecals(_ encoder: MTLRenderCommandEncoder, viewport: Viewport, vertices: MTLBuffer, vertexOffset: Int,
+                            instances: MTLBuffer, instanceOffset: Int) {
+        encoder.setVertexBuffer(bubbles, offset: 0, index: 4)
+        encoder.setFragmentBuffer(points, offset: 0, index: 0)
+        encoder.setFragmentBuffer(counts, offset: 0, index: 1)
+        Self.bindDecalCommon(encoder, viewport: viewport, vertices: vertices, vertexOffset: vertexOffset,
+                             instances: instances, instanceOffset: instanceOffset, stride: contourStride)
+    }
+
+    /// Naklejki samych brył: shader deklaruje bufory baniek i konturów, więc dostają zaślepkę (nikt ich nie czyta).
+    package static func bindDecalsWithoutBubbles(_ encoder: MTLRenderCommandEncoder, viewport: Viewport, vertices: MTLBuffer,
+                                                 vertexOffset: Int, instances: MTLBuffer, instanceOffset: Int) {
+        encoder.setVertexBuffer(vertices, offset: 0, index: 4)
+        encoder.setFragmentBuffer(vertices, offset: 0, index: 0)
+        encoder.setFragmentBuffer(vertices, offset: 0, index: 1)
+        bindDecalCommon(encoder, viewport: viewport, vertices: vertices, vertexOffset: vertexOffset,
+                        instances: instances, instanceOffset: instanceOffset, stride: 0)
+    }
+
+    private static func bindDecalCommon(_ encoder: MTLRenderCommandEncoder, viewport: Viewport, vertices: MTLBuffer,
+                                        vertexOffset: Int, instances: MTLBuffer, instanceOffset: Int, stride: Int) {
+        encoder.setVertexBuffer(vertices, offset: vertexOffset, index: 0)
+        encoder.setVertexBuffer(instances, offset: instanceOffset, index: 1)
+        var values = SIMD4<Float>(viewport.center.x, viewport.center.y, viewport.size.x, viewport.size.y)
+        encoder.setVertexBytes(&values, length: MemoryLayout<SIMD4<Float>>.stride, index: 2)
+        var contourStride = UInt32(stride)
+        encoder.setFragmentBytes(&contourStride, length: MemoryLayout<UInt32>.stride, index: 2)
     }
 
     /// Wyłącznie adapter diagnostyczny. Produkcyjny renderer nie wywołuje tej metody.
@@ -117,6 +151,8 @@ package struct NativeRenderFunctions {
     package let bodyVertex: MTLFunction
     package let bubbleFragment: MTLFunction
     package let bodyFragment: MTLFunction
+    package let decalVertex: MTLFunction
+    package let decalFragment: MTLFunction
 }
 
 /// Materiał renderu jednego obiektu; lustro `NativeRenderMaterial` w `NativeRenderKernels` (sonda ABI w NativeMetalShaderABITests).
@@ -149,6 +185,33 @@ package struct NativeRenderBodyVertex: Equatable, Sendable {
     package var info: SIMD4<UInt32>
     package init(world: SIMD2<Float>, uv: SIMD2<Float>, info: SIMD4<UInt32>) {
         self.world = world; self.uv = uv; self.info = info
+    }
+}
+
+/// Instancja naklejki; lustro `NativeDecalInstance` w `NativeRenderKernels` (sonda ABI w NativeMetalShaderABITests).
+package struct NativeDecalInstance: Equatable, Sendable {
+    package var color: SIMD4<Float>
+    /// Kotwica xy, promień odniesienia i obrót (tylko bryły); dla bańki z rekordu bańki w uchwycie.
+    package var placement: SIMD4<Float>
+    /// Indeks bańki w uchwycie (`noBubble` dla bryły), tryb (`Mode`), reserved x2.
+    package var info: SIMD4<UInt32>
+
+    package static let noBubble: UInt32 = 0xFFFF_FFFF
+    package enum Mode: UInt32 { case image = 0, glyphAlpha = 1, glyphDistanceField = 2 }
+
+    package init(color: SIMD4<Float>, placement: SIMD4<Float>, bubbleIndex: UInt32, mode: Mode) {
+        self.color = color; self.placement = placement; self.info = SIMD4(bubbleIndex, mode.rawValue, 0, 0)
+    }
+}
+
+/// Wierzchołek czworokąta naklejki: położenie względem kotwicy w jednostkach promienia odniesienia (przed obrotem),
+/// współrzędne tekstury (wiersz 0 u góry) i indeks instancji.
+package struct NativeDecalVertex: Equatable, Sendable {
+    package var local: SIMD2<Float>
+    package var uv: SIMD2<Float>
+    package var info: SIMD4<UInt32>
+    package init(local: SIMD2<Float>, uv: SIMD2<Float>, instance: UInt32) {
+        self.local = local; self.uv = uv; self.info = SIMD4(instance, 0, 0, 0)
     }
 }
 
