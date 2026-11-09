@@ -945,9 +945,15 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
                 points: state.workingContourPoints, counts: state.workingContourCounts,
                 bubbles: state.workingBubbles,
                 bubbleIDs: snapshot.sourceBubbles.map { ObjectID(rawValue: UInt64(bitPattern: Int64($0.id.rawValue))) },
-                contourStride: state.contourStride)
+                contourStride: state.contourStride,
+                // Strona t−1 kroku w toku to strona opublikowana: nietknięta, dopóki krok nie zostanie opublikowany.
+                previousPoints: lastSnapshot == nil ? nil : state.publishedContourPoints,
+                previousCounts: lastSnapshot == nil ? nil : state.publishedContourCounts,
+                previousBubbleIDs: previousPublicationBubbleIDs)
             try beforeCommit(working)
         }
+        // Od tej chwili krok pisze stronę roboczą, która w opublikowanym uchwycie jest stroną t−1.
+        publishedRenderHandoff?.invalidatePreviousContours()
         let encodingEnd = DispatchTime.now().uptimeNanoseconds
         // Jedyny await/commit: wszystkie etapy zostały już zakodowane.
         let timing = try await commandExecutor.complete(command)
@@ -1133,6 +1139,8 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         publishedRigidContacts = rigidContacts
         removedPolygons = rigidResult.removed
         wrappedPolygons = rigidResult.wrapped
+        let previousIDs = previousPublicationBubbleIDs
+        let hadPreviousPublication = lastSnapshot != nil
         state.publish()
         previousSensorPairs = pairCount > 0 ? currentSensorPairs : nil
         previousSensorPairCount = pairCount
@@ -1150,10 +1158,19 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
                 points: state.publishedContourPoints, counts: state.publishedContourCounts,
                 bubbles: state.publishedBubbles,
                 bubbleIDs: snapshot.sourceBubbles.map { ObjectID(rawValue: UInt64(bitPattern: Int64($0.id.rawValue))) },
-                contourStride: state.contourStride)
+                contourStride: state.contourStride,
+                // Po publikacji strona robocza trzyma kontury poprzedniej publikacji (t−1).
+                previousPoints: hadPreviousPublication ? state.workingContourPoints : nil,
+                previousCounts: hadPreviousPublication ? state.workingContourCounts : nil,
+                previousBubbleIDs: previousIDs)
         }
         if readsContours { publishedContourCPUReadbackCount += 1 }
         return frame
+    }
+
+    /// Kolejność baniek ostatniej publikacji, czyli strony t−1 po publikacji następnego kroku.
+    private var previousPublicationBubbleIDs: [ObjectID] {
+        (lastSnapshot?.sourceBubbles ?? []).map { ObjectID(rawValue: UInt64(bitPattern: Int64($0.id.rawValue))) }
     }
 
     private func milliseconds(_ nanoseconds: UInt64) -> Double { Double(nanoseconds) / 1_000_000 }

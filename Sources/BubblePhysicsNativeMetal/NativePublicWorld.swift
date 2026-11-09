@@ -88,8 +88,9 @@ package final class NativePublicWorld {
     /// w kroku bez GPU. Zduplikowany koniec odfiltrowuje historia kompaktora, bo koniec bez pary w historii jest pomijany.
     private var contactHistory: Set<ContactPair> = []
 
-    package init(device: MTLDevice, configuration: NativeMetalConfiguration = .default) throws {
-        solver = try NativeMetalSolver(device: device, configuration: configuration)
+    package init(device: MTLDevice, configuration: NativeMetalConfiguration = .default,
+                 commandExecutor: (any NativeMetalCommandExecuting)? = nil) throws {
+        solver = try NativeMetalSolver(device: device, commandExecutor: commandExecutor, configuration: configuration)
     }
     package var hasSensorPairHistory: Bool { solver.hasSensorPairHistory }
     package var publishedRenderHandoff: NativeMetalRenderHandoff? { solver.publishedRenderHandoff }

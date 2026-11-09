@@ -8,6 +8,15 @@ package final class NativeMetalRenderHandoff {
     private let points: MTLBuffer
     private let counts: MTLBuffer
     private let bubbles: MTLBuffer
+    /// Druga strona konturów (krok t−1) w roli ping-pong solvera; `nil` przed pierwszą publikacją. Bez kopii: to ten sam bufor,
+    /// który następny krok nadpisze, dlatego `previousContoursValid` gaśnie, gdy krok bez publikacji go zepsuje.
+    private let previousPoints: MTLBuffer?
+    private let previousCounts: MTLBuffer?
+    /// Kolejność baniek na stronie t−1 (indeks rekordu w buforach t−1); pusta, gdy strony t−1 nie ma.
+    package let previousBubbleIDs: [ObjectID]
+    /// Czy strona t−1 nadal trzyma kontury z poprzedniej publikacji. Fałsz, gdy nie ma strony t−1 albo krok wykonany na GPU
+    /// bez publikacji nadpisał ją; wtedy renderer rysuje bez interpolacji.
+    package private(set) var previousContoursValid: Bool
     package let bubbleIDs: [ObjectID]
     package var bubbleCount: Int { bubbleIDs.count }
     package let contourStride: Int
@@ -19,13 +28,21 @@ package final class NativeMetalRenderHandoff {
         uniqueKeysWithValues: bubbleIDs.enumerated().map { ($0.element, $0.offset) })
 
     init(points: MTLBuffer, counts: MTLBuffer, bubbles: MTLBuffer,
-         bubbleIDs: [ObjectID], contourStride: Int) {
+         bubbleIDs: [ObjectID], contourStride: Int,
+         previousPoints: MTLBuffer? = nil, previousCounts: MTLBuffer? = nil, previousBubbleIDs: [ObjectID] = []) {
         self.points = points
         self.counts = counts
         self.bubbles = bubbles
         self.bubbleIDs = bubbleIDs
         self.contourStride = contourStride
+        self.previousPoints = previousPoints
+        self.previousCounts = previousCounts
+        self.previousBubbleIDs = previousBubbleIDs
+        previousContoursValid = previousPoints != nil && previousCounts != nil
     }
+
+    /// Solver wywołuje to, gdy krok wykonany na GPU nie został opublikowany: zapisał stronę t−1 tego uchwytu.
+    func invalidatePreviousContours() { previousContoursValid = false }
 
     private static var compiledFunctions: [UInt64: NativeRenderFunctions] = [:]
 
@@ -70,14 +87,23 @@ package final class NativeMetalRenderHandoff {
 
     /// Wyłącznie adapter diagnostyczny. Produkcyjny renderer nie wywołuje tej metody.
     package func debugContourSnapshot() -> [ObjectID: [WorldPoint]] {
-        let countValues = counts.contents().bindMemory(to: UInt32.self, capacity: bubbleCount)
-        let pointValues = points.contents().bindMemory(to: SIMD2<Float>.self,
-            capacity: bubbleCount * contourStride)
+        Self.readContours(points: points, counts: counts, ids: bubbleIDs, stride: contourStride)
+    }
+
+    /// Szew testowy: kontury ze strony t−1, niezależnie od flagi `previousContoursValid` (puste bez strony t−1).
+    package func debugPreviousContourSnapshot() -> [ObjectID: [WorldPoint]] {
+        guard let previousPoints, let previousCounts else { return [:] }
+        return Self.readContours(points: previousPoints, counts: previousCounts, ids: previousBubbleIDs, stride: contourStride)
+    }
+
+    private static func readContours(points: MTLBuffer, counts: MTLBuffer, ids: [ObjectID], stride: Int) -> [ObjectID: [WorldPoint]] {
+        let countValues = counts.contents().bindMemory(to: UInt32.self, capacity: ids.count)
+        let pointValues = points.contents().bindMemory(to: SIMD2<Float>.self, capacity: ids.count * stride)
         var result: [ObjectID: [WorldPoint]] = [:]
-        for (index, id) in bubbleIDs.enumerated() {
-            let count = min(Int(countValues[index]), contourStride)
+        for (index, id) in ids.enumerated() {
+            let count = min(Int(countValues[index]), stride)
             result[id] = (0..<count).map { offset in
-                let point = pointValues[index * contourStride + offset]
+                let point = pointValues[index * stride + offset]
                 return WorldPoint(point.x, point.y)
             }
         }
