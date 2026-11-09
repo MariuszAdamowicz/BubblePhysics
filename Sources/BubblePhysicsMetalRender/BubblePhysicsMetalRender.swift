@@ -1,4 +1,5 @@
 import BubblePhysics
+import BubblePhysicsAssets
 import Metal
 import BubblePhysicsNativeMetal
 
@@ -31,6 +32,11 @@ public final class BubblePhysicsMetalRender {
         let functions = try NativeMetalRenderHandoff.makeFunctions(device: device)
         self.vertexFunction = functions.vertex
         self.technicalFragment = functions.fragment
+    }
+
+    /// Zaślepka etapu 5 (zadanie 46): rejestr jeszcze nie jest sprawdzany ani używany.
+    public convenience init(device: MTLDevice, assets: AssetRegistry) throws {
+        try self.init(device: device)
     }
 
     public func encode(world: BubbleWorld, viewport: Viewport, commandBuffer: MTLCommandBuffer,

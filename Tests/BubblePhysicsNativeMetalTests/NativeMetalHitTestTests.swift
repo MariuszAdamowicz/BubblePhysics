@@ -13,8 +13,19 @@ final class NativeMetalHitTestTests: XCTestCase {
     private func id(_ value: UInt64) -> ObjectID { ObjectID(rawValue: value) }
 
     private func step(_ objects: [WorldObject], hitTests: [WorldPoint], world: NativePublicWorld? = nil) async throws -> NativePublicFrame {
+        try await step(objects.map { NativePublicObject(descriptor: $0) }, hitTests: hitTests, world: world)
+    }
+
+    /// Obiekty z warstwą ustawioną na `NativePublicObject`, jak robi to stepper z `RuntimeObject.layer`.
+    private func step(layered objects: [(WorldObject, Int32)], hitTests: [WorldPoint]) async throws -> NativePublicFrame {
+        try await step(objects.map { descriptor, layer in
+            var object = NativePublicObject(descriptor: descriptor); object.layer = layer; return object
+        }, hitTests: hitTests)
+    }
+
+    private func step(_ objects: [NativePublicObject], hitTests: [WorldPoint], world: NativePublicWorld? = nil) async throws -> NativePublicFrame {
         let world = try world ?? NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
-        return try await world.step(objects: objects.map { NativePublicObject(descriptor: $0) },
+        return try await world.step(objects: objects,
             materials: [bubbleMaterial: PhysicsMaterial(kind: .bubble), rigidMaterial: PhysicsMaterial(kind: .rigid)],
             region: WorldRectangle(min: [-100, -100], max: [100, 100]),
             duration: 1.0 / 60, hitTests: hitTests)
@@ -94,5 +105,27 @@ final class NativeMetalHitTestTests: XCTestCase {
         let second = try await step(objects, hitTests: [[50, 0], [0, 0]], world: world)
         XCTAssertEqual(first.hitTestResults, [id(1)])
         XCTAssertEqual(second.hitTestResults, [nil, id(1)])
+    }
+
+    // P-B-71: wyższa warstwa wygrywa z większym ObjectID, bańka z bryłą i bryła z bańką; w tej samej warstwie rozstrzyga ObjectID.
+    func testHigherLayerWinsOverLargerObjectIDForBubblesAndBodies() async throws {
+        let box = try PolygonGeometry(vertices: [[-3, -3], [3, -3], [3, 3], [-3, 3]])
+        let frame = try await step(layered: [
+            (bubble(30, at: [0, 0]), 0), (rigid(7, .polygon(box), at: [0, 0]), 3),
+            (rigid(40, .circle(radius: 4), at: [40, 0]), 0), (bubble(2, at: [40, 0]), 5),
+            (bubble(8, at: [80, 0]), 1), (rigid(9, .capsule(halfLength: 2, radius: 2), at: [80, 0]), 1)],
+            hitTests: [[0, 0], [40, 0], [80, 0], [-4, 0]])
+        XCTAssertEqual(frame.hitTestResults, [id(7), id(2), id(9), id(30)])
+    }
+
+    // P-B-71: warstwy ujemne i skrajne porządkują się jak Int32, a nie jak liczby bez znaku.
+    func testNegativeAndExtremeLayersOrderLikeSignedIntegers() async throws {
+        let frame = try await step(layered: [
+            (bubble(90, at: [0, 0]), -1), (bubble(2, at: [0, 0]), 0),
+            (bubble(91, at: [40, 0]), Int32.min), (bubble(3, at: [40, 0]), -2),
+            (bubble(4, at: [80, 0]), Int32.max), (bubble(95, at: [80, 0]), Int32.max - 1),
+            (bubble(5, at: [120, 0]), -3), (bubble(77, at: [120, 0]), -3)],
+            hitTests: [[0, 0], [40, 0], [80, 0], [120, 0]])
+        XCTAssertEqual(frame.hitTestResults, [id(2), id(3), id(4), id(77)])
     }
 }

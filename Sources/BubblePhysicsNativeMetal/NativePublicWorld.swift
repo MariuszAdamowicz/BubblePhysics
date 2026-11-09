@@ -17,6 +17,8 @@ package struct NativePublicObject: Equatable, Sendable {
     package var bounds: WorldRectangle?
     package var rigidity: Float = 0
     package var structuralShape: NativeStructuralShape?
+    /// Warstwa rysowania i hit-testu. Zaślepka etapu 5 (zadanie 46): jeszcze nie trafia do rekordów GPU.
+    package var layer: Int32 = 0
 
     package init(descriptor: WorldObject) {
         self.descriptor = descriptor
@@ -57,6 +59,8 @@ struct NativePublicProperties: Equatable, Sendable {
     var filter: CollisionFilter = .default
     /// Limity prędkości z materiału: liniowa, kątowa (0 = bez limitu); w rekordzie bańki jako `deformation.zw`.
     var speedLimits: SIMD2<Float> = .zero
+    /// Warstwa obiektu; w rekordzie bańki jako `filter.w` (`NativeMetalFilter.encodeLayer`).
+    var layer: Int32 = 0
 }
 
 struct NativePublicSettings: Equatable, Sendable {

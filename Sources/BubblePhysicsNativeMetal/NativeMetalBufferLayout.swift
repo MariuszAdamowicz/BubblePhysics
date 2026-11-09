@@ -35,6 +35,9 @@ struct NativeMetalBubble: Equatable, Sendable {
 /// Brak filtra (rekord bez ustawień publicznych) oznacza filtr domyślny, czyli kolizję ze wszystkim.
 enum NativeMetalFilter {
     static let `default` = pack(.default)
+    /// Zaślepka etapu 5 (zadanie 46): warstwa jeszcze nie jest zapisywana w rekordach.
+    static func encodeLayer(_ layer: Int32) -> UInt32 { UInt32(bitPattern: layer) }
+    static func decodeLayer(_ value: UInt32) -> Int32 { Int32(bitPattern: value) }
     static func pack(_ filter: CollisionFilter, kinematic: Bool = false) -> SIMD4<UInt32> {
         SIMD4(filter.category, filter.mask, kinematic ? 1 : 0, 0)
     }

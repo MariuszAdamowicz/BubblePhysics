@@ -31,7 +31,7 @@ let package = Package(
                           path: "Benchmarks/macOS/BubblePhysicsPerfGuard"),
         .target(name: "BubblePhysics", dependencies: ["BubblePhysicsRuntime", "BubblePhysicsModel", "BubblePhysicsNativeMetal", "BubblePhysicsAssets"],
                 path: "Sources/BubblePhysicsPublic", exclude: ["Model"]),
-        .target(name: "BubblePhysicsMetalRender", dependencies: ["BubblePhysics", "BubblePhysicsNativeMetal", "BubblePhysicsModel"]),
+        .target(name: "BubblePhysicsMetalRender", dependencies: ["BubblePhysics", "BubblePhysicsNativeMetal", "BubblePhysicsModel", "BubblePhysicsAssets"]),
         .target(name: "BubblePhysicsModel", path: "Sources/BubblePhysicsPublic/Model"),
         // Rejestr tekstur gry per urządzenie Metal; nie zależy od świata ani od Runtime.
         .target(name: "BubblePhysicsAssets", dependencies: ["BubblePhysicsModel"]),
@@ -55,7 +55,7 @@ let package = Package(
         .testTarget(name: "BubblePhysicsPublicTests", dependencies: ["BubblePhysics", "BubblePhysicsAssets"]),
         .testTarget(name: "BubblePhysicsAssetsTests", dependencies: ["BubblePhysicsAssets"]),
         .testTarget(name: "BubblePhysicsPerfGuardTests", dependencies: ["BubblePhysicsPerfGuard"]),
-        .testTarget(name: "BubblePhysicsMetalRenderTests", dependencies: ["BubblePhysics", "BubblePhysicsMetalRender"]),
+        .testTarget(name: "BubblePhysicsMetalRenderTests", dependencies: ["BubblePhysics", "BubblePhysicsMetalRender", "BubblePhysicsAssets"]),
         .testTarget(name: "BubblePhysicsRuntimeTests", dependencies: ["BubblePhysics", "BubblePhysicsRuntime"]),
         .testTarget(name: "BubblePhysicsTests", dependencies: ["BubblePhysicsLegacy"]),
         .testTarget(name: "BubblePhysicsCoreTests", dependencies: ["BubblePhysicsCore"]),

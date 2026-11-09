@@ -9,6 +9,7 @@ import XCTest
 final class HitTestTests: XCTestCase {
     private typealias B = SceneBuilders
     private func id(_ value: UInt64) -> ObjectID { ObjectID(rawValue: value) }
+    private let ghost = CollisionFilter(category: 1, mask: 0)
 
     private func makeWorld(region: WorldRectangle? = nil) throws -> BubbleWorld {
         try B.makeWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()), region: region)
@@ -224,5 +225,47 @@ final class HitTestTests: XCTestCase {
         let secondResult = await second.value
         XCTAssertEqual(secondResult, id(7))
         XCTAssertEqual(world.pendingHitTestCount, 0)
+    }
+
+    // P-B-71: nakładanie w różnych warstwach; wygrywa wyższa warstwa, choć jej ObjectID jest mniejszy.
+    func testHigherLayerWinsOverLargerObjectID() async throws {
+        let world = try makeWorld()
+        try await settle(world, WorldTransaction()
+            .add(B.bubble(11, at: [100, 100], radius: 10, role: .static, layer: 0))
+            .add(B.bubble(3, at: [100, 100], radius: 10, role: .static, layer: 2))
+            .add(B.box(20, at: [300, 100], half: [6, 6], layer: -1))
+            .add(B.circle(4, at: [300, 100], radius: 6, role: .static, layer: 5))
+            .add(B.bubble(5, at: [500, 100], radius: 10, role: .static, layer: 1))
+            .add(B.box(8, at: [500, 100], half: [6, 6], layer: 1)))
+        let results = await hitTests(world, [[100, 100], [300, 100], [500, 100]])
+        XCTAssertEqual(results, [id(3), id(4), id(8)], "ostatnia para: ta sama warstwa, więc największy ObjectID")
+    }
+
+    // P-B-71: setLayer zmienia wynik hit-testu w następnym kroku; warstwy ujemne leżą pod zerową.
+    func testSetLayerChangesTheWinnerOfTheNextHitTest() async throws {
+        let world = try makeWorld()
+        try await settle(world, WorldTransaction()
+            .add(B.bubble(11, at: [100, 100], radius: 10, role: .static))
+            .add(B.bubble(9, at: [100, 100], radius: 10, role: .static)))
+        var results = await hitTests(world, [[100, 100]])
+        XCTAssertEqual(results, [id(11)])
+        results = await hitTests(world, [[100, 100]]) { world.submit(WorldTransaction().setLayer(self.id(9), layer: 1)) }
+        XCTAssertEqual(results, [id(9)], "transakcja potwierdzona w kroku hit-testu")
+        results = await hitTests(world, [[100, 100]]) { world.submit(WorldTransaction().setLayer(self.id(9), layer: -4)) }
+        XCTAssertEqual(results, [id(11)], "warstwa −4 leży pod warstwą 0")
+    }
+
+    // P-B-71: wynik scalenia ma warstwę z `BubbleResult` i wygrywa nad obiektem na niższej warstwie.
+    func testMergedBubbleKeepsTheLayerOfItsResult() async throws {
+        let world = try makeWorld()
+        try await settle(world, WorldTransaction()
+            .add(B.bubble(1, at: [100, 100], radius: 10, filter: ghost))
+            .add(B.bubble(2, at: [112, 100], radius: 10, filter: ghost))
+            .add(B.box(9_000, at: [106, 100], half: [3, 3], filter: ghost)))
+        let result = BubbleResult(id: id(50), physicsMaterialID: B.bubbleMaterial, renderMaterialID: B.style, filter: ghost, layer: 7)
+        world.submit(WorldTransaction().mergeBubbles([id(1), id(2)], result: result))
+        _ = await B.advance(world, steps: 1)
+        let results = await hitTests(world, [[106, 100]])
+        XCTAssertEqual(results, [id(50)], "warstwa 7 wyniku scalenia nad bryłą o dużym ObjectID na warstwie 0")
     }
 }

@@ -227,16 +227,10 @@ final class MetalRenderIntegrationTests: XCTestCase {
                 physicsMaterialID: .init(rawValue: 2), renderMaterialID: .init(rawValue: 2)))))
         _ = await world.advance(by: 1.0 / 60)
         let renderer = try BubblePhysicsMetalRender(device: device)
-        let texture = try makeTexture(device: device)
-        let pass = makePass(texture: texture)
-        let command = try XCTUnwrap(device.makeCommandQueue()?.makeCommandBuffer())
-        try renderer.encode(world: world, viewport: Viewport(center: .zero, size: [4,4]),
-                            commandBuffer: command, renderPassDescriptor: pass)
-        command.commit()
-        await command.completed()
-        XCTAssertEqual(command.status, .completed)
-        XCTAssertNotEqual(Array(pixel(texture, x: 32, y: 32).prefix(3)), [0, 0, 0])
-        XCTAssertEqual(Array(pixel(texture, x: 2, y: 2).prefix(3)), [0, 0, 0])
+        let harness = try OffscreenRenderHarness(device: device)
+        try await harness.render(world: world, renderer: renderer, viewport: Viewport(center: .zero, size: [4,4]))
+        XCTAssertNotEqual(Array(harness.pixel(x: 128, y: 128).prefix(3)), [0, 0, 0])
+        XCTAssertEqual(Array(harness.pixel(x: 8, y: 8).prefix(3)), [0, 0, 0])
     }
 
     func testLastBodyRemovalClearsDebugContourSnapshot() async throws {
@@ -260,15 +254,15 @@ final class MetalRenderIntegrationTests: XCTestCase {
             .add(.bubble(try BubbleDescriptor(id: .init(rawValue: 1), position: [3,0],
                 targetRadius: 0.5, physicsMaterialID: .init(rawValue: 1), renderMaterialID: .init(rawValue: 1)))))
         let renderer = try BubblePhysicsMetalRender(device: device)
-        let texture = try makeTexture(device: device)
-        let pass = makePass(texture: texture)
-        let command = try XCTUnwrap(device.makeCommandQueue()?.makeCommandBuffer())
+        let harness = try OffscreenRenderHarness(device: device)
+        let command = try harness.makeCommandBuffer()
+        let pass = harness.makePass()
         let frame = await world.advance(by: 1.0 / 60, commandBuffer: command) {
             try renderer.encode(world: world, viewport: Viewport(center: [3,0], size: [4,4]),
                                 commandBuffer: command, renderPassDescriptor: pass)
         }
         XCTAssertEqual(frame.stepIndex, 1)
-        XCTAssertEqual(Array(pixel(texture, x: 32, y: 32).prefix(3)), [0,0,0])
+        XCTAssertEqual(Array(harness.pixel(x: 128, y: 128).prefix(3)), [0,0,0])
     }
 
     func testPublicStressHarnessExercisesSameBufferWithoutContourReadback() async throws {
@@ -289,29 +283,6 @@ final class MetalRenderIntegrationTests: XCTestCase {
         XCTAssertTrue(report.text.contains("host_encoding_p95_ms="))
         XCTAssertTrue(report.text.contains("host_waiting_p95_ms="))
         XCTAssertEqual(progress, [1, 2, 3])
-    }
-
-    private func makeTexture(device: MTLDevice) throws -> MTLTexture {
-        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm,
-            width: 64, height: 64, mipmapped: false)
-        descriptor.usage = [.renderTarget, .shaderRead]
-        descriptor.storageMode = .shared
-        return try XCTUnwrap(device.makeTexture(descriptor: descriptor))
-    }
-
-    private func makePass(texture: MTLTexture) -> MTLRenderPassDescriptor {
-        let pass = MTLRenderPassDescriptor()
-        pass.colorAttachments[0].texture = texture
-        pass.colorAttachments[0].loadAction = .clear
-        pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1)
-        pass.colorAttachments[0].storeAction = .store
-        return pass
-    }
-
-    private func pixel(_ texture: MTLTexture, x: Int, y: Int) -> [UInt8] {
-        var result = [UInt8](repeating: 0, count: 4)
-        texture.getBytes(&result, bytesPerRow: 4, from: MTLRegionMake2D(x, y, 1, 1), mipmapLevel: 0)
-        return result
     }
 
     private func makeWorld(device: MTLDevice) throws -> BubbleWorld {

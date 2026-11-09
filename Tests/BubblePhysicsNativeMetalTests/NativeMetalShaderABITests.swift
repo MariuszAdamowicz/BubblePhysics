@@ -1,4 +1,5 @@
 import XCTest
+import BubblePhysicsModel
 import Metal
 @testable import BubblePhysicsNativeMetal
 
@@ -154,5 +155,38 @@ final class NativeMetalShaderABITests: XCTestCase {
             ("bounds", MemoryLayout<NativeMetalBubble>.offset(of: \.bounds)),
             ("filter", MemoryLayout<NativeMetalBubble>.offset(of: \.filter))])]
         assertMatches(probes, try measure(probes, sources: [try source("NativeRenderKernels")], device: device))
+    }
+
+    /// P-B-71: warstwa w `filter.w` to Int32 z odwróconym bitem znaku, więc porządek uint zgadza się z porządkiem Int32.
+    func testLayerEncodingKeepsSignedOrderAndRoundTrips() {
+        let layers: [Int32] = [.min, -70_000, -2, -1, 0, 1, 2, 70_000, .max - 1, .max]
+        let encoded = layers.map(NativeMetalFilter.encodeLayer)
+        XCTAssertEqual(encoded, encoded.sorted(), "rosnące warstwy dają rosnące wartości uint")
+        XCTAssertEqual(Set(encoded).count, layers.count)
+        XCTAssertEqual(encoded.map(NativeMetalFilter.decodeLayer), layers)
+        XCTAssertEqual(NativeMetalFilter.encodeLayer(0), 0x8000_0000)
+    }
+
+    /// P-B-71: rekord bańki niesie warstwę w `filter.w` bez zmiany kategorii i maski ani rozmiaru rekordu.
+    func testBubbleRecordCarriesLayerInFilterW() throws {
+        let id = NativeSolverBubbleID(rawValue: 4)
+        let filter = CollisionFilter(category: 6, mask: 0x30)
+        var snapshots: [Int32: NativeMetalSnapshot] = [:]
+        for layer in [Int32(-5), 0, 9] {
+            let properties = NativePublicProperties(flags: SIMD4(1, 0, 0, 0), material: .zero, restitution: 0,
+                resources: .zero, eventData: .zero, filter: filter, layer: layer)
+            var input = NativeSolverInput(configuration: .init(), bubbles: [NativeSolverBubble(id: id, center: .zero, mass: 1, targetRadius: 1)],
+                segments: [], publicSettings: NativePublicSettings(properties: [id: properties],
+                    region: try WorldRectangle(min: [-10, -10], max: [10, 10])))
+            input.hitTests = []
+            snapshots[layer] = NativeMetalSnapshot(input: input)
+        }
+        for (layer, snapshot) in snapshots {
+            let record = try XCTUnwrap(snapshot.bubbleChanges.first).value
+            XCTAssertEqual(record.filter.w, NativeMetalFilter.encodeLayer(layer), "warstwa \(layer)")
+            XCTAssertEqual(record.filter.x, 6); XCTAssertEqual(record.filter.y, 0x30)
+        }
+        XCTAssertEqual(MemoryLayout<NativeMetalBubble>.stride, NativeMetalRenderHandoff.bubbleRecordByteCount)
+        XCTAssertEqual(MemoryLayout<NativeMetalBubble>.stride, 11 * 16, "rozmiar rekordu bańki bez zmian: 11 lane'ów po 16 B")
     }
 }
