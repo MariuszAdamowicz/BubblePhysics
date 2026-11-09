@@ -45,10 +45,12 @@ public struct WorldConfiguration: Equatable, Sendable {
     /// Górny limit zaległego czasu (backlogu) w sekundach; nadmiar jest odrzucany i raportowany w diagnostyce.
     /// Limit krótszy niż krok symulacji działa jak jeden krok, więc nie blokuje symulacji.
     public let maximumBacklog: TimeInterval
+    /// Gdy włączone (domyślnie), świat pauzuje po przejściu aplikacji w tło i po powrocie odrzuca pierwszy przyrost czasu.
+    public let automaticPause: Bool
 
     public init(simulationRegion: WorldRectangle, fixedTimeStep: TimeInterval = 1.0 / 60.0,
                 eventBufferCapacity: Int = 1024, globalForce: WorldPoint = .zero,
-                maximumBacklog: TimeInterval = 0.25) throws {
+                maximumBacklog: TimeInterval = 0.25, automaticPause: Bool = true) throws {
         guard fixedTimeStep.isFinite else { throw ModelValidationError.nonFiniteValue("fixedTimeStep") }
         guard fixedTimeStep > 0 else { throw ModelValidationError.nonPositiveValue("fixedTimeStep") }
         guard maximumBacklog.isFinite else { throw ModelValidationError.nonFiniteValue("maximumBacklog") }
@@ -60,6 +62,7 @@ public struct WorldConfiguration: Equatable, Sendable {
         self.eventBufferCapacity = eventBufferCapacity
         self.globalForce = globalForce
         self.maximumBacklog = maximumBacklog
+        self.automaticPause = automaticPause
     }
 
     /// Walidacja zależna od świata; stager transakcji musi ją ponowić dla swojego regionu.

@@ -56,6 +56,9 @@ package struct FixedStepDriver {
         min(max((backlogSeconds - fixedTimeStep) / fixedTimeStep, 0), 1)
     }
 
+    /// Pierwszy przyrost czasu po wznowieniu z tła zostanie odrzucony.
+    package mutating func discardNextAdvance() {}
+
     package mutating func completeStep() {
         precondition(canStep)
         backlogSeconds = max(0, backlogSeconds - fixedTimeStep)

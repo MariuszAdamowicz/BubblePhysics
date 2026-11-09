@@ -108,7 +108,8 @@ public final class BubbleWorld {
     /// urządzenia) to `AssetError.deviceMismatch`.
     public convenience init(configuration: WorldConfiguration,
                             device: MTLDevice? = MTLCreateSystemDefaultDevice(),
-                            assets: AssetRegistry? = nil) throws {
+                            assets: AssetRegistry? = nil,
+                            lifecycle: LifecycleEventSource? = nil) throws {
         let registry: AssetRegistry?
         if let assets {
             guard let device, device.registryID == assets.deviceRegistryID else { throw AssetError.deviceMismatch }
@@ -116,7 +117,8 @@ public final class BubbleWorld {
         } else {
             registry = device.map { AssetRegistry(device: $0) }
         }
-        self.init(configuration: configuration, stepper: try NativeCompleteStepper(device: device), assets: registry)
+        self.init(configuration: configuration, stepper: try NativeCompleteStepper(device: device), assets: registry,
+                  lifecycle: lifecycle)
     }
 
     /// Konstruktor wyłącznie dla diagnostycznego harnessu; limit nie jest parametrem API gry.
@@ -137,7 +139,8 @@ public final class BubbleWorld {
         (stepper as? NativeCompleteStepper)?.publishedContourCPUReadbackCount ?? 0
     }
 
-    internal init(configuration: WorldConfiguration, stepper: any CompleteStepper, assets: AssetRegistry? = nil) {
+    internal init(configuration: WorldConfiguration, stepper: any CompleteStepper, assets: AssetRegistry? = nil,
+                  lifecycle: LifecycleEventSource? = nil) {
         self.configuration = configuration
         self.assets = assets
         self.state = RuntimeState(configuration: configuration)

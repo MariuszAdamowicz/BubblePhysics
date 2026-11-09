@@ -116,4 +116,24 @@ final class FixedStepDriverTests: XCTestCase {
         XCTAssertTrue(driver.discardedBacklogSeconds.isFinite)
         XCTAssertEqual(driver.backlogSeconds, 0.25)
     }
+
+    // P-B-56: po wznowieniu z tła pierwszy przyrost czasu jest odrzucony, następne liczą się normalnie.
+    func testDiscardNextAdvanceDropsOnlyTheNextIncrement() {
+        var driver = FixedStepDriver(fixedTimeStep: 0.125)
+        XCTAssertTrue(driver.accumulate(0.0625))
+        driver.discardNextAdvance()
+        XCTAssertTrue(driver.accumulate(5))
+        XCTAssertEqual(driver.backlogSeconds, 0.0625, "dotychczasowa zaległość zostaje, przyrost odrzucony")
+        XCTAssertEqual(driver.discardedBacklogSeconds, 0, "to nie jest nadmiar backlogu")
+        XCTAssertTrue(driver.accumulate(0.0625))
+        XCTAssertEqual(driver.backlogSeconds, 0.125, accuracy: 1e-12)
+    }
+
+    func testDiscardNextAdvanceStillRejectsInvalidTimeWithoutConsumingTheDiscard() {
+        var driver = FixedStepDriver(fixedTimeStep: 0.125)
+        driver.discardNextAdvance()
+        XCTAssertFalse(driver.accumulate(-1))
+        XCTAssertTrue(driver.accumulate(1))
+        XCTAssertEqual(driver.backlogSeconds, 0)
+    }
 }
