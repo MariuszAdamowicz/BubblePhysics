@@ -74,7 +74,16 @@ Testy Metal działają na macOS z lokalnym GPU. Źródła shaderów są dołącz
 
 ## Benchmark na urządzeniu
 
-Aplikacja hosta iOS jest w `Benchmarks/iOS/BubblePhysicsBench` i ma jeden ekran, który uruchamia `PublicWorldStressBenchmark`: 300 baniek, cztery ściany i poruszający się trójkąt, renderowane przez `BubblePhysicsMetalRender` w tym samym command bufferze co krok fizyki.
+Aplikacja hosta iOS jest w `Benchmarks/iOS/BubblePhysicsBench` i ma jeden ekran, który uruchamia `PublicWorldStressBenchmark` na wybranej scenie. Świat i renderer (`BubblePhysicsMetalRender`) działają w tym samym command bufferze co krok fizyki, a render idzie poza ekranem w natywnej rozdzielczości ekranu (`UIScreen.main.nativeBounds`):
+
+| Scena | Skład | Bramka p95 |
+|-------|-------|------------|
+| `stress-300` | 300 baniek, cztery ściany, poruszający się trójkąt | 10,4568 ms |
+| `mixed` | 200 baniek, 60 brył (wielokąty, koła, kapsuły), 10 więzów, belki kinematyczne | 10,4568 ms |
+| `decals` | stress-300 z teksturą przyklejoną i naklejką tekstową na każdej bańce | 10,4568 ms |
+| `acceptance` | `decals`, trójkąt kinematyczny z `KinematicDrive`, połowa baniek na warstwie 1; dwa materiały alfa | 16,67 ms |
+
+Wynik akceptacyjny wydania to scena `acceptance`.
 
 1. Skopiuj `Benchmarks/iOS/BubblePhysicsBench/Signing.local.xcconfig.example` do `Signing.local.xcconfig` (ignorowany przez git) i ustaw swój `DEVELOPMENT_TEAM` oraz bundle identifier.
 2. Otwórz `BubblePhysicsBench.xcodeproj`, wybierz fizyczny iPhone i uruchom konfigurację Release.
@@ -88,7 +97,7 @@ xcodebuild -project Benchmarks/iOS/BubblePhysicsBench/BubblePhysicsBench.xcodepr
   CODE_SIGNING_ALLOWED=NO build
 ```
 
-Bramka akceptacji to p95 pełnej klatki nie większe niż `PublicWorldStressBenchmark.p95GateMilliseconds` (10.4568 ms) na iPhonie X, przy zerze nieudanych klatek, zerze klatek `non-finite` i bez readbacku konturów na CPU. Raport wypisuje tę wartość jako `p95_gate_ms`. Jedyny dotychczasowy pomiar urządzeniowy (2026-10-14, `docs/benchmarks/native-metal-bubble-solver-2026-10-14.md`) wykonano na wcześniejszej ścieżce `NativeMetalBenchmarkRunner`; ścieżka gry `BubbleWorld` + renderer nie była jeszcze mierzona na urządzeniu.
+Bramka sceny akceptacyjnej to p95 pełnej klatki nie większe niż 16,67 ms (`PublicWorldStressBenchmark.acceptanceGateMilliseconds`) na iPhonie X w natywnej rozdzielczości, przy zerze nieudanych klatek, zerze klatek `non-finite`, bez readbacku konturów na CPU, z zerem przepełnień kandydatów kontaktu i z największą liczbą kandydatów na obiekt nie większą niż połowa limitu (`candidate_limit`). Pozostałe sceny mają bramkę `PublicWorldStressBenchmark.p95GateMilliseconds` (10,4568 ms). Raport wypisuje bramkę jako `p95_gate_ms`, rozmiar celu jako `render_px`, a liczniki kandydatów w linii `contact_candidate_overflow`. Jedyny dotychczasowy pomiar urządzeniowy (2026-10-14, `docs/benchmarks/native-metal-bubble-solver-2026-10-14.md`) wykonano na wcześniejszej ścieżce `NativeMetalBenchmarkRunner`; ścieżka gry `BubbleWorld` + renderer nie była jeszcze mierzona na urządzeniu.
 
 ## Układ repozytorium
 

@@ -5,6 +5,16 @@ import UIKit
 
 /// Ręcznie uruchamiany pomiar fizycznego urządzenia; wynik można skopiować do raportu.
 struct PublicWorldStressView: View {
+    private typealias Scene = PublicWorldStressBenchmark.Scene
+
+    private let scenes: [(title: String, scene: Scene)] = [
+        ("stress-300", .stress(bubbleCount: 300)),
+        ("mixed", .mixed),
+        ("decals", .decals),
+        ("acceptance", .acceptance)
+    ]
+
+    @State private var selectedIndex = 3
     @State private var task: Task<Void, Never>?
     @State private var completed = 0
     @State private var report: String?
@@ -14,8 +24,13 @@ struct PublicWorldStressView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                Text("Publiczny stress-300").font(.title2.bold())
-                Text("BubbleWorld + bezpośredni renderer, ten sam command buffer; limit 4, 30 klatek rozgrzewki i 300 mierzonych. Wynik akceptacyjny wymaga fizycznego iPhone X.")
+                Text("Publiczny benchmark świata").font(.title2.bold())
+                Text("BubbleWorld + bezpośredni renderer, ten sam command buffer; limit 4, 30 klatek rozgrzewki i 300 mierzonych. Render poza ekranem w natywnej rozdzielczości ekranu. Wynik akceptacyjny (scena acceptance) wymaga fizycznego iPhone X.")
+                Picker("Scena", selection: $selectedIndex) {
+                    ForEach(scenes.indices, id: \.self) { Text(scenes[$0].title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .disabled(isRunning)
                 ProgressView(value: Double(completed), total: 330)
                 if isRunning {
                     Text("Pomiar trwa: \(completed) / 330")
@@ -37,6 +52,7 @@ struct PublicWorldStressView: View {
 
     private func start() {
         guard let device = MTLCreateSystemDefaultDevice() else { error = "Metal niedostępny"; return }
+        let scene = scenes[selectedIndex].scene
         completed = 0; report = nil; error = nil
         isRunning = true
         UIApplication.shared.isIdleTimerDisabled = true
@@ -44,7 +60,9 @@ struct PublicWorldStressView: View {
             // Pozwala SwiftUI najpierw pokazać aktywny stan przycisku i postęp.
             await Task.yield()
             do {
-                let result = try await PublicWorldStressBenchmark.measure(device: device) { done, _ in
+                // Rozmiar celu to piksele ekranu, nie punkty: pomiar obejmuje koszt wypełnienia pełnej rozdzielczości.
+                let result = try await PublicWorldStressBenchmark.measure(
+                    device: device, scene: scene, renderSize: UIScreen.main.nativeBounds.size) { done, _ in
                     completed = done
                 }
                 report = result.text
