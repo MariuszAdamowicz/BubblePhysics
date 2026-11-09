@@ -1,0 +1,160 @@
+# BubblePhysics v1.0.0 -> HEAD: różnice publicznego API z `swift-api-digester -diagnose-sdk`.
+# Moduły: BubblePhysics, BubblePhysicsModel (typy modelu), BubblePhysicsMetalRender. Zrzut modułu nie obejmuje re-eksportów,
+# więc typy modelu leżą w BubblePhysicsModel. Moduł BubblePhysicsAssets jest nowy w 2.0.0 i nie ma odpowiednika w v1.0.0.
+# Zamienniki każdego symbolu opisuje docs/MIGRATION-v2.md (test MigrationGuideTests).
+# Powtarzalne: ten sam HEAD daje ten sam plik (polecenia z katalogu głównego repozytorium, ścieżki względne).
+# Generowanie (wiersze `# $ ` to polecenia; plik powstaje z ich wyniku):
+# $ [ -d .build/v1-worktree ] || git worktree add --detach .build/v1-worktree v1.0.0
+# $ swift build --package-path .build/v1-worktree --target BubblePhysics --target BubblePhysicsModel --target BubblePhysicsMetalRender
+# $ swift build --target BubblePhysics --target BubblePhysicsModel --target BubblePhysicsMetalRender
+# $ mkdir -p .build/api-dump/v1
+# $ for m in BubblePhysics BubblePhysicsModel BubblePhysicsMetalRender; do xcrun swift-api-digester -dump-sdk -module $m -I .build/v1-worktree/.build/debug/Modules -sdk "$(xcrun --sdk macosx --show-sdk-path)" -target "$(uname -m)-apple-macosx13.0" -o .build/api-dump/v1/$m.json; done
+# $ for m in BubblePhysics BubblePhysicsModel BubblePhysicsMetalRender; do xcrun swift-api-digester -diagnose-sdk -print-module -module $m -I .build/debug/Modules -sdk "$(xcrun --sdk macosx --show-sdk-path)" -target "$(uname -m)-apple-macosx13.0" -baseline-path .build/api-dump/v1/$m.json; done
+# Wiersze poniżej to wynik ostatniego polecenia, bez zmian.
+
+/* Generic Signature Changes */
+
+/* RawRepresentable Changes */
+
+/* Removed Decls */
+BubblePhysics: Constructor BubbleWorld.init(configuration:device:) has been removed
+BubblePhysics: Struct BubbleWorldRenderItem has been removed
+BubblePhysics: Var BubbleWorldRenderShape.item has been removed
+BubblePhysics: Var BubbleWorldRenderState.items has been removed
+BubblePhysics: Var BubbleWorldRenderState.shapes has been removed
+
+/* Moved Decls */
+
+/* Renamed Decls */
+BubblePhysics: Var BubbleWorldRenderShape.vertices has been renamed to Var localVertices
+
+/* Type Changes */
+
+/* Decl Attribute changes */
+
+/* Fixed-layout Type Changes */
+BubblePhysics: EnumElement WorldAdvanceIssue.frameRejected has been added as a new enum case
+BubblePhysics: EnumElement WorldAdvanceIssue.worldFailed has been added as a new enum case
+
+/* Protocol Conformance Change */
+
+/* Protocol Requirement Change */
+
+/* Class Inheritance Change */
+
+/* Others */
+
+/* Generic Signature Changes */
+
+/* RawRepresentable Changes */
+
+/* Removed Decls */
+BubblePhysicsModel: Constructor BubbleDescriptor.init(id:position:velocity:targetRadius:mass:motionRole:regionExitPolicy:physicsMaterialID:renderStyleID:mergeGroups:eventInterest:presentation:drivePolicy:) has been removed
+BubblePhysicsModel: Constructor BubbleDrivePolicy.init(rigidifies:rigidificationDuration:relaxationDuration:) has been removed
+BubblePhysicsModel: Constructor BubbleResult.init(id:physicsMaterialID:renderStyleID:motionRole:regionExitPolicy:mergeGroups:eventInterest:presentation:) has been removed
+BubblePhysicsModel: Constructor ForceFieldDescriptor.init(id:position:rotation:geometry:field:filter:regionExitPolicy:renderStyleID:eventInterest:presentation:) has been removed
+BubblePhysicsModel: Constructor PhysicsMaterial.init(kind:deformability:damping:friction:restitution:) has been removed
+BubblePhysicsModel: Constructor SensorDescriptor.init(id:position:rotation:geometry:filter:regionExitPolicy:renderStyleID:eventInterest:presentation:) has been removed
+BubblePhysicsModel: Constructor TransactionReceipt.init(token:createdObjectIDs:removedObjectIDs:replacedObjectIDs:) has been removed
+BubblePhysicsModel: Constructor WorldConfiguration.init(simulationRegion:fixedTimeStep:eventBufferCapacity:globalForce:) has been removed
+BubblePhysicsModel: Constructor WorldFrame.init(stepIndex:simulationTime:transactionReceipts:events:eventOverflow:driveFeedback:) has been removed
+BubblePhysicsModel: Enum RenderShader has been removed
+BubblePhysicsModel: EnumElement PhysicsMaterialKind.polygon has been removed
+BubblePhysicsModel: EnumElement TransactionRejectionReason.renderStyleNotFound has been removed
+BubblePhysicsModel: EnumElement TransitionTarget.objectPresentation has been removed
+BubblePhysicsModel: EnumElement TransitionTarget.renderStyle has been removed
+BubblePhysicsModel: EnumElement WorldObject.polygon has been removed
+BubblePhysicsModel: EnumElement WorldOperation.replacePolygons has been removed
+BubblePhysicsModel: EnumElement WorldOperation.updateRenderStyle has been removed
+BubblePhysicsModel: Func WorldTransaction.replacePolygons(_:with:) has been removed
+BubblePhysicsModel: Func WorldTransaction.updateRenderStyle(_:style:) has been removed
+BubblePhysicsModel: Struct ParameterID has been removed
+BubblePhysicsModel: Struct PolygonDescriptor has been removed
+BubblePhysicsModel: Struct PresentationParameters has been removed
+BubblePhysicsModel: Struct RenderStyle has been removed
+BubblePhysicsModel: Struct RenderStyleID has been removed
+BubblePhysicsModel: Var BubbleDescriptor.presentation has been removed
+BubblePhysicsModel: Var BubbleDescriptor.renderStyleID has been removed
+BubblePhysicsModel: Var BubbleResult.presentation has been removed
+BubblePhysicsModel: Var BubbleResult.renderStyleID has been removed
+BubblePhysicsModel: Var ForceFieldDescriptor.presentation has been removed
+BubblePhysicsModel: Var ForceFieldDescriptor.renderStyleID has been removed
+BubblePhysicsModel: Var SensorDescriptor.presentation has been removed
+BubblePhysicsModel: Var SensorDescriptor.renderStyleID has been removed
+
+/* Moved Decls */
+
+/* Renamed Decls */
+
+/* Type Changes */
+BubblePhysicsModel: Func WorldConfiguration.validate(_:) has parameter 0 type change from BubblePhysicsModel.PolygonDescriptor to BubblePhysicsModel.RigidBodyDescriptor
+
+/* Decl Attribute changes */
+
+/* Fixed-layout Type Changes */
+BubblePhysicsModel: EnumElement MotionRole.kinematic has been added as a new enum case
+BubblePhysicsModel: EnumElement PhysicsMaterialKind.rigid has been added as a new enum case
+BubblePhysicsModel: EnumElement TransactionRejectionReason.characterNotInGlyphSet has been added as a new enum case
+BubblePhysicsModel: EnumElement TransactionRejectionReason.decalNotSupported has been added as a new enum case
+BubblePhysicsModel: EnumElement TransactionRejectionReason.duplicateJointID has been added as a new enum case
+BubblePhysicsModel: EnumElement TransactionRejectionReason.fontNotFound has been added as a new enum case
+BubblePhysicsModel: EnumElement TransactionRejectionReason.glyphAtlasNotFound has been added as a new enum case
+BubblePhysicsModel: EnumElement TransactionRejectionReason.jointNotFound has been added as a new enum case
+BubblePhysicsModel: EnumElement TransactionRejectionReason.layerNotSupported has been added as a new enum case
+BubblePhysicsModel: EnumElement TransactionRejectionReason.renderMaterialNotFound has been added as a new enum case
+BubblePhysicsModel: EnumElement TransactionRejectionReason.textureNotFound has been added as a new enum case
+BubblePhysicsModel: EnumElement TransactionRejectionReason.unsupportedJointBody has been added as a new enum case
+BubblePhysicsModel: EnumElement WorldEvent.contactBegan has been added as a new enum case
+BubblePhysicsModel: EnumElement WorldEvent.contactEnded has been added as a new enum case
+BubblePhysicsModel: EnumElement WorldObject.rigidBody has been added as a new enum case
+BubblePhysicsModel: EnumElement WorldOperation.addJoint has been added as a new enum case
+BubblePhysicsModel: EnumElement WorldOperation.removeJoint has been added as a new enum case
+BubblePhysicsModel: EnumElement WorldOperation.replaceRigidBodies has been added as a new enum case
+BubblePhysicsModel: EnumElement WorldOperation.setBackground has been added as a new enum case
+BubblePhysicsModel: EnumElement WorldOperation.setDecal has been added as a new enum case
+BubblePhysicsModel: EnumElement WorldOperation.setKinematicDrive has been added as a new enum case
+BubblePhysicsModel: EnumElement WorldOperation.setLayer has been added as a new enum case
+BubblePhysicsModel: EnumElement WorldOperation.updateRenderMaterial has been added as a new enum case
+
+/* Protocol Conformance Change */
+
+/* Protocol Requirement Change */
+
+/* Class Inheritance Change */
+
+/* Others */
+
+/* Generic Signature Changes */
+
+/* RawRepresentable Changes */
+
+/* Removed Decls */
+BubblePhysicsMetalRender: Constructor BubblePhysicsMetalRender.init(device:customPipelines:) has been removed
+BubblePhysicsMetalRender: Func BubblePhysicsMetalRender.makeContourVertexFunction() has been removed
+BubblePhysicsMetalRender: Struct RenderStylePipeline has been removed
+BubblePhysicsMetalRender: Var BubblePhysicsMetalRender.customPipelines has been removed
+
+/* Moved Decls */
+
+/* Renamed Decls */
+BubblePhysicsMetalRender: Func BubblePhysicsMetalRender.encode(world:viewport:commandBuffer:renderPassDescriptor:) has been renamed to Func encode(world:viewport:commandBuffer:renderPassDescriptor:hooks:)
+BubblePhysicsMetalRender: Func PublicWorldStressBenchmark.measure(device:progress:) has been renamed to Func measure(device:scene:renderSize:progress:)
+BubblePhysicsMetalRender: Func PublicWorldStressBenchmark.run(device:warmupFrames:measuredFrames:progress:) has been renamed to Func run(device:bubbleCount:warmupFrames:measuredFrames:progress:)
+
+/* Type Changes */
+BubblePhysicsMetalRender: Func PublicWorldStressBenchmark.measure(device:progress:) has parameter 1 type change from (Swift.Int, Swift.Int) -> Swift.Void to BubblePhysicsMetalRender.PublicWorldStressBenchmark.Scene
+BubblePhysicsMetalRender: Func PublicWorldStressBenchmark.measure(device:progress:) has removed default argument from parameter 1
+BubblePhysicsMetalRender: Func PublicWorldStressBenchmark.run(device:warmupFrames:measuredFrames:progress:) has parameter 3 type change from (Swift.Int, Swift.Int) -> Swift.Void to Swift.Int
+
+/* Decl Attribute changes */
+
+/* Fixed-layout Type Changes */
+BubblePhysicsMetalRender: EnumElement BubblePhysicsMetalRenderError.bufferAllocationFailed has been added as a new enum case
+
+/* Protocol Conformance Change */
+
+/* Protocol Requirement Change */
+
+/* Class Inheritance Change */
+
+/* Others */
