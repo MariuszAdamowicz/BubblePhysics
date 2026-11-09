@@ -809,13 +809,70 @@ Każde `verify` uruchamia się z katalogu głównego repozytorium. Testy polityk
 Każde `verify` uruchamia się z katalogu głównego repozytorium. Testy CPU modelu i stagera są w `Tests/BubblePhysicsPublicTests` i `Tests/BubblePhysicsRuntimeTests`, a testy rejestru w nowym `Tests/BubblePhysicsAssetsTests`. Testy obrazu idą przez publiczne `BubbleWorld` i renderer w `Tests/BubblePhysicsMetalRenderTests`, ze wspólnym `Support/OffscreenRenderHarness.swift` i budowniczymi z `Support/PhysicsSceneBuilders.swift`. Deformację bańki wymusza dociśnięcie do statycznej ściany materiałem z deformowalnością, a punkty konturu daje `debugContourSnapshot()`. Testy rekordów, sond ABI i kernela hit-testu są w `Tests/BubblePhysicsNativeMetalTests`. Czerwone testy kompilują się na zaślepkach API (wniosek z odstępstwa nr 33). Etap ma szacunkowo 3000–4000 linii, z czego około jednej trzeciej to migracja wywołań w zadaniu 43. Gdy sesji implementacji zabraknie kontekstu, naturalne punkty podziału to koniec zadania 43 i koniec zadania 48.
 
 43. Model renderu v2 i migracja: `RenderMaterial`, `RenderMaterialID`, `TextureID` w `Decals.swift`, `updateRenderMaterial`, warstwa w `PhysicsBodyProperties`, `setLayer`, `setBackground` i nowe powody odrzucenia jako zaślepki stagera (operacje przyjęte bez skutku); usuń `RenderStyle`, `RenderShader`, `PresentationParameters`, `ParameterID`, pola `presentation`, cele przejścia `renderStyle` i `objectPresentation`, styl czujnika i pola sił, `RenderStylePipeline`, `customPipelines`, trzy testy własnych pipeline'ów i `testSensorAndForceFieldStylesAreRenderedWithoutBodies` (czujniki przestają się rysować, odwrotność sprawdzi [P-B-73](#p-b-73)); przepisz wywołania w `Sources`, `Tests`, `Benchmarks` i szybki start w `README.md`, renderer rysuje bańki i bryły bez zmian · verify: `swift build --build-tests && swift test --filter 'BubblePhysicsPublicTests|BubblePhysicsRuntimeTests|MetalRenderIntegrationTests|NativeMetalRenderHandoffTests|NativeMetalPublicObjectTests' && ! grep -rqE 'RenderStyle|RenderShader|customPipelines|renderStyle|PresentationParameters|ParameterID|objectPresentation' Sources Tests Benchmarks README.md`
+
+    ```text
+    $ swift build --build-tests && swift test --filter 'BubblePhysicsPublicTests|BubblePhysicsRuntimeTests|MetalRenderIntegrationTests|NativeMetalRenderHandoffTests|NativeMetalPublicObjectTests' && ! grep -rqE '…' Sources Tests Benchmarks README.md
+    Executed 211 tests, with 0 failures (0 unexpected) in 5.690 (5.708) seconds
+    exit=0 (grep bez trafień)
+    ```
+
 44. Testy CPU i rejestru (czerwone, na zaślepkach: moduł `BubblePhysicsAssets` z celem testów w `Package.swift`, `AssetRegistry` z szwem `init(device:deviceRegistryID:)` i `BubbleWorld(configuration:device:assets:)`, które ignorują rejestr, żeby testy się kompilowały): `AssetRegistryTests` (`CGImage` i `MTLTexture` dają `TextureID`, nieobsługiwany format i tekstura innego urządzenia to błąd w wywołaniu; inne urządzenie przez szew `init(device:deviceRegistryID:)` z R2), `RenderMaterialStagingTests` (niezarejestrowana tekstura materiału i tła → `textureNotFound`, nieznany materiał → `renderMaterialNotFound`, odrzucona transakcja nie zmienia materiału, warstwy ani tła, `setLayer` na czujniku i polu sił odrzucony, warstwa wyniku scalenia i podziału), walidacja materiału w `ModelValidationTests` (kolor w [0, 1], szerokość obrysu ≥ 0, skala UV skończona i ≠ 0) i `AssetWorldCreationTests` (świat z rejestrem innego urządzenia, przez ten sam szew, to błąd), covering [P-B-39](#p-b-39), [P-B-62](#p-b-62), [P-B-75](#p-b-75) · verify: `swift build --build-tests && ! swift test --filter 'AssetRegistryTests|RenderMaterialStagingTests|ModelValidationTests|AssetWorldCreationTests'`
+
+    ```text
+    $ swift build --build-tests && ! swift test --filter 'AssetRegistryTests|RenderMaterialStagingTests|ModelValidationTests|AssetWorldCreationTests'
+    faza czerwona: c5a3f9d; po zadaniu 45 ten sam filtr na HEAD 6b70b2a:
+    Executed 40 tests, with 0 failures (0 unexpected) in 0.071 (0.074) seconds
+    ```
+
 45. Rejestr i walidacja: `AssetRegistry` jak w R2, `BubbleWorld(configuration:device:assets:)`, `stageBatch(…, textureExists:)`, materiały renderu, warstwa i tło w `RuntimeState`, warstwa wyniku z `BubbleResult`, covering [P-B-39](#p-b-39), [P-B-62](#p-b-62), [P-B-75](#p-b-75) · verify: `swift test --filter 'AssetRegistryTests|RenderMaterialStagingTests|ModelValidationTests|AssetWorldCreationTests|TransactionStagerTests'`
+
+    ```text
+    $ swift test --filter 'AssetRegistryTests|RenderMaterialStagingTests|ModelValidationTests|AssetWorldCreationTests|TransactionStagerTests'
+    Executed 59 tests, with 0 failures (0 unexpected) in 0.072 (0.077) seconds
+    ```
+
 46. Testy obrazu i warstw (czerwone): `OffscreenRenderHarness` (256×256, `rgba8Unorm`, próbka piksela, tolerancja ±2/255) z pomocnikami przeniesionymi z `MetalRenderIntegrationTests`; `LayerRenderTests` ([P-B-40](#p-b-40), [P-B-62](#p-b-62), [P-B-73](#p-b-73), [P-B-74](#p-b-74); obiekty rozróżnia kolor materiału, a dwie białe tekstury 1×1 tylko łamią ciągi, więc test przechodzi bez próbkowania tekstur), `MaterialColorRenderTests` (kolor, trzy tryby mieszania i obrys z [P-B-35](#p-b-35), [P-B-42](#p-b-42), renderer z rejestrem innego urządzenia z [P-B-39](#p-b-39), przez szew rejestru, oraz świat i renderer z dwoma rejestrami tego samego urządzenia: klatka odrzucona `.frameRejected` z powodem `frameEncoding` w diagnostyce), `MaterialTextureRenderTests` (tekstura z [P-B-35](#p-b-35), [P-B-36](#p-b-36)–[P-B-38](#p-b-38), [P-B-41](#p-b-41)) oraz warstwy w `HitTestTests` i `NativeMetalHitTestTests` ([P-B-71](#p-b-71)) · verify: `swift build --build-tests && ! swift test --filter 'LayerRenderTests|MaterialColorRenderTests|MaterialTextureRenderTests|HitTestTests|NativeMetalHitTestTests'`
+
+    ```text
+    $ swift build --build-tests && ! swift test --filter 'LayerRenderTests|MaterialColorRenderTests|MaterialTextureRenderTests|HitTestTests|NativeMetalHitTestTests'
+    faza czerwona: d5aa4eb; po zadaniach 47–49 ten sam filtr na HEAD 6b70b2a:
+    Executed 61 tests, with 0 failures (0 unexpected) in 1.573 (1.581) seconds
+    ```
+
 47. Warstwa na GPU: `filter.w` w rekordach bańki i bryły (Int32 z odwróconym bitem znaku), przekazanie z `RuntimeObject` przez `NativePublicObject`, odczyt w `nativeHitTest`, pola w sondach ABI, covering [P-B-71](#p-b-71) · verify: `swift test --filter 'HitTestTests|NativeMetalHitTestTests|NativeMetalShaderABITests'`
+
+    ```text
+    $ swift test --filter 'HitTestTests|NativeMetalHitTestTests|NativeMetalShaderABITests'
+    Executed 29 tests, with 0 failures (0 unexpected) in 0.594 (0.598) seconds
+    ```
+
 48. Renderer bez tekstur: lista rysowania z `makeRenderState` (bez czujników i pól sił), bufor indeksów instancji baniek, bufor trójkątów brył na warstwę z lokalnymi współrzędnymi, `MaterialPipelines`, `NativeRenderMaterial` z sondą ABI w `NativeMetalShaderABITests`, kolor, obrys, ciągi po (trybie mieszania, teksturze), `init(device:assets:)`, drzewo rysowania jak w R2, covering [P-B-35](#p-b-35) (kolor, mieszanie, obrys), [P-B-39](#p-b-39) (renderer), [P-B-40](#p-b-40), [P-B-42](#p-b-42), [P-B-62](#p-b-62), [P-B-73](#p-b-73), [P-B-74](#p-b-74) · verify: `swift test --filter 'LayerRenderTests|MaterialColorRenderTests|MetalRenderIntegrationTests|NativeMetalRenderHandoffTests|NativeMetalShaderABITests'`
+
+    ```text
+    $ swift test --filter 'LayerRenderTests|MaterialColorRenderTests|MetalRenderIntegrationTests|NativeMetalRenderHandoffTests|NativeMetalShaderABITests'
+    Executed 43 tests, with 0 failures (0 unexpected) in 3.298 (3.304) seconds
+    ```
+
 49. Tekstury: tekstura z rejestru w ciągu, UV bańki z kąta próbki (przyklejony), koło o promieniu docelowym (pod maską), UV brył z lokalnych współrzędnych z przesunięciem i skalą, tło rozciągnięte na region pod warstwami, covering [P-B-35](#p-b-35)–[P-B-38](#p-b-38), [P-B-41](#p-b-41) · verify: `swift test --filter 'MaterialTextureRenderTests|LayerRenderTests'`
+
+    ```text
+    $ swift test --filter 'MaterialTextureRenderTests|LayerRenderTests'
+    Executed 26 tests, with 0 failures (0 unexpected) in 0.793 (0.797) seconds
+    ```
+
 50. Sprawdź etap: pełne `swift test` (z determinizmem) i strażnik uruchomiony na bezczynnej maszynie (wniosek z odstępstwa nr 43); gdy wynik się poprawił albo koszt materiałów zamierzenie go podniósł, zapisz punkt odniesienia w osobnym commicie „perf-guard: punkt odniesienia po etapie 5” z uzasadnieniem, covering [P-B-35](#p-b-35)–[P-B-42](#p-b-42), [P-B-62](#p-b-62), [P-B-71](#p-b-71), [P-B-73](#p-b-73)–[P-B-75](#p-b-75) · verify: `swift test && swift run -c release BubblePhysicsPerfGuard`
+
+    ```text
+    $ swift test && swift run -c release BubblePhysicsPerfGuard
+    Executed 1061 tests, with 1 test skipped and 0 failures (0 unexpected) in 399.407 (399.508) seconds
+    …testMixedScenePublishedStateIsIdenticalAcrossTwoRunsOf300Steps]' passed
+    …testStress300PublishedStateIsIdenticalAcrossTwoRunsOf300Steps]' passed
+    PASS stress-300: p95 3.3360 ms, punkt odniesienia 3.3516 ms, limit 3.6867 ms (-0.5%)
+    PASS mixed: p95 5.0908 ms, punkt odniesienia 4.9506 ms, limit 5.4456 ms (+2.8%)
+    scaling 600/300: 1.95 (limit 2.50) PASS; CPU poza GPU p95 300: 1.8928 ms, 600: 3.6955 ms
+    (load average 2,51; wynik bez wyraźnej poprawy, punktu odniesienia nie zapisano)
+    ```
+
 
 ## Deviations from Design
 
@@ -969,3 +1026,5 @@ Każde `verify` uruchamia się z katalogu głównego repozytorium. Testy CPU mod
 | 71 | 5 | 49 | change | UV bańki dla obu trybów (przyklejony i pod maską) liczone w vertex shaderze dla każdego wierzchołka, a fragment wybiera tryb po `material.parameters.z`. Bez nowych buforów. Tekstura próbkowana z alfą przemnożoną: tryb nieprzezroczysty cofa przemnożenie i pomija alfę, alfa i addytywny dają kolor × teksel z alfą (8074adc) | pending | 2026-11-09 |
 | 72 | 5 | 49 | change | Tło używa potoku brył z syntetycznym nieprzezroczystym `RenderMaterial(texture:)` zamiast osobnego `MaterialPipelines.background` z R2. Rysowane jako czworokąt regionu przed wszystkimi warstwami (8074adc) | pending | 2026-11-09 |
 | 73 | 5 | 50 | gap | Strażnik na maszynie pod obciążeniem (średnia ok. 4,5) daje raz wynik pozytywny, raz negatywny. HEAD etapu 5, 4 przebiegi: stress-300 od +8,2 do +11,0%, scena mieszana od +9,3 do +11,3%, skalowanie 1,75–1,81 (limit 2,5). Baza etapu 4 (159e441) w tej samej sesji: stress-300 od +18,8 do +19,6%, scena mieszana od +10,4 do +11,6%, obie negatywne. Etap 5 nie jest gorszy od etapu 4. Punktu odniesienia nie zapisano, bo strażnik wymaga powtórki na bezczynnej maszynie, jak w wierszu 43 | pending | 2026-11-09 |
+| 74 | 5 | 43–50 | change | Poprawki wymuszone przeglądem końcowym (6b70b2a). Kontrakt alfy przemnożonej dla `register(_ texture: MTLTexture)` zapisany w komentarzu i README, a formaty `_srgb` są odrzucane. `uvOffset` i `uvScale` nie działają na bańkach. Tryb pod maską ma gałąź „poza kołem sam kolor”, bez testu, bo kontur nie wychodzi poza promień docelowy. Nowe testy: tekstura w trybach alfa i addytywnym, cofanie przemnożenia, przyklejona tekstura z błędem ≤ 1 px po przesunięciu bańki, cztery testy pod walidacją Metal. Usunięte trzy testy, które nie mogły zawieść. Nowy błąd `bufferAllocationFailed` (bufor dalej przydzielany co klatkę), zmiany nazw `RetainedFrameBuffer` i `NativeRenderBodyVertex.uv`, prostokąt otaczający trzymany w `ringGeometryCache`. Wada spoza listy: klatka z samym tłem dawała pusty blok pierścieni z przesunięciem równym długości bufora i walidacja Metal ją odrzucała. Teraz blok ma co najmniej jeden element | pending | 2026-11-09 |
+| 75 | 5 | 45–49 | change | Symbole widoczne poza plikiem, których R2 nie pokazuje (z przeglądu końcowego): `public let AssetRegistry.device`, `package static AssetRegistry.maximumTextureDimension`, `NativeMetalFilter.encodeLayer`/`decodeLayer`, `package struct NativeRenderFunctions` i `NativeRenderInstance`, `bindBubbles(_:viewport:instances:instanceOffset:)` i `drawBubbles(_:first:count:)` zamiast `bind` i `drawAll`, `package struct BubbleWorldRenderLayer` i `BubbleWorldRenderBubble` | pending | 2026-11-09 |
