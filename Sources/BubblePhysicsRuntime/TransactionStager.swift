@@ -143,7 +143,7 @@ package enum TransactionStager {
     /// `textureExists` mówi, czy tekstura jest w rejestrze zasobów świata; Runtime nie zna rejestru.
     package static func stage(_ transaction: WorldTransaction, against state: RuntimeState,
         textureExists: @escaping (TextureID) -> Bool = { _ in false },
-        glyphLookup: @escaping (GlyphSource, Character) -> GlyphAvailability = { _, _ in .sourceUnknown }) throws -> StagedWorldChange {
+        glyphLookup: @escaping GlyphLookup = { _ in nil }) throws -> StagedWorldChange {
         var candidate = StagingContext(state: state, textureExists: textureExists, glyphLookup: glyphLookup)
         for (index, operation) in transaction.operations.enumerated() {
             do { try candidate.apply(operation) }
@@ -164,7 +164,7 @@ package enum TransactionStager {
     package static func stageBatch(_ pending: [PendingTransaction], against state: RuntimeState,
         validate: ((StagedWorldChange) throws -> Void)? = nil,
         textureExists: @escaping (TextureID) -> Bool = { _ in false },
-        glyphLookup: @escaping (GlyphSource, Character) -> GlyphAvailability = { _, _ in .sourceUnknown }) -> StagedTransactionBatch {
+        glyphLookup: @escaping GlyphLookup = { _ in nil }) -> StagedTransactionBatch {
         var candidate = state
         var changes: [StagedWorldChange] = []
         var receipts: [TransactionReceipt] = []
@@ -197,7 +197,7 @@ package enum TransactionStager {
 private struct StagingContext {
     var state: RuntimeState
     let textureExists: (TextureID) -> Bool
-    let glyphLookup: (GlyphSource, Character) -> GlyphAvailability
+    let glyphLookup: GlyphLookup
     var created: [ObjectID] = []
     var removed: [ObjectID] = []
     var replaced: [ObjectID] = []
@@ -238,7 +238,15 @@ private struct StagingContext {
         case .setBackground(let texture):
             try requireTexture(texture)
             state.background = texture
-        case .setDecal: break
+        case .setDecal(let id, let decal):
+            var existing = try object(id)
+            switch existing.descriptor {
+            case .bubble, .rigidBody: break
+            case .forceField, .sensor: throw TransactionRejectionReason.decalNotSupported(id)
+            }
+            try requireDecal(decal)
+            existing.decal = decal
+            state.objects[id] = existing
         case .setMotion(let id, let role):
             var existing = try physicalObject(id)
             guard role != .playerDriven || existing.playerDriveTarget != nil else {
@@ -338,6 +346,23 @@ private struct StagingContext {
     func requireTexture(_ texture: TextureID?) throws {
         if let texture, !textureExists(texture) { throw TransactionRejectionReason.textureNotFound(texture) }
     }
+    /// Naklejka tekstowa wymaga zarejestrowanego źródła glifów i samych znaków z jego zestawu, obrazowa zarejestrowanej tekstury.
+    func requireDecal(_ decal: Decal?) throws {
+        guard let decal else { return }
+        switch decal.content {
+        case .image(let texture, _): try requireTexture(texture)
+        case .text(let string, let source):
+            guard let contains = glyphLookup(source) else {
+                switch source {
+                case .font(let font): throw TransactionRejectionReason.fontNotFound(font)
+                case .atlas(let atlas): throw TransactionRejectionReason.glyphAtlasNotFound(atlas)
+                }
+            }
+            for character in string where !contains(character) {
+                throw TransactionRejectionReason.characterNotInGlyphSet(character)
+            }
+        }
+    }
     func object(_ id: ObjectID) throws -> RuntimeObject {
         guard let existing = state.objects[id] else { throw TransactionRejectionReason.objectNotFound(id) }
         return existing
@@ -421,6 +446,7 @@ private struct StagingContext {
         if let id = object.renderMaterialID, state.renderMaterials[id] == nil {
             throw TransactionRejectionReason.renderMaterialNotFound(id)
         }
+        try requireDecal(object.decal)
         switch object.descriptor {
         case .bubble(let value):
             guard object.motionRole != .kinematic else {
@@ -489,7 +515,7 @@ private struct StagingContext {
             targetRadius: radius, mass: mass, motionRole: result.motionRole,
             regionExitPolicy: result.regionExitPolicy, physicsMaterialID: result.physicsMaterialID,
             renderMaterialID: result.renderMaterialID, mergeGroups: result.mergeGroups,
-            eventInterest: result.eventInterest, filter: result.filter, layer: result.layer))
+            eventInterest: result.eventInterest, filter: result.filter, layer: result.layer, decal: result.decal))
     }
     mutating func merge(_ sources: [ObjectID], result: BubbleResult) throws {
         guard sources.count >= 2, Set(sources).count == sources.count else { throw TransactionRejectionReason.invalidStructuralOperation }

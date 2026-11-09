@@ -18,11 +18,11 @@ final class DecalStagingTests: XCTestCase {
 
     private func exists(_ texture: TextureID) -> Bool { texture == known }
     /// Czcionka 3 ma cyfry, atlas 4 ma "AB"; reszta źródeł nie istnieje.
-    private func glyphs(_ source: GlyphSource, _ character: Character) -> GlyphAvailability {
+    private func glyphs(_ source: GlyphSource) -> ((Character) -> Bool)? {
         switch source {
-        case .font(let value) where value == font: return "0123456789".contains(character) ? .present : .characterMissing
-        case .atlas(let value) where value == atlas: return "AB".contains(character) ? .present : .characterMissing
-        default: return .sourceUnknown
+        case .font(let value) where value == font: return { "0123456789".contains($0) }
+        case .atlas(let value) where value == atlas: return { "AB".contains($0) }
+        default: return nil
         }
     }
 
@@ -116,9 +116,11 @@ final class DecalStagingTests: XCTestCase {
         XCTAssertNoThrow(try staged(WorldTransaction().setDecal(id(1), decal: .image(known)), against: initial))
     }
 
-    func testEmptyTextIsAcceptedBecauseThereIsNothingToLookUp() throws {
+    func testEmptyTextNeedsARegisteredSourceButNoCharacters() throws {
         let initial = try staged(resources().add(bubble(1)), against: state()).state
         XCTAssertNoThrow(try staged(WorldTransaction().setDecal(id(1), decal: .text("", source: .font(font))), against: initial))
+        try assertRejected(WorldTransaction().setDecal(id(1), decal: .text("", source: .font(otherFont))), against: initial,
+                           at: 0, reason: .fontNotFound(otherFont))
     }
 
     func testReplacementAndRigidBodyReplacementValidateTheirDecals() throws {

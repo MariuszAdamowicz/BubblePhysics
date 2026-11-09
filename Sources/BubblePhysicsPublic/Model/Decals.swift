@@ -72,10 +72,6 @@ public struct Decal: Equatable, Sendable {
     }
 }
 
-/// Odpowiedź rejestru zasobów dla stagera: czy źródło glifów istnieje i czy ma dany znak. Runtime nie zna rejestru,
-/// więc dostaje to w domknięciu, jak `textureExists`.
-package enum GlyphAvailability: Equatable, Sendable {
-    case sourceUnknown
-    case characterMissing
-    case present
-}
+/// Domknięcie z rejestru zasobów dla stagera: dla źródła glifów zwraca test przynależności znaku do jego zestawu albo `nil`,
+/// gdy źródło nie jest zarejestrowane. Runtime nie zna rejestru, więc dostaje to jak `textureExists`.
+package typealias GlyphLookup = (GlyphSource) -> ((Character) -> Bool)?

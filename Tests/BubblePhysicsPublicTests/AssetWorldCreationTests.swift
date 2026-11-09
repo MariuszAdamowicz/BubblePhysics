@@ -66,4 +66,26 @@ final class AssetWorldCreationTests: XCTestCase {
             .transactionRejected(rejected, TransactionRejection(operationIndex: 0, reason: .textureNotFound(unknown))),
             .transactionRejected(rejectedBackground, TransactionRejection(operationIndex: 0, reason: .textureNotFound(unknown)))])
     }
+
+    /// P-B-49: stager świata dostaje glify z rejestru świata; znak spoza zestawu i niezarejestrowane źródło odrzucają transakcję.
+    func testTransactionSeesOnlyGlyphSourcesAndCharactersRegisteredInTheWorldRegistry() async throws {
+        let registry = AssetRegistry(device: device)
+        let world = try BubbleWorld(configuration: configuration(), device: device, assets: registry)
+        let font = try registry.register(font: "Helvetica", characters: "0123")
+        let missingFont = FontID(rawValue: font.rawValue + 100)
+        let physics = PhysicsMaterialID(rawValue: 1), look = RenderMaterialID(rawValue: 1), object = ObjectID(rawValue: 1)
+        let setup = world.submit(WorldTransaction()
+            .updatePhysicsMaterial(physics, material: try PhysicsMaterial(kind: .bubble))
+            .updateRenderMaterial(look, material: try RenderMaterial())
+            .add(.bubble(try BubbleDescriptor(id: object, position: [50, 50], targetRadius: 5,
+                                              physicsMaterialID: physics, renderMaterialID: look))))
+        let accepted = world.submit(try WorldTransaction().setDecal(object, decal: .text("0123", source: .font(font))))
+        let badCharacter = world.submit(try WorldTransaction().setDecal(object, decal: .text("012x", source: .font(font))))
+        let badFont = world.submit(try WorldTransaction().setDecal(object, decal: .text("0", source: .font(missingFont))))
+        let frame = await world.advance(by: step)
+        XCTAssertEqual(frame.transactionReceipts.map(\.token), [setup, accepted])
+        XCTAssertEqual(frame.events, [
+            .transactionRejected(badCharacter, TransactionRejection(operationIndex: 0, reason: .characterNotInGlyphSet("x"))),
+            .transactionRejected(badFont, TransactionRejection(operationIndex: 0, reason: .fontNotFound(missingFont)))])
+    }
 }

@@ -29,6 +29,9 @@ public final class AssetRegistry {
     package let deviceRegistryID: UInt64
     private var textures: [TextureID: MTLTexture] = [:]
     private var nextID: UInt64 = 1
+    private var glyphAtlases: [GlyphSource: GlyphAtlas] = [:]
+    private var nextFontID: UInt64 = 1
+    private var nextAtlasID: UInt64 = 1
 
     public init(device: MTLDevice) {
         self.device = device
@@ -87,24 +90,57 @@ public final class AssetRegistry {
 
     package func texture(for id: TextureID) -> MTLTexture? { textures[id] }
 
-    /// Rejestruje czcionkę o danej nazwie z zestawem znaków i raz generuje jej atlas SDF.
+    /// Rejestruje czcionkę o danej nazwie (PostScript, pełnej albo rodziny; systemową albo dołączoną do aplikacji) z zestawem
+    /// znaków i raz generuje jej atlas SDF. Znak, którego czcionka nie ma, nie trafia do zestawu; pusty zestaw to błąd.
     public func register(font name: String, characters: String) throws -> FontID {
-        throw AssetError.fontNotFound
+        let atlas = try SDFAtlasGenerator.generate(fontName: name, characters: characters, device: device)
+        let id = FontID(rawValue: nextFontID)
+        nextFontID += 1
+        glyphAtlases[.font(id)] = atlas
+        return id
     }
 
-    /// Przyjmuje gotowy atlas glifów gry (tekstura i metryki) tego samego urządzenia.
-    public func register(glyphAtlas: GlyphAtlas) throws -> GlyphAtlasID {
-        throw AssetError.invalidGlyphAtlas
+    /// Przyjmuje gotowy atlas glifów gry (tekstura `r8Unorm` z pokryciem w kanale czerwonym i metryki w tekselach) tego
+    /// samego urządzenia. Metryka spoza tekstury, nieskończona albo pusta unieważnia atlas (`invalidGlyphAtlas`).
+    public func register(glyphAtlas atlas: GlyphAtlas) throws -> GlyphAtlasID {
+        let texture = atlas.texture
+        guard texture.device.registryID == deviceRegistryID else { throw AssetError.deviceMismatch }
+        guard texture.textureType == .type2D, texture.sampleCount == 1, texture.usage.contains(.shaderRead),
+              texture.pixelFormat == .r8Unorm, !atlas.glyphs.isEmpty,
+              atlas.ascent.isFinite, atlas.ascent > 0, atlas.descent.isFinite, atlas.descent >= 0
+        else { throw AssetError.invalidGlyphAtlas }
+        let bounds = SIMD2(Float(texture.width), Float(texture.height))
+        for metrics in atlas.glyphs.values {
+            let end = metrics.origin + metrics.size
+            guard metrics.origin.x.isFinite, metrics.origin.y.isFinite, metrics.size.x.isFinite, metrics.size.y.isFinite,
+                  metrics.offset.x.isFinite, metrics.offset.y.isFinite, metrics.advance.isFinite, metrics.advance >= 0,
+                  metrics.origin.x >= 0, metrics.origin.y >= 0, metrics.size.x > 0, metrics.size.y > 0,
+                  end.x <= bounds.x, end.y <= bounds.y else { throw AssetError.invalidGlyphAtlas }
+        }
+        let id = GlyphAtlasID(rawValue: nextAtlasID)
+        nextAtlasID += 1
+        glyphAtlases[.atlas(id)] = atlas
+        return id
     }
 
     /// Czy źródło glifów jest zarejestrowane; stager pyta o to przy walidacji naklejki.
-    package func contains(_ source: GlyphSource) -> Bool { false }
+    package func contains(_ source: GlyphSource) -> Bool { glyphAtlases[source] != nil }
 
     /// Atlas źródła glifów; renderer rysuje z jego tekstury.
-    package func atlas(for source: GlyphSource) -> GlyphAtlas? { nil }
+    package func atlas(for source: GlyphSource) -> GlyphAtlas? { glyphAtlases[source] }
 
     /// Metryki znaku w źródle; `nil`, gdy źródła albo znaku nie ma.
-    package func glyph(_ character: Character, in source: GlyphSource) -> GlyphMetrics? { nil }
+    package func glyph(_ character: Character, in source: GlyphSource) -> GlyphMetrics? {
+        glyphAtlases[source]?.glyphs[character]
+    }
+
+    /// Domknięcie dla stagera: zestaw znaków źródła albo `nil`, gdy źródła nie ma.
+    package var glyphLookup: GlyphLookup {
+        { [weak self] source in
+            guard let atlas = self?.glyphAtlases[source] else { return nil }
+            return { atlas.glyphs[$0] != nil }
+        }
+    }
 
     private func store(_ texture: MTLTexture) -> TextureID {
         let id = TextureID(rawValue: nextID)
