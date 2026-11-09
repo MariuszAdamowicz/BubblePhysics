@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import BubblePhysicsAssets
 import BubblePhysicsModel
 import BubblePhysicsRuntime
 import BubblePhysicsNativeMetal
@@ -47,8 +48,12 @@ public final class BubbleWorld {
     private var queryIndexCache: QueryIndex?
     private var queryIndexBuilds = 0
 
+    /// Rejestr tekstur świata; `nil`, gdy świat nie ma urządzenia.
+    public let assets: AssetRegistry?
+
     public convenience init(configuration: WorldConfiguration,
-                            device: MTLDevice? = MTLCreateSystemDefaultDevice()) throws {
+                            device: MTLDevice? = MTLCreateSystemDefaultDevice(),
+                            assets: AssetRegistry? = nil) throws {
         self.init(configuration: configuration, stepper: try NativeCompleteStepper(device: device))
     }
 
@@ -71,6 +76,7 @@ public final class BubbleWorld {
 
     internal init(configuration: WorldConfiguration, stepper: any CompleteStepper) {
         self.configuration = configuration
+        self.assets = nil
         self.state = RuntimeState(configuration: configuration)
         self.clock = FixedStepDriver(fixedTimeStep: configuration.fixedTimeStep,
                                      maximumBacklog: configuration.maximumBacklog)

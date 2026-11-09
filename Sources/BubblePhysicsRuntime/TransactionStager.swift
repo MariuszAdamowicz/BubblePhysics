@@ -9,6 +9,8 @@ package struct RuntimeState: Equatable, Sendable {
     package var physicsMaterials: [PhysicsMaterialID: PhysicsMaterial] = [:]
     package var transitions: [TransitionTarget: ParameterTransition] = [:]
     package var joints: [JointID: Joint] = [:]
+    package var renderMaterials: [RenderMaterialID: RenderMaterial] = [:]
+    package var background: TextureID?
     package var globalForce: WorldPoint
     package var nextDriveID: UInt64 = 1
     package var transitionProgress: [TransitionTarget: PhysicalTransitionProgress] = [:]
@@ -38,6 +40,7 @@ package struct RuntimeObject: Equatable, Sendable {
     package var kinematicDrive: KinematicDrive?
     /// Poza kinematycznej (x, y, obrót) liczona w podwójnej precyzji, żeby błąd `Float` nie narastał z krokami toru.
     package var kinematicExactPose: SIMD3<Double>?
+    package var layer: Int32 = 0
     package var targetRadius: Float = 0
     package var collisionRadius: Float = 0
     package var effectiveRadius: Float = 0
@@ -120,7 +123,8 @@ package struct StagedTransactionBatch: Sendable {
 }
 
 package enum TransactionStager {
-    package static func stage(_ transaction: WorldTransaction, against state: RuntimeState) throws -> StagedWorldChange {
+    package static func stage(_ transaction: WorldTransaction, against state: RuntimeState,
+        textureExists: (TextureID) -> Bool = { _ in false }) throws -> StagedWorldChange {
         var candidate = StagingContext(state: state)
         for (index, operation) in transaction.operations.enumerated() {
             do { try candidate.apply(operation) }
@@ -139,7 +143,8 @@ package enum TransactionStager {
     /// Wywoływane raz na granicy kroku. Odrzucona transakcja nie zmienia stanu dla następnej.
     /// To tylko staging: nie wykonuje kroku fizyki ani nie publikuje stanu na zewnątrz.
     package static func stageBatch(_ pending: [PendingTransaction], against state: RuntimeState,
-        validate: ((StagedWorldChange) throws -> Void)? = nil) -> StagedTransactionBatch {
+        validate: ((StagedWorldChange) throws -> Void)? = nil,
+        textureExists: (TextureID) -> Bool = { _ in false }) -> StagedTransactionBatch {
         var candidate = state
         var changes: [StagedWorldChange] = []
         var receipts: [TransactionReceipt] = []

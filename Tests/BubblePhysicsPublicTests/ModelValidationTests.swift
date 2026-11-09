@@ -208,3 +208,55 @@ final class ModelValidationTests: XCTestCase {
         XCTAssertTrue(try Joint(id: id, bodyA: a, bodyB: b, kind: .weld, collideConnected: true).collideConnected)
     }
 }
+
+/// P-B-39: materiał renderu sprawdza kolor, obrys i mapowanie UV przy tworzeniu.
+extension ModelValidationTests {
+    func testColorComponentsMustBeFiniteAndInUnitRange() throws {
+        for value in [RGBA(-0.01, 0, 0, 1), RGBA(0, 1.01, 0, 1), RGBA(0, 0, 2, 1), RGBA(0, 0, 0, -1), RGBA(0, 0, 0, 1.5)] {
+            XCTAssertThrowsError(try RenderMaterial(color: value)) {
+                XCTAssertEqual($0 as? ModelValidationError, .valueOutOfRange("renderMaterial.color"))
+            }
+        }
+        for value in [RGBA(.nan, 0, 0, 1), RGBA(0, .infinity, 0, 1), RGBA(0, 0, 0, .nan)] {
+            XCTAssertThrowsError(try RenderMaterial(color: value)) {
+                XCTAssertEqual($0 as? ModelValidationError, .nonFiniteValue("renderMaterial.color"))
+            }
+        }
+        XCTAssertNoThrow(try RenderMaterial(color: RGBA(0, 0, 0, 0)))
+        XCTAssertNoThrow(try RenderMaterial(color: RGBA(1, 1, 1, 1)))
+    }
+
+    func testOutlineWidthMustBeFiniteAndNonnegativeAndItsColorInRange() throws {
+        XCTAssertThrowsError(try RenderMaterial(outline: RenderOutline(color: .white, width: -0.1))) {
+            XCTAssertEqual($0 as? ModelValidationError, .valueOutOfRange("renderMaterial.outline.width"))
+        }
+        for width in [Float.nan, .infinity] {
+            XCTAssertThrowsError(try RenderMaterial(outline: RenderOutline(color: .white, width: width))) {
+                XCTAssertEqual($0 as? ModelValidationError, .nonFiniteValue("renderMaterial.outline.width"))
+            }
+        }
+        XCTAssertThrowsError(try RenderMaterial(outline: RenderOutline(color: RGBA(0, 2, 0, 1), width: 1))) {
+            XCTAssertEqual($0 as? ModelValidationError, .valueOutOfRange("renderMaterial.outline.color"))
+        }
+        XCTAssertNoThrow(try RenderMaterial(outline: RenderOutline(color: .white, width: 0)))
+        XCTAssertNoThrow(try RenderMaterial(outline: RenderOutline(color: RGBA(1, 0, 0, 1), width: 0.5)))
+    }
+
+    func testUVScaleMustBeFiniteAndNonzeroAndOffsetFinite() throws {
+        for scale: SIMD2<Float> in [[0, 1], [1, 0], [0, 0]] {
+            XCTAssertThrowsError(try RenderMaterial(uvScale: scale)) {
+                XCTAssertEqual($0 as? ModelValidationError, .valueOutOfRange("renderMaterial.uvScale"))
+            }
+        }
+        for scale: SIMD2<Float> in [[.nan, 1], [1, .infinity]] {
+            XCTAssertThrowsError(try RenderMaterial(uvScale: scale)) {
+                XCTAssertEqual($0 as? ModelValidationError, .nonFiniteValue("renderMaterial.uvScale"))
+            }
+        }
+        XCTAssertThrowsError(try RenderMaterial(uvOffset: [.nan, 0])) {
+            XCTAssertEqual($0 as? ModelValidationError, .nonFiniteValue("renderMaterial.uvOffset"))
+        }
+        // Ujemna skala odwraca teksturę i jest poprawna.
+        XCTAssertNoThrow(try RenderMaterial(uvOffset: [-3, 2], uvScale: [-2, 0.5]))
+    }
+}
