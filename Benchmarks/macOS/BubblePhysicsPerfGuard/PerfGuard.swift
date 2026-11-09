@@ -127,7 +127,7 @@ struct PerfGuardOptions: Equatable {
 
 enum PerfGuard {
     /// Sceny, które strażnik umie zmierzyć.
-    static let scenes = ["stress-300", "mixed"]
+    static let scenes = ["stress-300", "mixed", "decals"]
     /// Dopuszczalne pogorszenie względem punktu odniesienia (G12-AC3).
     static let regressionTolerance = 0.10
     /// Liczby obiektów porównywane przy skalowaniu CPU.
@@ -239,17 +239,20 @@ enum PerfGuard {
         return report.hostNonGPUP95Milliseconds
     }
 
-    @MainActor
-    static func measure(scene: String, device: MTLDevice, options: PerfGuardOptions) async throws -> Double {
+    /// Scena benchmarku dla nazwy sceny strażnika.
+    static func benchmarkScene(named scene: String) throws -> PublicWorldStressBenchmark.Scene {
         switch scene {
-        case "stress-300":
-            return try await measureStress300(device: device, warmupFrames: options.warmupFrames,
-                measuredFrames: options.measuredFrames)
-        case "mixed":
-            return try await measureScene(.mixed, device: device, warmupFrames: options.warmupFrames,
-                measuredFrames: options.measuredFrames)
+        case "stress-300": return .stress300
+        case "mixed": return .mixed
+        case "decals": return .decals
         default: throw PerfGuardOptions.ParseError.invalidArgument(scene)
         }
+    }
+
+    @MainActor
+    static func measure(scene: String, device: MTLDevice, options: PerfGuardOptions) async throws -> Double {
+        try await measureScene(benchmarkScene(named: scene), device: device, warmupFrames: options.warmupFrames,
+            measuredFrames: options.measuredFrames)
     }
 
     /// Punkt wejścia z `main.swift`; zwraca kod wyjścia procesu.

@@ -1,5 +1,7 @@
 import BubblePhysics
+import BubblePhysicsAssets
 import Metal
+import CoreGraphics
 import Foundation
 import simd
 
@@ -72,6 +74,8 @@ public enum PublicWorldStressBenchmark {
     package enum Scene: Equatable, Sendable {
         case stress(bubbleCount: Int)
         case mixed
+        /// stress-300 z teksturą przyklejoną i naklejką tekstową na każdej bańce; mierzy koszt naklejek i przycinania maską.
+        case decals
 
         package static let stress300 = Scene.stress(bubbleCount: Stress300Scene.defaultBubbleCount)
 
@@ -79,6 +83,7 @@ public enum PublicWorldStressBenchmark {
             switch self {
             case .stress(let count): return count == Stress300Scene.defaultBubbleCount ? "stress-300" : "stress-\(count)"
             case .mixed: return "mixed"
+            case .decals: return "decals"
             }
         }
 
@@ -86,27 +91,51 @@ public enum PublicWorldStressBenchmark {
             switch self {
             case .stress(let count): return Stress300Scene.regionHeight(bubbleCount: count)
             case .mixed: return MixedScene.regionHeight
+            case .decals: return Stress300Scene.regionHeight(bubbleCount: Stress300Scene.defaultBubbleCount)
             }
         }
 
-        func configuration() throws -> WorldConfiguration {
+        package func configuration() throws -> WorldConfiguration {
             switch self {
             case .stress(let count): return try Stress300Scene.configuration(bubbleCount: count)
             case .mixed: return try MixedScene.configuration()
+            case .decals: return try Stress300Scene.configuration()
             }
         }
 
-        func initialTransaction() throws -> WorldTransaction {
+        /// Rejestry zasobów scena `decals` zapełnia przy tworzeniu transakcji (poza pomiarem).
+        @MainActor package func initialTransaction(assets: AssetRegistry) throws -> WorldTransaction {
             switch self {
             case .stress(let count): return try Stress300Scene.initialTransaction(bubbleCount: count)
             case .mixed: return try MixedScene.initialTransaction()
+            case .decals:
+                let texture = try assets.register(Self.decalTextureImage())
+                let font = try assets.register(font: "Helvetica-Bold", characters: "0123456789")
+                return try Stress300Scene.initialTransaction(decorations: .init(texture: texture, font: font))
             }
+        }
+
+        /// Gradient 64×64 z alfą 1: tekstura przyklejona do każdej bańki sceny `decals`.
+        private static func decalTextureImage() throws -> CGImage {
+            let side = 64
+            var pixels = [UInt8](repeating: 255, count: side * side * 4)
+            for row in 0..<side { for column in 0..<side {
+                let offset = (row * side + column) * 4
+                pixels[offset] = UInt8(80 + column * 175 / side); pixels[offset + 1] = UInt8(80 + row * 175 / side)
+                pixels[offset + 2] = 160
+            } }
+            guard let provider = CGDataProvider(data: Data(pixels) as CFData), let space = CGColorSpace(name: CGColorSpace.sRGB),
+                  let image = CGImage(width: side, height: side, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: side * 4,
+                                      space: space, bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+                                      provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
+            else { throw StressBenchmarkError.metalUnavailable }
+            return image
         }
 
         /// Transakcja przed krokiem `step` (numer od 0) albo `nil`, gdy scena nic wtedy nie zmienia.
         func stepTransaction(step: Int) throws -> WorldTransaction? {
             switch self {
-            case .stress: return step > 0 ? try Stress300Scene.triangleReplacement(step: step) : nil
+            case .stress, .decals: return step > 0 ? try Stress300Scene.triangleReplacement(step: step) : nil
             case .mixed: return try MixedScene.stepTransaction(step: step)
             }
         }
@@ -128,7 +157,7 @@ public enum PublicWorldStressBenchmark {
             device: device, solverIterationLimit: 4)
         guard let assets = world.assets else { throw StressBenchmarkError.metalUnavailable }
         let renderer = try BubblePhysicsMetalRender(device: device, assets: assets)
-        world.submit(try scene.initialTransaction())
+        world.submit(try scene.initialTransaction(assets: assets))
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm,
             width: 375, height: Int(height.rounded(.up)), mipmapped: false)
         descriptor.usage = .renderTarget
@@ -218,8 +247,17 @@ package enum Stress300Scene {
             fixedTimeStep: 1.0 / 60)
     }
 
-    /// Materiały, 300 baniek, ściany i trójkąt w pozycji początkowej.
-    package static func initialTransaction(bubbleCount: Int = defaultBubbleCount) throws -> WorldTransaction {
+    /// Zasoby sceny `decals`: tekstura przyklejona w materiale baniek i czcionka cyfr naklejek tekstowych.
+    package struct Decorations {
+        package let texture: TextureID
+        package let font: FontID
+        package init(texture: TextureID, font: FontID) { self.texture = texture; self.font = font }
+    }
+
+    /// Materiały, 300 baniek, ściany i trójkąt w pozycji początkowej. Z `decorations` materiał baniek ma teksturę w trybie
+    /// przyklejonym, a każda bańka naklejkę tekstową (numer 0–99) czcionką z `decorations`.
+    package static func initialTransaction(bubbleCount: Int = defaultBubbleCount,
+                                           decorations: Decorations? = nil) throws -> WorldTransaction {
         let height = regionHeight(bubbleCount: bubbleCount)
         let materialID = PhysicsMaterialID(rawValue: 1)
         let polygonMaterialID = PhysicsMaterialID(rawValue: 2)
@@ -227,7 +265,7 @@ package enum Stress300Scene {
         var transaction = WorldTransaction()
             .updatePhysicsMaterial(materialID, material: try PhysicsMaterial(kind: .bubble))
             .updatePhysicsMaterial(polygonMaterialID, material: try PhysicsMaterial(kind: .rigid))
-            .updateRenderMaterial(styleID, material: try RenderMaterial())
+            .updateRenderMaterial(styleID, material: try RenderMaterial(texture: decorations?.texture, bubbleMapping: .attached))
         var random = StressLCG(seed: 0x2B_60_F5)
         let horizontalSpacing: Float = 345 / 15
         let verticalSpacing: Float = 33.5
@@ -242,7 +280,8 @@ package enum Stress300Scene {
                 position: [15 + (Float(column) + 0.5) * horizontalSpacing + jitterX,
                            15 + (Float(row) + 0.5) * verticalSpacing + jitterY],
                 targetRadius: radius, mass: max(1, radius * radius * 0.02),
-                physicsMaterialID: materialID, renderMaterialID: styleID)))
+                physicsMaterialID: materialID, renderMaterialID: styleID,
+                decal: try decorations.map { try Decal.text(String(index % 100), source: .font($0.font)) })))
         }
         let walls: [[WorldPoint]] = [
             [[0,0], [1,0], [1,height], [0,height]],

@@ -19,10 +19,28 @@ final class PerfGuardTests: XCTestCase {
             runs: 5, injectedSlowdown: slowdown, measure: measure)
     }
 
-    // P-B-65: strażnik zna scenę mieszaną i potrafi ją zmierzyć.
-    func testGuardKnowsStressAndMixedScenes() {
-        XCTAssertEqual(PerfGuard.scenes, ["stress-300", "mixed"])
+    // P-B-65, P-B-76: strażnik zna sceny stress-300, mieszaną i `decals`.
+    func testGuardKnowsStressMixedAndDecalsScenes() throws {
+        XCTAssertEqual(PerfGuard.scenes, ["stress-300", "mixed", "decals"])
         XCTAssertNoThrow(try PerfGuardOptions.parse(["--record", "mixed"]))
+        XCTAssertEqual(try PerfGuardOptions.parse(["--record", "decals"]).recordScene, "decals")
+    }
+
+    // P-B-76: nazwa sceny wybiera scenę benchmarku; każda nazwa strażnika ma scenę o tej samej nazwie.
+    func testSceneNameSelectsTheBenchmarkScene() throws {
+        XCTAssertEqual(try PerfGuard.benchmarkScene(named: "stress-300"), .stress300)
+        XCTAssertEqual(try PerfGuard.benchmarkScene(named: "mixed"), .mixed)
+        XCTAssertEqual(try PerfGuard.benchmarkScene(named: "decals"), .decals)
+        XCTAssertThrowsError(try PerfGuard.benchmarkScene(named: "unknown-scene"))
+        for name in PerfGuard.scenes { XCTAssertEqual(try PerfGuard.benchmarkScene(named: name).name, name) }
+    }
+
+    // P-B-76: scena `decals` bez punktu odniesienia nie przechodzi po cichu, jak pozostałe.
+    func testDecalsSceneWithoutBaselineFailsInsteadOfPassingSilently() async throws {
+        let report = try await PerfGuard.check(scenes: ["decals"], baseline: baseline(8.0), device: device, runs: 5,
+                                               measure: { _ in 1.0 })
+        XCTAssertFalse(report.passed)
+        XCTAssertTrue(report.text.contains("--record decals"))
     }
 
     func testMedianOfFiveIgnoresSingleOutlierRun() {
@@ -169,6 +187,13 @@ final class PerfGuardTests: XCTestCase {
     func testHostCPUMeasurementForBubbleCountIsPositiveAndFinite() async throws {
         let gpu = try XCTUnwrap(MTLCreateSystemDefaultDevice())
         let value = try await PerfGuard.measureHostCPU(device: gpu, bubbleCount: 300, warmupFrames: 2, measuredFrames: 5)
+        XCTAssertTrue(value.isFinite && value > 0)
+    }
+
+    /// Okablowanie sceny `decals` na prawdziwym świecie: krótki przebieg daje skończone, dodatnie p95 i bezpieczne klatki.
+    func testDecalsMeasurementReturnsPositiveFiniteP95() async throws {
+        let gpu = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let value = try await PerfGuard.measureScene(.decals, device: gpu, warmupFrames: 2, measuredFrames: 5)
         XCTAssertTrue(value.isFinite && value > 0)
     }
 
