@@ -12,6 +12,7 @@ package struct FixedStepDriver {
     package let maximumBacklog: TimeInterval
     /// Suma czasu odrzuconego przez limit backlogu od początku świata (nasyca się, nie przepełnia).
     package private(set) var discardedBacklogSeconds: TimeInterval = 0
+    private var discardsNextAdvance = false
 
     package init(fixedTimeStep: TimeInterval, maximumStepsPerAdvance: Int = 8,
                  maximumBacklog: TimeInterval = .infinity) {
@@ -35,6 +36,10 @@ package struct FixedStepDriver {
     /// Backlog ponad limit jest obcinany, a nadmiar trafia do `discardedBacklogSeconds`.
     package mutating func accumulate(_ seconds: TimeInterval) -> Bool {
         guard seconds.isFinite, seconds >= 0 else { return false }
+        if discardsNextAdvance {
+            discardsNextAdvance = false
+            return true
+        }
         let accumulated = backlogSeconds + seconds
         guard accumulated.isFinite, (simulationTime + accumulated).isFinite else { return false }
         if accumulated > maximumBacklog {
@@ -57,7 +62,7 @@ package struct FixedStepDriver {
     }
 
     /// Pierwszy przyrost czasu po wznowieniu z tła zostanie odrzucony.
-    package mutating func discardNextAdvance() {}
+    package mutating func discardNextAdvance() { discardsNextAdvance = true }
 
     package mutating func completeStep() {
         precondition(canStep)

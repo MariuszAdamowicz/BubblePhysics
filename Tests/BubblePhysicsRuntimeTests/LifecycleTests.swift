@@ -117,8 +117,11 @@ final class LifecycleTests: XCTestCase {
         XCTAssertEqual(stepper.calls, 0)
         world.resume()
         XCTAssertFalse(world.diagnostics.isPaused)
+        let discarded = await world.advance(by: 0.5)
+        XCTAssertEqual(discarded.stepIndex, 0, "pierwszy przyrost po powrocie z tła jest odrzucony także po resume gry")
+        XCTAssertEqual(stepper.calls, 0)
         let frame = await world.advance(by: 0.125)
-        XCTAssertEqual(frame.stepIndex, 1, "po resume gry świat idzie dalej; ręczna pauza nie zostawiła czasu do odrzucenia")
+        XCTAssertEqual(frame.stepIndex, 1, "po resume gry świat idzie dalej")
         XCTAssertEqual(stepper.calls, 1)
     }
 

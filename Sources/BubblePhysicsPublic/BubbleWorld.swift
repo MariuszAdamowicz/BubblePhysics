@@ -74,7 +74,12 @@ public final class BubbleWorld {
     private var pending: [PendingTransaction] = []
     private var nextToken: UInt64 = 1
     private var lastFrame = WorldFrame(transactionReceipts: [], events: [])
-    private var isPaused = false
+    /// Pauza ręczna (`pause()`/`resume()`) i automatyczna (aplikacja w tle) są niezależne; świat stoi, gdy działa którakolwiek.
+    private var isManuallyPaused = false
+    private var isPausedInBackground = false
+    private var isPaused: Bool { isManuallyPaused || isPausedInBackground }
+    /// Trzyma źródło zdarzeń cyklu życia przy życiu; uchwyty źródła nie trzymają świata.
+    private let lifecycle: LifecycleEventSource?
     private var isAdvancing = false
     private var stepsInLastAdvance = 0
     private var lastAdvanceIssue: WorldAdvanceIssue?
@@ -147,6 +152,14 @@ public final class BubbleWorld {
         self.clock = FixedStepDriver(fixedTimeStep: configuration.fixedTimeStep,
                                      maximumBacklog: configuration.maximumBacklog)
         self.stepper = stepper
+        self.lifecycle = configuration.automaticPause ? (lifecycle ?? defaultLifecycleEventSource()) : nil
+        self.lifecycle?.willEnterBackground = { [weak self] in self?.isPausedInBackground = true }
+        self.lifecycle?.didBecomeActive = { [weak self] in
+            guard let self, isPausedInBackground else { return }
+            isPausedInBackground = false
+            // Czas spędzony w tle nie jest czasem gry: pierwszy przyrost po powrocie jest odrzucany.
+            clock.discardNextAdvance()
+        }
     }
 
     public var diagnostics: WorldDiagnostics {
@@ -370,8 +383,9 @@ public final class BubbleWorld {
 
     /// Pauza zachowuje kolejkę i istniejący akumulator. Czas przekazany w pauzie jest ignorowany.
     /// Rozpoczęty krok może się ukończyć; kolejny poczeka na resume.
-    public func pause() { isPaused = true }
-    public func resume() { isPaused = false }
+    /// Pauza automatyczna w tle (`WorldConfiguration.automaticPause`) jest od niej niezależna.
+    public func pause() { isManuallyPaused = true }
+    public func resume() { isManuallyPaused = false }
 
     /// Przyjmuje skończony, nieujemny czas prezentacji. Zero pozwala opróżnić backlog.
     /// Jedno wywołanie wykonuje ograniczoną liczbę kroków; cały nadmiar zostaje w diagnostyce.
