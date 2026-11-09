@@ -12,11 +12,17 @@ final class BubbleInterpolationTests: XCTestCase {
     private let tolerance: Float = 0.25
     private func id(_ value: UInt64) -> ObjectID { ObjectID(rawValue: value) }
 
-    private func makeScene() async throws -> (scene: RenderTestScene, previous: Float, current: Float) {
+    /// `withDecal`: na bańce leży zielona naklejka (obraz 1×1 na kwadracie o połowie promienia efektywnego), więc jej środek da się zmierzyć osobno.
+    private func makeScene(withDecal: Bool = false) async throws -> (scene: RenderTestScene, previous: Float, current: Float) {
         let scene = try RenderTestScene(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         try scene.submitMaterials([(redID, RenderMaterial(color: RGBA(1, 0, 0))), (blueID, RenderMaterial(color: RGBA(0, 0, 1)))])
+        var decal: Decal?
+        if withDecal {
+            let image = try OffscreenRenderHarness.image(width: 1, height: 1, pixels: [[0, 255, 0, 255]])
+            decal = try .image(scene.assets.register(image), scale: 0.5)
+        }
         scene.world.submit(try WorldTransaction()
-            .add(B.bubble(1, at: [-10, 0], radius: 5, velocity: [60, 0], filter: ghost, render: redID)))
+            .add(B.bubble(1, at: [-10, 0], radius: 5, velocity: [60, 0], filter: ghost, render: redID, decal: decal)))
         var previous: Float = 0, current: Float = 0
         for _ in 0..<3 {
             previous = current
@@ -86,5 +92,29 @@ final class BubbleInterpolationTests: XCTestCase {
         try await scene.advanceRendering(by: 1.0 / 120)
         let center = try XCTUnwrap(scene.renderedCenterX())
         XCTAssertEqual(center, (current + now) / 2, accuracy: tolerance, "kontury t−1 przeżyły ponowne przydzielenie")
+    }
+
+    private let green: ([UInt8]) -> Bool = { $0[1] > 128 && $0[0] < 100 && $0[2] < 100 }
+
+    // A1 (G10-AC1): naklejka bańki jest interpolowana razem z bańką, a nie rysowana w stanie t.
+    func testBubbleDecalSitsWithItsBubbleInAnIntermediateFrame() async throws {
+        let (scene, previous, current) = try await makeScene(withDecal: true)
+        try await scene.advanceRendering(by: 1.0 / 120)
+        let center = try XCTUnwrap(scene.renderedCenterX(where: green))
+        XCTAssertEqual(center, (previous + current) / 2, accuracy: tolerance, "α = 0,5: naklejka w połowie między krokami")
+    }
+
+    // A1: klatka z krokiem, α ∈ (0, 1): bańka i naklejka leżą między stanem sprzed kroku (t) a stanem nowego kroku (t+1).
+    func testBubbleDecalSitsWithItsBubbleInAStepFrame() async throws {
+        let (scene, _, current) = try await makeScene(withDecal: true)
+        let result = try await scene.advanceRendering(by: 1.5 / 60)
+        XCTAssertEqual(result.frame.stepIndex, 4)
+        XCTAssertEqual(scene.world.diagnostics.backlogSeconds, 0.5 / 60, accuracy: 1e-9, "α = 0,5 po kroku")
+        let newest = try XCTUnwrap(result.frame.objects[id(1)]).position.x
+        XCTAssertGreaterThan(newest - current, 0.5)
+        let center = try XCTUnwrap(scene.renderedCenterX(where: green))
+        XCTAssertEqual(center, (current + newest) / 2, accuracy: tolerance, "naklejka nie wyprzedza bańki o v·dt")
+        let bubble = try XCTUnwrap(scene.renderedCenterX())
+        XCTAssertEqual(bubble, center, accuracy: tolerance, "bańka i jej naklejka mają ten sam środek")
     }
 }

@@ -49,17 +49,58 @@ final class MetalRenderIntegrationTests: XCTestCase {
             "MaterialTextureRenderTests/testBackgroundStretchesOverRegionBelowAllLayersAndDisappearsWhenRemoved")
     }
 
-    /// Naklejki (tekst SDF, gotowy atlas, obraz; bańki i bryły; maska radialna) bez błędów walidacji Metal.
+    /// Naklejki (tekst SDF, gotowy atlas, obraz; bańki i bryły; maska radialna) bez błędów walidacji Metal: każdy test obrazu naklejek.
     func testDecalRenderPassesMetalValidation() throws {
         try assertPassesUnderMetalValidation("DecalRenderTests/testGlyphAtOneTimesHasThirtyTwoPixelLineHeightAndSharpEdgesAtEveryScale")
         try assertPassesUnderMetalValidation("DecalRenderTests/testTextFromAReadyAtlasDrawsItsGlyphsInTheTintColor")
         try assertPassesUnderMetalValidation("DecalRenderTests/testImageDecalShowsTheChosenRegionOfTheTexture")
+        try assertPassesUnderMetalValidation("DecalRenderTests/testImageDecalKeepsTheAspectOfTheRegionAndCentersItOnTheAnchor")
         try assertPassesUnderMetalValidation(
             "DecalRenderTests/testDecalOnADeformedBubbleKeepsItsShapeAndIsClippedToTheEffectiveRadiusCircle")
+        try assertPassesUnderMetalValidation("DecalRenderTests/testDecalOnABubbleKeepsConstantOrientationAfterDeformationAndMovement")
         try assertPassesUnderMetalValidation("DecalRenderTests/testDecalOnARotatedBodyRotatesWithIt")
         try assertPassesUnderMetalValidation("DecalRenderTests/testBodyDecalIsDrawnInAWorldWithoutBubbles")
+        try assertPassesUnderMetalValidation("DecalRenderTests/testDecalIsAnchoredAtTheObjectOriginOnACapsuleToo")
+        try assertPassesUnderMetalValidation("DecalRenderTests/testDecalWithScaleAboveOneIsStillClippedToTheReferenceCircle")
         try assertPassesUnderMetalValidation("DecalRenderTests/testRigidBodyInTheSameLayerCoversABubbleTogetherWithItsDecal")
+        try assertPassesUnderMetalValidation("DecalRenderTests/testBubbleDecalOnAHigherLayerCoversTheBodyBelow")
+        try assertPassesUnderMetalValidation(
+            "DecalRenderTests/testNewDecalIsDrawnInTheFirstFrameWithItsReceiptAndARejectedOneChangesNothing")
         try assertPassesUnderMetalValidation("DecalRenderTests/testMergeAndSplitResultsCarryTheDecalFromTheOperation")
+    }
+
+    /// Interpolacja t−1 → t (bryły, bańki, naklejki baniek) i rysowanie bez interpolacji (utworzone, zawinięte, zastąpione, scalone,
+    /// podzielone) bez błędów walidacji Metal; bufory t−1 i liczniki są wiązane także dla naklejek.
+    func testInterpolationRenderPassesMetalValidation() throws {
+        try assertPassesUnderMetalValidation("BodyInterpolationTests/testIntermediateFrameDrawsTheBodyBetweenTheTwoSteps")
+        try assertPassesUnderMetalValidation("BodyInterpolationTests/testStepFrameDrawsTheRemainderFractionBetweenThePreviousAndTheNewStep")
+        try assertPassesUnderMetalValidation("BodyInterpolationTests/testBacklogOverAStepGivesFractionOneAndASingleStep")
+        try assertPassesUnderMetalValidation("BodyInterpolationTests/testFrameAfterARejectedStepDrawsThePublishedStateNotTheRejectedOne")
+        try assertPassesUnderMetalValidation("BodyInterpolationTests/testBodyDecalAnchorFollowsTheInterpolatedPose")
+        try assertPassesUnderMetalValidation(
+            "BodyInterpolationTests/testStepFrameWithAFractionBetweenZeroAndOneDrawsTheBodyBetweenTheStates")
+        try assertPassesUnderMetalValidation(
+            "BodyInterpolationTests/testDynamicBodyHittingAWallAtFractionOneIsDrawnExtrapolatedPastTheWall")
+        try assertPassesUnderMetalValidation(
+            "BodyInterpolationTests/testDynamicBodyHittingAWallInAStepFrameWithHalfFractionIsExtrapolatedByHalfAStep")
+        try assertPassesUnderMetalValidation("BubbleInterpolationTests/testIntermediateFrameDrawsTheBubbleContourBetweenTheTwoSteps")
+        try assertPassesUnderMetalValidation("BubbleInterpolationTests/testStepFrameDrawsThePreviousStepWhenNothingIsOwed")
+        try assertPassesUnderMetalValidation("BubbleInterpolationTests/testBacklogOverAStepDrawsTheNewStepWithFractionOne")
+        try assertPassesUnderMetalValidation("BubbleInterpolationTests/testFrameAfterARejectedStepDrawsThePublishedStateNotTheRejectedOne")
+        try assertPassesUnderMetalValidation(
+            "BubbleInterpolationTests/testIntermediateFrameAfterGrowingCapacityKeepsExistingBubblesInPlace")
+        try assertPassesUnderMetalValidation("BubbleInterpolationTests/testBubbleDecalSitsWithItsBubbleInAnIntermediateFrame")
+        try assertPassesUnderMetalValidation("BubbleInterpolationTests/testBubbleDecalSitsWithItsBubbleInAStepFrame")
+        try assertPassesUnderMetalValidation("SnapRenderTests/testCreatedObjectIsDrawnAtItsCurrentPose")
+        try assertPassesUnderMetalValidation("SnapRenderTests/testWrappedBodyIsDrawnAtTheTargetEdge")
+        try assertPassesUnderMetalValidation("SnapRenderTests/testReplacedObjectIsDrawnAtItsNewPose")
+        try assertPassesUnderMetalValidation("SnapRenderTests/testMergedBubbleWithAnExistingIDIsDrawnAtItsCurrentPose")
+        try assertPassesUnderMetalValidation("SnapRenderTests/testSplitBubbleKeepingItsIDIsDrawnAtItsCurrentPose")
+        try assertPassesUnderMetalValidation("SnapRenderTests/testWrappedBubbleIsDrawnAtTheTargetEdge")
+        try assertPassesUnderMetalValidation(
+            "SnapRenderTests/testBubbleWrappedInAStepFrameIsDrawnAtTheTargetEdgeEvenForFractionBetweenZeroAndOne")
+        try assertPassesUnderMetalValidation("SnapRenderTests/testDecalOfABubbleWrappedInAStepFrameIsDrawnWithTheBubble")
+        try assertPassesUnderMetalValidation("SnapRenderTests/testBodyWrappedInAStepFrameIsExtrapolatedFromTheStateBeforeTheStep")
     }
 
     /// Punkty zaczepienia gry (własny potok między warstwami, ponowne wiązanie buforów po haku) bez błędów walidacji Metal.

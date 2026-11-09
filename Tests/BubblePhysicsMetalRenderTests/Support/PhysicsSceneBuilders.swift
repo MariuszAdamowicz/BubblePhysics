@@ -27,9 +27,10 @@ enum SceneBuilders {
     static func bubble(_ id: UInt64, at position: WorldPoint, radius: Float = 8, velocity: WorldPoint = .zero,
                        filter: CollisionFilter = .default, interest: EventInterest = [],
                        mergeGroups: MergeGroupSet = [], role: MotionRole = .dynamic,
+                       regionExitPolicy: RegionExitPolicy = .remove,
                        render: RenderMaterialID = style, layer: Int32 = 0, decal: Decal? = nil) throws -> WorldObject {
         .bubble(try BubbleDescriptor(id: ObjectID(rawValue: id), position: position, velocity: velocity,
-            targetRadius: radius, motionRole: role, physicsMaterialID: bubbleMaterial, renderMaterialID: render, mergeGroups: mergeGroups,
+            targetRadius: radius, motionRole: role, regionExitPolicy: regionExitPolicy, physicsMaterialID: bubbleMaterial, renderMaterialID: render, mergeGroups: mergeGroups,
             eventInterest: interest, filter: filter, layer: layer, decal: decal))
     }
 

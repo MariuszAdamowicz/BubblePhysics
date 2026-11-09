@@ -195,6 +195,15 @@ final class NativeMetalShaderABITests: XCTestCase {
         assertMatches(probes, try measure(probes, sources: [try source("NativeRenderKernels")], device: device))
         XCTAssertEqual(MemoryLayout<NativeDecalInstance>.stride, 48)
         XCTAssertEqual(MemoryLayout<NativeDecalVertex>.stride, 32)
+        // Układ się nie zmienił: indeks t−1 leży w `info.z`, a α bańki w `placement.w` (pola, które shader czyta po tych indeksach).
+        let bubble = NativeDecalInstance(color: .zero, placement: SIMD4(1, 2, 3, 4), bubbleIndex: 5, mode: .image,
+                                         previousBubbleIndex: 6, alpha: 0.25)
+        XCTAssertEqual(bubble.info, SIMD4<UInt32>(5, 0, 6, 0))
+        XCTAssertEqual(bubble.placement.w, 0.25)
+        let body = NativeDecalInstance(color: .zero, placement: SIMD4(1, 2, 3, 4), bubbleIndex: NativeDecalInstance.noBubble,
+                                       mode: .glyphAlpha, previousBubbleIndex: 6, alpha: 0.25)
+        XCTAssertEqual(body.info.z, NativeDecalInstance.noPrevious, "bryła nie ma strony t−1")
+        XCTAssertEqual(body.placement, SIMD4<Float>(1, 2, 3, 4), "obrót bryły zostaje w placement.w")
     }
 
     /// P-B-71: warstwa w `filter.w` to Int32 z odwróconym bitem znaku, więc porządek uint zgadza się z porządkiem Int32.

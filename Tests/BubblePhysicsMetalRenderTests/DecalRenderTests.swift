@@ -416,10 +416,12 @@ final class DecalRenderTests: XCTestCase {
         scene.assertPixel([0, 0], red, "początkowa naklejka")
 
         let change = scene.world.submit(try WorldTransaction().setDecal(id(1), decal: .image(greenImage)))
-        let frame = await scene.step()
-        XCTAssertEqual(frame.transactionReceipts.map(\.token), [change], "klatka z potwierdzeniem")
+        // Klatka z krokiem: render zakodowany w tym samym buforze, przed publikacją, już pokazuje nową naklejkę.
+        let stepFrame = try await scene.advanceRendering(by: 1.0 / 60)
+        XCTAssertEqual(stepFrame.frame.transactionReceipts.map(\.token), [change], "klatka z potwierdzeniem")
+        scene.assertPixel([0, 0], green, "nowa naklejka w klatce z krokiem, która niesie potwierdzenie")
         try await scene.render()
-        scene.assertPixel([0, 0], green, "nowa naklejka w pierwszej klatce z potwierdzeniem")
+        scene.assertPixel([0, 0], green, "nowa naklejka po publikacji")
 
         let rejected = scene.world.submit(try WorldTransaction().setDecal(id(1), decal: .image(redImage))
             .setDecal(id(1), decal: .image(missing)))

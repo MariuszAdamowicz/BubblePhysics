@@ -46,8 +46,9 @@ struct NativeRenderBodyVertex {
 // Instancja naklejki; lustro `NativeDecalInstance` w Swift (sonda ABI).
 struct NativeDecalInstance {
     float4 color;        // kolor naklejki, RGBA w [0, 1]
-    float4 placement;    // bryła: kotwica xy, promień odniesienia, obrót; bańka: z rekordu bańki w uchwycie (pole nieużywane)
-    uint4 info;          // indeks bańki w uchwycie (0xFFFFFFFF dla bryły), tryb (0 obraz, 1 alfa atlasu, 2 SDF), reserved x2
+    float4 placement;    // bryła: kotwica xy, promień odniesienia, obrót; bańka: kotwica i promień z rekordu bańki, w = α (waga stanu t)
+    uint4 info;          // indeks bańki w uchwycie (0xFFFFFFFF dla bryły), tryb (0 obraz, 1 alfa atlasu, 2 SDF), indeks bańki na
+                         // stronie t−1 (0xFFFFFFFF: bez interpolacji; tylko bańka), reserved
 };
 
 // Wierzchołek czworokąta glifu albo obrazu: położenie względem kotwicy w jednostkach promienia odniesienia (przed obrotem),
@@ -88,6 +89,10 @@ struct DecalVertexOutput {
     float4 color [[flat]];
     uint bubble [[flat]];
     uint mode [[flat]];
+    // Czy kontur bańki jest mieszany ze stroną t−1 (decyzja wierzchołka, ta sama co dla środka) i z jaką wagą stanu t.
+    uint blend [[flat]];
+    uint previousBase [[flat]];
+    float alpha [[flat]];
 };
 
 float2 nativeClip(float2 point, float4 viewport) { return (point - viewport.xy) * 2.0 / viewport.zw; }
@@ -118,9 +123,10 @@ vertex BubbleVertexOutput nativeBubbleVertex(
     uint first = bubbleIndex * stride;
     float2 center = bubbles[bubbleIndex].position.xy;
     // Interpolacja t−1 → t: kontury mieszane próbka po próbce (kąty próbek są stałe), środek z rekordów obu stron. Gdy liczba
-    // próbek się zmieniła, bańka rysuje się w stanie t.
+    // próbek się zmieniła albo bańka zawinęła się w tym kroku (flaga rekordu t), bańka rysuje się w stanie t.
     uint previousIndex = instance.previous;
-    bool blend = previousIndex != 0xFFFFFFFFu && count > 2 && min(previousCounts[previousIndex], stride) == count;
+    bool blend = previousIndex != 0xFFFFFFFFu && count > 2 && bubbles[bubbleIndex].publicFlags.w != 2
+        && min(previousCounts[previousIndex], stride) == count;
     uint previousFirst = previousIndex * stride;
     if (blend) center = mix(previousBubbles[previousIndex].position.xy, center, instance.alpha);
     float2 point = center;
@@ -229,13 +235,18 @@ fragment float4 nativeBodyFragment(BodyVertexOutput in [[stage_in]],
 }
 
 // Naklejka: czworokąt glifu albo obrazu w układzie kotwicy. Dla bańki kotwica i promień odniesienia (efektywny) idą z rekordu
-// bańki w uchwycie, więc naklejka nie zna ich na CPU; dla bryły z instancji. Bańka nie ma obrotu.
+// bańki w uchwycie, więc naklejka nie zna ich na CPU; dla bryły z instancji. Bańka nie ma obrotu. Naklejka bańki jest
+// interpolowana t−1 → t jak sama bańka: kotwica i promień z rekordów obu stron, a decyzja o mieszaniu (jest strona t−1, ta sama
+// liczba próbek konturu, bańka nie zawinęła się w tym kroku) zapada tu i idzie do fragmentu.
 vertex DecalVertexOutput nativeDecalVertex(
     uint vertexID [[vertex_id]],
     device const NativeDecalVertex *vertices [[buffer(0)]],
     device const NativeDecalInstance *instances [[buffer(1)]],
     constant float4 &viewport [[buffer(2)]],
-    device const RenderBubble *bubbles [[buffer(4)]]) {
+    constant uint &stride [[buffer(3)]],
+    device const RenderBubble *bubbles [[buffer(4)]],
+    device const RenderBubble *previousBubbles [[buffer(5)]],
+    device const uint *counts [[buffer(6)]], device const uint *previousCounts [[buffer(7)]]) {
     DecalVertexOutput result;
     NativeDecalVertex source = vertices[vertexID];
     NativeDecalInstance instance = instances[source.info.x];
@@ -245,6 +256,9 @@ vertex DecalVertexOutput nativeDecalVertex(
     result.color = instance.color;
     result.bubble = instance.info.x;
     result.mode = instance.info.y;
+    result.blend = 0;
+    result.previousBase = 0;
+    result.alpha = 1.0f;
     result.uv = source.uv;
     if (instance.info.x != 0xFFFFFFFFu) {
         RenderBubble bubble = bubbles[instance.info.x];
@@ -257,6 +271,18 @@ vertex DecalVertexOutput nativeDecalVertex(
         }
         anchor = bubble.position.xy;
         radius = bubble.deformation.y;
+        uint previousIndex = instance.info.z;
+        uint count = min(counts[instance.info.x], stride);
+        if (previousIndex != 0xFFFFFFFFu && count > 2 && bubble.publicFlags.w != 2
+            && min(previousCounts[previousIndex], stride) == count) {
+            RenderBubble before = previousBubbles[previousIndex];
+            float alpha = instance.placement.w;
+            anchor = mix(before.position.xy, anchor, alpha);
+            radius = mix(before.deformation.y, radius, alpha);
+            result.blend = 1;
+            result.previousBase = previousIndex * stride;
+            result.alpha = alpha;
+        }
         angle = 0;
     }
     radius = max(radius, 1e-6f);
@@ -281,7 +307,7 @@ constexpr sampler nativeDecalGlyphSampler(coord::normalized, address::clamp_to_e
 // Kolor wychodzi z alfą przemnożoną (potok składa `one / oneMinusSourceAlpha`).
 fragment float4 nativeDecalFragment(DecalVertexOutput in [[stage_in]],
     device const float2 *points [[buffer(0)]], device const uint *counts [[buffer(1)]],
-    constant uint &stride [[buffer(2)]],
+    constant uint &stride [[buffer(2)]], device const float2 *previousPoints [[buffer(3)]],
     texture2d<float> texture [[texture(0)]]) {
     float2 delta = in.worldPosition - in.anchor;
     float distanceToAnchor = length(delta);
@@ -296,8 +322,14 @@ fragment float4 nativeDecalFragment(DecalVertexOutput in [[stage_in]],
             uint first = min(uint(position), count - 1);
             float fraction = clamp(position - float(first), 0.0f, 1.0f);
             uint base = in.bubble * stride;
-            float contour = mix(length(points[base + first] - in.anchor),
-                                length(points[base + ((first + 1) % count)] - in.anchor), fraction);
+            uint second = (first + 1) % count;
+            float2 a = points[base + first], b = points[base + second];
+            // Interpolacja t−1 → t jak w `nativeBubbleVertex`: próbki konturu mieszane z tą samą wagą co kotwica.
+            if (in.blend == 1) {
+                a = mix(previousPoints[in.previousBase + first], a, in.alpha);
+                b = mix(previousPoints[in.previousBase + second], b, in.alpha);
+            }
+            float contour = mix(length(a - in.anchor), length(b - in.anchor), fraction);
             coverage = min(coverage, clamp((contour - distanceToAnchor) / pixel + 0.5f, 0.0f, 1.0f));
         }
     }

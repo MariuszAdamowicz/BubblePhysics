@@ -22,9 +22,10 @@ struct DecalRenderer {
         let texture: DecalTexture
     }
 
-    /// `placement` to kotwica xy, promień odniesienia i obrót bryły; dla bańki ignorowane przez shader. `nil`, gdy zasób
+    /// `placement` to kotwica xy, promień odniesienia i obrót bryły; dla bańki ignorowane przez shader (α idzie z `alpha`). `nil`, gdy zasób
     /// naklejki zniknął z rejestru (stager tego nie przepuszcza) albo tekst nie ma żadnego glifu.
-    func layout(_ decal: Decal, placement: SIMD4<Float>, bubbleIndex: UInt32, instanceIndex: UInt32) -> Layout? {
+    func layout(_ decal: Decal, placement: SIMD4<Float>, bubbleIndex: UInt32, previousBubbleIndex: UInt32 = NativeDecalInstance.noPrevious,
+                alpha: Float = 1, instanceIndex: UInt32) -> Layout? {
         let tint = SIMD4(decal.color.red, decal.color.green, decal.color.blue, decal.color.alpha)
         switch decal.content {
         case .image(let textureID, let region):
@@ -36,7 +37,8 @@ struct DecalRenderer {
             let halfWidth = decal.scale * width / longest, halfHeight = decal.scale * height / longest
             let vertices = Self.quad(left: -halfWidth, bottom: -halfHeight, right: halfWidth, top: halfHeight,
                                      uvMin: region.min, uvMax: region.max, instance: instanceIndex)
-            return Layout(instance: NativeDecalInstance(color: tint, placement: placement, bubbleIndex: bubbleIndex, mode: .image),
+            return Layout(instance: NativeDecalInstance(color: tint, placement: placement, bubbleIndex: bubbleIndex, mode: .image,
+                                                 previousBubbleIndex: previousBubbleIndex, alpha: alpha),
                           vertices: vertices, texture: .texture(textureID))
         case .text(let string, let source):
             guard let atlas = assets.atlas(for: source) else { return nil }
@@ -60,7 +62,8 @@ struct DecalRenderer {
                 penX += metrics.advance * unit
             }
             let mode: NativeDecalInstance.Mode = atlas.isSignedDistanceField ? .glyphDistanceField : .glyphAlpha
-            return Layout(instance: NativeDecalInstance(color: tint, placement: placement, bubbleIndex: bubbleIndex, mode: mode),
+            return Layout(instance: NativeDecalInstance(color: tint, placement: placement, bubbleIndex: bubbleIndex, mode: mode,
+                                                 previousBubbleIndex: previousBubbleIndex, alpha: alpha),
                           vertices: vertices, texture: .atlas(source))
         }
     }

@@ -104,13 +104,20 @@ package final class NativeMetalRenderHandoff {
                                instanceCount: count, baseInstance: first)
     }
 
-    /// Wiąże dane naklejek: wierzchołki i instancje z areny, rekordy baniek (kotwica i promień odniesienia) w wierzchołku oraz
-    /// kontury baniek w fragmencie (maska radialna). Bez uchwytu (świat bez kroku GPU) `bindDecalsWithoutBubbles`.
+    /// Wiąże dane naklejek: wierzchołki i instancje z areny, rekordy baniek t i t−1 (kotwica i promień odniesienia) oraz liczniki
+    /// w wierzchołku, a kontury baniek t i t−1 w fragmencie (maska radialna). Bez ważnej strony t−1 wiązane są strony t jako
+    /// zaślepki, bo instancje i tak nie wskażą indeksu t−1. Bez uchwytu (świat bez kroku GPU) `bindDecalsWithoutBubbles`.
     package func bindDecals(_ encoder: MTLRenderCommandEncoder, viewport: Viewport, vertices: MTLBuffer, vertexOffset: Int,
                             instances: MTLBuffer, instanceOffset: Int) {
         encoder.setVertexBuffer(bubbles, offset: 0, index: 4)
+        encoder.setVertexBuffer(previousBubbles ?? bubbles, offset: 0, index: 5)
+        encoder.setVertexBuffer(counts, offset: 0, index: 6)
+        encoder.setVertexBuffer(previousCounts ?? counts, offset: 0, index: 7)
+        var stride = UInt32(contourStride)
+        encoder.setVertexBytes(&stride, length: MemoryLayout<UInt32>.stride, index: 3)
         encoder.setFragmentBuffer(points, offset: 0, index: 0)
         encoder.setFragmentBuffer(counts, offset: 0, index: 1)
+        encoder.setFragmentBuffer(previousPoints ?? points, offset: 0, index: 3)
         Self.bindDecalCommon(encoder, viewport: viewport, vertices: vertices, vertexOffset: vertexOffset,
                              instances: instances, instanceOffset: instanceOffset, stride: contourStride)
     }
@@ -118,9 +125,10 @@ package final class NativeMetalRenderHandoff {
     /// Naklejki samych brył: shader deklaruje bufory baniek i konturów, więc dostają zaślepkę (nikt ich nie czyta).
     package static func bindDecalsWithoutBubbles(_ encoder: MTLRenderCommandEncoder, viewport: Viewport, vertices: MTLBuffer,
                                                  vertexOffset: Int, instances: MTLBuffer, instanceOffset: Int) {
-        encoder.setVertexBuffer(vertices, offset: 0, index: 4)
-        encoder.setFragmentBuffer(vertices, offset: 0, index: 0)
-        encoder.setFragmentBuffer(vertices, offset: 0, index: 1)
+        for index in 4...7 { encoder.setVertexBuffer(vertices, offset: 0, index: index) }
+        var stride: UInt32 = 0
+        encoder.setVertexBytes(&stride, length: MemoryLayout<UInt32>.stride, index: 3)
+        for index in [0, 1, 3] { encoder.setFragmentBuffer(vertices, offset: 0, index: index) }
         bindDecalCommon(encoder, viewport: viewport, vertices: vertices, vertexOffset: vertexOffset,
                         instances: instances, instanceOffset: instanceOffset, stride: 0)
     }
@@ -214,16 +222,24 @@ package struct NativeRenderBodyVertex: Equatable, Sendable {
 /// Instancja naklejki; lustro `NativeDecalInstance` w `NativeRenderKernels` (sonda ABI w NativeMetalShaderABITests).
 package struct NativeDecalInstance: Equatable, Sendable {
     package var color: SIMD4<Float>
-    /// Kotwica xy, promień odniesienia i obrót (tylko bryły); dla bańki z rekordu bańki w uchwycie.
+    /// Bryła: kotwica xy, promień odniesienia i obrót. Bańka: kotwicę i promień daje rekord bańki w uchwycie, a `w` to α, waga
+    /// stanu t w obrazie między t−1 i t (xyz nieużywane).
     package var placement: SIMD4<Float>
-    /// Indeks bańki w uchwycie (`noBubble` dla bryły), tryb (`Mode`), reserved x2.
+    /// Indeks bańki w uchwycie (`noBubble` dla bryły), tryb (`Mode`), indeks rekordu bańki na stronie t−1 (`noPrevious`: bez
+    /// interpolacji; tylko bańka), reserved.
     package var info: SIMD4<UInt32>
 
     package static let noBubble: UInt32 = 0xFFFF_FFFF
+    package static let noPrevious: UInt32 = 0xFFFF_FFFF
     package enum Mode: UInt32 { case image = 0, glyphAlpha = 1, glyphDistanceField = 2 }
 
-    package init(color: SIMD4<Float>, placement: SIMD4<Float>, bubbleIndex: UInt32, mode: Mode) {
-        self.color = color; self.placement = placement; self.info = SIMD4(bubbleIndex, mode.rawValue, 0, 0)
+    /// Dla bańki `previousBubbleIndex` i `alpha` opisują interpolację t−1 → t jak w `NativeRenderInstance`; dla bryły są ignorowane
+    /// (poza bryły liczy CPU).
+    package init(color: SIMD4<Float>, placement: SIMD4<Float>, bubbleIndex: UInt32, mode: Mode,
+                 previousBubbleIndex: UInt32 = noPrevious, alpha: Float = 1) {
+        self.color = color; self.placement = placement
+        self.info = SIMD4(bubbleIndex, mode.rawValue, bubbleIndex == Self.noBubble ? Self.noPrevious : previousBubbleIndex, 0)
+        if bubbleIndex != Self.noBubble { self.placement.w = alpha }
     }
 }
 

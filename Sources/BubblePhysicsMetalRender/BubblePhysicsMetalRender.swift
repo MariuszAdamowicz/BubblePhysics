@@ -209,16 +209,16 @@ public final class BubblePhysicsMetalRender {
                     guard let index = handoff.bubbleIndexByID[bubble.id] else { continue }
                     let material = frame.materialIndex(bubble.materialID, bubble.material)
                     frame.extendRun(.bubble, bubble.material, first: frame.instances.count, count: 1)
-                    // Bez ważnej strony t−1 albo dla obiektu, który pojawił się w tym kroku, bańka rysuje się w stanie t.
-                    let previous = state.snapped.contains(bubble.id) ? nil : handoff.previousBubbleIndexByID[bubble.id].map { UInt32($0) }
-                    let previousIndex = previous ?? NativeRenderInstance.noPrevious
-                    frame.instances.append(NativeRenderInstance(bubble: UInt32(index), material: material, previous: previousIndex,
-                                                                alpha: state.interpolation))
+                    frame.instances.append(NativeRenderInstance(bubble: UInt32(index), material: material,
+                        previous: previousIndex(of: bubble.id, state, handoff), alpha: state.interpolation))
                 }
-                // Naklejki baniek po wszystkich bańkach warstwy; kotwica i promień odniesienia z rekordu bańki w shaderze.
+                // Naklejki baniek po wszystkich bańkach warstwy; kotwica i promień odniesienia z rekordu bańki w shaderze,
+                // interpolowane t−1 → t razem z bańką.
                 for bubble in layer.bubbles {
                     guard let decal = bubble.decal, let index = handoff.bubbleIndexByID[bubble.id] else { continue }
-                    appendDecal(decal, placement: .zero, bubbleIndex: UInt32(index), renderer: decals, to: &frame)
+                    appendDecal(decal, placement: .zero, bubbleIndex: UInt32(index),
+                                previousBubbleIndex: previousIndex(of: bubble.id, state, handoff), alpha: state.interpolation,
+                                renderer: decals, to: &frame)
                 }
             }
             for shape in layer.shapes {
@@ -247,10 +247,19 @@ public final class BubblePhysicsMetalRender {
         return frame
     }
 
-    private func appendDecal(_ decal: Decal, placement: SIMD4<Float>, bubbleIndex: UInt32, renderer: DecalRenderer,
-                             to frame: inout FrameData) {
+    /// Indeks rekordu bańki na stronie t−1. Bez ważnej strony t−1 albo dla obiektu, który pojawił się w tym kroku, bańka rysuje
+    /// się w stanie t; zawinięcie wykrywa shader po fladze rekordu (znane dopiero po kroku GPU).
+    private func previousIndex(of id: ObjectID, _ state: BubbleWorldRenderState, _ handoff: NativeMetalRenderHandoff) -> UInt32 {
+        if state.snapped.contains(id) { return NativeRenderInstance.noPrevious }
+        return handoff.previousBubbleIndexByID[id].map { UInt32($0) } ?? NativeRenderInstance.noPrevious
+    }
+
+    private func appendDecal(_ decal: Decal, placement: SIMD4<Float>, bubbleIndex: UInt32,
+                             previousBubbleIndex: UInt32 = NativeDecalInstance.noPrevious, alpha: Float = 1,
+                             renderer: DecalRenderer, to frame: inout FrameData) {
         let instanceIndex = UInt32(frame.decalInstances.count)
-        guard let layout = renderer.layout(decal, placement: placement, bubbleIndex: bubbleIndex, instanceIndex: instanceIndex)
+        guard let layout = renderer.layout(decal, placement: placement, bubbleIndex: bubbleIndex,
+                                           previousBubbleIndex: previousBubbleIndex, alpha: alpha, instanceIndex: instanceIndex)
         else { return }
         frame.decalInstances.append(layout.instance)
         frame.extendRun(.decal, blend: .alpha, texture: layout.texture, first: frame.decalVertices.count,

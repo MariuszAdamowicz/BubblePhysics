@@ -9,13 +9,13 @@ import XCTest
 final class SnapRenderTests: XCTestCase {
     private typealias B = SceneBuilders
     private let ghost = RenderTestScene.ghost
-    private let redID = RenderMaterialID(rawValue: 10)
+    private let redID = RenderMaterialID(rawValue: 10), blueID = RenderMaterialID(rawValue: 11)
     private let tolerance: Float = 0.25
     private func id(_ value: UInt64) -> ObjectID { ObjectID(rawValue: value) }
 
     private func makeScene(region: WorldRectangle? = nil) throws -> RenderTestScene {
         let scene = try RenderTestScene(device: XCTUnwrap(MTLCreateSystemDefaultDevice()), region: region)
-        try scene.submitMaterials([(redID, RenderMaterial(color: RGBA(1, 0, 0)))])
+        try scene.submitMaterials([(redID, RenderMaterial(color: RGBA(1, 0, 0))), (blueID, RenderMaterial(color: RGBA(0, 0, 1)))])
         return scene
     }
 
@@ -82,17 +82,101 @@ final class SnapRenderTests: XCTestCase {
     func testSplitBubbleKeepingItsIDIsDrawnAtItsCurrentPose() async throws {
         let scene = try makeScene()
         scene.world.submit(try WorldTransaction()
-            .add(B.bubble(1, at: [8, 0], radius: 6, filter: ghost, role: .static, render: redID)))
+            .add(B.bubble(5, at: [8, 0], radius: 6, filter: ghost, role: .static, render: redID)))
         await scene.step(); await scene.step()
-        let first = BubbleSplitPart(result: BubbleResult(id: id(1), physicsMaterialID: B.bubbleMaterial,
+        let first = BubbleSplitPart(result: BubbleResult(id: id(5), physicsMaterialID: B.bubbleMaterial,
                                                          renderMaterialID: redID, filter: ghost), share: 0.5)
         let second = BubbleSplitPart(result: BubbleResult(id: id(3), physicsMaterialID: B.bubbleMaterial,
-                                                          renderMaterialID: redID, filter: ghost), share: 0.5)
-        scene.world.submit(WorldTransaction().splitBubble(id(1), first: first, second: second))
+                                                          renderMaterialID: blueID, filter: ghost), share: 0.5)
+        scene.world.submit(WorldTransaction().splitBubble(id(5), first: first, second: second))
         let split = await scene.step()
-        let object = try XCTUnwrap(split.objects[id(1)])
+        let object = try XCTUnwrap(split.objects[id(5)])
+        // Kontur części bywa spłaszczony przy styku z drugą, więc środek rysunku porównujemy z zasięgiem poziomym jej konturu.
+        let contour = try XCTUnwrap(scene.world.debugContourSnapshot()[id(5)]).map(\.x)
+        let expected = (try XCTUnwrap(contour.min()) + XCTUnwrap(contour.max())) / 2
+        XCTAssertGreaterThan(abs(expected - 8), 1, "część przesunęła się względem poprzedniej bańki, więc test odróżnia pozy")
         let center = try await intermediateCenter(scene, objectY: object.position.y)
-        let measured = try XCTUnwrap(center)
-        XCTAssertEqual(measured, object.position.x, accuracy: 3.5, "część podziału leży w swojej bieżącej pozycji")
+        // Druga część (ID 3) jest niebieska i rysowana przed czerwoną, która zachowała ID 5, więc czerwone piksele należą tylko do niej
+        // i nie są zasłonięte.
+        XCTAssertEqual(try XCTUnwrap(center), expected, accuracy: tolerance,
+                       "część podziału leży w swojej bieżącej pozycji, a nie w połowie drogi od starej bańki")
+    }
+
+    // P-B-52 (bańki): zawinięta bańka rysuje się przy docelowej krawędzi, bez smugi przez region.
+    func testWrappedBubbleIsDrawnAtTheTargetEdge() async throws {
+        let scene = try makeScene(region: WorldRectangle(min: [-15, -15], max: [15, 15]))
+        let wrapped = try await wrappingBubble(scene)
+        let center = try await intermediateCenter(scene)
+        XCTAssertEqual(try XCTUnwrap(center), wrapped.current, accuracy: tolerance, "bez smugi przez cały region")
+    }
+
+    // A3 (G10-AC1): w klatce z krokiem zawinięcia znanym dopiero po GPU (α = 0,5) bańka też rysuje się bez interpolacji.
+    func testBubbleWrappedInAStepFrameIsDrawnAtTheTargetEdgeEvenForFractionBetweenZeroAndOne() async throws {
+        let scene = try makeScene(region: WorldRectangle(min: [-15, -15], max: [15, 15]))
+        let wrapped = try await wrappingBubble(scene, stepFrameFraction: 0.5)
+        XCTAssertEqual(scene.world.diagnostics.backlogSeconds, 0.5 / 60, accuracy: 1e-9, "α = 0,5 w klatce z krokiem")
+        let center = try XCTUnwrap(scene.renderedCenterX())
+        XCTAssertEqual(center, wrapped.current, accuracy: tolerance, "docelowa krawędź, nie środek regionu")
+    }
+
+    // A3: ta sama klatka dla naklejki bańki, która zawinęła się w kroku niesionym przez klatkę.
+    func testDecalOfABubbleWrappedInAStepFrameIsDrawnWithTheBubble() async throws {
+        let scene = try makeScene(region: WorldRectangle(min: [-15, -15], max: [15, 15]))
+        let image = try OffscreenRenderHarness.image(width: 1, height: 1, pixels: [[0, 255, 0, 255]])
+        let decal = try Decal.image(scene.assets.register(image), scale: 0.5)
+        let wrapped = try await wrappingBubble(scene, stepFrameFraction: 0.5, decal: decal)
+        let center = try XCTUnwrap(scene.renderedCenterX(where: { $0[1] > 128 && $0[0] < 100 && $0[2] < 100 }))
+        XCTAssertEqual(center, wrapped.current, accuracy: tolerance, "naklejka przy docelowej krawędzi razem z bańką")
+    }
+
+    /// Bańka (promień 1, 60 jednostek na sekundę) zawija się przez prawą krawędź. Bez `stepFrameFraction` kończy po kroku
+    /// zawinięcia; z nim ostatnia klatka z kroku zawinięcia jest wyrenderowana z tym α (nadwyżka 0,5 kroku przed klatką).
+    private func wrappingBubble(_ scene: RenderTestScene, stepFrameFraction: Double? = nil,
+                                decal: Decal? = nil) async throws -> (previous: Float, current: Float) {
+        scene.world.submit(try WorldTransaction()
+            .add(B.bubble(1, at: [8, 0], radius: 1, velocity: [60, 0], filter: ghost, regionExitPolicy: .wrap, render: redID,
+                          decal: decal)))
+        await scene.step()
+        var previous: Float = 8, current: Float = 8
+        if let stepFrameFraction {
+            // Nadwyżka w akumulatorze: każda następna klatka z krokiem zostawia w nim `stepFrameFraction` kroku.
+            await scene.world.advance(by: stepFrameFraction / 60)
+            for _ in 0..<30 {
+                previous = current
+                let result = try await scene.advanceRendering(by: 1.0 / 60)
+                current = try XCTUnwrap(result.frame.objects[id(1)]).position.x
+                if current < previous - 5 { return (previous, current) }
+            }
+            XCTFail("bańka nie zawinęła się")
+            return (previous, current)
+        }
+        for _ in 0..<30 where current >= previous {
+            previous = current
+            let stepped = await scene.step()
+            current = try XCTUnwrap(stepped.objects[id(1)]).position.x
+        }
+        XCTAssertLessThan(current, previous - 5, "krok z zawinięciem")
+        return (previous, current)
+    }
+
+    // A3, ograniczenie: bryła zawinięta w klatce z krokiem nie jest przycinana do docelowej krawędzi, bo poza po kroku GPU
+    // nie jest znana w chwili kodowania; klatka rysuje ją ekstrapolowaną z pozy sprzed kroku (tuż za krawędzią regionu).
+    func testBodyWrappedInAStepFrameIsExtrapolatedFromTheStateBeforeTheStep() async throws {
+        let scene = try makeScene(region: WorldRectangle(min: [-15, -15], max: [15, 15]))
+        scene.world.submit(try WorldTransaction()
+            .add(B.circle(1, at: [8, 0], radius: 1, velocity: [60, 0], filter: ghost, regionExitPolicy: .wrap, render: redID)))
+        await scene.step()
+        await scene.world.advance(by: 0.5 / 60)
+        var before: Float = 8, wrappedAt: Float = 8
+        for _ in 0..<30 {
+            before = wrappedAt
+            let result = try await scene.advanceRendering(by: 1.0 / 60)
+            wrappedAt = try XCTUnwrap(result.frame.objects[id(1)]).position.x
+            if wrappedAt < before - 5 { break }
+        }
+        XCTAssertLessThan(wrappedAt, before - 5, "krok z zawinięciem")
+        let center = try XCTUnwrap(scene.renderedCenterX())
+        XCTAssertEqual(center, before + 0.5, accuracy: tolerance, "poza sprzed kroku plus α·v·dt, nie docelowa krawędź")
+        XCTAssertGreaterThan(abs(center - wrappedAt), 5, "udokumentowane: bryła nie rysuje się przy docelowej krawędzi")
     }
 }
