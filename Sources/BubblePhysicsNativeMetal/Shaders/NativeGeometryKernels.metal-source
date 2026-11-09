@@ -12,7 +12,7 @@ struct NativeBubble {
     ulong2 resources;
     ulong2 eventData;
     float4 bounds;
-    uint4 filter; // kategoria, maska, reserved, reserved
+    uint4 filter; // kategoria, maska, reserved, warstwa (Int32 z odwróconym bitem znaku)
 };
 struct NativeSegment {
     long2 identity; uint4 flags; float4 previous; float4 current;
@@ -30,7 +30,7 @@ struct NativeRenderPacket { long2 identity; float4 geometry; float4 deformation;
 struct NativeRigidBody {
     ulong2 identity; float4 pose; float4 previous; float4 motion; float4 physical;
     uint4 ranges; uint4 flags;
-    uint4 filter; // kategoria, maska, kinematyczna (1), reserved
+    uint4 filter; // kategoria, maska, kinematyczna (1), warstwa (Int32 z odwróconym bitem znaku)
     float4 shape; // rodzaj rdzenia (0 wielokąt, 1 koło, 2 kapsuła), promień, półdługość, reserved
     float4 limits; // maksymalna prędkość liniowa i kątowa (0 = bez limitu), znacznik TOI CCD (1 + t, 0 = brak; nativeRigidResolveCCD ustawia, nativeRigidApplyCCD zeruje), reserved
 };
@@ -427,7 +427,8 @@ bool nativeRigidInside(float2 p, NativeRigidBody body, device float2 *vertices, 
 
 
 // Wynik hit-testu jednego punktu: zwycięzca to największa para (warstwa, ObjectID); `found` 0 oznacza puste miejsce.
-// Warstwa to pole rekordu, równe 0 do etapu warstw.
+// Warstwa to `filter.w` rekordu: Int32 z odwróconym bitem znaku, więc porównanie `uint` zgadza się z porządkiem Int32;
+// wynik niesie ją w tym samym zapisie.
 struct NativeHitTestResult { ulong identity; uint layer; uint found; };
 
 // Wątek na punkt, na buforach roboczych tego kroku. Bańka: kontur po kroku, parzystość przecięć (kontur zdeformowany,
@@ -454,7 +455,7 @@ kernel void nativeHitTest(device float2 *points [[buffer(0)]],
             inside = crosses ? !inside : inside;
         }
         if (!inside) continue;
-        uint layer = 0; ulong identity = ulong(bubbles[i].identity.x);
+        uint layer = bubbles[i].filter.w; ulong identity = ulong(bubbles[i].identity.x);
         if (!found || layer > bestLayer || (layer == bestLayer && identity > bestID)) {
             found = true; bestLayer = layer; bestID = identity;
         }
@@ -462,7 +463,7 @@ kernel void nativeHitTest(device float2 *points [[buffer(0)]],
     for (uint i = 0; i < counts.y; ++i) {
         NativeRigidBody body = bodies[i];
         if (body.flags.z == 1 || !nativeRigidInside(query, body, vertices, triangles)) continue;
-        uint layer = 0; ulong identity = body.identity.x;
+        uint layer = body.filter.w; ulong identity = body.identity.x;
         if (!found || layer > bestLayer || (layer == bestLayer && identity > bestID)) {
             found = true; bestLayer = layer; bestID = identity;
         }

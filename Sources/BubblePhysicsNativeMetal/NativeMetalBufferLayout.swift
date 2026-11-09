@@ -12,7 +12,7 @@ struct NativeMetalBubble: Equatable, Sendable {
     var resources = SIMD2<UInt64>.zero
     var eventData = SIMD2<UInt64>.zero // interest, merge groups
     var bounds = SIMD4<Float>.zero // AABB zdeformowanego konturu po kroku: min.xy, max.xy
-    var filter = NativeMetalFilter.default // kategoria, maska, reserved, reserved
+    var filter = NativeMetalFilter.default // kategoria, maska, reserved, warstwa (`NativeMetalFilter.encodeLayer`)
 
     init(_ bubble: NativeSolverBubble) {
         identity = SIMD2(Int64(bubble.id.rawValue), 0)
@@ -31,15 +31,16 @@ struct NativeMetalBubble: Equatable, Sendable {
     }
 }
 
-/// Filtr kolizji w rekordach GPU: kategoria i maska w pierwszych dwóch lane'ach, reszta zarezerwowana.
-/// Brak filtra (rekord bez ustawień publicznych) oznacza filtr domyślny, czyli kolizję ze wszystkim.
+/// Filtr kolizji i warstwa w rekordach GPU: kategoria i maska w pierwszych dwóch lane'ach, w trzecim znacznik kinematyczny,
+/// w czwartym warstwa. Brak filtra (rekord bez ustawień publicznych) oznacza filtr domyślny i warstwę 0.
 enum NativeMetalFilter {
     static let `default` = pack(.default)
-    /// Zaślepka etapu 5 (zadanie 46): warstwa jeszcze nie jest zapisywana w rekordach.
-    static func encodeLayer(_ layer: Int32) -> UInt32 { UInt32(bitPattern: layer) }
-    static func decodeLayer(_ value: UInt32) -> Int32 { Int32(bitPattern: value) }
-    static func pack(_ filter: CollisionFilter, kinematic: Bool = false) -> SIMD4<UInt32> {
-        SIMD4(filter.category, filter.mask, kinematic ? 1 : 0, 0)
+    /// Warstwa jako Int32 z odwróconym bitem znaku, więc porządek wartości `uint` zgadza się z porządkiem `Int32`
+    /// (kernele porównują warstwy jako `uint`); rozmiar rekordu bez zmian.
+    static func encodeLayer(_ layer: Int32) -> UInt32 { UInt32(bitPattern: layer) ^ 0x8000_0000 }
+    static func decodeLayer(_ value: UInt32) -> Int32 { Int32(bitPattern: value ^ 0x8000_0000) }
+    static func pack(_ filter: CollisionFilter, kinematic: Bool = false, layer: Int32 = 0) -> SIMD4<UInt32> {
+        SIMD4(filter.category, filter.mask, kinematic ? 1 : 0, encodeLayer(layer))
     }
 }
 
@@ -226,7 +227,7 @@ package struct NativeMetalSnapshot: Sendable {
                 // restitucję bez współdzielenia bufora deformacji konturu.
                 value.resources.x = UInt64(properties.restitution.bitPattern)
                 value.eventData = properties.eventData
-                value.filter = NativeMetalFilter.pack(properties.filter)
+                value.filter = NativeMetalFilter.pack(properties.filter, layer: properties.layer)
                 value.deformation = SIMD4(0, 0, properties.speedLimits.x, properties.speedLimits.y)
             }
             return .init(index: index, value: value)

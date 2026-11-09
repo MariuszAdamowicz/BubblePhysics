@@ -30,7 +30,7 @@ struct NativeRigidBody: Equatable {
     var physical: SIMD4<Float> // inverse mass, inverse moment, radius, reserved
     var ranges: SIMD4<UInt32> // vertex offset/count, convex triangle offset/count
     var flags: SIMD4<UInt32> // static, wrap, region result, restitution
-    var filter: SIMD4<UInt32> // kategoria, maska, kinematyczna, reserved
+    var filter: SIMD4<UInt32> // kategoria, maska, kinematyczna, warstwa (`NativeMetalFilter.encodeLayer`)
     /// Rdzeń z promieniem: rodzaj (0 wielokąt, 1 koło, 2 kapsuła), promień, półdługość osi, reserved.
     /// Koło ma jeden wierzchołek rdzenia, kapsuła dwa (oś lokalnego X); wielokąt ma promień 0 i trójkąty.
     var shape: SIMD4<Float>
@@ -216,7 +216,7 @@ final class NativeRigidPolygonState {
                                 geometry.radius, input.friction),
                 ranges: SIMD4(UInt32(vertices.count), UInt32(geometry.vertices.count), UInt32(triangles.count), UInt32(geometry.triangles.count)),
                 flags: SIMD4(isStatic ? 1 : 0, p.regionExitPolicy == .wrap ? 1 : 0, 0, input.restitution.bitPattern),
-                filter: NativeMetalFilter.pack(p.filter, kinematic: isKinematic),
+                filter: NativeMetalFilter.pack(p.filter, kinematic: isKinematic, layer: o.layer),
                 shape: SIMD4(Float(geometry.kind), geometry.coreRadius, geometry.halfLength, 0),
                 limits: SIMD4(input.maximumLinearSpeed, input.maximumAngularSpeed, 0, 0))
             guard record.physical.x.isFinite, record.physical.y.isFinite else { throw NativeMetalSolverError.invalidSnapshot }

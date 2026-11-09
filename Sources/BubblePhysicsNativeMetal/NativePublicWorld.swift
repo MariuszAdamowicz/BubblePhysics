@@ -17,7 +17,7 @@ package struct NativePublicObject: Equatable, Sendable {
     package var bounds: WorldRectangle?
     package var rigidity: Float = 0
     package var structuralShape: NativeStructuralShape?
-    /// Warstwa rysowania i hit-testu. Zaślepka etapu 5 (zadanie 46): jeszcze nie trafia do rekordów GPU.
+    /// Warstwa rysowania i hit-testu; w rekordzie bańki i bryły jako `filter.w`.
     package var layer: Int32 = 0
 
     package init(descriptor: WorldObject) {
@@ -136,7 +136,8 @@ package final class NativePublicWorld {
                     restitution: material.restitution,
                     resources: SIMD2(b.physicsMaterialID.rawValue, b.renderMaterialID.rawValue),
                     eventData: SIMD2(b.eventInterest.rawValue, b.mergeGroups.rawValue), filter: b.filter,
-                    speedLimits: SIMD2(material.maximumLinearSpeed ?? 0, material.maximumAngularSpeed ?? 0))
+                    speedLimits: SIMD2(material.maximumLinearSpeed ?? 0, material.maximumAngularSpeed ?? 0),
+                    layer: object.layer)
                 if let shape = object.structuralShape { structuralShapes[b.id] = shape }
             case .rigidBody(let p):
                 guard let material = materials[p.physicsMaterialID] else { throw NativeMetalSolverError.invalidSnapshot }
