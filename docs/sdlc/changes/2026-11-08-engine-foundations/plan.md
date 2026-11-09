@@ -1126,16 +1126,78 @@ Każde `verify` uruchamia się z katalogu głównego repozytorium. Testy CPU są
 Każde `verify` uruchamia się z katalogu głównego repozytorium. Testy statyczne leżą w `Tests/BubblePhysicsPublicTests` i znajdują korzeń repo przez `#filePath` jak `PackageGraphTests`. Test sceny akceptacyjnej leży w `Tests/BubblePhysicsMetalRenderTests`. Czerwone testy kompilują się na zaślepkach API (odstępstwo nr 33). Każdy nowy plik w `App/` wymaga regeneracji `.xcodeproj` przez `xcodegen generate`. Zadania 77 i 78 wykonuje właściciel: pierwsze wymaga iPhone'a X z jego podpisem, drugie zakłada tag w zdalnym repozytorium.
 
 66. Scal `origin/main` (commit scalający PR #1, zawartość identyczna z bazą gałęzi) do `feature/engine-foundations` bez zmiany plików, zamiast przebazowania z [CD-D-19](change-design.md#cd-d-19) (wiersz w Deviations from Design) · verify: `git merge-base --is-ancestor origin/main HEAD && git diff --quiet HEAD^1 HEAD`
+   ```text
+   $ git merge-base --is-ancestor origin/main HEAD && git diff --quiet 8c5bb09^1 8c5bb09
+   66 OK (8c5bb09) — commit scalający bez zmian plików
+   ```
 67. Testy sceny akceptacyjnej (czerwone, na zaślepce publicznego `Scene.acceptance`, `measure(device:scene:renderSize:progress:)` i pól raportu): `AcceptanceSceneTests` — 300 baniek z teksturą przyklejoną i naklejką tekstową, 4 ściany, trójkąt w roli `kinematic` z `KinematicDrive`, dwie warstwy z materiałem alfa; `renderWidth` i `renderHeight` raportu równe zadanemu `renderSize`, a przy `nil` 375 × wysokość regionu; 5 klatek z `contact_candidate_overflow=0`, `max_candidates_per_object` ≤ `candidate_limit`/2 i bez odczytów konturów; raport ma `scene=acceptance` i bramkę 16,67 ms, covering [P-B-61](#p-b-61) · verify: `swift build --build-tests && ! swift test --filter AcceptanceSceneTests`
+   ```text
+   $ swift build --build-tests && ! swift test --filter AcceptanceSceneTests
+   faza czerwona w ed5701d; po zadaniu 68 i poprawkach przeglądu (dc64172) zielone:
+   $ swift test --filter 'AcceptanceSceneTests|BubblePhysicsPerfGuardTests|DecalsSceneTests|MetalRenderIntegrationTests|MigrationGuideTests|IntegrationGuideTests'
+   Executed 55 tests, with 0 failures (0 unexpected)
+   ```
 68. Scena akceptacyjna: publiczne `PublicWorldStressBenchmark.Scene` z przypadkiem `.acceptance` (metody sceny zostają `package`), `measure(device:scene:renderSize:progress:)` w miejsce `measure(device:progress:)`, `renderSize` w `run` z domyślnym `nil`, pola i linie raportu oraz bramka sceny jak w R2; sceny stress-300, mixed i decals bez zmian, covering [P-B-61](#p-b-61) · verify: `swift test --filter 'AcceptanceSceneTests|BubblePhysicsPerfGuardTests|DecalsSceneTests|MetalRenderIntegrationTests'`
+   ```text
+   $ swift test --filter 'AcceptanceSceneTests|BubblePhysicsPerfGuardTests|DecalsSceneTests|MetalRenderIntegrationTests|MigrationGuideTests|IntegrationGuideTests'
+   Executed 55 tests, with 0 failures (0 unexpected)
+   ```
 69. Aplikacja benchmarku: wybór sceny w `PublicWorldStressView`, `renderSize` z `UIScreen.main.nativeBounds`, `BubblePhysicsAssets` w `project.yml`, regeneracja `.xcodeproj`, sekcja benchmarku w README (sceny, bramka 16,67 ms sceny akceptacyjnej), covering [P-B-61](#p-b-61) · verify: `grep -q BubblePhysicsAssets Benchmarks/iOS/BubblePhysicsBench/project.yml && grep -q nativeBounds Benchmarks/iOS/BubblePhysicsBench/App/PublicWorldStressView.swift && grep -q '\.acceptance' Benchmarks/iOS/BubblePhysicsBench/App/PublicWorldStressView.swift && grep -q '16,67 ms' README.md && xcodebuild -project Benchmarks/iOS/BubblePhysicsBench/BubblePhysicsBench.xcodeproj -scheme BubblePhysicsBench -configuration Release -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build`
+   ```text
+   $ grep -q BubblePhysicsAssets …/project.yml && grep -q nativeBounds …/PublicWorldStressView.swift && grep -q '\.acceptance' … && grep -q '16,67 ms' README.md
+   69 grep OK
+   $ xcodebuild -project Benchmarks/iOS/BubblePhysicsBench/BubblePhysicsBench.xcodeproj -scheme BubblePhysicsBench -configuration Release -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build
+   ** BUILD SUCCEEDED **
+   ```
 70. Testy statyczne (czerwone): `MigrationGuideTests` — każdy symbol z `docs/migration/v1-api-diff.txt` ma wpis w `docs/MIGRATION-v2.md`, a README podaje 2.0.0 i odsyła do obu dokumentów; `IntegrationGuideTests` — każdy blok `swift` przewodnika ma znacznik `<!-- guide-region: nazwa -->` (blok bez znacznika to błąd) i jest równy regionowi `// guide-region: nazwa` … `// guide-region-end` w `Examples/BubblePhysicsShowcase/App`, każdy region jest użyty, a przewodnik ma nagłówki siedmiu tematów z [G13-AC2](change-design.md#g13-ac2), covering [P-B-10](#p-b-10), [P-B-60](#p-b-60) · verify: `swift build --build-tests && ! swift test --filter 'MigrationGuideTests|IntegrationGuideTests'`
+   ```text
+   $ swift build --build-tests && ! swift test --filter 'MigrationGuideTests|IntegrationGuideTests'
+   faza czerwona w 8459204; po zadaniach 72 i 75 zielone (wynik pod zadaniem 75)
+   ```
 71. Diff API po ostatniej zmianie publicznego API etapu (zadanie 68): `swift-api-digester -dump-sdk` modułów `BubblePhysics`, `BubblePhysicsModel` i `BubblePhysicsMetalRender` (zrzut nie obejmuje re-eksportów, a typy modelu leżą w `BubblePhysicsModel`) z worktree tagu `v1.0.0` pod stałą ścieżką `.build/v1-worktree` i z HEAD, potem `-diagnose-sdk`; wynik w `docs/migration/v1-api-diff.txt` z nagłówkiem, który podaje polecenia ze ścieżkami względnymi i nie zawiera niczego zmiennego między przebiegami (daty, ścieżek bezwzględnych), covering [P-B-10](#p-b-10) · verify: `grep -q 'RenderStyle' docs/migration/v1-api-diff.txt && grep -q 'PolygonDescriptor' docs/migration/v1-api-diff.txt && grep -q 'measure' docs/migration/v1-api-diff.txt`
+   ```text
+   $ grep -q 'RenderStyle' … && grep -q 'PolygonDescriptor' … && grep -q 'measure' docs/migration/v1-api-diff.txt
+   71 OK
+   ```
 72. `docs/MIGRATION-v2.md`: zamiennik każdego symbolu z diffu (materiały zamiast stylów, `RigidBodyDescriptor`, usunięte kanały prezentacji z [CD-D-28](change-design.md#cd-d-28), czujniki bez stylu z [CD-D-29](change-design.md#cd-d-29), nowe skutki błędów z [CD-D-23](change-design.md#cd-d-23), `measure(device:scene:renderSize:progress:)`) i sekcja o przeniesieniu narzędzi diagnostycznych do `BubblePhysicsNativeMetalDiagnostics`; README z wersją 2.0.0 i odnośnikami, covering [P-B-10](#p-b-10) · verify: `swift test --filter MigrationGuideTests`
+   ```text
+   $ swift test --filter MigrationGuideTests
+   w przebiegu z filtrem zadania 75: Executed 55 tests, with 0 failures (0 unexpected)
+   ```
 73. Przykład, część 1: `project.yml`, `Signing.xcconfig`, `Signing.local.xcconfig.example` i wpis w `.gitignore` wzorem benchmarku, `ShowcaseApp`, `MetalHostView` z pętlą i chwytem palcem jak w drzewie R2 (deskryptor passu i drawable pobierane synchronicznie w `draw(in:)`), `ShowcaseScene` i `BubbleScene` (tekstury z `CGImage` generowanego w kodzie, naklejki SDF, scalanie po `mergeContact`) z regionami przewodnika, wygenerowany `.xcodeproj`, covering [P-B-59](#p-b-59) · verify: `grep -q 'Examples/BubblePhysicsShowcase/Signing.local.xcconfig' .gitignore && xcodebuild -project Examples/BubblePhysicsShowcase/BubblePhysicsShowcase.xcodeproj -scheme BubblePhysicsShowcase -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build`
+   ```text
+   $ grep -q 'Examples/BubblePhysicsShowcase/Signing.local.xcconfig' .gitignore
+   73 gitignore OK
+   $ xcodebuild -project Examples/BubblePhysicsShowcase/BubblePhysicsShowcase.xcodeproj -scheme BubblePhysicsShowcase -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
+   ** BUILD SUCCEEDED **
+   ```
 74. Przykład, część 2: `RigidScene` (koło, kapsuła, wielokąty, więzy dystansowy, zawias i spaw, platforma kinematyczna z dynamiczną bryłą) i przełącznik scen w `ShowcaseApp`, regeneracja `.xcodeproj`, covering [P-B-59](#p-b-59) · verify: `grep -q 'RigidScene' Examples/BubblePhysicsShowcase/BubblePhysicsShowcase.xcodeproj/project.pbxproj && xcodebuild -project Examples/BubblePhysicsShowcase/BubblePhysicsShowcase.xcodeproj -scheme BubblePhysicsShowcase -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build`
+   ```text
+   $ grep -q 'RigidScene' Examples/BubblePhysicsShowcase/BubblePhysicsShowcase.xcodeproj/project.pbxproj
+   74 pbxproj OK
+   $ xcodebuild … BubblePhysicsShowcase … CODE_SIGNING_ALLOWED=NO build
+   ** BUILD SUCCEEDED **
+   ```
 75. `docs/integration-guide.md`: siedem tematów z [G13-AC2](change-design.md#g13-ac2) z blokami z regionów przykładu, jedno zdanie o rozbieżności hit-testu z obrazem do dwóch kroków i o oczekiwaniu na GPU w klatce bez kroku (notatki w R2), pass tylko z kolorem, bez bufora szablonu; odnośnik w README, covering [P-B-60](#p-b-60) · verify: `swift test --filter 'IntegrationGuideTests|MigrationGuideTests'`
+   ```text
+   $ swift test --filter 'AcceptanceSceneTests|BubblePhysicsPerfGuardTests|DecalsSceneTests|MetalRenderIntegrationTests|MigrationGuideTests|IntegrationGuideTests'
+   Executed 55 tests, with 0 failures (0 unexpected)
+   ```
 76. Sprawdź etap: ponownie wygeneruj diff API jak w zadaniu 71 (musi być bez zmian), pełne `swift test`, strażnik na bezczynnej maszynie i oba buildy `xcodebuild`, covering [P-B-10](#p-b-10), [P-B-59](#p-b-59), [P-B-60](#p-b-60) · verify: `git diff --exit-code docs/migration/v1-api-diff.txt && swift test && swift run -c release BubblePhysicsPerfGuard && xcodebuild -project Benchmarks/iOS/BubblePhysicsBench/BubblePhysicsBench.xcodeproj -scheme BubblePhysicsBench -configuration Release -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build && xcodebuild -project Examples/BubblePhysicsShowcase/BubblePhysicsShowcase.xcodeproj -scheme BubblePhysicsShowcase -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build`
+   ```text
+   $ (polecenie -diagnose-sdk z nagłówka diffu) | cmp - <(sed -n '15,$p' docs/migration/v1-api-diff.txt); git diff --exit-code docs/migration/v1-api-diff.txt
+   diff API: identyczny (147 wierszy); git diff: bez zmian
+   $ swift test
+   Executed 1199 tests, with 1 test skipped and 0 failures (0 unexpected)
+   $ uptime; swift run -c release BubblePhysicsPerfGuard
+   load averages: 1,27 1,40 1,83
+   PASS stress-300: p95 3.3909 ms, punkt odniesienia 3.3516 ms, limit 3.6867 ms (+1.2%)
+   PASS mixed: p95 5.2001 ms, punkt odniesienia 4.9506 ms, limit 5.4456 ms (+5.0%)
+   PASS decals: p95 3.7814 ms, punkt odniesienia 4.3001 ms, limit 4.7301 ms (-12.1%)
+   scaling 600/300: 1.94 (limit 2.50) PASS
+   $ xcodebuild … BubblePhysicsBench … build && xcodebuild … BubblePhysicsShowcase … build
+   ** BUILD SUCCEEDED ** (oba)
+   ```
 77. (właściciel: iPhone X i jego podpis w `Signing.local.xcconfig`) Pomiar: Release, scena akceptacyjna, „Kopiuj raport” do `docs/benchmarks/v2-iphone-x-<data>.md`; agent dopisuje wynik i odnośnik do pliku w sekcji benchmarku w README, covering [P-B-61](#p-b-61) · verify: `f=$(ls docs/benchmarks/v2-iphone-x-*.md) && grep -q 'scene=acceptance' $f && grep -q 'p95_gate=pass' $f && grep -q 'failed_frames=0' $f && grep -q 'non_finite_frames=0' $f && grep -q 'contour_cpu_readbacks=0' $f && grep -q 'contact_candidate_overflow=0' $f && awk -F'max_candidates_per_object=' 'NF>1{split($2,a,";"); split($0,b,"candidate_limit="); ok=(a[1]*2<=b[2]+0)} END{exit !ok}' $f && grep -q "$(basename $f)" README.md`
 78. (właściciel: dostęp do zdalnego repozytorium) Wydanie: PR gałęzi do `main` scalony commitem scalającym, jak PR #1 (nie squash ani rebase); po scaleniu tag `v2.0.0` na tym commicie scalającym na `main`, wypchnięty do `origin`. Etap dostaje status `done` i dowody zadań 66–77 w `plan.md` przed otwarciem PR. Dowód zadania 78 to osobny mały commit dokumentacji bezpośrednio na `main`, już po tagu, albo zostaje tylko w wiadomości końcowej sesji; na gałęzi po scaleniu nie powstaje żaden commit, covering [P-B-10](#p-b-10) · verify: `git fetch origin --tags && git ls-remote --tags origin v2.0.0 | grep -q v2.0.0 && git merge-base --is-ancestor v2.0.0 origin/main && test "$(git rev-list --parents -n 1 'v2.0.0^{commit}' | wc -w)" -ge 3 && git log -1 --format=%s 'v2.0.0^{commit}' | grep -q 'feature/engine-foundations'`
 
