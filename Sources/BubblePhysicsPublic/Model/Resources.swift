@@ -50,7 +50,7 @@ public struct RGBA: Equatable, Hashable, Sendable {
     public static let white = RGBA(1, 1, 1, 1)
 
     /// Składowe skończone i w [0, 1].
-    package func validate(_ name: String) throws {
+    internal func validate(_ name: String) throws {
         for component in [red, green, blue, alpha] {
             try requireFinite(component, name)
             guard (0...1).contains(component) else { throw ModelValidationError.valueOutOfRange(name) }

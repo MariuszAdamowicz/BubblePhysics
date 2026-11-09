@@ -39,10 +39,10 @@ final class GlyphRegistryTests: XCTestCase {
     func testSystemFontWithACharacterSetGetsAFontIDAndAnSDFAtlasWithMetrics() throws {
         let registry = AssetRegistry(device: device)
         let id = try registry.register(font: "Helvetica", characters: "0123456789AB")
-        XCTAssertTrue(registry.contains(.font(id)))
+        XCTAssertNotNil(registry.atlas(for: .font(id)))
         let atlas = try XCTUnwrap(registry.atlas(for: .font(id)))
         for character in "0123456789AB" {
-            let metrics = try XCTUnwrap(registry.glyph(character, in: .font(id)), "brak glifu \(character)")
+            let metrics = try XCTUnwrap(registry.atlas(for: .font(id))?.glyphs[character], "brak glifu \(character)")
             XCTAssertGreaterThan(metrics.size.x, 0, "glif \(character)")
             XCTAssertGreaterThan(metrics.size.y, 0)
             XCTAssertGreaterThan(metrics.advance, 0)
@@ -51,7 +51,7 @@ final class GlyphRegistryTests: XCTestCase {
             XCTAssertLessThanOrEqual(metrics.origin.x + metrics.size.x, Float(atlas.texture.width))
             XCTAssertLessThanOrEqual(metrics.origin.y + metrics.size.y, Float(atlas.texture.height))
         }
-        XCTAssertNil(registry.glyph("Z", in: .font(id)), "znak spoza zestawu nie ma glifu")
+        XCTAssertNil(registry.atlas(for: .font(id))?.glyphs["Z"], "znak spoza zestawu nie ma glifu")
         XCTAssertTrue(atlas.isSignedDistanceField)
         XCTAssertEqual(atlas.texture.pixelFormat, .r8Unorm)
         XCTAssertEqual(atlas.lineHeight, 32, accuracy: 1e-3, "skala 1× to glif o wysokości linii 32 px")
@@ -89,10 +89,10 @@ final class GlyphRegistryTests: XCTestCase {
         let digits = try registry.register(font: "Helvetica", characters: "012")
         let letters = try registry.register(font: "Helvetica", characters: "AB")
         XCTAssertNotEqual(digits, letters)
-        XCTAssertNotNil(registry.glyph("1", in: .font(digits)))
-        XCTAssertNil(registry.glyph("A", in: .font(digits)))
-        XCTAssertNotNil(registry.glyph("A", in: .font(letters)))
-        XCTAssertNil(registry.glyph("1", in: .font(letters)))
+        XCTAssertNotNil(registry.atlas(for: .font(digits))?.glyphs["1"])
+        XCTAssertNil(registry.atlas(for: .font(digits))?.glyphs["A"])
+        XCTAssertNotNil(registry.atlas(for: .font(letters))?.glyphs["A"])
+        XCTAssertNil(registry.atlas(for: .font(letters))?.glyphs["1"])
     }
 
     func testEmptyCharacterSetIsRejectedBecauseThereWouldBeNothingToDraw() throws {
@@ -109,12 +109,12 @@ final class GlyphRegistryTests: XCTestCase {
         let font = try registry.register(font: "Helvetica", characters: "0123")
         let atlasValue = try readyAtlas()
         let id = try registry.register(glyphAtlas: atlasValue)
-        XCTAssertTrue(registry.contains(.atlas(id)))
-        XCTAssertFalse(registry.contains(.atlas(GlyphAtlasID(rawValue: 9999))))
-        XCTAssertEqual(registry.glyph("A", in: .atlas(id)), atlasValue.glyphs["A"])
-        XCTAssertEqual(registry.glyph("B", in: .atlas(id)), atlasValue.glyphs["B"])
-        XCTAssertNil(registry.glyph("0", in: .atlas(id)), "cyfra jest w czcionce, nie w atlasie")
-        XCTAssertNil(registry.glyph("A", in: .font(font)))
+        XCTAssertNotNil(registry.atlas(for: .atlas(id)))
+        XCTAssertNil(registry.atlas(for: .atlas(GlyphAtlasID(rawValue: 9999))))
+        XCTAssertEqual(registry.atlas(for: .atlas(id))?.glyphs["A"], atlasValue.glyphs["A"])
+        XCTAssertEqual(registry.atlas(for: .atlas(id))?.glyphs["B"], atlasValue.glyphs["B"])
+        XCTAssertNil(registry.atlas(for: .atlas(id))?.glyphs["0"], "cyfra jest w czcionce, nie w atlasie")
+        XCTAssertNil(registry.atlas(for: .font(font))?.glyphs["A"])
         let stored = try XCTUnwrap(registry.atlas(for: .atlas(id)))
         XCTAssertTrue(stored.texture === atlasValue.texture)
         XCTAssertEqual(stored.lineHeight, 12)
@@ -174,9 +174,9 @@ final class GlyphRegistryTests: XCTestCase {
         let other = AssetRegistry(device: device)
         let font = try other.register(font: "Helvetica", characters: "A")
         let atlas = try other.register(glyphAtlas: readyAtlas())
-        XCTAssertFalse(registry.contains(.font(font)))
-        XCTAssertFalse(registry.contains(.atlas(atlas)))
-        XCTAssertNil(registry.glyph("A", in: .font(font)))
+        XCTAssertNil(registry.atlas(for: .font(font)))
+        XCTAssertNil(registry.atlas(for: .atlas(atlas)))
+        XCTAssertNil(registry.atlas(for: .font(font))?.glyphs["A"])
         XCTAssertNil(registry.atlas(for: .atlas(atlas)))
     }
 }

@@ -105,6 +105,26 @@ final class MetalRenderIntegrationTests: XCTestCase {
         try assertPassesUnderMetalValidation("SnapRenderTests/testDecalOfABodyWrappedInAStepFrameIsDrawnWithTheBody")
     }
 
+    /// Światy bez baniek, z samymi bryłami statycznymi albo kinematycznymi (rysowanie tylko z rekordu GPU), bez błędów walidacji Metal.
+    func testBodiesWithoutBubblesPassMetalValidation() throws {
+        try assertPassesUnderMetalValidation(
+            "BodiesWithoutBubblesRenderTests/testStaticBodyWithoutBubblesIsDrawnWithItsDecalAfterAStep")
+        try assertPassesUnderMetalValidation(
+            "BodiesWithoutBubblesRenderTests/testStaticBodyWithoutBubblesIsDrawnInAnIntermediateFrame")
+        try assertPassesUnderMetalValidation(
+            "BodiesWithoutBubblesRenderTests/testStaticBodyWithoutBubblesIsDrawnInAStepFrame")
+        try assertPassesUnderMetalValidation(
+            "BodiesWithoutBubblesRenderTests/testStaticBodyWithoutBubblesFirstFrameWithoutAStepDrawsNothingAndNextStepDrawsIt")
+        try assertPassesUnderMetalValidation(
+            "BodiesWithoutBubblesRenderTests/testKinematicBodyWithoutBubblesIsDrawnWithItsDecalAfterAStep")
+        try assertPassesUnderMetalValidation(
+            "BodiesWithoutBubblesRenderTests/testKinematicBodyWithoutBubblesIsDrawnInAnIntermediateFrame")
+        try assertPassesUnderMetalValidation(
+            "BodiesWithoutBubblesRenderTests/testKinematicBodyWithoutBubblesIsDrawnInAStepFrame")
+        try assertPassesUnderMetalValidation(
+            "BodiesWithoutBubblesRenderTests/testKinematicBodyWithoutBubblesFirstFrameWithoutAStepDrawsNothingAndNextStepDrawsIt")
+    }
+
     /// Punkty zaczepienia gry (własny potok między warstwami, ponowne wiązanie buforów po haku) bez błędów walidacji Metal.
     func testRenderHooksPassMetalValidation() throws {
         try assertPassesUnderMetalValidation("RenderHookTests/testHooksDrawBetweenBackgroundLayersAndOverlay")

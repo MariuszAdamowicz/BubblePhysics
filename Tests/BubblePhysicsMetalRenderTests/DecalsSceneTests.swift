@@ -27,8 +27,8 @@ final class DecalsSceneTests: XCTestCase {
                     XCTFail("bańka \(bubble.id) bez naklejki tekstowej"); continue
                 }
                 XCTAssertFalse(text.isEmpty)
-                XCTAssertTrue(assets.contains(source), "źródło glifów naklejki jest w rejestrze")
-                for character in text { XCTAssertNotNil(assets.glyph(character, in: source), "znak \(character) w zestawie") }
+                XCTAssertNotNil(assets.atlas(for: source), "źródło glifów naklejki jest w rejestrze")
+                for character in text { XCTAssertNotNil(assets.atlas(for: source)?.glyphs[character], "znak \(character) w zestawie") }
             case .updateRenderMaterial(_, let material): materials.append(material)
             default: break
             }

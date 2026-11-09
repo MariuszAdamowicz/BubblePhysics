@@ -111,7 +111,8 @@ public enum PublicWorldStressBenchmark {
             case .decals:
                 let texture = try assets.register(Self.decalTextureImage())
                 let font = try assets.register(font: "Helvetica-Bold", characters: "0123456789")
-                return try Stress300Scene.initialTransaction(decorations: .init(texture: texture, font: font))
+                return try Stress300Scene.initialTransaction(bubbleCount: Stress300Scene.defaultBubbleCount,
+                    decorations: .init(texture: texture, font: font))
             }
         }
 
@@ -248,16 +249,19 @@ package enum Stress300Scene {
     }
 
     /// Zasoby sceny `decals`: tekstura przyklejona w materiale baniek i czcionka cyfr naklejek tekstowych.
-    package struct Decorations {
-        package let texture: TextureID
-        package let font: FontID
-        package init(texture: TextureID, font: FontID) { self.texture = texture; self.font = font }
+    struct Decorations {
+        let texture: TextureID
+        let font: FontID
     }
 
-    /// Materiały, 300 baniek, ściany i trójkąt w pozycji początkowej. Z `decorations` materiał baniek ma teksturę w trybie
-    /// przyklejonym, a każda bańka naklejkę tekstową (numer 0–99) czcionką z `decorations`.
-    package static func initialTransaction(bubbleCount: Int = defaultBubbleCount,
-                                           decorations: Decorations? = nil) throws -> WorldTransaction {
+    /// Materiały, 300 baniek, ściany i trójkąt w pozycji początkowej.
+    package static func initialTransaction(bubbleCount: Int = defaultBubbleCount) throws -> WorldTransaction {
+        try initialTransaction(bubbleCount: bubbleCount, decorations: nil)
+    }
+
+    /// To samo z `decorations`: materiał baniek ma teksturę w trybie przyklejonym, a każda bańka naklejkę tekstową (numer 0–99)
+    /// czcionką z `decorations`.
+    static func initialTransaction(bubbleCount: Int, decorations: Decorations?) throws -> WorldTransaction {
         let height = regionHeight(bubbleCount: bubbleCount)
         let materialID = PhysicsMaterialID(rawValue: 1)
         let polygonMaterialID = PhysicsMaterialID(rawValue: 2)

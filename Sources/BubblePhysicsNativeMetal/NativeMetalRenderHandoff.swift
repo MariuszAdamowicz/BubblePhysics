@@ -15,21 +15,21 @@ package final class NativeMetalRenderHandoff {
     /// Rekordy baniek strony t−1 (środek poprzedniego kroku); ta sama druga połowa ping-pong co punkty.
     private let previousBubbles: MTLBuffer?
     /// Kolejność baniek na stronie t−1 (indeks rekordu w buforach t−1); pusta, gdy strony t−1 nie ma.
-    package let previousBubbleIDs: [ObjectID]
+    let previousBubbleIDs: [ObjectID]
     /// Czy strona t−1 nadal trzyma kontury z poprzedniej publikacji. Fałsz, gdy nie ma strony t−1 albo krok wykonany na GPU
     /// bez publikacji nadpisał ją; wtedy renderer rysuje bez interpolacji.
-    package private(set) var previousContoursValid: Bool
+    private(set) var previousContoursValid: Bool
     /// Rekordy brył tej publikacji (albo kroku w toku) z obiema pozami, t−1 (przed krokiem) i t, oraz ich kolejność. Poza bryły w
     /// klatce jest mieszana w shaderze, więc współrzędne brył nie przechodzą przez CPU.
     private let bodies: MTLBuffer?
-    package let bodyIDs: [ObjectID]
+    let bodyIDs: [ObjectID]
     package let bubbleIDs: [ObjectID]
     package var bubbleCount: Int { bubbleIDs.count }
     package let contourStride: Int
     /// Rozmiar jednego rekordu `RenderBubble` w ABI shadera renderu (ten sam układ co `NativeBubble`).
     package static let bubbleRecordByteCount = MemoryLayout<NativeMetalBubble>.stride
     /// Rozmiar jednego rekordu `RenderBody` w ABI shadera renderu (ten sam układ co `NativeRigidBody`).
-    package static let bodyRecordByteCount = MemoryLayout<NativeRigidBody>.stride
+    static let bodyRecordByteCount = MemoryLayout<NativeRigidBody>.stride
 
     /// Indeks rekordu bańki w uchwycie; budowany raz na uchwyt przy pierwszym użyciu przez renderer.
     package private(set) lazy var bubbleIndexByID: [ObjectID: Int] = Dictionary(
@@ -156,7 +156,7 @@ package final class NativeMetalRenderHandoff {
     }
 
     /// Szew testowy: kontury ze strony t−1, niezależnie od flagi `previousContoursValid` (puste bez strony t−1).
-    package func debugPreviousContourSnapshot() -> [ObjectID: [WorldPoint]] {
+    func debugPreviousContourSnapshot() -> [ObjectID: [WorldPoint]] {
         guard let previousPoints, let previousCounts else { return [:] }
         return Self.readContours(points: previousPoints, counts: previousCounts, ids: previousBubbleIDs, stride: contourStride)
     }

@@ -123,16 +123,8 @@ public final class AssetRegistry {
         return id
     }
 
-    /// Czy źródło glifów jest zarejestrowane; stager pyta o to przy walidacji naklejki.
-    package func contains(_ source: GlyphSource) -> Bool { glyphAtlases[source] != nil }
-
     /// Atlas źródła glifów; renderer rysuje z jego tekstury.
     package func atlas(for source: GlyphSource) -> GlyphAtlas? { glyphAtlases[source] }
-
-    /// Metryki znaku w źródle; `nil`, gdy źródła albo znaku nie ma.
-    package func glyph(_ character: Character, in source: GlyphSource) -> GlyphMetrics? {
-        glyphAtlases[source]?.glyphs[character]
-    }
 
     /// Domknięcie dla stagera: zestaw znaków źródła albo `nil`, gdy źródła nie ma.
     package var glyphLookup: GlyphLookup {

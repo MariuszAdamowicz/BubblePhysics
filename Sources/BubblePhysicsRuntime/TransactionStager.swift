@@ -139,6 +139,20 @@ package struct StagedTransactionBatch: Sendable {
     package let frame: WorldFrame
 }
 
+extension StagedTransactionBatch {
+    /// Obiekty, które pojawiły się w partii (utworzone, zastąpione, a także scalone, podzielone i wstawione przez
+    /// `replaceRigidBodies`, bo te kończą się utworzeniem): ich poprzednia poza nie jest poprzednikiem nowego stanu,
+    /// więc renderer nie interpoluje od niej.
+    package var appearedObjectIDs: Set<ObjectID> {
+        var ids = Set<ObjectID>()
+        for change in changes {
+            ids.formUnion(change.createdObjectIDs)
+            ids.formUnion(change.replacedObjectIDs)
+        }
+        return ids
+    }
+}
+
 package enum TransactionStager {
     /// `textureExists` mówi, czy tekstura jest w rejestrze zasobów świata; Runtime nie zna rejestru.
     package static func stage(_ transaction: WorldTransaction, against state: RuntimeState,

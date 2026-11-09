@@ -233,6 +233,29 @@ final class BubbleWorldCompletionTests: XCTestCase {
         XCTAssertEqual(stepper.publishedCount, 1)
     }
 
+    // P-B-58, G10-AC4, zadanie 58: bufor klatki bez kroku, który kończy się statusem innym niż `completed`, przełącza świat
+    // w „zawiódł” (nie odrzuca klatki), kolejka jest porzucona, a nic nie jest publikowane.
+    func testNoStepFrameWithAFailedCommandBufferFailsTheWorld() async throws {
+        let queue = try XCTUnwrap(MTLCreateSystemDefaultDevice()?.makeCommandQueue())
+        let stepper = ScriptedStepper([.complete])
+        let world = try world(stepper: stepper)
+        let first = await world.advance(by: 0.125)
+        XCTAssertEqual(first.stepIndex, 1)
+        world.submit(WorldTransaction())
+        let failing = FailingCommandBuffer(wrapping: try XCTUnwrap(queue.makeCommandBuffer()))
+        var rendered = 0
+        let frame = await world.advance(by: 0.0625, commandBuffer: failing.buffer) { rendered += 1 }
+        XCTAssertEqual(rendered, 1, "klatka bez kroku została zakodowana")
+        XCTAssertEqual(failing.commitCount, 1)
+        XCTAssertEqual(frame, first, "nic nie jest publikowane")
+        XCTAssertEqual(stepper.calls, 1, "bez kroku stepper nie jest wołany")
+        XCTAssertEqual(world.diagnostics.failureReason, .commandExecutionFailed)
+        XCTAssertEqual(world.diagnostics.lastAdvanceIssue, .worldFailed)
+        XCTAssertFalse(world.diagnostics.didRenderLastAdvance)
+        XCTAssertEqual(world.diagnostics.pendingTransactionCount, 0, "kolejka porzucona")
+        try await assertWorldStaysFailed(world, stepper: stepper, lastFrame: first, expectedCalls: 1)
+    }
+
     // P-B-58: błąd zakodowania renderu, który wyszedł z `beforeCommit`, nie jest mylony z błędem solvera nawet wtedy, gdy
     // sam jest typem błędu solvera.
     func testGameClosureThrowingASolverShapedErrorStaysAFrameRejection() async throws {
@@ -587,4 +610,28 @@ private final class HitTestStepper: CompleteStepper {
         let answers = results.isEmpty ? [] : hitTests.indices.map { results[min($0, results.count - 1)] }
         return CompletedRuntimeStep(state: batch.state, hitTestResults: answers)
     }
+}
+
+/// Bufor poleceń, którego `commit` natychmiast kończy się statusem `.error`; reszta wywołań idzie do prawdziwego bufora.
+/// Prawdziwy bufor nie da się zepsuć na żądanie, a `advance` widzi tylko `status` i uchwyt ukończenia.
+private final class FailingCommandBuffer: NSObject {
+    private let real: MTLCommandBuffer
+    private var handlers: [MTLCommandBufferHandler] = []
+    private var committed = false
+    private(set) var commitCount = 0
+
+    init(wrapping real: MTLCommandBuffer) { self.real = real }
+
+    /// Obiekt ObjC pod protokołem: wywołania `MTLCommandBuffer` idą przez `objc_msgSend`, więc wystarczą selektory poniżej
+    /// i przekazywanie reszty do prawdziwego bufora.
+    var buffer: MTLCommandBuffer { unsafeBitCast(self, to: (any MTLCommandBuffer).self) }
+
+    @objc var status: MTLCommandBufferStatus { committed ? .error : real.status }
+    @objc func addCompletedHandler(_ block: @escaping MTLCommandBufferHandler) { handlers.append(block) }
+    @objc func commit() {
+        committed = true
+        commitCount += 1
+        handlers.forEach { $0(buffer) }
+    }
+    override func forwardingTarget(for selector: Selector!) -> Any? { real }
 }

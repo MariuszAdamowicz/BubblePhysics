@@ -157,28 +157,6 @@ package final class NativeCompleteStepper: CompleteStepper {
     }
 }
 
-extension StagedTransactionBatch {
-    /// Obiekty, które pojawiły się w partii (utworzone, zastąpione, scalone, podzielone): ich poprzednia poza nie jest
-    /// poprzednikiem nowego stanu, więc renderer nie interpoluje od niej.
-    package var appearedObjectIDs: Set<ObjectID> {
-        var ids = Set<ObjectID>()
-        for change in changes {
-            ids.formUnion(change.createdObjectIDs)
-            ids.formUnion(change.replacedObjectIDs)
-            for operation in change.operations {
-                switch operation {
-                case .add(let value), .replace(_, let value): ids.insert(value.id)
-                case .replaceRigidBodies(_, let results): ids.formUnion(results.map(\.id))
-                case .mergeBubbles(_, let result): ids.insert(result.id)
-                case .splitBubble(_, let first, let second): ids.formUnion([first.result.id, second.result.id])
-                default: break
-                }
-            }
-        }
-        return ids
-    }
-}
-
 extension RuntimeState {
     /// Stan bańek i brył po ostatnim kroku, z rekordów, bez odczytu konturów. Czujniki i pola sił nie mają stanu.
     package func publishedObjectStates() -> [ObjectID: ObjectState] {
