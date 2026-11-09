@@ -48,6 +48,9 @@ package struct FixedStepDriver {
         return true
     }
 
+    /// Ułamek kroku zalegający w akumulatorze, obcięty do [0, 1]: waga stanu t w obrazie między t−1 i t.
+    package var interpolationFraction: Double { 0 }
+
     package mutating func completeStep() {
         precondition(canStep)
         backlogSeconds = max(0, backlogSeconds - fixedTimeStep)

@@ -57,4 +57,7 @@ public struct WorldDiagnostics: Equatable, Sendable {
     public let failureReason: WorldFailureReason?
     /// Powód ostatniego odrzuconego kroku lub klatki; zostaje do następnego odrzucenia (etap 4).
     public let lastRejectionReason: WorldRejectionReason?
+    /// Prawda tylko wtedy, gdy ostatnie `advance` zatwierdziło bufor poleceń z renderem; gra prezentuje drawable tylko przy
+    /// prawdzie. Pauza, stan „zawiódł”, odrzucona klatka i `advance` bez bufora dają fałsz (etap 6).
+    public let didRenderLastAdvance: Bool
 }

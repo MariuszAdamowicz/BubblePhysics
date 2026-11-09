@@ -66,6 +66,7 @@ public final class BubbleWorld {
     /// Stan końcowy „zawiódł”: ustawiony raz, nigdy nie czyszczony.
     private var failureReason: WorldFailureReason?
     private var lastRejectionReason: WorldRejectionReason?
+    private var didRenderLastAdvance = false
     private struct PendingHitTest {
         let id: UInt64
         let point: WorldPoint
@@ -131,7 +132,8 @@ public final class BubbleWorld {
             eventOverflow: lastFrame.eventOverflow,
             contactCandidateOverflow: contactCandidateOverflow,
             maximumContactCandidatesPerObject: maximumContactCandidatesPerObject,
-            failureReason: failureReason, lastRejectionReason: lastRejectionReason)
+            failureReason: failureReason, lastRejectionReason: lastRejectionReason,
+            didRenderLastAdvance: didRenderLastAdvance)
     }
 
     /// Stały limit k kandydatów kontaktu na obiekt, wspólny dla wszystkich rodzajów par.
