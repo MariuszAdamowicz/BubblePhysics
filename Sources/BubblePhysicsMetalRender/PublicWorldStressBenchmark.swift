@@ -28,6 +28,14 @@ public struct PublicWorldStressReport: Sendable {
     public let fallbackFrames: Int
     public let failedFrames: Int
     public let contourCPUReadbacks: Int
+    /// Rozmiar celu renderu w pikselach (zaślepka zadania 67).
+    public let renderWidth: Int
+    public let renderHeight: Int
+    /// Zaślepka zadania 67: pola liczników kandydatów i bramki sceny.
+    public let contactCandidateOverflow: Int
+    public let maximumCandidatesPerObject: Int
+    public let candidateLimit: Int
+    public let gateMilliseconds: Double
 
     /// Kontrola bezpieczeństwa; geometryczna obwiednia referencyjna wymaga osobnego porównania.
     public var safetyPassed: Bool {
@@ -64,18 +72,20 @@ public enum PublicWorldStressBenchmark {
     public nonisolated static let p95GateMilliseconds = 10.4568
 
     /// Wymaga fizycznego urządzenia dla wyniku akceptacyjnego. Koduje oba etapy do jednego bufora.
-    public static func measure(device: MTLDevice,
+    public static func measure(device: MTLDevice, scene: Scene, renderSize: CGSize? = nil,
                                progress: @escaping @MainActor (Int, Int) -> Void = { _, _ in }) async throws
         -> PublicWorldStressReport {
-        try await run(device: device, warmupFrames: 30, measuredFrames: 300, progress: progress)
+        try await run(device: device, scene: scene, warmupFrames: 30, measuredFrames: 300, progress: progress)
     }
 
     /// Scena mierzona przez `run(scene:)`.
-    package enum Scene: Equatable, Sendable {
+    public enum Scene: Equatable, Sendable {
         case stress(bubbleCount: Int)
         case mixed
         /// stress-300 z teksturą przyklejoną i naklejką tekstową na każdej bańce; mierzy koszt naklejek i przycinania maską.
         case decals
+        /// Zaślepka zadania 67: scena akceptacyjna.
+        case acceptance
 
         package static let stress300 = Scene.stress(bubbleCount: Stress300Scene.defaultBubbleCount)
 
@@ -84,6 +94,7 @@ public enum PublicWorldStressBenchmark {
             case .stress(let count): return count == Stress300Scene.defaultBubbleCount ? "stress-300" : "stress-\(count)"
             case .mixed: return "mixed"
             case .decals: return "decals"
+            case .acceptance: return "acceptance"
             }
         }
 
@@ -91,7 +102,7 @@ public enum PublicWorldStressBenchmark {
             switch self {
             case .stress(let count): return Stress300Scene.regionHeight(bubbleCount: count)
             case .mixed: return MixedScene.regionHeight
-            case .decals: return Stress300Scene.regionHeight(bubbleCount: Stress300Scene.defaultBubbleCount)
+            case .decals, .acceptance: return Stress300Scene.regionHeight(bubbleCount: Stress300Scene.defaultBubbleCount)
             }
         }
 
@@ -99,7 +110,7 @@ public enum PublicWorldStressBenchmark {
             switch self {
             case .stress(let count): return try Stress300Scene.configuration(bubbleCount: count)
             case .mixed: return try MixedScene.configuration()
-            case .decals: return try Stress300Scene.configuration()
+            case .decals, .acceptance: return try Stress300Scene.configuration()
             }
         }
 
@@ -108,7 +119,7 @@ public enum PublicWorldStressBenchmark {
             switch self {
             case .stress(let count): return try Stress300Scene.initialTransaction(bubbleCount: count)
             case .mixed: return try MixedScene.initialTransaction()
-            case .decals:
+            case .decals, .acceptance:
                 let texture = try assets.register(Self.decalTextureImage())
                 let font = try assets.register(font: "Helvetica-Bold", characters: "0123456789")
                 return try Stress300Scene.initialTransaction(bubbleCount: Stress300Scene.defaultBubbleCount,
@@ -136,7 +147,7 @@ public enum PublicWorldStressBenchmark {
         /// Transakcja przed krokiem `step` (numer od 0) albo `nil`, gdy scena nic wtedy nie zmienia.
         func stepTransaction(step: Int) throws -> WorldTransaction? {
             switch self {
-            case .stress, .decals: return step > 0 ? try Stress300Scene.triangleReplacement(step: step) : nil
+            case .stress, .decals, .acceptance: return step > 0 ? try Stress300Scene.triangleReplacement(step: step) : nil
             case .mixed: return try MixedScene.stepTransaction(step: step)
             }
         }
@@ -149,7 +160,7 @@ public enum PublicWorldStressBenchmark {
                       measuredFrames: measuredFrames, progress: progress)
     }
 
-    package static func run(device: MTLDevice, scene: Scene = .stress300,
+    package static func run(device: MTLDevice, scene: Scene = .stress300, renderSize: CGSize? = nil,
                             warmupFrames: Int, measuredFrames: Int,
                             progress: @escaping @MainActor (Int, Int) -> Void) async throws
         -> PublicWorldStressReport {
@@ -227,7 +238,8 @@ public enum PublicWorldStressBenchmark {
             hostWaitingP95Milliseconds: p95(hostWaitingMeasured),
             maximumMilliseconds: measured.last ?? .infinity, guardCorrections: guardCorrections,
             nonFiniteFrames: nonFiniteFrames, fallbackFrames: fallbackFrames, failedFrames: failedFrames,
-            contourCPUReadbacks: world.benchmarkContourCPUReadbackCount)
+            contourCPUReadbacks: world.benchmarkContourCPUReadbackCount, renderWidth: 0, renderHeight: 0,
+            contactCandidateOverflow: 0, maximumCandidatesPerObject: 0, candidateLimit: 0, gateMilliseconds: 0)
     }
 }
 
