@@ -291,7 +291,7 @@ Etapy wdrożenia ustala plan. Wymaganie z tego dokumentu: najpierw porządki wyd
 ## Testing & verification
 
 - **Testy obrazu Metal:** render offscreen 256×256 z próbkowaniem pikseli, z tolerancją ±2/255 na kanał, o ile kryterium nie podaje innej. Wspólna infrastruktura dla G3, G4, G5, G9 i G10.
-- **Strażnik wydajności (G12-AC3):** stały zestaw scen (stress-300, mieszana: 200 baniek, 60 brył, 10 więzów, 5 kinematycznych), wyniki zapisane w `docs/benchmarks/perf-guard.json`. Pierwszy punkt odniesienia powstaje przed zmianami, na `feature/engine-foundations` od `fix/audit-local-fixes`, dla sceny stress-300. Scena mieszana dostaje punkt odniesienia w etapie, w którym jej elementy zaczynają istnieć.
+- **Strażnik wydajności (G12-AC3):** stały zestaw scen (stress-300, mieszana: 200 baniek, 60 brył, 10 więzów, 5 kinematycznych), wyniki zapisane w `docs/benchmarks/perf-guard.json`. Pierwszy punkt odniesienia powstaje przed zmianami, na `feature/engine-foundations` od `fix/audit-local-fixes`, dla sceny stress-300. Scena mieszana dostaje punkt odniesienia w etapie, w którym jej elementy zaczynają istnieć. Od etapu naklejek zestaw obejmuje też scenę `decals`: stress-300 z teksturą w trybie przyklejonym i naklejką tekstową na każdej bańce, która mierzy koszt przycinania naklejek (doprecyzowanie z replanu etapu 6, 2026-11-09).
 - **Pomiar na iPhonie X (G12-AC4):** jedyny krok wymagający właściciela, wykonywany raz na końcu gałęzi.
 
 ## Decisions 🔍
