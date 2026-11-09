@@ -51,15 +51,31 @@ public struct Decal: Equatable, Sendable {
         case image(TextureID, region: TextureRegion)
     }
 
-    public let content: Content
-    public let color: RGBA
+    /// Wartości trzyma jeden niezmienny obiekt, więc kopia deskryptora z naklejką (albo bez niej) to jedno zliczenie
+    /// referencji, a nie kopia napisu i wariantu: deskryptory baniek są kopiowane w każdym kroku.
+    private final class Storage: Sendable {
+        let content: Content
+        let color: RGBA
+        let scale: Float
+        init(content: Content, color: RGBA, scale: Float) { self.content = content; self.color = color; self.scale = scale }
+    }
+
+    private let storage: Storage
+
+    public var content: Content { storage.content }
+    public var color: RGBA { storage.color }
     /// Skończona i dodatnia; wysokość linii tekstu to promień odniesienia razy skala, obraz zajmuje koło o tym promieniu razy skala.
-    public let scale: Float
+    public var scale: Float { storage.scale }
 
     public init(_ content: Content, color: RGBA = .white, scale: Float = 1) throws {
         try color.validate("decal.color")
         try requirePositive(scale, "decal.scale")
-        self.content = content; self.color = color; self.scale = scale
+        storage = Storage(content: content, color: color, scale: scale)
+    }
+
+    public static func == (lhs: Decal, rhs: Decal) -> Bool {
+        lhs.storage === rhs.storage
+            || (lhs.content == rhs.content && lhs.color == rhs.color && lhs.scale == rhs.scale)
     }
 
     public static func text(_ string: String, source: GlyphSource, color: RGBA = .white, scale: Float = 1) throws -> Decal {
