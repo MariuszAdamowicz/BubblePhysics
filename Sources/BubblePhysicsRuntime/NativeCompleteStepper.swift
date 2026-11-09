@@ -105,12 +105,15 @@ package final class NativeCompleteStepper: CompleteStepper {
             // Bez kroku GPU pary usuniętych obiektów i tak dostają koniec kontaktu.
             // Bez bańki i bryły nie ma czego trafić: każdy punkt hit-testu daje puste miejsce.
             let noHits = [ObjectID?](repeating: nil, count: hitTests.count)
-            guard !previousContacts.isEmpty else { return .init(state: state, hitTestResults: noHits) }
+            guard !previousContacts.isEmpty else {
+                return .init(state: state, hitTestResults: noHits, snappedObjectIDs: batch.appearedObjectIDs)
+            }
             let discrete = EventCompactor.finish([], overflow: WorldEventOverflow(), feedback: [], state: state,
                 previousBlockers: previousBlockers, previousContacts: previousContacts,
                 removedObjects: removedContactObjects(in: state))
             candidateHistory = (previousBlockers, discrete.contacts)
-            return .init(state: state, events: discrete.events, eventOverflow: discrete.overflow, hitTestResults: noHits)
+            return .init(state: state, events: discrete.events, eventOverflow: discrete.overflow, hitTestResults: noHits,
+                         snappedObjectIDs: batch.appearedObjectIDs)
         }
         guard let native else { throw NativeRuntimeError.deviceUnavailable }
         let input = state.objects.values.map { object in
@@ -149,7 +152,30 @@ package final class NativeCompleteStepper: CompleteStepper {
         return .init(state: state, events: discrete.events, eventOverflow: discrete.overflow,
             driveFeedback: feedback, contactCandidateOverflowCount: frame.contactCandidateOverflowCount,
             maximumContactCandidatesPerObject: frame.maximumContactCandidatesPerObject,
-            hitTestResults: frame.hitTestResults)
+            hitTestResults: frame.hitTestResults,
+            snappedObjectIDs: batch.appearedObjectIDs.union(frame.wrappedObjectIDs))
+    }
+}
+
+extension StagedTransactionBatch {
+    /// Obiekty, które pojawiły się w partii (utworzone, zastąpione, scalone, podzielone): ich poprzednia poza nie jest
+    /// poprzednikiem nowego stanu, więc renderer nie interpoluje od niej.
+    package var appearedObjectIDs: Set<ObjectID> {
+        var ids = Set<ObjectID>()
+        for change in changes {
+            ids.formUnion(change.createdObjectIDs)
+            ids.formUnion(change.replacedObjectIDs)
+            for operation in change.operations {
+                switch operation {
+                case .add(let value), .replace(_, let value): ids.insert(value.id)
+                case .replaceRigidBodies(_, let results): ids.formUnion(results.map(\.id))
+                case .mergeBubbles(_, let result): ids.insert(result.id)
+                case .splitBubble(_, let first, let second): ids.formUnion([first.result.id, second.result.id])
+                default: break
+                }
+            }
+        }
+        return ids
     }
 }
 

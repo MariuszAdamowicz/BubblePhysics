@@ -15,6 +15,8 @@ package struct BubbleWorldRenderState {
     package let layers: [BubbleWorldRenderLayer]
     /// Waga stanu t w obrazie między t−1 i t (1 = sam stan t).
     package let interpolation: Float
+    /// Obiekty rysowane bez interpolacji w tej klatce (pojawiły się albo zawinęły w ostatnim kroku).
+    package let snapped: Set<ObjectID>
 }
 
 package struct BubbleWorldRenderLayer {
@@ -56,7 +58,7 @@ package struct RigidPose: Equatable {
 /// Skąd bierze się poza brył w rysowanej klatce.
 private enum RenderPoses {
     /// Klatka z opublikowanym stanem t: mieszanie z pozą t−1 z wagą `alpha`.
-    case blended(previous: [ObjectID: RigidPose], alpha: Float)
+    case blended(previous: [ObjectID: RigidPose], alpha: Float, snapped: Set<ObjectID>)
     /// Klatka z krokiem: stan nowego kroku nie jest znany przed wykonaniem GPU, więc poza to stan sprzed kroku
     /// przesunięty o `alpha` kroku z jego prędkości.
     case extrapolated(alpha: Float, step: Float)
@@ -86,6 +88,8 @@ public final class BubbleWorld {
     private var didRenderLastAdvance = false
     /// Pozy brył sprzed ostatniej publikacji (t−1), zapamiętane przy publikacji; obiekt bez wpisu rysuje się w stanie t.
     private var previousPoses: [ObjectID: RigidPose] = [:]
+    /// Obiekty ostatniego opublikowanego kroku, które rysują się bez interpolacji.
+    private var snappedObjects: Set<ObjectID> = []
     private struct PendingHitTest {
         let id: UInt64
         let point: WorldPoint
@@ -163,7 +167,8 @@ public final class BubbleWorld {
         if let pendingRenderState { return pendingRenderState }
         guard clock.completedSteps > 0 else { return nil }
         return makeRenderState((stepper as? NativeCompleteStepper)?.publishedRenderHandoff, from: state,
-                               poses: .blended(previous: previousPoses, alpha: 1), interpolation: 1)
+                               poses: .blended(previous: previousPoses, alpha: 1, snapped: snappedObjects), interpolation: 1,
+                               snapped: snappedObjects)
     }
 
     private func rigidPoses(of source: RuntimeState) -> [ObjectID: RigidPose] {
@@ -176,8 +181,8 @@ public final class BubbleWorld {
 
     private func pose(of object: RuntimeObject, id: ObjectID, _ poses: RenderPoses) -> RigidPose {
         switch poses {
-        case .blended(let previous, let alpha):
-            guard alpha < 1, let before = previous[id] else { return RigidPose(position: object.position, rotation: object.rotation) }
+        case .blended(let previous, let alpha, let snapped):
+            guard alpha < 1, !snapped.contains(id), let before = previous[id] else { return RigidPose(position: object.position, rotation: object.rotation) }
             var turn = object.rotation - before.rotation
             // Najkrótszy obrót, także gdy obrót jest zawijany do (−π, π].
             turn -= 2 * Float.pi * (turn / (2 * Float.pi)).rounded()
@@ -192,7 +197,8 @@ public final class BubbleWorld {
     /// Lista rysowania z `source`: warstwy rosnąco, w nich bańki i bryły rosnąco po `ObjectID`. Obiekt bez materiału renderu
     /// (czujnik, pole sił) nie jest rysowany.
     private func makeRenderState(_ handoff: NativeMetalRenderHandoff?, from source: RuntimeState,
-                                 poses: RenderPoses, interpolation: Float) -> BubbleWorldRenderState {
+                                 poses: RenderPoses, interpolation: Float,
+                                 snapped: Set<ObjectID> = []) -> BubbleWorldRenderState {
         var bubbles: [Int32: [BubbleWorldRenderBubble]] = [:], shapes: [Int32: [BubbleWorldRenderShape]] = [:]
         for (id, object) in source.objects.sorted(by: { $0.key.rawValue < $1.key.rawValue }) {
             guard let materialID = object.renderMaterialID, let material = source.renderMaterials[materialID] else { continue }
@@ -220,7 +226,7 @@ public final class BubbleWorld {
         }
         return BubbleWorldRenderState(handoff: handoff, background: source.background,
                                       region: source.configuration.simulationRegion, layers: layers,
-                                      interpolation: interpolation)
+                                      interpolation: interpolation, snapped: snapped)
     }
 
     /// Promień okręgu opisanego na kształcie wokół początku układu lokalnego (kotwicy naklejki).
@@ -427,12 +433,15 @@ public final class BubbleWorld {
             let batch = TransactionStager.stageBatch(pending, against: state, validate: stepper.validate,
                 textureExists: { [assets] texture in assets?.contains(texture) ?? false },
                 glyphLookup: { [assets] source in assets?.glyphLookup(source) })
+            // Obiekty z partii znamy przed krokiem; zawinięcia dopiero po nim, więc w klatce z krokiem ich nie ma.
+            let appeared = batch.appearedObjectIDs
             do {
                 let beforeCommit: ((NativeMetalRenderHandoff?, RuntimeState) throws -> Void)? = encode.map { encode in
                     { [self] handoff, prepared in
                         let alpha = Float(clock.interpolationFractionAfterNextStep)
                         pendingRenderState = makeRenderState(handoff, from: prepared,
-                            poses: .extrapolated(alpha: alpha, step: Float(clock.fixedTimeStep)), interpolation: alpha)
+                            poses: .extrapolated(alpha: alpha, step: Float(clock.fixedTimeStep)), interpolation: alpha,
+                            snapped: appeared)
                         defer { pendingRenderState = nil }
                         try encode()
                     }
@@ -444,7 +453,8 @@ public final class BubbleWorld {
                 if let commandBuffer, let encode, commandBuffer.status == .notEnqueued {
                     let alpha = Float(clock.interpolationFractionAfterNextStep)
                     pendingRenderState = makeRenderState(nil, from: complete.state,
-                        poses: .blended(previous: rigidPoses(of: state), alpha: alpha), interpolation: alpha)
+                        poses: .blended(previous: rigidPoses(of: state), alpha: alpha, snapped: complete.snappedObjectIDs),
+                        interpolation: alpha, snapped: complete.snappedObjectIDs)
                     defer { pendingRenderState = nil }
                     try encode()
                     try await commitAndWait(commandBuffer)
@@ -452,6 +462,7 @@ public final class BubbleWorld {
                 // W czasie await można dopisać transakcje lub włączyć pauzę.
                 // Dopiero tutaj publikujemy kandydat i zdejmujemy wyłącznie jego prefiks kolejki.
                 previousPoses = rigidPoses(of: state)
+                snappedObjects = complete.snappedObjectIDs
                 state = complete.state
                 queryIndexCache = nil
                 pending.removeFirst(transactionCount)
@@ -481,7 +492,8 @@ public final class BubbleWorld {
             do {
                 let alpha = Float(clock.interpolationFraction)
                 pendingRenderState = makeRenderState((stepper as? NativeCompleteStepper)?.publishedRenderHandoff, from: state,
-                    poses: .blended(previous: previousPoses, alpha: alpha), interpolation: alpha)
+                    poses: .blended(previous: previousPoses, alpha: alpha, snapped: snappedObjects), interpolation: alpha,
+                    snapped: snappedObjects)
                 defer { pendingRenderState = nil }
                 try encode()
                 try await commitAndWait(commandBuffer)

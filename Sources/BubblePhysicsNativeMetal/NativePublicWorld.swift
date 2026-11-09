@@ -48,6 +48,8 @@ package struct NativePublicFrame {
     package var maximumContactCandidatesPerObject = 0
     /// Wynik dla każdego punktu hit-testu, w kolejności punktów; `nil` oznacza puste miejsce.
     package var hitTestResults: [ObjectID?] = []
+    /// Obiekty, które w tym kroku zawinęły się przez region; niezależnie od zainteresowania `didWrap`.
+    package var wrappedObjectIDs: Set<ObjectID> = []
 }
 
 struct NativePublicProperties: Equatable, Sendable {
@@ -223,9 +225,11 @@ package final class NativePublicWorld {
             else { dropped += 1 }
         }
         let descriptors = Dictionary(uniqueKeysWithValues: objects.map { ($0.descriptor.id, $0.descriptor) })
+        var wrappedIDs = Set<ObjectID>()
         for bubble in frame.bubbles {
             let id = ObjectID(rawValue: UInt64(bitPattern: Int64(bubble.id.rawValue)))
             guard let original = descriptors[id], case .bubble(let descriptor) = original else { continue }
+            if frame.regionWraps.contains(bubble.id) { wrappedIDs.insert(id) }
             if frame.regionRemovals.contains(bubble.id), descriptor.eventInterest.contains(.didExitSimulationRegion) {
                 append(.didExitSimulationRegion(id))
             }
@@ -235,6 +239,7 @@ package final class NativePublicWorld {
         }
         for object in objects {
             guard case .rigidBody(let descriptor) = object.descriptor else { continue }
+            if solver.wrappedPolygons.contains(descriptor.id) { wrappedIDs.insert(descriptor.id) }
             if solver.removedPolygons.contains(descriptor.id), descriptor.eventInterest.contains(.didExitSimulationRegion) {
                 append(.didExitSimulationRegion(descriptor.id))
             }
@@ -263,7 +268,7 @@ package final class NativePublicWorld {
             contacts: contacts, events: discreteEvents, eventOverflow: WorldEventOverflow(droppedCount: dropped),
             contactCandidateOverflowCount: frame.contactCandidateOverflowCount,
             maximumContactCandidatesPerObject: frame.maximumContactCandidatesPerObject,
-            hitTestResults: frame.hitTestResults)
+            hitTestResults: frame.hitTestResults, wrappedObjectIDs: wrappedIDs)
     }
 
     /// Przejścia kontaktu pary w jednym kroku. Cache baniek i wiersze brył są już odczytane na CPU, więc początek to para

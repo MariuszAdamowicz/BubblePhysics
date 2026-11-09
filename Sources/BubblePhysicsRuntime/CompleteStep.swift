@@ -41,11 +41,15 @@ package struct CompletedRuntimeStep {
     /// Wynik hit-testu dla każdego punktu z `hitTests` kroku, w tej samej kolejności; `nil` to puste miejsce.
     /// Pusta tablica (stepper bez zapytań) oznacza `nil` dla każdego punktu.
     package let hitTestResults: [ObjectID?]
+    /// Obiekty, które w tym kroku pojawiły się (utworzone, zastąpione, scalone, podzielone) albo zawinęły się przez region:
+    /// renderer rysuje je w stanie tego kroku, bez interpolacji z t−1.
+    package let snappedObjectIDs: Set<ObjectID>
     package init(state: RuntimeState, events: [WorldEvent] = [],
                  eventOverflow: WorldEventOverflow = WorldEventOverflow(), driveFeedback: [DriveFeedback] = [],
                  contactCandidateOverflowCount: Int = 0, maximumContactCandidatesPerObject: Int = 0,
-                 hitTestResults: [ObjectID?] = []) {
+                 hitTestResults: [ObjectID?] = [], snappedObjectIDs: Set<ObjectID> = []) {
         self.hitTestResults = hitTestResults
+        self.snappedObjectIDs = snappedObjectIDs
         self.state = state; self.events = events
         self.eventOverflow = eventOverflow
         self.driveFeedback = driveFeedback

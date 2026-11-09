@@ -207,4 +207,22 @@ final class NativeMetalPublicObjectTests: XCTestCase {
         XCTAssertEqual(second.profile.segmentUploadCount, 0)
         XCTAssertEqual(second.objects[.init(rawValue: UInt64.max)]?.position, .zero)
     }
+
+    // P-B-52: zawinięcia (bańka i bryła) są w wyniku kroku niezależnie od zainteresowania `didWrap`.
+    func testWrappedObjectIDsListWrapsRegardlessOfDidWrapInterest() async throws {
+        let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
+        let bubbleMaterial = PhysicsMaterialID(rawValue: 1), rigidMaterial = PhysicsMaterialID(rawValue: 2)
+        let bubble = NativePublicObject(descriptor: .bubble(try BubbleDescriptor(id: .init(rawValue: 1), position: [9.5, 0],
+            velocity: [600, 0], targetRadius: 0.5, regionExitPolicy: .wrap, physicsMaterialID: bubbleMaterial, renderMaterialID: style)))
+        let circle = NativePublicObject(descriptor: .rigidBody(try RigidBodyDescriptor(id: .init(rawValue: 2),
+            shape: .circle(radius: 0.5), position: [0, 10.2], velocity: [0, 120], mass: 1, motionRole: .dynamic, regionExitPolicy: .wrap,
+            physicsMaterialID: rigidMaterial, renderMaterialID: style)))
+        let still = NativePublicObject(descriptor: .bubble(try BubbleDescriptor(id: .init(rawValue: 3), position: [-5, -5],
+            targetRadius: 0.5, regionExitPolicy: .wrap, physicsMaterialID: bubbleMaterial, renderMaterialID: style)))
+        let frame = try await world.step(objects: [bubble, circle, still],
+            materials: [bubbleMaterial: PhysicsMaterial(kind: .bubble), rigidMaterial: PhysicsMaterial(kind: .rigid)],
+            region: WorldRectangle(min: [-10, -10], max: [10, 10]), duration: 1.0 / 60)
+        XCTAssertEqual(frame.wrappedObjectIDs, [.init(rawValue: 1), .init(rawValue: 2)])
+        XCTAssertTrue(frame.events.isEmpty)
+    }
 }

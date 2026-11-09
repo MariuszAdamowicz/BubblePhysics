@@ -47,6 +47,58 @@ final class RegionPolicyTests: XCTestCase {
         XCTAssertTrue(complete.state.joints.isEmpty)
     }
 
+    // P-B-52: zawinięcie trafia do zbioru obiektów rysowanych bez interpolacji, choć gra nie prosi o `didWrap`.
+    func testWrappedObjectIsSnappedEvenWithoutDidWrapInterest() async throws {
+        let stepper = try NativeCompleteStepper(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
+        var state = try initial(policy: .wrap)
+        state.objects[.init(rawValue: 1)]?.position = [-25, 5]
+        state.objects[.init(rawValue: 1)]?.velocity = [-4, 0]
+        let complete = try await stepper.completePublishedStep(TransactionStager.stageBatch([], against: state), duration: 0.25)
+        XCTAssertEqual(complete.snappedObjectIDs, [.init(rawValue: 1)])
+        XCTAssertTrue(complete.events.isEmpty, "bez zainteresowania didWrap nie ma zdarzenia")
+    }
+
+    func testStepWithoutWrapsAndOperationsSnapsNothing() async throws {
+        let stepper = try NativeCompleteStepper(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
+        let state = try initial(policy: .wrap)
+        let complete = try await stepper.completePublishedStep(TransactionStager.stageBatch([], against: state), duration: 0.001)
+        XCTAssertTrue(complete.snappedObjectIDs.isEmpty)
+    }
+
+    // P-B-52: obiekty utworzone, zastąpione, scalone i podzielone w partii rysują się bez interpolacji.
+    func testBatchOperationsSnapCreatedReplacedMergedAndSplitObjects() async throws {
+        let stepper = try NativeCompleteStepper(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
+        func bubble(_ id: UInt64, _ x: Float) throws -> WorldObject {
+            .bubble(try BubbleDescriptor(id: .init(rawValue: id), position: [x, 5], targetRadius: 1, regionExitPolicy: .wrap,
+                physicsMaterialID: .init(rawValue: 1), renderMaterialID: .init(rawValue: 1)))
+        }
+        let state = try initial(policy: .wrap)
+        func pending(_ transaction: WorldTransaction) -> PendingTransaction {
+            PendingTransaction(token: .init(rawValue: 1), transaction: transaction)
+        }
+        var batch = TransactionStager.stageBatch([pending(try WorldTransaction().add(bubble(2, 3)).add(bubble(3, 5.5)))],
+                                                 against: state)
+        var step = try await stepper.completePublishedStep(batch, duration: 0.001)
+        XCTAssertEqual(step.snappedObjectIDs, [.init(rawValue: 2), .init(rawValue: 3)], "utworzone")
+        batch = TransactionStager.stageBatch([pending(try WorldTransaction().replace(.init(rawValue: 2), with: bubble(2, 2)))],
+                                             against: step.state)
+        step = try await stepper.completePublishedStep(batch, duration: 0.001)
+        XCTAssertEqual(step.snappedObjectIDs, [.init(rawValue: 2)], "zastąpione")
+        let merged = BubbleResult(id: .init(rawValue: 2), physicsMaterialID: .init(rawValue: 1), renderMaterialID: .init(rawValue: 1))
+        batch = TransactionStager.stageBatch([pending(WorldTransaction()
+            .mergeBubbles([.init(rawValue: 2), .init(rawValue: 3)], result: merged))], against: step.state)
+        step = try await stepper.completePublishedStep(batch, duration: 0.001)
+        XCTAssertEqual(step.snappedObjectIDs, [.init(rawValue: 2)], "scalone")
+        let first = BubbleSplitPart(result: BubbleResult(id: .init(rawValue: 2), physicsMaterialID: .init(rawValue: 1),
+                                                         renderMaterialID: .init(rawValue: 1)), share: 0.5)
+        let second = BubbleSplitPart(result: BubbleResult(id: .init(rawValue: 4), physicsMaterialID: .init(rawValue: 1),
+                                                          renderMaterialID: .init(rawValue: 1)), share: 0.5)
+        batch = TransactionStager.stageBatch([pending(WorldTransaction().splitBubble(.init(rawValue: 2), first: first, second: second))],
+                                             against: step.state)
+        step = try await stepper.completePublishedStep(batch, duration: 0.001)
+        XCTAssertEqual(step.snappedObjectIDs, [.init(rawValue: 2), .init(rawValue: 4)], "podzielone")
+    }
+
     func testWrapRetainsOvershootAcrossSeveralRegionWidths() async throws {
         let stepper = try NativeCompleteStepper(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         var state = try initial(policy: .wrap)
