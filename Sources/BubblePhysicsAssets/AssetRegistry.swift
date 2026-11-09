@@ -6,7 +6,7 @@ import BubblePhysicsModel
 public enum AssetError: Error, Equatable, Sendable {
     /// Obraz bez kolorów (maska), pusty albo większy niż tekstura 2D Metal.
     case unsupportedImage
-    /// Tekstura, która nie jest próbkowalną teksturą 2D w formacie 8-bitowym RGBA lub BGRA.
+    /// Tekstura, która nie jest próbkowalną teksturą 2D w formacie 8-bitowym RGBA lub BGRA (bez wariantów `_srgb`).
     case unsupportedTexture
     /// Zasób albo rejestr należy do innego `MTLDevice` niż świat lub tekstura.
     case deviceMismatch
@@ -62,10 +62,17 @@ public final class AssetRegistry {
         return store(texture)
     }
 
-    /// Przyjmuje gotową teksturę 2D z `shaderRead` w formacie 8-bitowym RGBA lub BGRA (także sRGB) tego samego urządzenia.
+    /// Przyjmuje gotową teksturę 2D z `shaderRead` w formacie 8-bitowym RGBA lub BGRA (`rgba8Unorm`, `bgra8Unorm`)
+    /// tego samego urządzenia. Formaty `_srgb` są odrzucane (`unsupportedTexture`): potok liczy w przestrzeni celu renderu
+    /// bez konwersji liniowej, a próbkowanie `_srgb` zwracałoby wartości liniowe.
+    ///
+    /// Kontrakt: tekstura ma **alfę przemnożoną** (premultiplied alpha), czyli składowe RGB są już pomnożone przez alfę.
+    /// Shader dzieli RGB przez alfę w trybie nieprzezroczystym i mnoży RGB przez alfę koloru w trybach alfa i addytywnym;
+    /// tekstura z alfą prostą (straight) wyglądałaby na ciemniejszą albo z prześwitującymi obwódkami. `register(_: CGImage)`
+    /// przemnaża sam, ta metoda przyjmuje bajty bez zmian.
     public func register(_ texture: MTLTexture) throws -> TextureID {
         guard texture.device.registryID == deviceRegistryID else { throw AssetError.deviceMismatch }
-        let formats: Set<MTLPixelFormat> = [.rgba8Unorm, .rgba8Unorm_srgb, .bgra8Unorm, .bgra8Unorm_srgb]
+        let formats: Set<MTLPixelFormat> = [.rgba8Unorm, .bgra8Unorm]
         guard texture.textureType == .type2D, texture.sampleCount == 1, texture.usage.contains(.shaderRead),
               formats.contains(texture.pixelFormat) else { throw AssetError.unsupportedTexture }
         return store(texture)

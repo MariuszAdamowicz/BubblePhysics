@@ -171,7 +171,7 @@ final class NativeMetalShaderABITests: XCTestCase {
                 ("material", MemoryLayout<NativeRenderInstance>.offset(of: \.material))]),
             Probe(name: "bodyVertex", mslSize: "NativeRenderBodyVertex", swiftSize: MemoryLayout<NativeRenderBodyVertex>.stride, fields: [
                 ("world", MemoryLayout<NativeRenderBodyVertex>.offset(of: \.world)),
-                ("local", MemoryLayout<NativeRenderBodyVertex>.offset(of: \.local)),
+                ("uv", MemoryLayout<NativeRenderBodyVertex>.offset(of: \.uv)),
                 ("info", MemoryLayout<NativeRenderBodyVertex>.offset(of: \.info))])]
         assertMatches(probes, try measure(probes, sources: [try source("NativeRenderKernels")], device: device))
         XCTAssertEqual(MemoryLayout<NativeRenderMaterial>.stride, 64)

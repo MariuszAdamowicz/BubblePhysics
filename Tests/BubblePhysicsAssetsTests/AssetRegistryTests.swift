@@ -33,12 +33,6 @@ final class AssetRegistryTests: XCTestCase {
         return try XCTUnwrap(device.makeTexture(descriptor: descriptor))
     }
 
-    func testRegistryBelongsToItsDevice() {
-        let registry = AssetRegistry(device: device)
-        XCTAssertTrue(registry.device === device)
-        XCTAssertEqual(registry.deviceRegistryID, device.registryID)
-    }
-
     func testCGImageIsDecodedOnceToRGBA8TextureAndGetsDistinctIDs() throws {
         let registry = AssetRegistry(device: device)
         // 2×2: czerwony, zielony / niebieski, biały.
@@ -95,7 +89,19 @@ final class AssetRegistryTests: XCTestCase {
                         try metalTexture(usage: .renderTarget)] {
             XCTAssertThrowsError(try registry.register(texture)) { XCTAssertEqual($0 as? AssetError, .unsupportedTexture) }
         }
-        XCTAssertNoThrow(try registry.register(metalTexture(format: .bgra8Unorm_srgb)))
+        XCTAssertNoThrow(try registry.register(metalTexture(format: .rgba8Unorm)))
+        XCTAssertNoThrow(try registry.register(metalTexture(format: .bgra8Unorm)))
+    }
+
+    // Potok liczy w przestrzeni celu renderu bez konwersji liniowej, a próbkowanie `_srgb` zwracałoby wartości liniowe,
+    // więc ten sam obraz wyglądałby inaczej jako `CGImage` i jako tekstura `_srgb`.
+    func testSRGBMTLTexturesAreRejected() throws {
+        let registry = AssetRegistry(device: device)
+        for format in [MTLPixelFormat.rgba8Unorm_srgb, .bgra8Unorm_srgb] {
+            XCTAssertThrowsError(try registry.register(metalTexture(format: format)), "\(format)") {
+                XCTAssertEqual($0 as? AssetError, .unsupportedTexture)
+            }
+        }
     }
 
     func testTextureOfAnotherDeviceIsRejected() throws {

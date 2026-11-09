@@ -6,6 +6,8 @@ import BubblePhysicsNativeMetal
 
 public enum BubblePhysicsMetalRenderError: Error {
     case deviceMismatch, missingColorTarget, renderEncoderUnavailable
+    /// Nie udało się przydzielić bufora pomocniczego klatki (listy instancji, materiałów, wierzchołków i pierścieni).
+    case bufferAllocationFailed
 }
 
 /// Renderuje opublikowaną klatkę bez materializacji konturów na CPU. Lista rysowania świata (tło, warstwy rosnąco, w nich
@@ -18,8 +20,14 @@ public final class BubblePhysicsMetalRender {
     private let pipelines: MaterialPipelines
     /// Biała tekstura 1×1 dla materiałów bez tekstury, bo fragment zawsze próbkuje.
     private let whiteTexture: MTLTexture
-    private var triangulationCache: [[WorldPoint]: [Int]] = [:]
-    private static let triangulationCacheLimit = 256
+    /// Dane zależne tylko od lokalnego pierścienia bryły: indeksy trójkątów i prostokąt otaczający, więc są liczone raz.
+    private struct RingGeometry {
+        let indices: [Int]
+        let minimum: SIMD2<Float>
+        let size: SIMD2<Float>
+    }
+    private var ringGeometryCache: [[WorldPoint]: RingGeometry] = [:]
+    private static let ringGeometryCacheLimit = 256
     /// Liczba wywołań rysowania w ostatnio zakodowanej klatce (jedno na ciąg); szew testów grupowania.
     package private(set) var lastDrawCallCount = 0
     /// Zakres bufora pomocniczego klatki jest wyrównany, bo `setVertexBuffer` wymaga wyrównanego przesunięcia.
@@ -94,7 +102,11 @@ public final class BubblePhysicsMetalRender {
         var boundGeometry: MaterialPipelines.Geometry?
         for run in frame.runs {
             encoder.setRenderPipelineState(try pipelines.pipeline(run.geometry, blend: run.blend, format: color.pixelFormat))
-            encoder.setFragmentTexture(run.texture.flatMap { assets.texture(for: $0) } ?? whiteTexture, index: 0)
+            // Stager odrzuca transakcje z nieznaną teksturą, więc brak tekstury w rejestrze jest nieosiągalny; biała tekstura
+            // jest tylko zabezpieczeniem, które nie ma zepsuć klatki w buildzie bez asercji.
+            let registered = run.texture.flatMap { assets.texture(for: $0) }
+            assert(run.texture == nil || registered != nil, "tekstura \(String(describing: run.texture)) nie jest w rejestrze")
+            encoder.setFragmentTexture(registered ?? whiteTexture, index: 0)
             switch run.geometry {
             case .bubble:
                 guard let handoff = published.handoff else { continue }
@@ -134,7 +146,8 @@ public final class BubblePhysicsMetalRender {
                 }
             }
             for shape in layer.shapes {
-                let indices = triangulation(for: shape.localVertices)
+                let ring = ringGeometry(for: shape.localVertices)
+                let indices = ring.indices
                 guard !indices.isEmpty else { continue }
                 let material = frame.materialIndex(shape.materialID, shape.material)
                 let ringStart = UInt32(frame.rings.count), ringCount = UInt32(shape.vertices.count)
@@ -142,13 +155,10 @@ public final class BubblePhysicsMetalRender {
                 let info = SIMD4<UInt32>(material, ringStart, ringCount, 0)
                 frame.extendRun(.body, shape.material, first: frame.vertices.count, count: indices.count)
                 // Tekstura rozciągnięta na lokalny prostokąt otaczający, wiersz 0 obrazu u góry; obraca się z bryłą.
-                let xs = shape.localVertices.map(\.x), ys = shape.localVertices.map(\.y)
-                let minimum = SIMD2(xs.min() ?? 0, ys.min() ?? 0), maximum = SIMD2(xs.max() ?? 0, ys.max() ?? 0)
-                let size = SIMD2(max(maximum.x - minimum.x, 1e-6), max(maximum.y - minimum.y, 1e-6))
                 for index in indices {
                     let world = shape.vertices[index], local = shape.localVertices[index]
-                    let uv = SIMD2((local.x - minimum.x) / size.x, 1 - (local.y - minimum.y) / size.y)
-                    frame.vertices.append(NativeRenderBodyVertex(world: SIMD2(world.x, world.y), local: uv, info: info))
+                    let uv = SIMD2((local.x - ring.minimum.x) / ring.size.x, 1 - (local.y - ring.minimum.y) / ring.size.y)
+                    frame.vertices.append(NativeRenderBodyVertex(world: SIMD2(world.x, world.y), uv: uv, info: info))
                 }
             }
         }
@@ -167,7 +177,7 @@ public final class BubblePhysicsMetalRender {
             (SIMD2(low.x, high.y), SIMD2(0, 0)), (SIMD2(high.x, high.y), SIMD2(1, 0)),
             (SIMD2(high.x, low.y), SIMD2(1, 1)), (SIMD2(low.x, low.y), SIMD2(0, 1))]
         for corner in [0, 1, 2, 0, 2, 3] {
-            frame.vertices.append(NativeRenderBodyVertex(world: corners[corner].0, local: corners[corner].1, info: info))
+            frame.vertices.append(NativeRenderBodyVertex(world: corners[corner].0, uv: corners[corner].1, info: info))
         }
     }
 
@@ -183,9 +193,13 @@ public final class BubblePhysicsMetalRender {
         let materials = aligned(instances + frame.instances.count * MemoryLayout<NativeRenderInstance>.stride)
         let vertices = aligned(materials + frame.materials.count * MemoryLayout<NativeRenderMaterial>.stride)
         let rings = aligned(vertices + frame.vertices.count * MemoryLayout<NativeRenderBodyVertex>.stride)
-        let length = max(aligned(rings + frame.rings.count * MemoryLayout<SIMD2<Float>>.stride), Self.arenaAlignment)
+        // Każdy blok musi mieć przesunięcie mniejsze od długości bufora (walidacja Metal), także pusty blok pierścieni
+        // (klatka z samym tłem), więc rezerwujemy w nim co najmniej jeden element.
+        let length = aligned(rings + max(frame.rings.count, 1) * MemoryLayout<SIMD2<Float>>.stride)
+        // Bufor jest przydzielany co klatkę (zawartość zależy od klatki i musi przeżyć jej bufor poleceń); pierścień
+        // buforów byłby optymalizacją, której ta klatka jeszcze nie wymaga.
         guard let buffer = device.makeBuffer(length: length, options: .storageModeShared) else {
-            throw BubblePhysicsMetalRenderError.renderEncoderUnavailable
+            throw BubblePhysicsMetalRenderError.bufferAllocationFailed
         }
         func copy<T>(_ values: [T], to offset: Int) {
             values.withUnsafeBytes { bytes in
@@ -195,18 +209,22 @@ public final class BubblePhysicsMetalRender {
         }
         copy(frame.instances, to: instances); copy(frame.materials, to: materials)
         copy(frame.vertices, to: vertices); copy(frame.rings, to: rings)
-        let retained = RetainedShapeBuffer(buffer)
+        let retained = RetainedFrameBuffer(buffer)
         commandBuffer.addCompletedHandler { _ in withExtendedLifetime(retained) {} }
         return Arena(buffer: buffer, instances: instances, materials: materials, vertices: vertices, rings: rings)
     }
 
-    /// Indeksy trójkątów zależą tylko od lokalnego pierścienia, więc są używane ponownie między klatkami.
-    private func triangulation(for ring: [WorldPoint]) -> [Int] {
-        if let cached = triangulationCache[ring] { return cached }
-        if triangulationCache.count >= Self.triangulationCacheLimit { triangulationCache.removeAll(keepingCapacity: true) }
-        let indices = Self.triangulate(ring)
-        triangulationCache[ring] = indices
-        return indices
+    /// Indeksy trójkątów i prostokąt otaczający zależą tylko od lokalnego pierścienia, więc są używane ponownie między klatkami.
+    private func ringGeometry(for ring: [WorldPoint]) -> RingGeometry {
+        if let cached = ringGeometryCache[ring] { return cached }
+        if ringGeometryCache.count >= Self.ringGeometryCacheLimit { ringGeometryCache.removeAll(keepingCapacity: true) }
+        var minimum = SIMD2<Float>(repeating: .infinity), maximum = SIMD2<Float>(repeating: -.infinity)
+        for point in ring { minimum = pointwiseMin(minimum, point); maximum = pointwiseMax(maximum, point) }
+        if ring.isEmpty { minimum = .zero; maximum = .zero }
+        let size = SIMD2(max(maximum.x - minimum.x, 1e-6), max(maximum.y - minimum.y, 1e-6))
+        let geometry = RingGeometry(indices: Self.triangulate(ring), minimum: minimum, size: size)
+        ringGeometryCache[ring] = geometry
+        return geometry
     }
 
     /// Ear clipping obsługuje także wklęsłe proste pierścienie z modelu.
@@ -249,7 +267,7 @@ public final class BubblePhysicsMetalRender {
     }
 }
 
-private struct RetainedShapeBuffer: @unchecked Sendable {
+private struct RetainedFrameBuffer: @unchecked Sendable {
     let buffer: MTLBuffer
     init(_ buffer: MTLBuffer) { self.buffer = buffer }
 }

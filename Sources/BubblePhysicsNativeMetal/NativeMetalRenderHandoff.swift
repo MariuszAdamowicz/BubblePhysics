@@ -116,13 +116,13 @@ package struct NativeRenderInstance: Equatable, Sendable {
     package init(bubble: UInt32, material: UInt32) { self.bubble = bubble; self.material = material }
 }
 
-/// Wierzchołek trójkąta bryły: pozycja świata, współrzędne tekstury (`local`: lokalny punkt w prostokącie otaczającym, V w dół) i `info` (materiał, początek i liczba punktów pierścienia).
+/// Wierzchołek trójkąta bryły: pozycja świata, współrzędne tekstury (`uv`: lokalny punkt w prostokącie otaczającym, V w dół) i `info` (materiał, początek i liczba punktów pierścienia).
 package struct NativeRenderBodyVertex: Equatable, Sendable {
     package var world: SIMD2<Float>
-    package var local: SIMD2<Float>
+    package var uv: SIMD2<Float>
     package var info: SIMD4<UInt32>
-    package init(world: SIMD2<Float>, local: SIMD2<Float>, info: SIMD4<UInt32>) {
-        self.world = world; self.local = local; self.info = info
+    package init(world: SIMD2<Float>, uv: SIMD2<Float>, info: SIMD4<UInt32>) {
+        self.world = world; self.uv = uv; self.info = info
     }
 }
 

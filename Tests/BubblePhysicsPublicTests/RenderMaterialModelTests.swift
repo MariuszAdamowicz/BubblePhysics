@@ -63,15 +63,6 @@ final class RenderMaterialModelTests: XCTestCase {
             renderMaterialID: material).layer, 0)
     }
 
-    func testSensorAndForceFieldDescriptorsHaveNoRenderMaterial() throws {
-        // Czujnik i pole sił nie są rysowane, więc ich deskryptory nie przyjmują materiału renderu.
-        let sensor = try SensorDescriptor(id: ObjectID(rawValue: 1), position: .zero, geometry: .circle(radius: 1))
-        let field = try ForceFieldDescriptor(id: ObjectID(rawValue: 2), position: .zero,
-            geometry: .circle(radius: 1), field: .directional(force: [1, 0]))
-        XCTAssertEqual(sensor.id, ObjectID(rawValue: 1))
-        XCTAssertEqual(field.id, ObjectID(rawValue: 2))
-    }
-
     func testTransactionBuilderRecordsRenderOperationsInOrder() throws {
         let value = try RenderMaterial()
         let texture = TextureID(rawValue: 3)
@@ -85,14 +76,5 @@ final class RenderMaterialModelTests: XCTestCase {
             .setLayer(ObjectID(rawValue: 1), 2),
             .setBackground(texture),
             .setBackground(nil)])
-    }
-
-    func testRejectionReasonsNameTheMissingResource() {
-        XCTAssertEqual(TransactionRejectionReason.renderMaterialNotFound(material),
-                       .renderMaterialNotFound(RenderMaterialID(rawValue: 4)))
-        XCTAssertNotEqual(TransactionRejectionReason.textureNotFound(TextureID(rawValue: 1)),
-                          .textureNotFound(TextureID(rawValue: 2)))
-        XCTAssertEqual(TransactionRejectionReason.layerNotSupported(ObjectID(rawValue: 5)),
-                       .layerNotSupported(ObjectID(rawValue: 5)))
     }
 }

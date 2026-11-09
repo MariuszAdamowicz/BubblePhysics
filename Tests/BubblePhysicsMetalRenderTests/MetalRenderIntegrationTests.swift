@@ -42,6 +42,11 @@ final class MetalRenderIntegrationTests: XCTestCase {
         try assertPassesUnderMetalValidation("LayerRenderTests/testBodiesAlternatingOpaqueAndAlphaFollowObjectID")
         try assertPassesUnderMetalValidation("MaterialColorRenderTests/testRigidBodyOutlineLiesInsideTheShapeWithTheGivenWidth")
         try assertPassesUnderMetalValidation("LayerRenderTests/testBubbleOnHigherLayerCoversRigidBody")
+        try assertPassesUnderMetalValidation("MaterialTextureRenderTests/testTextureFromCGImageCoversPolygonQuadrants")
+        try assertPassesUnderMetalValidation("MaterialTextureRenderTests/testTranslucentTexelInAlphaAndAdditiveModes")
+        try assertPassesUnderMetalValidation("MaterialTextureRenderTests/testMaskedModeDoesNotDeformTheTextureAndTheContourClipsIt")
+        try assertPassesUnderMetalValidation(
+            "MaterialTextureRenderTests/testBackgroundStretchesOverRegionBelowAllLayersAndDisappearsWhenRemoved")
     }
 #endif
 

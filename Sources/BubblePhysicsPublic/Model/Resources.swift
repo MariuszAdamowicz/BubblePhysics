@@ -37,7 +37,8 @@ public struct PhysicsMaterial: Equatable, Sendable {
     }
 }
 
-/// Kolor w przestrzeni liniowej o składowych w [0, 1]; zakres sprawdza `RenderMaterial`.
+/// Kolor o składowych w [0, 1] w przestrzeni celu renderu (potok liczy w gamma, bez konwersji liniowej); zakres sprawdza
+/// `RenderMaterial`.
 public struct RGBA: Equatable, Hashable, Sendable {
     public var red: Float
     public var green: Float
@@ -88,7 +89,10 @@ public struct RenderMaterial: Equatable, Sendable {
     public let blend: RenderBlendMode
     public let outline: RenderOutline
     public let bubbleMapping: BubbleTextureMapping
+    /// Przesunięcie współrzędnych tekstury (z powtarzaniem). Dotyczy tylko brył; na bańkach jest ignorowane.
     public let uvOffset: SIMD2<Float>
+    /// Skala współrzędnych tekstury (z powtarzaniem; niezerowa). Dotyczy tylko brył; na bańkach jest ignorowana, bo tekstura
+    /// bańki leży na kole o promieniu docelowym (`bubbleMapping`).
     public let uvScale: SIMD2<Float>
 
     public init(texture: TextureID? = nil, color: RGBA = .white, blend: RenderBlendMode = .opaque,
@@ -97,8 +101,8 @@ public struct RenderMaterial: Equatable, Sendable {
         try color.validate("renderMaterial.color")
         try outline.color.validate("renderMaterial.outline.color")
         try requireNonnegative(outline.width, "renderMaterial.outline.width")
-        try requireFinite(uvOffset.x, "renderMaterial.uvOffset"); try requireFinite(uvOffset.y, "renderMaterial.uvOffset")
-        try requireFinite(uvScale.x, "renderMaterial.uvScale"); try requireFinite(uvScale.y, "renderMaterial.uvScale")
+        try requireFinite(uvOffset, "renderMaterial.uvOffset")
+        try requireFinite(uvScale, "renderMaterial.uvScale")
         guard uvScale.x != 0, uvScale.y != 0 else { throw ModelValidationError.valueOutOfRange("renderMaterial.uvScale") }
         self.texture = texture
         self.color = color

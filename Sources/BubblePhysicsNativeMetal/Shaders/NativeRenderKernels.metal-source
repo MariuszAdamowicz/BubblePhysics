@@ -32,11 +32,11 @@ struct NativeRenderInstance {
 };
 
 // Wierzchołek trójkąta bryły: pozycja w świecie, współrzędne tekstury (lokalny punkt bryły znormalizowany do prostokąta
-// otaczającego, wiersz 0 obrazu u góry; przesunięcie i skalę UV materiału nakłada fragment), indeks materiału oraz zakres
+// otaczającego, wiersz 0 obrazu u góry; przesunięcie i skalę UV materiału nakłada fragment bryły), indeks materiału oraz zakres
 // pierścienia konturu w buforze pierścieni (pas obrysu liczy fragment jako odległość od krawędzi pierścienia).
 struct NativeRenderBodyVertex {
     float2 world;
-    float2 local;
+    float2 uv;
     uint4 info;          // materiał, początek pierścienia, liczba punktów pierścienia, reserved
 };
 
@@ -119,7 +119,7 @@ vertex BodyVertexOutput nativeBodyVertex(
     float2 clip = nativeClip(source.world, viewport);
     result.position = float4(clip.x, clip.y, 0, 1);
     result.worldPosition = source.world;
-    result.uv = source.local;
+    result.uv = source.uv;
     result.material = source.info.x;
     result.ringStart = source.info.y;
     result.ringCount = source.info.z;
@@ -132,14 +132,14 @@ constexpr sampler nativeTextureSampler(coord::normalized, address::repeat, mag_f
 
 // Kolor materiału (pomnożony przez teksel) albo obrysu w zapisie zgodnym z trybem mieszania: nieprzezroczysty ignoruje
 // alfę, pozostałe tryby zwracają kolor z alfą przemnożoną, więc potok składa `one / oneMinusSourceAlpha` (alfa) albo
-// `one / one` (addytywny). Tekstura jest z alfą przemnożoną; materiał bez tekstury dostaje białą teksturę 1×1.
-float4 nativeShade(NativeRenderMaterial material, bool outline, texture2d<float> texture, float2 uv) {
+// `one / one` (addytywny). Tekstura jest z alfą przemnożoną (kontrakt `AssetRegistry.register(_:)`); materiał bez tekstury
+// dostaje białą teksturę 1×1.
+float4 nativeShade(NativeRenderMaterial material, bool outline, float4 texel) {
     if (outline) {
         float4 color = material.outlineColor;
         if (uint(material.parameters.y) == 0) return float4(color.rgb, 1.0);
         return float4(color.rgb * color.a, color.a);
     }
-    float4 texel = texture.sample(nativeTextureSampler, uv * material.uv.zw + material.uv.xy);
     float4 color = material.color;
     if (uint(material.parameters.y) == 0) {
         float3 straight = texel.a > 0.0f ? texel.rgb / texel.a : float3(0.0f);
@@ -153,8 +153,15 @@ fragment float4 nativeBubbleFragment(BubbleVertexOutput in [[stage_in]],
     texture2d<float> texture [[texture(0)]]) {
     NativeRenderMaterial material = materials[in.material];
     bool outline = material.parameters.x > 0 && in.edgeDistance < material.parameters.x;
-    float2 uv = material.parameters.z > 0.5f ? in.maskedUV : in.attachedUV;
-    return nativeShade(material, outline, texture, uv);
+    // Przesunięcie i skala UV materiału dotyczą tylko brył: tekstura bańki leży na kole o promieniu docelowym.
+    float4 texel;
+    if (material.parameters.z > 0.5f) {
+        // Pod maską poza kołem tekstury (kontur wystaje poza promień docelowy) zostaje sam kolor materiału.
+        texel = length(in.maskedUV - 0.5f) > 0.5f ? float4(1.0f) : texture.sample(nativeTextureSampler, in.maskedUV);
+    } else {
+        texel = texture.sample(nativeTextureSampler, in.attachedUV);
+    }
+    return nativeShade(material, outline, texel);
 }
 
 fragment float4 nativeBodyFragment(BodyVertexOutput in [[stage_in]],
@@ -163,6 +170,9 @@ fragment float4 nativeBodyFragment(BodyVertexOutput in [[stage_in]],
     texture2d<float> texture [[texture(0)]]) {
     NativeRenderMaterial material = materials[in.material];
     bool outline = false;
+    // Znany koszt: pas obrysu liczony jest pętlą po całym pierścieniu konturu dla każdego fragmentu (O(fragmenty × punkty)),
+    // tylko dla materiałów z obrysem. Wystarcza przy małych pierścieniach brył; przy dużej liczbie punktów trzeba by
+    // zastąpić ją odległością liczoną w wierzchołkach albo siatką krawędzi.
     if (material.parameters.x > 0 && in.ringCount > 1) {
         float nearest = INFINITY;
         for (uint i = 0; i < in.ringCount; ++i) {
@@ -173,5 +183,6 @@ fragment float4 nativeBodyFragment(BodyVertexOutput in [[stage_in]],
         }
         outline = nearest < material.parameters.x;
     }
-    return nativeShade(material, outline, texture, in.uv);
+    float4 texel = texture.sample(nativeTextureSampler, in.uv * material.uv.zw + material.uv.xy);
+    return nativeShade(material, outline, texel);
 }
