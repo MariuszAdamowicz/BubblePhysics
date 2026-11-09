@@ -25,10 +25,13 @@ struct NativeRenderMaterial {
     float4 uv;           // przesunięcie xy, skala zw
 };
 
-// Jedna instancja bańki w kolejności rysowania: indeks rekordu bańki w uchwycie i indeks materiału.
+// Jedna instancja bańki w kolejności rysowania: indeks rekordu bańki w uchwycie, indeks materiału, indeks rekordu na stronie
+// t−1 (0xFFFFFFFF = bez interpolacji) i α, waga stanu t w obrazie między t−1 i t.
 struct NativeRenderInstance {
     uint bubble;
     uint material;
+    uint previous;
+    float alpha;
 };
 
 // Wierzchołek trójkąta bryły: pozycja w świecie, współrzędne tekstury (lokalny punkt bryły znormalizowany do prostokąta
@@ -94,7 +97,9 @@ vertex BubbleVertexOutput nativeBubbleVertex(
     device const float2 *points [[buffer(0)]], device const uint *counts [[buffer(1)]],
     constant float4 &viewport [[buffer(2)]], constant uint &stride [[buffer(3)]],
     device const RenderBubble *bubbles [[buffer(4)]],
-    device const NativeRenderInstance *instances [[buffer(7)]]) {
+    device const float2 *previousPoints [[buffer(5)]], device const uint *previousCounts [[buffer(6)]],
+    device const NativeRenderInstance *instances [[buffer(7)]],
+    device const RenderBubble *previousBubbles [[buffer(8)]]) {
     BubbleVertexOutput result;
     NativeRenderInstance instance = instances[instanceID];
     result.material = instance.material;
@@ -112,9 +117,19 @@ vertex BubbleVertexOutput nativeBubbleVertex(
     uint corner = vertexID % 3;
     uint first = bubbleIndex * stride;
     float2 center = bubbles[bubbleIndex].position.xy;
+    // Interpolacja t−1 → t: kontury mieszane próbka po próbce (kąty próbek są stałe), środek z rekordów obu stron. Gdy liczba
+    // próbek się zmieniła, bańka rysuje się w stanie t.
+    uint previousIndex = instance.previous;
+    bool blend = previousIndex != 0xFFFFFFFFu && count > 2 && min(previousCounts[previousIndex], stride) == count;
+    uint previousFirst = previousIndex * stride;
+    if (blend) center = mix(previousBubbles[previousIndex].position.xy, center, instance.alpha);
     float2 point = center;
     if (count > 2 && triangle < count) {
         float2 a = points[first + triangle], b = points[first + ((triangle + 1) % count)];
+        if (blend) {
+            a = mix(previousPoints[previousFirst + triangle], a, instance.alpha);
+            b = mix(previousPoints[previousFirst + ((triangle + 1) % count)], b, instance.alpha);
+        }
         if (corner == 1) point = a;
         if (corner == 2) point = b;
         if (corner != 0) {

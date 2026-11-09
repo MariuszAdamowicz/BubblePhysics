@@ -168,14 +168,16 @@ final class NativeMetalShaderABITests: XCTestCase {
                 ("uv", MemoryLayout<NativeRenderMaterial>.offset(of: \.uv))]),
             Probe(name: "instance", mslSize: "NativeRenderInstance", swiftSize: MemoryLayout<NativeRenderInstance>.stride, fields: [
                 ("bubble", MemoryLayout<NativeRenderInstance>.offset(of: \.bubble)),
-                ("material", MemoryLayout<NativeRenderInstance>.offset(of: \.material))]),
+                ("material", MemoryLayout<NativeRenderInstance>.offset(of: \.material)),
+                ("previous", MemoryLayout<NativeRenderInstance>.offset(of: \.previous)),
+                ("alpha", MemoryLayout<NativeRenderInstance>.offset(of: \.alpha))]),
             Probe(name: "bodyVertex", mslSize: "NativeRenderBodyVertex", swiftSize: MemoryLayout<NativeRenderBodyVertex>.stride, fields: [
                 ("world", MemoryLayout<NativeRenderBodyVertex>.offset(of: \.world)),
                 ("uv", MemoryLayout<NativeRenderBodyVertex>.offset(of: \.uv)),
                 ("info", MemoryLayout<NativeRenderBodyVertex>.offset(of: \.info))])]
         assertMatches(probes, try measure(probes, sources: [try source("NativeRenderKernels")], device: device))
         XCTAssertEqual(MemoryLayout<NativeRenderMaterial>.stride, 64)
-        XCTAssertEqual(MemoryLayout<NativeRenderInstance>.stride, 8)
+        XCTAssertEqual(MemoryLayout<NativeRenderInstance>.stride, 16)
         XCTAssertEqual(MemoryLayout<NativeRenderBodyVertex>.stride, 32)
     }
 

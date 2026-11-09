@@ -360,6 +360,12 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
                        min(state.segments.length, previous.segments.length))
                 memcpy(state.publishedContourCounts.contents(), previous.publishedContourCounts.contents(),
                        previous.publishedContourCounts.length)
+                // Opublikowane kontury (t−1 po następnej publikacji) bańka po bańce, bo krok konturu mógł się zmienić.
+                for index in 0..<previous.bubbleCapacity {
+                    memcpy(state.publishedContourPoints.contents().advanced(by: index * state.contourStride * 8),
+                           previous.publishedContourPoints.contents().advanced(by: index * previous.contourStride * 8),
+                           previous.contourStride * 8)
+                }
                 for index in 0..<previous.bubbleCapacity {
                     memcpy(state.publishedDeformation.contents().advanced(by: index * state.contourStride * 16),
                            previous.publishedDeformation.contents().advanced(by: index * previous.contourStride * 16),
@@ -949,6 +955,7 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
                 // Strona t−1 kroku w toku to strona opublikowana: nietknięta, dopóki krok nie zostanie opublikowany.
                 previousPoints: lastSnapshot == nil ? nil : state.publishedContourPoints,
                 previousCounts: lastSnapshot == nil ? nil : state.publishedContourCounts,
+                previousBubbles: lastSnapshot == nil ? nil : state.publishedBubbles,
                 previousBubbleIDs: previousPublicationBubbleIDs)
             try beforeCommit(working)
         }
@@ -1162,6 +1169,7 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
                 // Po publikacji strona robocza trzyma kontury poprzedniej publikacji (t−1).
                 previousPoints: hadPreviousPublication ? state.workingContourPoints : nil,
                 previousCounts: hadPreviousPublication ? state.workingContourCounts : nil,
+                previousBubbles: hadPreviousPublication ? state.workingBubbles : nil,
                 previousBubbleIDs: previousIDs)
         }
         if readsContours { publishedContourCPUReadbackCount += 1 }

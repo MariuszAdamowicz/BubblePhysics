@@ -12,6 +12,8 @@ package final class NativeMetalRenderHandoff {
     /// który następny krok nadpisze, dlatego `previousContoursValid` gaśnie, gdy krok bez publikacji go zepsuje.
     private let previousPoints: MTLBuffer?
     private let previousCounts: MTLBuffer?
+    /// Rekordy baniek strony t−1 (środek poprzedniego kroku); ta sama druga połowa ping-pong co punkty.
+    private let previousBubbles: MTLBuffer?
     /// Kolejność baniek na stronie t−1 (indeks rekordu w buforach t−1); pusta, gdy strony t−1 nie ma.
     package let previousBubbleIDs: [ObjectID]
     /// Czy strona t−1 nadal trzyma kontury z poprzedniej publikacji. Fałsz, gdy nie ma strony t−1 albo krok wykonany na GPU
@@ -27,9 +29,14 @@ package final class NativeMetalRenderHandoff {
     package private(set) lazy var bubbleIndexByID: [ObjectID: Int] = Dictionary(
         uniqueKeysWithValues: bubbleIDs.enumerated().map { ($0.element, $0.offset) })
 
+    /// Indeks rekordu bańki na stronie t−1; pusty, gdy nie ma ważnej strony t−1 (wtedy bańka rysuje się bez interpolacji).
+    package private(set) lazy var previousBubbleIndexByID: [ObjectID: Int] = previousContoursValid ? Dictionary(
+        uniqueKeysWithValues: previousBubbleIDs.enumerated().map { ($0.element, $0.offset) }) : [:]
+
     init(points: MTLBuffer, counts: MTLBuffer, bubbles: MTLBuffer,
          bubbleIDs: [ObjectID], contourStride: Int,
-         previousPoints: MTLBuffer? = nil, previousCounts: MTLBuffer? = nil, previousBubbleIDs: [ObjectID] = []) {
+         previousPoints: MTLBuffer? = nil, previousCounts: MTLBuffer? = nil, previousBubbles: MTLBuffer? = nil,
+         previousBubbleIDs: [ObjectID] = []) {
         self.points = points
         self.counts = counts
         self.bubbles = bubbles
@@ -37,8 +44,9 @@ package final class NativeMetalRenderHandoff {
         self.contourStride = contourStride
         self.previousPoints = previousPoints
         self.previousCounts = previousCounts
+        self.previousBubbles = previousBubbles
         self.previousBubbleIDs = previousBubbleIDs
-        previousContoursValid = previousPoints != nil && previousCounts != nil
+        previousContoursValid = previousPoints != nil && previousCounts != nil && previousBubbles != nil
     }
 
     /// Solver wywołuje to, gdy krok wykonany na GPU nie został opublikowany: zapisał stronę t−1 tego uchwytu.
@@ -75,6 +83,10 @@ package final class NativeMetalRenderHandoff {
         encoder.setVertexBuffer(counts, offset: 0, index: 1)
         encoder.setVertexBuffer(bubbles, offset: 0, index: 4)
         encoder.setVertexBuffer(instances, offset: instanceOffset, index: 7)
+        // Strona t−1 (punkty, liczniki, rekordy); bez niej zaślepki, bo instancje i tak nie wskażą indeksu t−1.
+        encoder.setVertexBuffer(previousPoints ?? points, offset: 0, index: 5)
+        encoder.setVertexBuffer(previousCounts ?? counts, offset: 0, index: 6)
+        encoder.setVertexBuffer(previousBubbles ?? bubbles, offset: 0, index: 8)
         var values = SIMD4<Float>(viewport.center.x, viewport.center.y, viewport.size.x, viewport.size.y)
         encoder.setVertexBytes(&values, length: MemoryLayout<SIMD4<Float>>.stride, index: 2)
         var stride = UInt32(contourStride)
@@ -171,11 +183,18 @@ package struct NativeRenderMaterial: Equatable, Sendable {
     }
 }
 
-/// Instancja bańki w kolejności rysowania: indeks rekordu w uchwycie i indeks materiału.
+/// Instancja bańki w kolejności rysowania: indeks rekordu w uchwycie, indeks materiału, indeks t−1 i α.
 package struct NativeRenderInstance: Equatable, Sendable {
     package var bubble: UInt32
     package var material: UInt32
-    package init(bubble: UInt32, material: UInt32) { self.bubble = bubble; self.material = material }
+    /// Indeks rekordu bańki na stronie t−1 albo `noPrevious` (bez interpolacji).
+    package var previous: UInt32
+    /// Waga stanu t w obrazie między t−1 i t.
+    package var alpha: Float
+    package static let noPrevious: UInt32 = 0xFFFF_FFFF
+    package init(bubble: UInt32, material: UInt32, previous: UInt32 = noPrevious, alpha: Float = 1) {
+        self.bubble = bubble; self.material = material; self.previous = previous; self.alpha = alpha
+    }
 }
 
 /// Wierzchołek trójkąta bryły: pozycja świata, współrzędne tekstury (`uv`: lokalny punkt w prostokącie otaczającym, V w dół) i `info` (materiał, początek i liczba punktów pierścienia).

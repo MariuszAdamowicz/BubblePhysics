@@ -168,7 +168,10 @@ public final class BubblePhysicsMetalRender {
                     guard let index = handoff.bubbleIndexByID[bubble.id] else { continue }
                     let material = frame.materialIndex(bubble.materialID, bubble.material)
                     frame.extendRun(.bubble, bubble.material, first: frame.instances.count, count: 1)
-                    frame.instances.append(NativeRenderInstance(bubble: UInt32(index), material: material))
+                    // Bez ważnej strony t−1 albo dla obiektu, który pojawił się w tym kroku, bańka rysuje się w stanie t.
+                    let previous = handoff.previousBubbleIndexByID[bubble.id].map { UInt32($0) } ?? NativeRenderInstance.noPrevious
+                    frame.instances.append(NativeRenderInstance(bubble: UInt32(index), material: material, previous: previous,
+                                                                alpha: state.interpolation))
                 }
                 // Naklejki baniek po wszystkich bańkach warstwy; kotwica i promień odniesienia z rekordu bańki w shaderze.
                 for bubble in layer.bubbles {
