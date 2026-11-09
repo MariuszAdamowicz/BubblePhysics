@@ -1,6 +1,18 @@
 {
   "device" : "Apple M1 Pro",
   "scenes" : {
+    "decals" : {
+      "note" : "scena decals po etapie 6: stress-300 z teksturą przyklejoną i naklejką tekstową na każdej bańce (maska radialna w shaderze); 5 przebiegów po 30+300 klatek",
+      "p95Milliseconds" : 4.300125,
+      "recordedAt" : "2026-11-09T16:33:58Z",
+      "runs" : [
+        4.367083,
+        4.300125,
+        4.275792,
+        4.343583,
+        4.190625
+      ]
+    },
     "mixed" : {
       "note" : "scena mieszana po etapie 3 (200 baniek, 55 brył dynamicznych, 5 belek kinematycznych, 10 więzów, k = 128); 5 przebiegów po 30+300 klatek",
       "p95Milliseconds" : 4.950583,
