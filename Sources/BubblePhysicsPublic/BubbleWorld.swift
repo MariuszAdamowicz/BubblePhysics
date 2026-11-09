@@ -13,6 +13,8 @@ package struct BubbleWorldRenderState {
     package let background: TextureID?
     package let region: WorldRectangle
     package let layers: [BubbleWorldRenderLayer]
+    /// Waga stanu t w obrazie między t−1 i t (1 = sam stan t).
+    package let interpolation: Float
 }
 
 package struct BubbleWorldRenderLayer {
@@ -45,6 +47,21 @@ package struct BubbleWorldRenderShape {
     package let referenceRadius: Float
 }
 
+/// Poza bryły: początek układu lokalnego i obrót.
+package struct RigidPose: Equatable {
+    package let position: WorldPoint
+    package let rotation: Float
+}
+
+/// Skąd bierze się poza brył w rysowanej klatce.
+private enum RenderPoses {
+    /// Klatka z opublikowanym stanem t: mieszanie z pozą t−1 z wagą `alpha`.
+    case blended(previous: [ObjectID: RigidPose], alpha: Float)
+    /// Klatka z krokiem: stan nowego kroku nie jest znany przed wykonaniem GPU, więc poza to stan sprzed kroku
+    /// przesunięty o `alpha` kroku z jego prędkości.
+    case extrapolated(alpha: Float, step: Float)
+}
+
 /// Jedyny właściciel świata i kolejki transakcji. Publikuje wyłącznie ukończone kroki.
 @MainActor
 public final class BubbleWorld {
@@ -67,6 +84,8 @@ public final class BubbleWorld {
     private var failureReason: WorldFailureReason?
     private var lastRejectionReason: WorldRejectionReason?
     private var didRenderLastAdvance = false
+    /// Pozy brył sprzed ostatniej publikacji (t−1), zapamiętane przy publikacji; obiekt bez wpisu rysuje się w stanie t.
+    private var previousPoses: [ObjectID: RigidPose] = [:]
     private struct PendingHitTest {
         let id: UInt64
         let point: WorldPoint
@@ -143,13 +162,37 @@ public final class BubbleWorld {
     package var renderState: BubbleWorldRenderState? {
         if let pendingRenderState { return pendingRenderState }
         guard clock.completedSteps > 0 else { return nil }
-        return makeRenderState((stepper as? NativeCompleteStepper)?.publishedRenderHandoff, from: state)
+        return makeRenderState((stepper as? NativeCompleteStepper)?.publishedRenderHandoff, from: state,
+                               poses: .blended(previous: previousPoses, alpha: 1), interpolation: 1)
+    }
+
+    private func rigidPoses(of source: RuntimeState) -> [ObjectID: RigidPose] {
+        var poses: [ObjectID: RigidPose] = [:]
+        for (id, object) in source.objects {
+            if case .rigidBody = object.descriptor { poses[id] = RigidPose(position: object.position, rotation: object.rotation) }
+        }
+        return poses
+    }
+
+    private func pose(of object: RuntimeObject, id: ObjectID, _ poses: RenderPoses) -> RigidPose {
+        switch poses {
+        case .blended(let previous, let alpha):
+            guard alpha < 1, let before = previous[id] else { return RigidPose(position: object.position, rotation: object.rotation) }
+            var turn = object.rotation - before.rotation
+            // Najkrótszy obrót, także gdy obrót jest zawijany do (−π, π].
+            turn -= 2 * Float.pi * (turn / (2 * Float.pi)).rounded()
+            return RigidPose(position: before.position + (object.position - before.position) * alpha,
+                             rotation: before.rotation + turn * alpha)
+        case .extrapolated(let alpha, let step):
+            return RigidPose(position: object.position + object.velocity * (alpha * step),
+                             rotation: object.rotation + object.angularVelocity * (alpha * step))
+        }
     }
 
     /// Lista rysowania z `source`: warstwy rosnąco, w nich bańki i bryły rosnąco po `ObjectID`. Obiekt bez materiału renderu
     /// (czujnik, pole sił) nie jest rysowany.
-    private func makeRenderState(_ handoff: NativeMetalRenderHandoff?,
-                                 from source: RuntimeState) -> BubbleWorldRenderState {
+    private func makeRenderState(_ handoff: NativeMetalRenderHandoff?, from source: RuntimeState,
+                                 poses: RenderPoses, interpolation: Float) -> BubbleWorldRenderState {
         var bubbles: [Int32: [BubbleWorldRenderBubble]] = [:], shapes: [Int32: [BubbleWorldRenderShape]] = [:]
         for (id, object) in source.objects.sorted(by: { $0.key.rawValue < $1.key.rawValue }) {
             guard let materialID = object.renderMaterialID, let material = source.renderMaterials[materialID] else { continue }
@@ -159,14 +202,15 @@ public final class BubbleWorld {
                     BubbleWorldRenderBubble(id: id, materialID: materialID, material: material, decal: object.decal))
             case .rigidBody(let body):
                 let ring = Self.rigidRing(body.shape)
-                let cosine = cos(object.rotation), sine = sin(object.rotation)
+                let placed = pose(of: object, id: id, poses)
+                let cosine = cos(placed.rotation), sine = sin(placed.rotation)
                 let vertices = ring.map { point in
-                    WorldPoint(object.position.x + point.x * cosine - point.y * sine,
-                               object.position.y + point.x * sine + point.y * cosine)
+                    WorldPoint(placed.position.x + point.x * cosine - point.y * sine,
+                               placed.position.y + point.x * sine + point.y * cosine)
                 }
                 shapes[object.layer, default: []].append(BubbleWorldRenderShape(id: id, materialID: materialID,
                     material: material, localVertices: ring, vertices: vertices, decal: object.decal,
-                    position: object.position, rotation: object.rotation,
+                    position: placed.position, rotation: placed.rotation,
                     referenceRadius: object.decal == nil ? 0 : Self.circumscribedRadius(body.shape)))
             case .sensor, .forceField: continue
             }
@@ -175,7 +219,8 @@ public final class BubbleWorld {
             BubbleWorldRenderLayer(layer: $0, bubbles: bubbles[$0] ?? [], shapes: shapes[$0] ?? [])
         }
         return BubbleWorldRenderState(handoff: handoff, background: source.background,
-                                      region: source.configuration.simulationRegion, layers: layers)
+                                      region: source.configuration.simulationRegion, layers: layers,
+                                      interpolation: interpolation)
     }
 
     /// Promień okręgu opisanego na kształcie wokół początku układu lokalnego (kotwicy naklejki).
@@ -328,8 +373,10 @@ public final class BubbleWorld {
 
     /// Koduje krok fizyki, następnie render do tego samego bufora aplikacji;
     /// po jego ukończeniu publikuje wynik. Jeden bufor obejmuje najwyżej jeden krok.
-    /// Drawable należy prezentować dopiero po zwrocie ukończonej klatki bez błędu.
-    /// Gdy czas nie wystarcza na krok, bufor pozostaje niezatwierdzony.
+    /// Drawable należy prezentować tylko przy `diagnostics.didRenderLastAdvance`.
+    /// Gdy czas nie wystarcza na krok, `encodeRender` rysuje opublikowany stan z interpolacją t−1 → t, bufor jest
+    /// zatwierdzany i ukończony, ale nic nie jest publikowane. Bufor zostaje niezatwierdzony w pauzie, w stanie „zawiódł”
+    /// i po odrzuceniu klatki.
     public func advance(by seconds: TimeInterval, commandBuffer: MTLCommandBuffer,
                         encodeRender: @escaping () throws -> Void) async -> WorldFrame {
         await advanceImpl(by: seconds, commandBuffer: commandBuffer, encodeRender: encodeRender)
@@ -343,6 +390,7 @@ public final class BubbleWorld {
         }
         stepsInLastAdvance = 0
         lastAdvanceIssue = nil
+        didRenderLastAdvance = false
         // Stan końcowy wygrywa z pauzą i z krokiem.
         guard failureReason == nil else {
             lastAdvanceIssue = .worldFailed
@@ -382,7 +430,9 @@ public final class BubbleWorld {
             do {
                 let beforeCommit: ((NativeMetalRenderHandoff?, RuntimeState) throws -> Void)? = encode.map { encode in
                     { [self] handoff, prepared in
-                        pendingRenderState = makeRenderState(handoff, from: prepared)
+                        let alpha = Float(clock.interpolationFractionAfterNextStep)
+                        pendingRenderState = makeRenderState(handoff, from: prepared,
+                            poses: .extrapolated(alpha: alpha, step: Float(clock.fixedTimeStep)), interpolation: alpha)
                         defer { pendingRenderState = nil }
                         try encode()
                     }
@@ -392,19 +442,16 @@ public final class BubbleWorld {
                 // Scena bez ciał nie uruchamia solvera, ale bufor wywołującego
                 // nadal musi zawierać ukończony render przed publikacją kroku.
                 if let commandBuffer, let encode, commandBuffer.status == .notEnqueued {
-                    pendingRenderState = makeRenderState(nil, from: complete.state)
+                    let alpha = Float(clock.interpolationFractionAfterNextStep)
+                    pendingRenderState = makeRenderState(nil, from: complete.state,
+                        poses: .blended(previous: rigidPoses(of: state), alpha: alpha), interpolation: alpha)
                     defer { pendingRenderState = nil }
                     try encode()
-                    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                        commandBuffer.addCompletedHandler { completed in
-                            if completed.status == .completed { continuation.resume() }
-                            else { continuation.resume(throwing: WorldRenderCommandError.failed) }
-                        }
-                        commandBuffer.commit()
-                    }
+                    try await commitAndWait(commandBuffer)
                 }
                 // W czasie await można dopisać transakcje lub włączyć pauzę.
                 // Dopiero tutaj publikujemy kandydat i zdejmujemy wyłącznie jego prefiks kolejki.
+                previousPoses = rigidPoses(of: state)
                 state = complete.state
                 queryIndexCache = nil
                 pending.removeFirst(transactionCount)
@@ -421,26 +468,58 @@ public final class BubbleWorld {
                     objects: state.publishedObjectStates())
                 stepper.didPublish(complete)
                 resolveHitTests(hitTestBatch, with: complete.hitTestResults)
+                if commandBuffer != nil { didRenderLastAdvance = true }
             } catch {
-                switch Self.outcome(of: error) {
-                case .cancelled:
-                    lastAdvanceIssue = .advanceCancelled
-                case .frameRejected:
-                    lastAdvanceIssue = .frameRejected
-                    lastRejectionReason = .frameEncoding
-                case .stepRejected(let reason):
-                    lastAdvanceIssue = .stepFailed
-                    lastRejectionReason = reason
-                case .failed(let reason):
-                    failureReason = reason
-                    pending.removeAll()
-                    dropHitTests()
-                    lastAdvanceIssue = .worldFailed
-                }
+                handleAdvanceError(error)
                 break stepLoop
             }
         }
+        // Klatka bez kroku (np. 120 Hz przy kroku 1/60): rysuje opublikowany stan z interpolacją i zatwierdza bufor, ale
+        // niczego nie publikuje, więc `lastFrame` zostaje bez zmian.
+        if stepsInLastAdvance == 0, lastAdvanceIssue == nil, failureReason == nil, !isPaused,
+           let commandBuffer, let encode, commandBuffer.status == .notEnqueued {
+            do {
+                let alpha = Float(clock.interpolationFraction)
+                pendingRenderState = makeRenderState((stepper as? NativeCompleteStepper)?.publishedRenderHandoff, from: state,
+                    poses: .blended(previous: previousPoses, alpha: alpha), interpolation: alpha)
+                defer { pendingRenderState = nil }
+                try encode()
+                try await commitAndWait(commandBuffer)
+                didRenderLastAdvance = true
+            } catch {
+                handleAdvanceError(error)
+            }
+        }
         return lastFrame
+    }
+
+    /// Zatwierdza bufor gry i czeka na jego ukończenie; status inny niż `completed` to błąd wykonania (stan „zawiódł”).
+    private func commitAndWait(_ commandBuffer: MTLCommandBuffer) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            commandBuffer.addCompletedHandler { completed in
+                if completed.status == .completed { continuation.resume() }
+                else { continuation.resume(throwing: WorldRenderCommandError.failed) }
+            }
+            commandBuffer.commit()
+        }
+    }
+
+    private func handleAdvanceError(_ error: Error) {
+        switch Self.outcome(of: error) {
+        case .cancelled:
+            lastAdvanceIssue = .advanceCancelled
+        case .frameRejected:
+            lastAdvanceIssue = .frameRejected
+            lastRejectionReason = .frameEncoding
+        case .stepRejected(let reason):
+            lastAdvanceIssue = .stepFailed
+            lastRejectionReason = reason
+        case .failed(let reason):
+            failureReason = reason
+            pending.removeAll()
+            dropHitTests()
+            lastAdvanceIssue = .worldFailed
+        }
     }
 
     private enum StepOutcome {
