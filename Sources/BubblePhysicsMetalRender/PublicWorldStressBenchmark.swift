@@ -161,7 +161,7 @@ public enum PublicWorldStressBenchmark {
         }
 
         /// Transakcja przed krokiem `step` (numer od 0) albo `nil`, gdy scena nic wtedy nie zmienia.
-        func stepTransaction(step: Int) throws -> WorldTransaction? {
+        package func stepTransaction(step: Int) throws -> WorldTransaction? {
             switch self {
             case .stress, .decals: return step > 0 ? try Stress300Scene.triangleReplacement(step: step) : nil
             // Trójkąt jedzie sam według `KinematicDrive` z transakcji początkowej.
@@ -169,6 +169,16 @@ public enum PublicWorldStressBenchmark {
             case .mixed: return try MixedScene.stepTransaction(step: step)
             }
         }
+    }
+
+    /// Piksele celu renderu: `nil` daje 375 × wysokość regionu; wymiary skończone, dodatnie i w granicach tekstury Metal.
+    package static func pixelSize(_ renderSize: CGSize?, regionHeight: Float) throws -> (width: Int, height: Int) {
+        guard let renderSize else { return (375, Int(regionHeight.rounded(.up))) }
+        let limit = 16_384.0
+        guard renderSize.width.isFinite, renderSize.height.isFinite,
+              renderSize.width >= 1, renderSize.height >= 1,
+              renderSize.width <= limit, renderSize.height <= limit else { throw StressBenchmarkError.invalidRenderSize }
+        return (Int(renderSize.width), Int(renderSize.height))
     }
 
     package static func run(device: MTLDevice, bubbleCount: Int, warmupFrames: Int, measuredFrames: Int,
@@ -180,19 +190,19 @@ public enum PublicWorldStressBenchmark {
 
     /// `renderSize` w pikselach celu renderu; `nil` daje 375 × wysokość regionu sceny. Viewport pokrywa region sceny
     /// w całości przy proporcjach celu, więc wynik w natywnej rozdzielczości nie jest rozciągnięty.
+    /// `renderTargetObserver` dostaje cel renderu zaraz po utworzeniu (szew testowy: rozmiar zamiast pól raportu).
     package static func run(device: MTLDevice, scene: Scene = .stress300, renderSize: CGSize? = nil,
+                            renderTargetObserver: ((MTLTexture) -> Void)? = nil,
                             warmupFrames: Int, measuredFrames: Int,
                             progress: @escaping @MainActor (Int, Int) -> Void) async throws
         -> PublicWorldStressReport {
         let height = scene.regionHeight
+        let (pixelWidth, pixelHeight) = try pixelSize(renderSize, regionHeight: height)
         let world = try BubbleWorld.makeBenchmarkWorld(configuration: try scene.configuration(),
             device: device, solverIterationLimit: 4)
         guard let assets = world.assets else { throw StressBenchmarkError.metalUnavailable }
         let renderer = try BubblePhysicsMetalRender(device: device, assets: assets)
         world.submit(try scene.initialTransaction(assets: assets))
-        let pixelWidth = renderSize.map { Int($0.width) } ?? 375
-        let pixelHeight = renderSize.map { Int($0.height) } ?? Int(height.rounded(.up))
-        guard pixelWidth > 0, pixelHeight > 0 else { throw StressBenchmarkError.metalUnavailable }
         let aspect = Float(pixelWidth) / Float(pixelHeight)
         let viewWidth = max(375, height * aspect)
         let viewport = try Viewport(center: [187.5, height / 2], size: [viewWidth, viewWidth / aspect])
@@ -202,6 +212,7 @@ public enum PublicWorldStressBenchmark {
         descriptor.storageMode = .private
         guard let texture = device.makeTexture(descriptor: descriptor),
               let queue = device.makeCommandQueue() else { throw StressBenchmarkError.metalUnavailable }
+        renderTargetObserver?(texture)
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = texture
         pass.colorAttachments[0].loadAction = .clear
@@ -307,6 +318,7 @@ package enum Stress300Scene {
     /// czcionką z `decorations`.
     static func initialTransaction(bubbleCount: Int, decorations: Decorations?) throws -> WorldTransaction {
         let height = regionHeight(bubbleCount: bubbleCount)
+        let acceptance = decorations?.acceptance == true
         let materialID = PhysicsMaterialID(rawValue: 1)
         let polygonMaterialID = PhysicsMaterialID(rawValue: 2)
         let styleID = RenderMaterialID(rawValue: 1)
@@ -315,9 +327,9 @@ package enum Stress300Scene {
             .updatePhysicsMaterial(materialID, material: try PhysicsMaterial(kind: .bubble))
             .updatePhysicsMaterial(polygonMaterialID, material: try PhysicsMaterial(kind: .rigid))
             .updateRenderMaterial(styleID, material: try RenderMaterial(texture: decorations?.texture,
-                color: decorations?.acceptance == true ? RGBA(1, 1, 1, 0.9) : .white,
-                blend: decorations?.acceptance == true ? .alpha : .opaque, bubbleMapping: .attached))
-        if decorations?.acceptance == true {
+                color: acceptance ? RGBA(1, 1, 1, 0.9) : .white,
+                blend: acceptance ? .alpha : .opaque, bubbleMapping: .attached))
+        if acceptance {
             transaction = transaction.updateRenderMaterial(upperStyleID,
                 material: try RenderMaterial(texture: decorations?.texture, color: RGBA(0.8, 0.9, 1, 0.7), blend: .alpha,
                                              bubbleMapping: .attached))
@@ -331,7 +343,7 @@ package enum Stress300Scene {
             let jitterX = (random.nextUnit() - 0.5) * horizontalSpacing * 0.12
             let jitterY = (random.nextUnit() - 0.5) * verticalSpacing * 0.12
             let radius = baseRadius * (0.78 + random.nextUnit() * 0.44)
-            let upper = decorations?.acceptance == true && index % 2 == 1
+            let upper = acceptance && index % 2 == 1
             transaction = transaction.add(.bubble(try BubbleDescriptor(
                 id: ObjectID(rawValue: UInt64(index + 1)),
                 position: [15 + (Float(column) + 0.5) * horizontalSpacing + jitterX,
@@ -352,9 +364,8 @@ package enum Stress300Scene {
                 id: ObjectID(rawValue: UInt64(10_001 + index)), vertices: vertices,
                 physicsMaterialID: polygonMaterialID, renderMaterialID: styleID)))
         }
-        let kinematic = decorations?.acceptance == true
-        transaction = transaction.add(.rigidBody(try triangle(step: 0, kinematic: kinematic)))
-        if kinematic { transaction = transaction.setKinematicDrive(triangleID, drive: .path(try trianglePath())) }
+        transaction = transaction.add(.rigidBody(try triangle(step: 0, kinematic: acceptance)))
+        if acceptance { transaction = transaction.setKinematicDrive(triangleID, drive: .path(try trianglePath())) }
         return transaction
     }
 
@@ -531,7 +542,11 @@ package enum MixedScene {
     }
 }
 
-private enum StressBenchmarkError: Error { case metalUnavailable }
+package enum StressBenchmarkError: Error {
+    case metalUnavailable
+    /// `renderSize` nie jest skończonym rozmiarem od 1 do 16384 pikseli w obu osiach.
+    case invalidRenderSize
+}
 
 private struct StressLCG {
     private var state: UInt64

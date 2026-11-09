@@ -1,6 +1,6 @@
 # Migracja z BubblePhysics 1.x do 2.0.0
 
-Wersja 2.0.0 zmienia publiczne API. Ten dokument podaje zamiennik każdego symbolu, który `v1.0.0` miał, a 2.0.0 usuwa albo zmienia. Lista symboli pochodzi z `swift-api-digester -diagnose-sdk` i leży w [`migration/v1-api-diff.txt`](migration/v1-api-diff.txt); test `MigrationGuideTests` pilnuje, żeby każdy wiersz tego diffu miał wpis w tabelach niżej. Nowe możliwości 2.0.0 (bryły, więzy, zapytania, naklejki, warstwy) opisuje [przewodnik integracji](integration-guide.md).
+Wersja 2.0.0 zmienia publiczne API. Ten dokument podaje zamiennik każdego symbolu, który `v1.0.0` miał, a 2.0.0 usuwa albo zmienia. Lista symboli pochodzi z `swift-api-digester -diagnose-sdk` i leży w [`migration/v1-api-diff.txt`](migration/v1-api-diff.txt); test `MigrationGuideTests` pilnuje, żeby każdy wiersz tego diffu miał wpis w tabelach niżej. Diff zawiera też deklaracje `package` (widoczne tylko w obrębie pakietu, więc nie są publicznym API `v1.0.0`); opisuje je osobna sekcja na końcu, a gry ich zmiany nie dotyczą. Nowe możliwości 2.0.0 (bryły, więzy, zapytania, naklejki, warstwy) opisuje [przewodnik integracji](integration-guide.md).
 
 Zmiana, która dotyka każdej gry: **świat renderuje materiały, a nie style**. Reszta to w większości zmiany nazw i usunięcia kanałów, które czytały tylko usunięte shadery.
 
@@ -80,9 +80,7 @@ Usunięcie obiektu po wyjściu z regionu symulacji nie jest transakcją, więc n
 | `WorldConfiguration.init` | Te same pierwsze parametry (`simulationRegion:fixedTimeStep:eventBufferCapacity:globalForce:`), plus `maximumBacklog:` i `automaticPause:` z wartościami domyślnymi; istniejące wywołania kompilują się bez zmian. |
 | `PhysicsMaterial.init` | Plus `maximumLinearSpeed:` i `maximumAngularSpeed:` (domyślnie `nil`, brak limitu); istniejące wywołania kompilują się bez zmian. |
 | `BubbleDrivePolicy.init` | Plus `maximumSpeed:` i `distanceResponse:` (wartości domyślne); istniejące wywołania kompilują się bez zmian. |
-| `TransactionReceipt.init`, `WorldFrame.init` | Nie są już publiczne: gra dostaje te wartości od świata. Odbiór `WorldFrame.objects` i `TransactionReceipt.removedJointIDs` jest nowy. |
 | `BubbleWorld.init` | `BubbleWorld(configuration:device:assets:lifecycle:)`: `assets` to opcjonalny `AssetRegistry` (`nil` tworzy pusty rejestr świata), `lifecycle` to źródło zdarzeń cyklu życia (domyślnie UIKit). Rejestr innego urządzenia daje `AssetError.deviceMismatch`. |
-| `BubbleWorldRenderState`, `BubbleWorldRenderState.items`, `BubbleWorldRenderState.shapes`, `BubbleWorldRenderShape`, `BubbleWorldRenderShape.item`, `BubbleWorldRenderShape.vertices`, `BubbleWorldRenderItem` | Typy stanu renderu nie są już publiczne. Rysuj przez `BubblePhysicsMetalRender.encode(world:viewport:commandBuffer:renderPassDescriptor:hooks:)`; własne rysowanie dokładaj przez `RenderHooks`. |
 
 ## Renderer i benchmark
 
@@ -93,7 +91,16 @@ Usunięcie obiektu po wyjściu z regionu symulacji nie jest transakcją, więc n
 | `BubblePhysicsMetalRender.encode` | `encode(world:viewport:commandBuffer:renderPassDescriptor:hooks:)`; `hooks` ma wartość domyślną `.none`, więc dotychczasowe wywołania działają. Pass wymaga tylko koloru, bez bufora szablonu. |
 | `BubblePhysicsMetalRenderError.bufferAllocationFailed` | Nowy przypadek: nie udało się przydzielić bufora pomocniczego klatki. Błąd odrzuca klatkę (`.frameRejected`). |
 | `PublicWorldStressBenchmark.measure` | `measure(device:scene:renderSize:progress:)`: scena (`.stress(bubbleCount:)`, `.mixed`, `.decals`, `.acceptance`) i rozmiar celu w pikselach (`nil`: 375 × wysokość regionu). |
-| `PublicWorldStressBenchmark.run` | Nie jest już publiczny; używaj `measure(device:scene:renderSize:progress:)`. |
+
+## Symbole `package` widoczne w diffie
+
+`swift-api-digester` zrzuca także deklaracje `package`. Te symbole były `package` już w `v1.0.0`: nie były publicznym API, więc gra nie mogła ich wywołać i ich zmiana niczego w grze nie psuje. Tabela tłumaczy tylko, skąd biorą się te wiersze diffu.
+
+| Symbol `package` z v1 | Co się stało w 2.0.0 |
+|-----------------------|----------------------|
+| `TransactionReceipt.init`, `WorldFrame.init` | Zmieniły parametry (`package init`, tworzy je tylko świat): gra dostaje te wartości od świata. Nowe pola do odczytu: `WorldFrame.objects` i `TransactionReceipt.removedJointIDs`. |
+| `BubbleWorldRenderState`, `BubbleWorldRenderState.items`, `BubbleWorldRenderState.shapes`, `BubbleWorldRenderShape`, `BubbleWorldRenderShape.item`, `BubbleWorldRenderShape.vertices`, `BubbleWorldRenderItem` | Wewnętrzny stan renderu (`package struct`) przebudowano razem z rendererem materiałów; nigdy nie był publiczny. Rysuj przez `BubblePhysicsMetalRender.encode(world:viewport:commandBuffer:renderPassDescriptor:hooks:)`; własne rysowanie dokładaj przez `RenderHooks`. |
+| `PublicWorldStressBenchmark.run` | Wewnętrzny punkt wejścia benchmarku (`package static func`) dostał parametr sceny (`run(device:bubbleCount:warmupFrames:measuredFrames:progress:)`); publiczne jest `measure(device:scene:renderSize:progress:)`. |
 
 ## Narzędzia diagnostyczne w `BubblePhysicsNativeMetalDiagnostics`
 

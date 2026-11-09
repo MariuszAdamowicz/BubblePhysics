@@ -146,7 +146,7 @@ func touchBegan(at point: WorldPoint, world: BubbleWorld) async {
 
 ## Obsługa zdarzeń
 
-Zdarzenia są opt-in: obiekt zgłasza je tylko wtedy, gdy ma odpowiedni `eventInterest`. Klatka zawiera zdarzenia ze wszystkich kroków ukończonych w wywołaniu `advance`. Brak nowego kroku zwraca tę samą klatkę, więc `stepIndex` chroni przed podwójną obsługą. Gra odpowiada na zdarzenia nowymi transakcjami, a wynik transakcji poznaje po potwierdzeniu (`transactionReceipts`) albo po zdarzeniu `transactionRejected` z tym samym tokenem.
+Zdarzenia są opt-in: obiekt zgłasza je tylko wtedy, gdy ma odpowiedni `eventInterest`. Klatka zawiera zdarzenia ze wszystkich kroków ukończonych w wywołaniu `advance`. Brak nowego kroku zwraca tę samą klatkę, więc `stepIndex` chroni przed podwójną obsługą. Gra odpowiada na zdarzenia nowymi transakcjami, a wynik transakcji poznaje po potwierdzeniu (`transactionReceipts`) albo po zdarzeniu `transactionRejected` z tym samym tokenem. Obiekt z `eventInterest: .contact` dostaje też zdarzenia `contactBegan` (para obiektów, punkt, normalna i impuls) oraz `contactEnded` (para obiektów), gdy jego kontakt z innym obiektem się zaczyna i kończy.
 
 <!-- guide-region: merge-events -->
 ```swift

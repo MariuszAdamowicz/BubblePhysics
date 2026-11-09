@@ -79,8 +79,12 @@ final class MigrationGuideTests: XCTestCase {
         XCTAssertTrue(all.contains { $0.name == "PolygonDescriptor" })
         XCTAssertTrue(all.contains { $0.name.hasSuffix("measure") })
         let rows = migrationRows(migration)
+        // Wiersz z samym typem właściciela obejmuje jego członków tylko wtedy, gdy diff zgłasza usunięcie tego typu;
+        // w przeciwnym razie członek potrzebuje własnego wpisu `Owner.member`.
+        let removedTypes = Set(all.filter { $0.owner == nil && $0.line.contains(" has been removed") }.map(\.name))
         for symbol in all {
-            let keys = ["`\(symbol.name)`"] + (symbol.owner.map { ["`\($0)`"] } ?? [])
+            var keys = ["`\(symbol.name)`"]
+            if let owner = symbol.owner, removedTypes.contains(owner) { keys.append("`\(owner)`") }
             let covered = rows.contains { row in
                 keys.contains { row.symbols.contains($0) } && row.replacement.count >= 3
             }

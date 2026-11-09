@@ -19,6 +19,9 @@ final class TouchMTKView: MTKView {
     }
 }
 
+/// Błąd przygotowania hosta: brak urządzenia Metal, kolejki poleceń albo rejestru zasobów świata.
+private enum ShowcaseError: Error { case metalUnavailable }
+
 /// Host świata: widok `MTKView`, pętla klatek i dotyk. Używa wyłącznie publicznego API.
 struct MetalHostView: UIViewRepresentable {
     let kind: ShowcaseKind
@@ -61,11 +64,11 @@ struct MetalHostView: UIViewRepresentable {
                         queue: MTLCommandQueue)?
             do {
                 guard let device, let queue = device.makeCommandQueue() else {
-                    throw BubblePhysicsMetalRenderError.deviceMismatch
+                    throw ShowcaseError.metalUnavailable
                 }
                 let scene = try kind.makeScene()
                 let world = try Self.makeWorld(for: scene, device: device)
-                guard let assets = world.assets else { throw BubblePhysicsMetalRenderError.deviceMismatch }
+                guard let assets = world.assets else { throw ShowcaseError.metalUnavailable }
                 world.submit(try scene.prepare(assets: assets))
                 built = (scene, world, try BubblePhysicsMetalRender(device: device, assets: assets), queue)
             } catch {

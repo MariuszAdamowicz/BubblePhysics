@@ -45,4 +45,25 @@ final class ContactCandidateMarginTests: XCTestCase {
         XCTAssertLessThanOrEqual(maximum * 2, BubbleWorld.contactCandidateLimit,
             "zmierzone maksimum \(maximum) bez dwukrotnego zapasu względem k = \(BubbleWorld.contactCandidateLimit)")
     }
+
+    /// G12-AC2 w scenie akceptacyjnej: ten sam przebieg co benchmark (30 klatek rozgrzewki i 300 mierzonych), więc obejmuje
+    /// chwilę, gdy bańki są już upakowane, a kinematyczny trójkąt wjeżdża w nie.
+    func testAcceptanceSceneKeepsCandidateLimitWithAtLeastTwofoldMarginOverTheBenchmarkRun() async throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let scene = PublicWorldStressBenchmark.Scene.acceptance
+        let world = try BubbleWorld.makeBenchmarkWorld(configuration: try scene.configuration(),
+            device: device, solverIterationLimit: 4)
+        world.submit(try scene.initialTransaction(assets: try XCTUnwrap(world.assets)))
+        var maximum = 0
+        for index in 0..<(30 + 300) {
+            if let transaction = try scene.stepTransaction(step: index) { world.submit(transaction) }
+            _ = await world.advance(by: 1.0 / 60)
+            XCTAssertNil(world.diagnostics.lastAdvanceIssue, "krok \(index + 1): klatka się nie udała")
+            maximum = max(maximum, world.diagnostics.maximumContactCandidatesPerObject)
+            XCTAssertEqual(world.diagnostics.contactCandidateOverflow, 0, "krok \(index + 1): limit k przekroczony")
+        }
+        XCTAssertGreaterThan(maximum, 0, "scena akceptacyjna ma kontakty, więc diagnostyka musi raportować kandydatów")
+        XCTAssertLessThanOrEqual(maximum * 2, BubbleWorld.contactCandidateLimit,
+            "zmierzone maksimum \(maximum) bez dwukrotnego zapasu względem k = \(BubbleWorld.contactCandidateLimit)")
+    }
 }

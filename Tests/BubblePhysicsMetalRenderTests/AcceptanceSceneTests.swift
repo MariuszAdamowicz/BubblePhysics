@@ -64,19 +64,48 @@ final class AcceptanceSceneTests: XCTestCase {
         XCTAssertNotNil(drives[triangle.id], "trójkąt kinematyczny ma KinematicDrive")
     }
 
-    func testRenderSizeFollowsTheRequestAndDefaultsToTheRegionAtWidth375() async throws {
-        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
-        let native = try await PublicWorldStressBenchmark.run(device: device, scene: .acceptance,
-            renderSize: CGSize(width: 1125, height: 2436), warmupFrames: 0, measuredFrames: 2, progress: { _, _ in })
-        XCTAssertEqual(native.renderWidth, 1125)
-        XCTAssertEqual(native.renderHeight, 2436)
-        XCTAssertTrue(native.text.contains("render_px=1125x2436"))
-        XCTAssertEqual(native.failedFrames, 0)
-        let standard = try await PublicWorldStressBenchmark.run(device: device, scene: .acceptance,
+    /// Rozmiar celu renderu czytany z tekstury, którą benchmark faktycznie utworzył, a nie z pól raportu.
+    private func renderTargetSize(device: MTLDevice, size: CGSize?) async throws -> (width: Int, height: Int) {
+        var observed: [(Int, Int)] = []
+        let report = try await PublicWorldStressBenchmark.run(device: device, scene: .acceptance, renderSize: size,
+            renderTargetObserver: { observed.append(($0.width, $0.height)) },
             warmupFrames: 0, measuredFrames: 2, progress: { _, _ in })
-        XCTAssertEqual(standard.renderWidth, 375)
-        XCTAssertEqual(standard.renderHeight, 700, "region sceny akceptacyjnej ma 700 jednostek wysokości")
-        XCTAssertTrue(standard.text.contains("render_px=375x700"))
+        XCTAssertEqual(report.failedFrames, 0)
+        XCTAssertEqual(observed.count, 1, "jeden cel renderu na przebieg")
+        let texture = try XCTUnwrap(observed.first)
+        XCTAssertEqual(report.renderWidth, texture.0, "raport zgadza się z celem")
+        XCTAssertEqual(report.renderHeight, texture.1, "raport zgadza się z celem")
+        XCTAssertTrue(report.text.contains("render_px=\(texture.0)x\(texture.1)"))
+        return texture
+    }
+
+    func testRenderTargetSizeFollowsTheRequestAndDefaultsToTheRegionAtWidth375() async throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let native = try await renderTargetSize(device: device, size: CGSize(width: 1125, height: 2436))
+        XCTAssertEqual(native.width, 1125)
+        XCTAssertEqual(native.height, 2436)
+        let standard = try await renderTargetSize(device: device, size: nil)
+        XCTAssertEqual(standard.width, 375)
+        XCTAssertEqual(standard.height, 700, "region sceny akceptacyjnej ma 700 jednostek wysokości")
+    }
+
+    func testInvalidRenderSizeThrowsADedicatedErrorInsteadOfTrapping() async throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let invalid: [CGSize] = [
+            CGSize(width: 0, height: 100), CGSize(width: 100, height: 0), CGSize(width: -375, height: 700),
+            CGSize(width: CGFloat.nan, height: 700), CGSize(width: 375, height: CGFloat.nan),
+            CGSize(width: CGFloat.infinity, height: 700), CGSize(width: 375, height: -CGFloat.infinity),
+            CGSize(width: 1e30, height: 700), CGSize(width: 0.5, height: 700)
+        ]
+        for size in invalid {
+            do {
+                _ = try await PublicWorldStressBenchmark.run(device: device, scene: .acceptance, renderSize: size,
+                    warmupFrames: 0, measuredFrames: 1, progress: { _, _ in })
+                XCTFail("rozmiar \(size) powinien zostać odrzucony")
+            } catch let error as StressBenchmarkError {
+                guard case .invalidRenderSize = error else { XCTFail("rozmiar \(size): \(error)"); continue }
+            }
+        }
     }
 
     func testFiveFramesKeepCandidateMarginAndReadNoContours() async throws {

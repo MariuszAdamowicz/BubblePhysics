@@ -1,6 +1,7 @@
 # BubblePhysics v1.0.0 -> HEAD: różnice publicznego API z `swift-api-digester -diagnose-sdk`.
 # Moduły: BubblePhysics, BubblePhysicsModel (typy modelu), BubblePhysicsMetalRender. Zrzut modułu nie obejmuje re-eksportów,
 # więc typy modelu leżą w BubblePhysicsModel. Moduł BubblePhysicsAssets jest nowy w 2.0.0 i nie ma odpowiednika w v1.0.0.
+# Zrzut obejmuje też deklaracje `package` (były `package` już w v1.0.0, nie są publicznym API); docs/MIGRATION-v2.md opisuje je osobno.
 # Zamienniki każdego symbolu opisuje docs/MIGRATION-v2.md (test MigrationGuideTests).
 # Powtarzalne: ten sam HEAD daje ten sam plik (polecenia z katalogu głównego repozytorium, ścieżki względne).
 # Generowanie (wiersze `# $ ` to polecenia; plik powstaje z ich wyniku):
