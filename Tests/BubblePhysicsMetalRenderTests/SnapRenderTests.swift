@@ -159,12 +159,12 @@ final class SnapRenderTests: XCTestCase {
         return (previous, current)
     }
 
-    // A3, ograniczenie: bryła zawinięta w klatce z krokiem nie jest przycinana do docelowej krawędzi, bo poza po kroku GPU
-    // nie jest znana w chwili kodowania; klatka rysuje ją ekstrapolowaną z pozy sprzed kroku (tuż za krawędzią regionu).
-    func testBodyWrappedInAStepFrameIsExtrapolatedFromTheStateBeforeTheStep() async throws {
-        let scene = try makeScene(region: WorldRectangle(min: [-15, -15], max: [15, 15]))
+    /// Koło (promień 1, 60 jednostek na sekundę) zawija się przez prawą krawędź regionu w klatce z krokiem, w której α = 0,5
+    /// (nadwyżka pół kroku w akumulatorze). Zwraca pozę sprzed kroku zawinięcia i po nim.
+    private func wrappingBody(_ scene: RenderTestScene, decal: Decal? = nil) async throws -> (before: Float, wrappedAt: Float) {
         scene.world.submit(try WorldTransaction()
-            .add(B.circle(1, at: [8, 0], radius: 1, velocity: [60, 0], filter: ghost, regionExitPolicy: .wrap, render: redID)))
+            .add(B.circle(1, at: [8, 0], radius: 1, velocity: [60, 0], filter: ghost, regionExitPolicy: .wrap, render: redID,
+                          decal: decal)))
         await scene.step()
         await scene.world.advance(by: 0.5 / 60)
         var before: Float = 8, wrappedAt: Float = 8
@@ -175,8 +175,26 @@ final class SnapRenderTests: XCTestCase {
             if wrappedAt < before - 5 { break }
         }
         XCTAssertLessThan(wrappedAt, before - 5, "krok z zawinięciem")
+        XCTAssertEqual(scene.world.diagnostics.backlogSeconds, 0.5 / 60, accuracy: 1e-9, "α = 0,5 w klatce z krokiem")
+        return (before, wrappedAt)
+    }
+
+    // A3 (G10-AC1): bryła zawinięta w klatce z krokiem (α = 0,5; zawinięcie znane dopiero po GPU) rysuje się bez interpolacji,
+    // przy docelowej krawędzi, a nie w środku regionu ani za krawędzią.
+    func testBodyWrappedInAStepFrameIsDrawnAtTheTargetEdgeWithoutInterpolation() async throws {
+        let scene = try makeScene(region: WorldRectangle(min: [-15, -15], max: [15, 15]))
+        let wrapped = try await wrappingBody(scene)
         let center = try XCTUnwrap(scene.renderedCenterX())
-        XCTAssertEqual(center, before + 0.5, accuracy: tolerance, "poza sprzed kroku plus α·v·dt, nie docelowa krawędź")
-        XCTAssertGreaterThan(abs(center - wrappedAt), 5, "udokumentowane: bryła nie rysuje się przy docelowej krawędzi")
+        XCTAssertEqual(center, wrapped.wrappedAt, accuracy: tolerance, "docelowa krawędź, nie ekstrapolacja ani środek regionu")
+    }
+
+    // A3: naklejka bryły zawiniętej w klatce z krokiem leży z bryłą przy docelowej krawędzi.
+    func testDecalOfABodyWrappedInAStepFrameIsDrawnWithTheBody() async throws {
+        let scene = try makeScene(region: WorldRectangle(min: [-15, -15], max: [15, 15]))
+        let image = try OffscreenRenderHarness.image(width: 1, height: 1, pixels: [[0, 255, 0, 255]])
+        let decal = try Decal.image(scene.assets.register(image), scale: 0.5)
+        let wrapped = try await wrappingBody(scene, decal: decal)
+        let center = try XCTUnwrap(scene.renderedCenterX(where: { $0[1] > 128 && $0[0] < 100 && $0[2] < 100 }))
+        XCTAssertEqual(center, wrapped.wrappedAt, accuracy: tolerance, "naklejka przy docelowej krawędzi razem z bryłą")
     }
 }

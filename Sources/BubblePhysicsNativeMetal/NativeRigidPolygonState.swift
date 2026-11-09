@@ -138,6 +138,11 @@ final class NativeRigidPolygonState {
     /// Pojemność wierszy kandydatów: bryły × k.
     private(set) var rowCapacity = 0
     var bodies: MTLBuffer { buffers["working"]! }
+    /// Rekordy ostatniej publikacji: poza po kroku (`pose`) i przed nim (`previous`, `pose.w`); `nil`, gdy nie ma brył.
+    var publishedBodies: MTLBuffer? { publishedInputs.isEmpty ? nil : buffers["published"] }
+    /// Kolejność brył w buforze roboczym (krok w toku) i w opublikowanym.
+    var workingIDs: [ObjectID] { current.map { $0.object.descriptor.id } }
+    var publishedIDs: [ObjectID] { publishedInputs.map { $0.object.descriptor.id } }
     var vertices: MTLBuffer { buffers["vertices"]! }
     var triangles: MTLBuffer { buffers["triangles"]! }
     var contacts: MTLBuffer { buffers["contacts"]! }

@@ -133,28 +133,50 @@ final class BodyInterpolationTests: XCTestCase {
         return (scene, before)
     }
 
-    // P-B-51, udokumentowane ograniczenie (A2): w klatce z krokiem bryła jest ekstrapolowana z pozy sprzed kroku (poza po
-    // kroku GPU nie jest znana w chwili kodowania), więc przy α = 1 koło uderzające w ścianę rysuje się o pełne v·dt dalej, niż
-    // ustawił je solver (w ścianie), zamiast przy ścianie. Bańki mieszają prawdziwe kontury t i t+1 i tego nie robią.
-    func testDynamicBodyHittingAWallAtFractionOneIsDrawnExtrapolatedPastTheWall() async throws {
+    // P-B-51 (G10-AC1): bryła w klatce z krokiem jest mieszana z prawdziwych póz t i t+1 jak bańka, więc przy α = 1 koło
+    // uderzające w ścianę rysuje się tam, gdzie zostawił je solver (przy ścianie), a nie o pełne v·dt dalej (w ścianie).
+    func testDynamicBodyHittingAWallAtFractionOneIsDrawnWhereTheSolverLeftIt() async throws {
         let (scene, before) = try await makeCollisionScene()
         let result = try await scene.advanceRendering(by: 2.5 / 60)
         XCTAssertEqual(scene.world.diagnostics.stepsInLastAdvance, 1)
         let newest = try XCTUnwrap(result.frame.objects[id(2)]).position.x
         XCTAssertLessThanOrEqual(newest, -0.95, "solver zatrzymał koło przy ścianie (powierzchnia w x = 0, promień 1)")
-        XCTAssertLessThan(newest, before + 1 - 0.3, "po kroku koło jest wyraźnie przed miejscem ekstrapolacji")
+        XCTAssertLessThan(newest, before + 1 - 0.3, "po kroku koło jest wyraźnie przed miejscem, do którego doleciałoby bez ściany")
         let center = try XCTUnwrap(scene.renderedCenterX())
-        XCTAssertEqual(center, before + 1, accuracy: tolerance, "rysunek: poza sprzed kroku plus v·dt (w ścianie)")
+        XCTAssertEqual(center, newest, accuracy: tolerance, "rysunek: poza po kroku, przy ścianie")
+        XCTAssertLessThanOrEqual(center, -0.8, "środek koła nie wchodzi w ścianę")
     }
 
-    // P-B-50, to samo przy α = 0,5: ekstrapolacja o pół kroku, nie prawdziwe mieszanie t i t+1.
-    func testDynamicBodyHittingAWallInAStepFrameWithHalfFractionIsExtrapolatedByHalfAStep() async throws {
+    // P-B-50: to samo przy α = 0,5: środek między pozą sprzed kroku (t) a pozą po kroku (t+1), nie ekstrapolacja z prędkości.
+    func testDynamicBodyHittingAWallInAStepFrameWithHalfFractionIsDrawnBetweenTheStates() async throws {
         let (scene, before) = try await makeCollisionScene()
         let result = try await scene.advanceRendering(by: 1.5 / 60)
         XCTAssertEqual(scene.world.diagnostics.backlogSeconds, 0.5 / 60, accuracy: 1e-9)
         let newest = try XCTUnwrap(result.frame.objects[id(2)]).position.x
         let center = try XCTUnwrap(scene.renderedCenterX())
-        XCTAssertEqual(center, before + 0.5, accuracy: tolerance, "poza sprzed kroku plus α·v·dt")
-        XCTAssertGreaterThan(abs(center - (before + newest) / 2), 0.1, "to nie jest mieszanie t i t+1")
+        XCTAssertEqual(center, (before + newest) / 2, accuracy: 0.12, "w połowie między t i t+1")
+        XCTAssertGreaterThan(abs(center - (before + 0.5)), 0.1, "to nie jest ekstrapolacja z prędkości")
+    }
+
+    // P-B-50: naklejka bryły w klatce z krokiem leży z interpolowaną bryłą (kotwica z rekordu GPU, nie z CPU).
+    func testBodyDecalInAStepFrameSitsWithTheInterpolatedBody() async throws {
+        let scene = try RenderTestScene(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
+        let blueID = RenderMaterialID(rawValue: 11)
+        try scene.submitMaterials([(redID, RenderMaterial(color: RGBA(1, 0, 0))), (blueID, RenderMaterial(color: RGBA(0, 0, 1)))])
+        let image = try OffscreenRenderHarness.image(width: 1, height: 1, pixels: [[0, 255, 0, 255]])
+        let texture = try scene.assets.register(image)
+        scene.world.submit(try WorldTransaction()
+            .add(B.box(1, at: [1, 0], half: [1, 10], role: .static, render: blueID))
+            .add(B.circle(2, at: [-4.5, 0], radius: 1, velocity: [60, 0], render: redID, decal: try .image(texture, scale: 0.5))))
+        var before: Float = -4.5
+        for _ in 0..<3 {
+            let stepped = await scene.step()
+            before = try XCTUnwrap(stepped.objects[id(2)]).position.x
+        }
+        let result = try await scene.advanceRendering(by: 1.5 / 60)
+        let newest = try XCTUnwrap(result.frame.objects[id(2)]).position.x
+        let green: ([UInt8]) -> Bool = { $0[1] > 128 && $0[0] < 100 && $0[2] < 100 }
+        let center = try XCTUnwrap(scene.renderedCenterX(where: green))
+        XCTAssertEqual(center, (before + newest) / 2, accuracy: 0.12, "naklejka w połowie między t i t+1, razem z bryłą")
     }
 }

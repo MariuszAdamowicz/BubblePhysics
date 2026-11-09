@@ -19,15 +19,25 @@ package final class NativeMetalRenderHandoff {
     /// Czy strona t−1 nadal trzyma kontury z poprzedniej publikacji. Fałsz, gdy nie ma strony t−1 albo krok wykonany na GPU
     /// bez publikacji nadpisał ją; wtedy renderer rysuje bez interpolacji.
     package private(set) var previousContoursValid: Bool
+    /// Rekordy brył tej publikacji (albo kroku w toku) z obiema pozami, t−1 (przed krokiem) i t, oraz ich kolejność. Poza bryły w
+    /// klatce jest mieszana w shaderze, więc współrzędne brył nie przechodzą przez CPU.
+    private let bodies: MTLBuffer?
+    package let bodyIDs: [ObjectID]
     package let bubbleIDs: [ObjectID]
     package var bubbleCount: Int { bubbleIDs.count }
     package let contourStride: Int
     /// Rozmiar jednego rekordu `RenderBubble` w ABI shadera renderu (ten sam układ co `NativeBubble`).
     package static let bubbleRecordByteCount = MemoryLayout<NativeMetalBubble>.stride
+    /// Rozmiar jednego rekordu `RenderBody` w ABI shadera renderu (ten sam układ co `NativeRigidBody`).
+    package static let bodyRecordByteCount = MemoryLayout<NativeRigidBody>.stride
 
     /// Indeks rekordu bańki w uchwycie; budowany raz na uchwyt przy pierwszym użyciu przez renderer.
     package private(set) lazy var bubbleIndexByID: [ObjectID: Int] = Dictionary(
         uniqueKeysWithValues: bubbleIDs.enumerated().map { ($0.element, $0.offset) })
+
+    /// Indeks rekordu bryły w uchwycie; budowany raz na uchwyt przy pierwszym użyciu przez renderer.
+    package private(set) lazy var bodyIndexByID: [ObjectID: Int] = Dictionary(
+        uniqueKeysWithValues: bodyIDs.enumerated().map { ($0.element, $0.offset) })
 
     /// Indeks rekordów stron t−1 budowany raz na uchwyt; słownik nie niesie ważności, bo ta zmienia się w czasie życia uchwytu.
     private lazy var previousIndexByID: [ObjectID: Int] = Dictionary(
@@ -40,7 +50,9 @@ package final class NativeMetalRenderHandoff {
     init(points: MTLBuffer, counts: MTLBuffer, bubbles: MTLBuffer,
          bubbleIDs: [ObjectID], contourStride: Int,
          previousPoints: MTLBuffer? = nil, previousCounts: MTLBuffer? = nil, previousBubbles: MTLBuffer? = nil,
-         previousBubbleIDs: [ObjectID] = []) {
+         previousBubbleIDs: [ObjectID] = [], bodies: MTLBuffer? = nil, bodyIDs: [ObjectID] = []) {
+        self.bodies = bodies
+        self.bodyIDs = bodyIDs
         self.points = points
         self.counts = counts
         self.bubbles = bubbles
@@ -97,6 +109,11 @@ package final class NativeMetalRenderHandoff {
         encoder.setVertexBytes(&stride, length: MemoryLayout<UInt32>.stride, index: 3)
     }
 
+    /// Wiąże rekordy brył dla wierzchołka bryły; bez nich (świat bez brył) zaślepka, bo żaden wierzchołek nie wskaże indeksu.
+    package func bindBodies(_ encoder: MTLRenderCommandEncoder) {
+        encoder.setVertexBuffer(bodies ?? points, offset: 0, index: 4)
+    }
+
     /// Jedno wywołanie rysowania na ciąg `count` instancji od `first` w buforze instancji.
     package func drawBubbles(_ encoder: MTLRenderCommandEncoder, first: Int, count: Int) {
         guard count > 0 else { return }
@@ -104,15 +121,16 @@ package final class NativeMetalRenderHandoff {
                                instanceCount: count, baseInstance: first)
     }
 
-    /// Wiąże dane naklejek: wierzchołki i instancje z areny, rekordy baniek t i t−1 (kotwica i promień odniesienia) oraz liczniki
-    /// w wierzchołku, a kontury baniek t i t−1 w fragmencie (maska radialna). Bez ważnej strony t−1 wiązane są strony t jako
-    /// zaślepki, bo instancje i tak nie wskażą indeksu t−1. Bez uchwytu (świat bez kroku GPU) `bindDecalsWithoutBubbles`.
+    /// Wiąże dane naklejek: wierzchołki i instancje z areny, rekordy baniek t i t−1 (kotwica i promień odniesienia), liczniki oraz
+    /// rekordy brył (kotwica i obrót) w wierzchołku, a kontury baniek t i t−1 w fragmencie (maska radialna). Bez ważnej strony t−1
+    /// albo bez brył wiązane są zaślepki, bo instancje i tak nie wskażą takiego indeksu.
     package func bindDecals(_ encoder: MTLRenderCommandEncoder, viewport: Viewport, vertices: MTLBuffer, vertexOffset: Int,
                             instances: MTLBuffer, instanceOffset: Int) {
         encoder.setVertexBuffer(bubbles, offset: 0, index: 4)
         encoder.setVertexBuffer(previousBubbles ?? bubbles, offset: 0, index: 5)
         encoder.setVertexBuffer(counts, offset: 0, index: 6)
         encoder.setVertexBuffer(previousCounts ?? counts, offset: 0, index: 7)
+        encoder.setVertexBuffer(bodies ?? bubbles, offset: 0, index: 8)
         var stride = UInt32(contourStride)
         encoder.setVertexBytes(&stride, length: MemoryLayout<UInt32>.stride, index: 3)
         encoder.setFragmentBuffer(points, offset: 0, index: 0)
@@ -120,17 +138,6 @@ package final class NativeMetalRenderHandoff {
         encoder.setFragmentBuffer(previousPoints ?? points, offset: 0, index: 3)
         Self.bindDecalCommon(encoder, viewport: viewport, vertices: vertices, vertexOffset: vertexOffset,
                              instances: instances, instanceOffset: instanceOffset, stride: contourStride)
-    }
-
-    /// Naklejki samych brył: shader deklaruje bufory baniek i konturów, więc dostają zaślepkę (nikt ich nie czyta).
-    package static func bindDecalsWithoutBubbles(_ encoder: MTLRenderCommandEncoder, viewport: Viewport, vertices: MTLBuffer,
-                                                 vertexOffset: Int, instances: MTLBuffer, instanceOffset: Int) {
-        for index in 4...7 { encoder.setVertexBuffer(vertices, offset: 0, index: index) }
-        var stride: UInt32 = 0
-        encoder.setVertexBytes(&stride, length: MemoryLayout<UInt32>.stride, index: 3)
-        for index in [0, 1, 3] { encoder.setFragmentBuffer(vertices, offset: 0, index: index) }
-        bindDecalCommon(encoder, viewport: viewport, vertices: vertices, vertexOffset: vertexOffset,
-                        instances: instances, instanceOffset: instanceOffset, stride: 0)
     }
 
     private static func bindDecalCommon(_ encoder: MTLRenderCommandEncoder, viewport: Viewport, vertices: MTLBuffer,
@@ -209,37 +216,43 @@ package struct NativeRenderInstance: Equatable, Sendable {
     }
 }
 
-/// Wierzchołek trójkąta bryły: pozycja świata, współrzędne tekstury (`uv`: lokalny punkt w prostokącie otaczającym, V w dół) i `info` (materiał, początek i liczba punktów pierścienia).
+/// Wierzchołek trójkąta bryły: punkt w układzie lokalnym bryły, współrzędne tekstury (`uv`: lokalny punkt w prostokącie
+/// otaczającym, V w dół), `info` (materiał, początek i liczba punktów pierścienia, indeks rekordu bryły w uchwycie) i waga
+/// stanu t w obrazie między t−1 i t. Pozę z rekordu nakłada shader. Dla tła `info.w` to `noBody`, a `local` jest punktem świata.
 package struct NativeRenderBodyVertex: Equatable, Sendable {
-    package var world: SIMD2<Float>
+    package var local: SIMD2<Float>
     package var uv: SIMD2<Float>
     package var info: SIMD4<UInt32>
-    package init(world: SIMD2<Float>, uv: SIMD2<Float>, info: SIMD4<UInt32>) {
-        self.world = world; self.uv = uv; self.info = info
+    package var weight: Float
+    package static let noBody: UInt32 = 0xFFFF_FFFF
+    package init(local: SIMD2<Float>, uv: SIMD2<Float>, info: SIMD4<UInt32>, weight: Float = 1) {
+        self.local = local; self.uv = uv; self.info = info; self.weight = weight
     }
 }
 
 /// Instancja naklejki; lustro `NativeDecalInstance` w `NativeRenderKernels` (sonda ABI w NativeMetalShaderABITests).
 package struct NativeDecalInstance: Equatable, Sendable {
     package var color: SIMD4<Float>
-    /// Bryła: kotwica xy, promień odniesienia i obrót. Bańka: kotwicę i promień daje rekord bańki w uchwycie, a `w` to α, waga
-    /// stanu t w obrazie między t−1 i t (xyz nieużywane).
+    /// Bryła: `x` to waga stanu t w obrazie między t−1 i t, `z` promień odniesienia (kotwicę i obrót daje rekord bryły w uchwycie).
+    /// Bańka: kotwicę i promień daje rekord bańki w uchwycie, a `w` to α, waga stanu t (xyz nieużywane).
     package var placement: SIMD4<Float>
     /// Indeks bańki w uchwycie (`noBubble` dla bryły), tryb (`Mode`), indeks rekordu bańki na stronie t−1 (`noPrevious`: bez
-    /// interpolacji; tylko bańka), reserved.
+    /// interpolacji; tylko bańka), indeks rekordu bryły w uchwycie (tylko bryła).
     package var info: SIMD4<UInt32>
 
     package static let noBubble: UInt32 = 0xFFFF_FFFF
     package static let noPrevious: UInt32 = 0xFFFF_FFFF
     package enum Mode: UInt32 { case image = 0, glyphAlpha = 1, glyphDistanceField = 2 }
 
-    /// Dla bańki `previousBubbleIndex` i `alpha` opisują interpolację t−1 → t jak w `NativeRenderInstance`; dla bryły są ignorowane
-    /// (poza bryły liczy CPU).
+    /// `alpha` to waga stanu t w obrazie między t−1 i t. Bańka: `previousBubbleIndex` wskazuje rekord t−1 (`placement.w` = α).
+    /// Bryła (`bubbleIndex == noBubble`): `bodyIndex` wskazuje jej rekord, α idzie do `placement.x`, a `previousBubbleIndex`
+    /// jest ignorowany.
     package init(color: SIMD4<Float>, placement: SIMD4<Float>, bubbleIndex: UInt32, mode: Mode,
-                 previousBubbleIndex: UInt32 = noPrevious, alpha: Float = 1) {
+                 previousBubbleIndex: UInt32 = noPrevious, alpha: Float = 1, bodyIndex: UInt32 = 0) {
         self.color = color; self.placement = placement
-        self.info = SIMD4(bubbleIndex, mode.rawValue, bubbleIndex == Self.noBubble ? Self.noPrevious : previousBubbleIndex, 0)
-        if bubbleIndex != Self.noBubble { self.placement.w = alpha }
+        let isBubble = bubbleIndex != Self.noBubble
+        self.info = SIMD4(bubbleIndex, mode.rawValue, isBubble ? previousBubbleIndex : Self.noPrevious, isBubble ? 0 : bodyIndex)
+        if isBubble { self.placement.w = alpha } else { self.placement.x = alpha }
     }
 }
 

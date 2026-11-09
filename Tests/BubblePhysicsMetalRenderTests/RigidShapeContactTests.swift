@@ -166,7 +166,8 @@ final class RigidShapeContactTests: XCTestCase {
         XCTAssertFalse(inside, "kapsuła wypchnięta z wielokąta")
     }
 
-    // G11-AC1: obrys koła i kapsuły do rysowania ma właściwą liczbę wierzchołków i zasięg (pierścień z rdzenia i promienia).
+    // G11-AC1: obrys koła i kapsuły do rysowania ma właściwą liczbę wierzchołków i zasięg (pierścień lokalny z rdzenia i promienia;
+    // pozę w świecie nakłada shader, co sprawdzają testy obrazu).
     func testRenderStateRingsOfCircleAndCapsuleHaveExpectedVertexCountAndExtent() async throws {
         let world = try world()
         world.submit(try B.baseTransaction()
@@ -179,14 +180,11 @@ final class RigidShapeContactTests: XCTestCase {
         XCTAssertEqual(circle.localVertices.count, 48)
         XCTAssertEqual(circle.localVertices.map { simd_length($0) }.min() ?? 0, 9, accuracy: 1e-3, "wszystkie wierzchołki na okręgu")
         XCTAssertEqual(circle.localVertices.map { simd_length($0) }.max() ?? 0, 9, accuracy: 1e-3)
-        XCTAssertEqual(circle.vertices.map { $0.x }.max() ?? 0, 109, accuracy: 1e-3, "wierzchołki we współrzędnych świata")
         XCTAssertEqual(capsule.localVertices.count, 50)
         XCTAssertEqual(capsule.localVertices.map { $0.x }.max() ?? 0, 25, accuracy: 1e-3)
         XCTAssertEqual(capsule.localVertices.map { $0.x }.min() ?? 0, -25, accuracy: 1e-3)
         XCTAssertEqual(capsule.localVertices.map { $0.y }.max() ?? 0, 5, accuracy: 1e-3)
         XCTAssertEqual(capsule.localVertices.map { $0.y }.min() ?? 0, -5, accuracy: 1e-3)
-        XCTAssertEqual(capsule.vertices.map { $0.x }.max() ?? 0, 325, accuracy: 1e-3)
-        XCTAssertEqual(capsule.vertices.map { $0.y }.min() ?? 0, 145, accuracy: 1e-3)
     }
 
     // P-B-69: kapsuła poprzeczna do cienkiej ściany, poza jej środkiem, z oboma końcami rdzenia na zewnątrz wielokąta.

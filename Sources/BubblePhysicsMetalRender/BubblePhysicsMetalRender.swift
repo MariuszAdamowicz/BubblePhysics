@@ -147,6 +147,9 @@ public final class BubblePhysicsMetalRender {
                     if boundGeometry != .body {
                         encoder.setVertexBuffer(arena.buffer, offset: arena.vertices, index: 0)
                         encoder.setVertexBytes(&values, length: MemoryLayout<SIMD4<Float>>.stride, index: 2)
+                        // Rekordy brył z uchwytu niosą pozy t−1 i t; tło ma współrzędne świata i nie czyta rekordów.
+                        if let handoff = published?.handoff { handoff.bindBodies(encoder) }
+                        else { encoder.setVertexBuffer(arena.buffer, offset: 0, index: 4) }
                         encoder.setFragmentBuffer(arena.buffer, offset: arena.materials, index: 0)
                         encoder.setFragmentBuffer(arena.buffer, offset: arena.rings, index: 1)
                         boundGeometry = .body
@@ -154,14 +157,11 @@ public final class BubblePhysicsMetalRender {
                     encoder.drawPrimitives(type: .triangle, vertexStart: run.first, vertexCount: run.count)
                     lastDrawCallCount += 1
                 case .decal:
+                    // Kotwica naklejki (bańki i bryły) pochodzi z rekordów uchwytu, więc bez uchwytu nie ma naklejek.
+                    guard let handoff = published?.handoff else { continue }
                     if boundGeometry != .decal {
-                        if let handoff = published?.handoff {
-                            handoff.bindDecals(encoder, viewport: viewport, vertices: arena.buffer, vertexOffset: arena.decalVertices,
-                                               instances: arena.buffer, instanceOffset: arena.decalInstances)
-                        } else {
-                            NativeMetalRenderHandoff.bindDecalsWithoutBubbles(encoder, viewport: viewport, vertices: arena.buffer,
-                                vertexOffset: arena.decalVertices, instances: arena.buffer, instanceOffset: arena.decalInstances)
-                        }
+                        handoff.bindDecals(encoder, viewport: viewport, vertices: arena.buffer, vertexOffset: arena.decalVertices,
+                                           instances: arena.buffer, instanceOffset: arena.decalInstances)
                         boundGeometry = .decal
                     }
                     encoder.drawPrimitives(type: .triangle, vertexStart: run.first, vertexCount: run.count)
@@ -221,27 +221,33 @@ public final class BubblePhysicsMetalRender {
                                 renderer: decals, to: &frame)
                 }
             }
-            for shape in layer.shapes {
-                let ring = ringGeometry(for: shape.localVertices)
-                let indices = ring.indices
-                guard !indices.isEmpty else { continue }
-                let material = frame.materialIndex(shape.materialID, shape.material)
-                let ringStart = UInt32(frame.rings.count), ringCount = UInt32(shape.vertices.count)
-                frame.rings += shape.vertices.map { SIMD2($0.x, $0.y) }
-                let info = SIMD4<UInt32>(material, ringStart, ringCount, 0)
-                frame.extendRun(.body, shape.material, first: frame.vertices.count, count: indices.count)
-                // Tekstura rozciągnięta na lokalny prostokąt otaczający, wiersz 0 obrazu u góry; obraca się z bryłą.
-                for index in indices {
-                    let world = shape.vertices[index], local = shape.localVertices[index]
-                    let uv = SIMD2((local.x - ring.minimum.x) / ring.size.x, 1 - (local.y - ring.minimum.y) / ring.size.y)
-                    frame.vertices.append(NativeRenderBodyVertex(world: SIMD2(world.x, world.y), uv: uv, info: info))
+            // Bryły rysuje poza z rekordu GPU: wierzchołki i pierścienie są lokalne, shader nakłada pozę z mieszaniem t−1 → t
+            // (bez niego dla obiektów, które pojawiły się w kroku, i dla zawiniętych: wagę 1 daje CPU, a zawinięcie flaga rekordu).
+            // Bryła spoza uchwytu nie istnieje w opublikowanym kroku GPU, więc nie ma jeszcze pozy do narysowania.
+            if let handoff = state.handoff {
+                for shape in layer.shapes {
+                    let ring = ringGeometry(for: shape.localVertices)
+                    let indices = ring.indices
+                    guard !indices.isEmpty, let body = handoff.bodyIndexByID[shape.id] else { continue }
+                    let material = frame.materialIndex(shape.materialID, shape.material)
+                    let ringStart = UInt32(frame.rings.count), ringCount = UInt32(shape.localVertices.count)
+                    frame.rings += shape.localVertices.map { SIMD2($0.x, $0.y) }
+                    let info = SIMD4<UInt32>(material, ringStart, ringCount, UInt32(body))
+                    let weight = Self.weight(of: shape.id, state)
+                    frame.extendRun(.body, shape.material, first: frame.vertices.count, count: indices.count)
+                    // Tekstura rozciągnięta na lokalny prostokąt otaczający, wiersz 0 obrazu u góry; obraca się z bryłą.
+                    for index in indices {
+                        let local = shape.localVertices[index]
+                        let uv = SIMD2((local.x - ring.minimum.x) / ring.size.x, 1 - (local.y - ring.minimum.y) / ring.size.y)
+                        frame.vertices.append(NativeRenderBodyVertex(local: SIMD2(local.x, local.y), uv: uv, info: info, weight: weight))
+                    }
                 }
-            }
-            // Naklejki brył po wszystkich bryłach warstwy; obracają się z bryłą wokół jej początku układu.
-            for shape in layer.shapes {
-                guard let decal = shape.decal else { continue }
-                let placement = SIMD4(shape.position.x, shape.position.y, shape.referenceRadius, shape.rotation)
-                appendDecal(decal, placement: placement, bubbleIndex: NativeDecalInstance.noBubble, renderer: decals, to: &frame)
+                // Naklejki brył po wszystkich bryłach warstwy; kotwica i obrót z rekordu bryły, jak sama bryła.
+                for shape in layer.shapes {
+                    guard let decal = shape.decal, let body = handoff.bodyIndexByID[shape.id] else { continue }
+                    appendDecal(decal, placement: SIMD4(0, 0, shape.referenceRadius, 0), bubbleIndex: NativeDecalInstance.noBubble,
+                                alpha: Self.weight(of: shape.id, state), bodyIndex: UInt32(body), renderer: decals, to: &frame)
+                }
             }
         }
         return frame
@@ -254,12 +260,18 @@ public final class BubblePhysicsMetalRender {
         return handoff.previousBubbleIndexByID[id].map { UInt32($0) } ?? NativeRenderInstance.noPrevious
     }
 
+    /// Waga stanu t w obrazie obiektu: 1 (bez interpolacji) dla obiektu, który pojawił się w ostatnim kroku.
+    private static func weight(of id: ObjectID, _ state: BubbleWorldRenderState) -> Float {
+        state.snapped.contains(id) ? 1 : state.interpolation
+    }
+
     private func appendDecal(_ decal: Decal, placement: SIMD4<Float>, bubbleIndex: UInt32,
-                             previousBubbleIndex: UInt32 = NativeDecalInstance.noPrevious, alpha: Float = 1,
+                             previousBubbleIndex: UInt32 = NativeDecalInstance.noPrevious, alpha: Float = 1, bodyIndex: UInt32 = 0,
                              renderer: DecalRenderer, to frame: inout FrameData) {
         let instanceIndex = UInt32(frame.decalInstances.count)
         guard let layout = renderer.layout(decal, placement: placement, bubbleIndex: bubbleIndex,
-                                           previousBubbleIndex: previousBubbleIndex, alpha: alpha, instanceIndex: instanceIndex)
+                                           previousBubbleIndex: previousBubbleIndex, alpha: alpha, bodyIndex: bodyIndex,
+                                           instanceIndex: instanceIndex)
         else { return }
         frame.decalInstances.append(layout.instance)
         frame.extendRun(.decal, blend: .alpha, texture: layout.texture, first: frame.decalVertices.count,
@@ -273,13 +285,13 @@ public final class BubblePhysicsMetalRender {
         let index = UInt32(frame.materials.count)
         frame.materials.append(MaterialPipelines.record(for: material))
         frame.extendRun(.body, material, first: frame.vertices.count, count: 6)
-        let info = SIMD4<UInt32>(index, 0, 0, 0)
+        let info = SIMD4<UInt32>(index, 0, 0, NativeRenderBodyVertex.noBody)
         let (low, high) = (region.min, region.max)
         let corners: [(SIMD2<Float>, SIMD2<Float>)] = [
             (SIMD2(low.x, high.y), SIMD2(0, 0)), (SIMD2(high.x, high.y), SIMD2(1, 0)),
             (SIMD2(high.x, low.y), SIMD2(1, 1)), (SIMD2(low.x, low.y), SIMD2(0, 1))]
         for corner in [0, 1, 2, 0, 2, 3] {
-            frame.vertices.append(NativeRenderBodyVertex(world: corners[corner].0, uv: corners[corner].1, info: info))
+            frame.vertices.append(NativeRenderBodyVertex(local: corners[corner].0, uv: corners[corner].1, info: info))
         }
     }
 

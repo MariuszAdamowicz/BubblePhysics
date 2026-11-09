@@ -956,7 +956,9 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
                 previousPoints: lastSnapshot == nil ? nil : state.publishedContourPoints,
                 previousCounts: lastSnapshot == nil ? nil : state.publishedContourCounts,
                 previousBubbles: lastSnapshot == nil ? nil : state.publishedBubbles,
-                previousBubbleIDs: previousPublicationBubbleIDs)
+                previousBubbleIDs: previousPublicationBubbleIDs,
+                // Rekordy brył kroku w toku niosą jego obie pozy: przed krokiem (t) i po nim (t+1).
+                bodies: rigidState.count > 0 ? rigidState.bodies : nil, bodyIDs: rigidState.workingIDs)
             try beforeCommit(working)
         }
         // Od tej chwili krok pisze stronę roboczą, która w opublikowanym uchwycie jest stroną t−1.
@@ -1170,7 +1172,9 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
                 previousPoints: hadPreviousPublication ? state.workingContourPoints : nil,
                 previousCounts: hadPreviousPublication ? state.workingContourCounts : nil,
                 previousBubbles: hadPreviousPublication ? state.workingBubbles : nil,
-                previousBubbleIDs: previousIDs)
+                previousBubbleIDs: previousIDs,
+                // Opublikowane rekordy brył niosą pozę t i t−1 (stan sprzed ostatniego kroku).
+                bodies: rigidState.publishedBodies, bodyIDs: rigidState.publishedIDs)
         }
         if readsContours { publishedContourCPUReadbackCount += 1 }
         return frame

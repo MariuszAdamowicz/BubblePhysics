@@ -157,6 +157,22 @@ final class NativeMetalShaderABITests: XCTestCase {
         assertMatches(probes, try measure(probes, sources: [try source("NativeRenderKernels")], device: device))
     }
 
+    /// Rekord bryły czytany przez shadery renderu (poza t−1 i t, flaga zawinięcia) ma układ rekordu solvera.
+    func testRenderBodyMatchesSolverRigidBodyLayout() throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let probes = [Probe(name: "renderBody", mslSize: "RenderBody", swiftSize: NativeMetalRenderHandoff.bodyRecordByteCount, fields: [
+            ("pose", MemoryLayout<NativeRigidBody>.offset(of: \.pose)),
+            ("previous", MemoryLayout<NativeRigidBody>.offset(of: \.previous)),
+            ("motion", MemoryLayout<NativeRigidBody>.offset(of: \.motion)),
+            ("physical", MemoryLayout<NativeRigidBody>.offset(of: \.physical)),
+            ("ranges", MemoryLayout<NativeRigidBody>.offset(of: \.ranges)),
+            ("flags", MemoryLayout<NativeRigidBody>.offset(of: \.flags)),
+            ("filter", MemoryLayout<NativeRigidBody>.offset(of: \.filter)),
+            ("shape", MemoryLayout<NativeRigidBody>.offset(of: \.shape)),
+            ("limits", MemoryLayout<NativeRigidBody>.offset(of: \.limits))])]
+        assertMatches(probes, try measure(probes, sources: [try source("NativeRenderKernels")], device: device))
+    }
+
     /// Rekordy renderu materiałów: materiał na obiekt, instancja bańki i wierzchołek bryły mają ten sam układ w Swift i w shaderze.
     func testRenderMaterialRecordsMatchShaderLayouts() throws {
         let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
@@ -172,13 +188,14 @@ final class NativeMetalShaderABITests: XCTestCase {
                 ("previous", MemoryLayout<NativeRenderInstance>.offset(of: \.previous)),
                 ("alpha", MemoryLayout<NativeRenderInstance>.offset(of: \.alpha))]),
             Probe(name: "bodyVertex", mslSize: "NativeRenderBodyVertex", swiftSize: MemoryLayout<NativeRenderBodyVertex>.stride, fields: [
-                ("world", MemoryLayout<NativeRenderBodyVertex>.offset(of: \.world)),
+                ("local", MemoryLayout<NativeRenderBodyVertex>.offset(of: \.local)),
                 ("uv", MemoryLayout<NativeRenderBodyVertex>.offset(of: \.uv)),
-                ("info", MemoryLayout<NativeRenderBodyVertex>.offset(of: \.info))])]
+                ("info", MemoryLayout<NativeRenderBodyVertex>.offset(of: \.info)),
+                ("weight", MemoryLayout<NativeRenderBodyVertex>.offset(of: \.weight))])]
         assertMatches(probes, try measure(probes, sources: [try source("NativeRenderKernels")], device: device))
         XCTAssertEqual(MemoryLayout<NativeRenderMaterial>.stride, 64)
         XCTAssertEqual(MemoryLayout<NativeRenderInstance>.stride, 16)
-        XCTAssertEqual(MemoryLayout<NativeRenderBodyVertex>.stride, 32)
+        XCTAssertEqual(MemoryLayout<NativeRenderBodyVertex>.stride, 48)
     }
 
     func testDecalRecordsMatchShaderLayouts() throws {
@@ -195,15 +212,20 @@ final class NativeMetalShaderABITests: XCTestCase {
         assertMatches(probes, try measure(probes, sources: [try source("NativeRenderKernels")], device: device))
         XCTAssertEqual(MemoryLayout<NativeDecalInstance>.stride, 48)
         XCTAssertEqual(MemoryLayout<NativeDecalVertex>.stride, 32)
-        // Układ się nie zmienił: indeks t−1 leży w `info.z`, a α bańki w `placement.w` (pola, które shader czyta po tych indeksach).
+        // Indeks t−1 bańki leży w `info.z`, a jej α w `placement.w`; bryła ma indeks rekordu w `info.w`, a α w `placement.x`.
         let bubble = NativeDecalInstance(color: .zero, placement: SIMD4(1, 2, 3, 4), bubbleIndex: 5, mode: .image,
                                          previousBubbleIndex: 6, alpha: 0.25)
         XCTAssertEqual(bubble.info, SIMD4<UInt32>(5, 0, 6, 0))
         XCTAssertEqual(bubble.placement.w, 0.25)
         let body = NativeDecalInstance(color: .zero, placement: SIMD4(1, 2, 3, 4), bubbleIndex: NativeDecalInstance.noBubble,
                                        mode: .glyphAlpha, previousBubbleIndex: 6, alpha: 0.25)
-        XCTAssertEqual(body.info.z, NativeDecalInstance.noPrevious, "bryła nie ma strony t−1")
-        XCTAssertEqual(body.placement, SIMD4<Float>(1, 2, 3, 4), "obrót bryły zostaje w placement.w")
+        XCTAssertEqual(body.info.z, NativeDecalInstance.noPrevious, "bryła nie ma strony t−1 baniek")
+        XCTAssertEqual(body.info.w, 0)
+        XCTAssertEqual(body.placement, SIMD4<Float>(0.25, 2, 3, 4), "α bryły w placement.x, promień odniesienia w placement.z")
+        let posed = NativeDecalInstance(color: .zero, placement: SIMD4(0, 0, 3, 0), bubbleIndex: NativeDecalInstance.noBubble,
+                                        mode: .image, alpha: 0.75, bodyIndex: 7)
+        XCTAssertEqual(posed.info, SIMD4<UInt32>(NativeDecalInstance.noBubble, 0, NativeDecalInstance.noPrevious, 7))
+        XCTAssertEqual(posed.placement, SIMD4<Float>(0.75, 0, 3, 0))
     }
 
     /// P-B-71: warstwa w `filter.w` to Int32 z odwróconym bitem znaku, więc porządek uint zgadza się z porządkiem Int32.

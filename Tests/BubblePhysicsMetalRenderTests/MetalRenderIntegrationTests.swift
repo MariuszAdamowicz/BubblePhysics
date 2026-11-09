@@ -80,9 +80,10 @@ final class MetalRenderIntegrationTests: XCTestCase {
         try assertPassesUnderMetalValidation(
             "BodyInterpolationTests/testStepFrameWithAFractionBetweenZeroAndOneDrawsTheBodyBetweenTheStates")
         try assertPassesUnderMetalValidation(
-            "BodyInterpolationTests/testDynamicBodyHittingAWallAtFractionOneIsDrawnExtrapolatedPastTheWall")
+            "BodyInterpolationTests/testDynamicBodyHittingAWallAtFractionOneIsDrawnWhereTheSolverLeftIt")
         try assertPassesUnderMetalValidation(
-            "BodyInterpolationTests/testDynamicBodyHittingAWallInAStepFrameWithHalfFractionIsExtrapolatedByHalfAStep")
+            "BodyInterpolationTests/testDynamicBodyHittingAWallInAStepFrameWithHalfFractionIsDrawnBetweenTheStates")
+        try assertPassesUnderMetalValidation("BodyInterpolationTests/testBodyDecalInAStepFrameSitsWithTheInterpolatedBody")
         try assertPassesUnderMetalValidation("BubbleInterpolationTests/testIntermediateFrameDrawsTheBubbleContourBetweenTheTwoSteps")
         try assertPassesUnderMetalValidation("BubbleInterpolationTests/testStepFrameDrawsThePreviousStepWhenNothingIsOwed")
         try assertPassesUnderMetalValidation("BubbleInterpolationTests/testBacklogOverAStepDrawsTheNewStepWithFractionOne")
@@ -100,7 +101,8 @@ final class MetalRenderIntegrationTests: XCTestCase {
         try assertPassesUnderMetalValidation(
             "SnapRenderTests/testBubbleWrappedInAStepFrameIsDrawnAtTheTargetEdgeEvenForFractionBetweenZeroAndOne")
         try assertPassesUnderMetalValidation("SnapRenderTests/testDecalOfABubbleWrappedInAStepFrameIsDrawnWithTheBubble")
-        try assertPassesUnderMetalValidation("SnapRenderTests/testBodyWrappedInAStepFrameIsExtrapolatedFromTheStateBeforeTheStep")
+        try assertPassesUnderMetalValidation("SnapRenderTests/testBodyWrappedInAStepFrameIsDrawnAtTheTargetEdgeWithoutInterpolation")
+        try assertPassesUnderMetalValidation("SnapRenderTests/testDecalOfABodyWrappedInAStepFrameIsDrawnWithTheBody")
     }
 
     /// Punkty zaczepienia gry (własny potok między warstwami, ponowne wiązanie buforów po haku) bez błędów walidacji Metal.

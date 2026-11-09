@@ -16,6 +16,22 @@ struct RenderBubble {
     uint4 filter;
 };
 
+// Rekord bryły ma układ `NativeRigidBody` solvera (sonda ABI w NativeMetalShaderABITests). Po kroku niesie obie pozy:
+// `pose` to środek masy i obrót stanu nowego kroku (z `w` = obrót przed krokiem), `previous.xy` środek masy przed krokiem,
+// `previous.zw` środek masy w układzie lokalnym, `flags.z` wynik regionu (1 poza regionem i usunięta, 2 zawinięta w kroku).
+struct RenderBody {
+    ulong2 identity;
+    float4 pose;
+    float4 previous;
+    float4 motion;
+    float4 physical;
+    uint4 ranges;
+    uint4 flags;
+    uint4 filter;
+    float4 shape;
+    float4 limits;
+};
+
 // Materiał renderu jednego obiektu; lustro `NativeRenderMaterial` w Swift (sonda ABI).
 struct NativeRenderMaterial {
     float4 color;        // RGBA, składowe w [0, 1]
@@ -37,18 +53,23 @@ struct NativeRenderInstance {
 // Wierzchołek trójkąta bryły: pozycja w świecie, współrzędne tekstury (lokalny punkt bryły znormalizowany do prostokąta
 // otaczającego, wiersz 0 obrazu u góry; przesunięcie i skalę UV materiału nakłada fragment bryły), indeks materiału oraz zakres
 // pierścienia konturu w buforze pierścieni (pas obrysu liczy fragment jako odległość od krawędzi pierścienia).
+// `local` to punkt w układzie lokalnym bryły (pierścień, indeks bryły w uchwycie w `info.w`) albo, dla tła (`info.w` = 0xFFFFFFFF),
+// punkt świata. Pozę bryły (środek masy i obrót, z mieszaniem t−1 → t) daje rekord GPU, więc kontur jest zawsze tam, gdzie
+// go zostawił krok; `weight` to waga stanu t (1 = bez interpolacji: obiekt utworzony, zastąpiony, scalony albo podzielony).
 struct NativeRenderBodyVertex {
-    float2 world;
+    float2 local;
     float2 uv;
-    uint4 info;          // materiał, początek pierścienia, liczba punktów pierścienia, reserved
+    uint4 info;          // materiał, początek pierścienia, liczba punktów pierścienia, indeks bryły (0xFFFFFFFF: punkt świata)
+    float weight;
 };
 
 // Instancja naklejki; lustro `NativeDecalInstance` w Swift (sonda ABI).
 struct NativeDecalInstance {
     float4 color;        // kolor naklejki, RGBA w [0, 1]
-    float4 placement;    // bryła: kotwica xy, promień odniesienia, obrót; bańka: kotwica i promień z rekordu bańki, w = α (waga stanu t)
+    float4 placement;    // bryła: x = waga stanu t (1 = bez interpolacji), z = promień odniesienia (kotwica i obrót z rekordu bryły);
+                         // bańka: kotwica i promień z rekordu bańki, w = α (waga stanu t)
     uint4 info;          // indeks bańki w uchwycie (0xFFFFFFFF dla bryły), tryb (0 obraz, 1 alfa atlasu, 2 SDF), indeks bańki na
-                         // stronie t−1 (0xFFFFFFFF: bez interpolacji; tylko bańka), reserved
+                         // stronie t−1 (0xFFFFFFFF: bez interpolacji; tylko bańka), indeks bryły w uchwycie (tylko bryła)
 };
 
 // Wierzchołek czworokąta glifu albo obrazu: położenie względem kotwicy w jednostkach promienia odniesienia (przed obrotem),
@@ -73,7 +94,9 @@ struct BubbleVertexOutput {
 
 struct BodyVertexOutput {
     float4 position [[position]];
-    float2 worldPosition;
+    // Położenie w układzie pierścienia: lokalnym bryły albo, dla tła (bez pierścienia), świata. Ruch sztywny zachowuje odległość
+    // do krawędzi pierścienia, więc obrys liczony tu jest taki sam jak w świecie.
+    float2 ringPosition;
     float2 uv;
     uint material [[flat]];
     uint ringStart [[flat]];
@@ -96,6 +119,23 @@ struct DecalVertexOutput {
 };
 
 float2 nativeClip(float2 point, float4 viewport) { return (point - viewport.xy) * 2.0 / viewport.zw; }
+
+// Układ lokalny bryły w świecie jako (początek xy, cosinus, sinus). Początek układu to środek masy minus przesunięty o obrót
+// środek masy w układzie lokalnym. Poza bryły jest mieszana t−1 → t z wagą stanu t, chyba że waga to 1 albo bryła zawinęła
+// się w tym kroku (flaga rekordu, znana dopiero po kroku GPU): wtedy poza z rekordu, bez interpolacji przez region.
+float4 nativeBodyFrame(RenderBody body, float weight) {
+    bool blend = weight < 1.0f && body.flags.z != 2;
+    float2 center = blend ? mix(body.previous.xy, body.pose.xy, weight) : body.pose.xy;
+    float angle = blend ? mix(body.pose.w, body.pose.z, weight) : body.pose.z;
+    float cosine = cos(angle), sine = sin(angle);
+    float2 centroid = body.previous.zw;
+    float2 origin = center - float2(cosine * centroid.x - sine * centroid.y, sine * centroid.x + cosine * centroid.y);
+    return float4(origin, cosine, sine);
+}
+
+float2 nativeBodyPoint(float4 frame, float2 local) {
+    return frame.xy + float2(frame.z * local.x - frame.w * local.y, frame.w * local.x + frame.z * local.y);
+}
 
 vertex BubbleVertexOutput nativeBubbleVertex(
     uint vertexID [[vertex_id]], uint instanceID [[instance_id]],
@@ -160,12 +200,28 @@ vertex BubbleVertexOutput nativeBubbleVertex(
 vertex BodyVertexOutput nativeBodyVertex(
     uint vertexID [[vertex_id]],
     device const NativeRenderBodyVertex *vertices [[buffer(0)]],
-    constant float4 &viewport [[buffer(2)]]) {
+    constant float4 &viewport [[buffer(2)]],
+    device const RenderBody *bodies [[buffer(4)]]) {
     BodyVertexOutput result;
     NativeRenderBodyVertex source = vertices[vertexID];
-    float2 clip = nativeClip(source.world, viewport);
+    float2 world = source.local;
+    if (source.info.w != 0xFFFFFFFFu) {
+        RenderBody body = bodies[source.info.w];
+        // Bryła poza regionem bez zawinięcia jest usuwana w tym kroku; jak bańka, nie jest już rysowana.
+        if (body.flags.z == 1) {
+            result.position = float4(2, 2, 0, 1);
+            result.ringPosition = float2(0);
+            result.uv = float2(0);
+            result.material = source.info.x;
+            result.ringStart = 0;
+            result.ringCount = 0;
+            return result;
+        }
+        world = nativeBodyPoint(nativeBodyFrame(body, source.weight), source.local);
+    }
+    float2 clip = nativeClip(world, viewport);
     result.position = float4(clip.x, clip.y, 0, 1);
-    result.worldPosition = source.world;
+    result.ringPosition = source.local;
     result.uv = source.uv;
     result.material = source.info.x;
     result.ringStart = source.info.y;
@@ -225,8 +281,8 @@ fragment float4 nativeBodyFragment(BodyVertexOutput in [[stage_in]],
         for (uint i = 0; i < in.ringCount; ++i) {
             float2 a = rings[in.ringStart + i], b = rings[in.ringStart + ((i + 1) % in.ringCount)];
             float2 edge = b - a;
-            float t = clamp(dot(in.worldPosition - a, edge) / max(dot(edge, edge), 1e-12f), 0.0f, 1.0f);
-            nearest = min(nearest, distance(in.worldPosition, a + t * edge));
+            float t = clamp(dot(in.ringPosition - a, edge) / max(dot(edge, edge), 1e-12f), 0.0f, 1.0f);
+            nearest = min(nearest, distance(in.ringPosition, a + t * edge));
         }
         outline = nearest < material.parameters.x;
     }
@@ -246,13 +302,14 @@ vertex DecalVertexOutput nativeDecalVertex(
     constant uint &stride [[buffer(3)]],
     device const RenderBubble *bubbles [[buffer(4)]],
     device const RenderBubble *previousBubbles [[buffer(5)]],
-    device const uint *counts [[buffer(6)]], device const uint *previousCounts [[buffer(7)]]) {
+    device const uint *counts [[buffer(6)]], device const uint *previousCounts [[buffer(7)]],
+    device const RenderBody *bodies [[buffer(8)]]) {
     DecalVertexOutput result;
     NativeDecalVertex source = vertices[vertexID];
     NativeDecalInstance instance = instances[source.info.x];
-    float2 anchor = instance.placement.xy;
+    float2 anchor;
     float radius = instance.placement.z;
-    float angle = instance.placement.w;
+    float cosine = 1.0f, sine = 0.0f;
     result.color = instance.color;
     result.bubble = instance.info.x;
     result.mode = instance.info.y;
@@ -283,11 +340,23 @@ vertex DecalVertexOutput nativeDecalVertex(
             result.previousBase = previousIndex * stride;
             result.alpha = alpha;
         }
-        angle = 0;
+    } else {
+        // Bryła: kotwica (początek układu lokalnego) i obrót z rekordu, interpolowane razem z bryłą.
+        RenderBody body = bodies[instance.info.w];
+        if (body.flags.z == 1) {
+            result.position = float4(2, 2, 0, 1);
+            result.worldPosition = float2(0);
+            result.anchor = float2(0);
+            result.radius = 0;
+            return result;
+        }
+        float4 frame = nativeBodyFrame(body, instance.placement.x);
+        anchor = frame.xy;
+        cosine = frame.z;
+        sine = frame.w;
     }
     radius = max(radius, 1e-6f);
     float2 offset = source.local * radius;
-    float cosine = cos(angle), sine = sin(angle);
     float2 world = anchor + float2(cosine * offset.x - sine * offset.y, sine * offset.x + cosine * offset.y);
     float2 clip = nativeClip(world, viewport);
     result.position = float4(clip.x, clip.y, 0, 1);

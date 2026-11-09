@@ -52,11 +52,11 @@ enum SceneBuilders {
                        filter: CollisionFilter = .default, interest: EventInterest = [],
                        materialID: PhysicsMaterialID? = nil,
                        regionExitPolicy: RegionExitPolicy = .remove,
-                       render: RenderMaterialID = style, layer: Int32 = 0) throws -> WorldObject {
+                       render: RenderMaterialID = style, layer: Int32 = 0, decal: Decal? = nil) throws -> WorldObject {
         .rigidBody(try RigidBodyDescriptor(id: ObjectID(rawValue: id), shape: .circle(radius: radius), position: center,
             velocity: velocity, angularVelocity: angularVelocity, mass: mass, motionRole: role,
             regionExitPolicy: regionExitPolicy, physicsMaterialID: materialID ?? polygonMaterial,
-            renderMaterialID: render, eventInterest: interest, filter: filter, layer: layer))
+            renderMaterialID: render, eventInterest: interest, filter: filter, layer: layer, decal: decal))
     }
 
     /// Kapsuła o osi wzdłuż lokalnej osi X.
