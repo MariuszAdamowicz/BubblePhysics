@@ -28,7 +28,7 @@ package struct BubbleWorldRenderBubble {
     package let id: ObjectID
     package let materialID: RenderMaterialID
     package let material: RenderMaterial
-    /// Naklejka rysowana po wszystkich bańkach warstwy; kotwicę i promień odniesienia (efektywny) renderer bierze z uchwytu.
+    /// Naklejka rysowana po wszystkich bańkach warstwy; kotwicę i promień odniesienia (docelowy) renderer bierze z uchwytu.
     package let decal: Decal?
 }
 

@@ -12,7 +12,7 @@ final class BubbleInterpolationTests: XCTestCase {
     private let tolerance: Float = 0.25
     private func id(_ value: UInt64) -> ObjectID { ObjectID(rawValue: value) }
 
-    /// `withDecal`: na bańce leży zielona naklejka (obraz 1×1 na kwadracie o połowie promienia efektywnego), więc jej środek da się zmierzyć osobno.
+    /// `withDecal`: na bańce leży zielona naklejka (obraz 1×1 na kwadracie o połowie promienia docelowego), więc jej środek da się zmierzyć osobno.
     private func makeScene(withDecal: Bool = false) async throws -> (scene: RenderTestScene, previous: Float, current: Float) {
         let scene = try RenderTestScene(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         try scene.submitMaterials([(redID, RenderMaterial(color: RGBA(1, 0, 0))), (blueID, RenderMaterial(color: RGBA(0, 0, 1)))])

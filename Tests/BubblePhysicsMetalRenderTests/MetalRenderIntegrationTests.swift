@@ -56,7 +56,8 @@ final class MetalRenderIntegrationTests: XCTestCase {
         try assertPassesUnderMetalValidation("DecalRenderTests/testImageDecalShowsTheChosenRegionOfTheTexture")
         try assertPassesUnderMetalValidation("DecalRenderTests/testImageDecalKeepsTheAspectOfTheRegionAndCentersItOnTheAnchor")
         try assertPassesUnderMetalValidation(
-            "DecalRenderTests/testDecalOnADeformedBubbleKeepsItsShapeAndIsClippedToTheEffectiveRadiusCircle")
+            "DecalRenderTests/testDecalOnADeformedBubbleIsClippedToTheTargetRadiusCircleAndTheDentedContour")
+        try assertPassesUnderMetalValidation("DecalRenderTests/testDecalOnADeformedBubbleHasTheSameSizeAsOnTheSameBubbleUndeformed")
         try assertPassesUnderMetalValidation("DecalRenderTests/testDecalOnABubbleKeepsConstantOrientationAfterDeformationAndMovement")
         try assertPassesUnderMetalValidation("DecalRenderTests/testDecalOnARotatedBodyRotatesWithIt")
         try assertPassesUnderMetalValidation("DecalRenderTests/testBodyDecalIsDrawnInAWorldWithoutBubbles")

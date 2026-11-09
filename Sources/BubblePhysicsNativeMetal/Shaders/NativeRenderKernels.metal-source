@@ -290,8 +290,9 @@ fragment float4 nativeBodyFragment(BodyVertexOutput in [[stage_in]],
     return nativeShade(material, outline, texel);
 }
 
-// Naklejka: czworokąt glifu albo obrazu w układzie kotwicy. Dla bańki kotwica i promień odniesienia (efektywny) idą z rekordu
-// bańki w uchwycie, więc naklejka nie zna ich na CPU; dla bryły z instancji. Bańka nie ma obrotu. Naklejka bańki jest
+// Naklejka: czworokąt glifu albo obrazu w układzie kotwicy. Dla bańki kotwica i promień odniesienia (docelowy, `physical.z`:
+// stały, niezależny od chwilowej deformacji) idą z rekordu bańki w uchwycie, więc naklejka nie zna ich na CPU; dla bryły
+// z instancji. Bańka nie ma obrotu. Naklejka bańki jest
 // interpolowana t−1 → t jak sama bańka: kotwica i promień z rekordów obu stron, a decyzja o mieszaniu (jest strona t−1, ta sama
 // liczba próbek konturu, bańka nie zawinęła się w tym kroku) zapada tu i idzie do fragmentu.
 vertex DecalVertexOutput nativeDecalVertex(
@@ -327,7 +328,7 @@ vertex DecalVertexOutput nativeDecalVertex(
             return result;
         }
         anchor = bubble.position.xy;
-        radius = bubble.deformation.y;
+        radius = bubble.physical.z;
         uint previousIndex = instance.info.z;
         uint count = min(counts[instance.info.x], stride);
         if (previousIndex != 0xFFFFFFFFu && count > 2 && bubble.publicFlags.w != 2
@@ -335,7 +336,7 @@ vertex DecalVertexOutput nativeDecalVertex(
             RenderBubble before = previousBubbles[previousIndex];
             float alpha = instance.placement.w;
             anchor = mix(before.position.xy, anchor, alpha);
-            radius = mix(before.deformation.y, radius, alpha);
+            radius = mix(before.physical.z, radius, alpha);
             result.blend = 1;
             result.previousBase = previousIndex * stride;
             result.alpha = alpha;

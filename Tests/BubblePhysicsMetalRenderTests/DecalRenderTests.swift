@@ -6,8 +6,9 @@ import XCTest
 
 /// P-B-43 … P-B-48: naklejki. Zasady, które sprawdzają testy:
 /// - kotwica w środku obiektu (bańka: środek, bryła: początek układu lokalnego), naklejka tekstowa wyśrodkowana w kotwicy;
-/// - promień odniesienia R: bańka to efektywny promień (najmniejsza odległość konturu od środka, więc koło R leży w całości
-///   wewnątrz konturu), bryła promień okręgu opisanego na kształcie wokół kotwicy;
+/// - promień odniesienia R: bańka to jej promień docelowy (stały, niezależny od chwilowej deformacji; efektywny promień to
+///   najmniejsza odległość konturu od środka, więc kontur nigdy nie przecinałby koła o tym promieniu), bryła promień okręgu
+///   opisanego na kształcie wokół kotwicy;
 /// - skala 1 daje linię tekstu o wysokości R, a obraz w kwadracie o boku 2R (z zachowaniem proporcji fragmentu);
 /// - 1× w atlasie SDF to wysokość linii 32 teksle, więc przy R = 32 px jeden teksel to jeden piksel;
 /// - naklejka jest zawsze przycinana do koła R, na bańce także do jej konturu, ale sama się nie deformuje;
@@ -239,14 +240,14 @@ final class DecalRenderTests: XCTestCase {
     // MARK: P-B-46 — kotwica, obrót, przycięcie
 
     /// Deformowalna bańka (promień 8) dociśnięta do statycznej ściany po prawej; po jednym kroku jej prawa strona jest spłaszczona.
-    private func deformedBubbleScene(image: CGImage) async throws
+    private func deformedBubbleScene(image: CGImage, scale: Float = 1) async throws
         -> (scene: RenderTestScene, texture: TextureID, center: WorldPoint, effectiveRadius: Float, contour: [WorldPoint]) {
         let scene = try makeScene()
         let texture = try scene.assets.register(image)
         scene.world.submit(try WorldTransaction()
             .updatePhysicsMaterial(B.bubbleMaterial, material: PhysicsMaterial(kind: .bubble, deformability: 1))
             .add(B.box(10, at: [8, 0], half: [8, 30], render: blackID))
-            .add(B.bubble(1, at: [-4.8, 0], radius: 8, render: blackID, decal: .image(texture))))
+            .add(B.bubble(1, at: [-4.8, 0], radius: 8, render: blackID, decal: .image(texture, scale: scale))))
         let frame = await scene.step()
         let state = try XCTUnwrap(frame.objects[id(1)])
         guard case .bubble(let effectiveRadius) = state.kind else { throw XCTSkip("to nie bańka") }
@@ -267,25 +268,85 @@ final class DecalRenderTests: XCTestCase {
 
     private func unit(_ vector: WorldPoint) -> WorldPoint { vector / (vector * vector).sum().squareRoot() }
 
-    func testDecalOnADeformedBubbleKeepsItsShapeAndIsClippedToTheEffectiveRadiusCircle() async throws {
-        let (scene, _, center, effective, contour) = try await deformedBubbleScene(image: bullseyeImage())
-        func radius(_ point: WorldPoint) -> Float { ((point - center) * (point - center)).sum().squareRoot() }
-        let flat = try XCTUnwrap(contour.min { radius($0) < radius($1) })
-        let round = try XCTUnwrap(contour.min { $0.x < $1.x })
-        XCTAssertLessThan(effective, 0.75 * 8, "warunek wstępny: bańka jest zdeformowana, promień efektywny mniejszy od docelowego")
-        XCTAssertEqual(radius(flat), effective, accuracy: 0.05, "efektywny promień to najmniejsza odległość konturu od środka")
-        XCTAssertGreaterThan(radius(round), 1.15 * effective, "warunek wstępny: po stronie okrągłej kontur sięga daleko poza koło R")
-        // Obraz 2R ma tarczę o promieniu 0,84 R i pierścień do R, na każdej stronie tak samo: naklejka się nie deformuje.
-        scene.assertPixel(center, blue, "środek")
-        for (name, target) in [("spłaszczona strona", flat), ("okrągła strona", round)] {
-            let direction = unit(target - center)
-            scene.assertPixel(center + direction * (0.6 * effective), blue, "\(name): tarcza")
-            scene.assertPixel(center + direction * (0.93 * effective), red, "\(name): pierścień")
+    /// Odległość konturu od środka w danym kierunku (kontur jest gwiaździsty względem środka bańki): bisekcja po `contains`.
+    private func contourRadius(_ contour: [WorldPoint], center: WorldPoint, direction: WorldPoint) -> Float {
+        var low: Float = 0, high: Float = 40
+        for _ in 0..<40 {
+            let middle = (low + high) / 2
+            if contains(contour, center + direction * middle) { low = middle } else { high = middle }
         }
-        // Poza kołem R naklejki nie ma, choć po stronie okrągłej piksel leży jeszcze w bańce (kontur sięga dalej).
-        let probe = center + unit(round - center) * (1.08 * effective)
-        XCTAssertTrue(contains(contour, probe), "warunek wstępny: sonda leży wewnątrz konturu")
-        scene.assertPixel(probe, black, "poza kołem odniesienia naklejka jest przycięta")
+        return low
+    }
+
+    /// G5-AC4: promień odniesienia bańki to jej promień docelowy (tu 8), stały mimo deformacji. Naklejka jest przycięta do koła
+    /// o tym promieniu i do zdeformowanego konturu: tam, gdzie kontur sięga poza promień efektywny, naklejka go wypełnia,
+    /// a za wgnieceniem jej nie ma. Sama się nie deformuje: tarcza (0,84 R) i pierścień (do R) leżą na tych samych promieniach.
+    func testDecalOnADeformedBubbleIsClippedToTheTargetRadiusCircleAndTheDentedContour() async throws {
+        let target: Float = 8
+        let (scene, _, center, effective, contour) = try await deformedBubbleScene(image: bullseyeImage())
+        XCTAssertLessThan(effective, 0.75 * target, "warunek wstępny: bańka jest zdeformowana, promień efektywny mniejszy od docelowego")
+        scene.assertPixel(center, blue, "środek")
+        var filledBeyondEffective = 0, cutByDent = 0, cutByCircle = 0
+        for step in 0..<24 {
+            let angle = Float(step) / 24 * 2 * .pi
+            let direction = WorldPoint(cos(angle), sin(angle))
+            let rim = contourRadius(contour, center: center, direction: direction)
+            XCTAssertGreaterThanOrEqual(rim, effective - 0.05, "promień efektywny to najmniejsza odległość konturu od środka")
+            // Wewnątrz konturu i koła R: naklejka jest, na tych samych promieniach co bez deformacji.
+            let inside = min(rim, target) - 0.5
+            if inside > 0.84 * target + 0.3 {
+                scene.assertPixel(center + direction * inside, red, "kąt \(step * 15)°: pierścień przy brzegu maski")
+            }
+            let probeDisc = min(inside, 0.84 * target - 0.4)
+            scene.assertPixel(center + direction * probeDisc, blue, "kąt \(step * 15)°: tarcza")
+            if inside > 1.1 * effective { filledBeyondEffective += 1 }
+            // Za konturem (wgniecenie) naklejki nie ma, choć leży jeszcze w kole R.
+            if rim + 0.5 < target - 0.3 {
+                scene.assertPixel(center + direction * (rim + 0.5), black, "kąt \(step * 15)°: za wgnieceniem konturu")
+                cutByDent += 1
+            }
+            // Za kołem R naklejki nie ma, choć kontur sięga dalej.
+            if rim > target + 0.7 {
+                scene.assertPixel(center + direction * (target + 0.5), black, "kąt \(step * 15)°: poza kołem docelowym")
+                cutByCircle += 1
+            }
+        }
+        XCTAssertGreaterThan(filledBeyondEffective, 0, "warunek wstępny: są kierunki, w których kontur sięga poza koło efektywne")
+        XCTAssertGreaterThan(cutByDent, 0, "warunek wstępny: są kierunki, w których wgniecenie wchodzi w koło docelowe")
+        _ = cutByCircle
+    }
+
+    /// Najdalszy punkt białej naklejki od środka w danym kierunku (krok 0,05 jednostki).
+    private func whiteExtent(_ scene: RenderTestScene, center: WorldPoint, direction: WorldPoint) -> Float {
+        var extent: Float = 0
+        while extent < 12 {
+            let next = extent + 0.05
+            let pixel = scene.harness.pixel(at: center + direction * next, in: RenderTestScene.viewport)
+            guard pixel[0] > 200, pixel[1] > 200, pixel[2] > 200 else { break }
+            extent = next
+        }
+        return extent
+    }
+
+    /// G5-AC4: rozmiar naklejki zależy od promienia docelowego, nie od chwilowej deformacji: kwadrat o połowie boku 0,35 R ma
+    /// na zdeformowanej bańce te same wymiary co na tej samej bańce bez deformacji.
+    func testDecalOnADeformedBubbleHasTheSameSizeAsOnTheSameBubbleUndeformed() async throws {
+        let target: Float = 8, half = 0.35 * target
+        let solid = try solidImage([255, 255, 255, 255])
+        let (deformed, _, center, effective, _) = try await deformedBubbleScene(image: solid, scale: 0.35)
+        XCTAssertLessThan(effective, 0.75 * target, "warunek wstępny: bańka jest zdeformowana")
+        XCTAssertGreaterThan(half, 0.4 * effective, "warunek wstępny: kwadrat jest zauważalnie większy niż przy skali względem efektywnego")
+        let flat = try makeScene()
+        let flatImage = try flat.assets.register(solid)
+        flat.world.submit(try WorldTransaction().add(B.bubble(1, at: center, radius: target, filter: ghost, role: .static,
+                                                               render: blackID, decal: .image(flatImage, scale: 0.35))))
+        await flat.step()
+        try await flat.render()
+        for (name, direction) in [("w górę", WorldPoint(0, 1)), ("w dół", WorldPoint(0, -1)), ("w lewo", WorldPoint(-1, 0))] {
+            let undeformed = whiteExtent(flat, center: center, direction: direction)
+            XCTAssertEqual(undeformed, half, accuracy: 0.25, "bez deformacji \(name)")
+            XCTAssertEqual(whiteExtent(deformed, center: center, direction: direction), undeformed, accuracy: 0.25, "\(name)")
+        }
     }
 
     func testDecalOnABubbleKeepsConstantOrientationAfterDeformationAndMovement() async throws {

@@ -43,7 +43,7 @@ public struct TextureRegion: Equatable, Hashable, Sendable {
 }
 
 /// Naklejka przypięta do bańki albo bryły: tekst z glifów albo fragment tekstury gry. Kotwica leży w środku obiektu,
-/// a skala jest względna do promienia odniesienia (bańka: efektywny promień; bryła: promień okręgu opisanego).
+/// a skala jest względna do promienia odniesienia (bańka: promień docelowy, stały mimo deformacji; bryła: promień okręgu opisanego).
 /// Naklejka jest zawsze przycinana do koła o promieniu odniesienia, na bańce także do jej konturu.
 public struct Decal: Equatable, Sendable {
     public enum Content: Equatable, Sendable {

@@ -11,7 +11,7 @@ enum DecalTexture: Hashable {
 
 /// Układa naklejkę w czworokąty: glify tekstu wyśrodkowane w kotwicy i fragment obrazu. Położenia są w jednostkach promienia
 /// odniesienia względem kotwicy (shader mnoży je przez promień i obraca z bryłą), więc dla bańki, której promień
-/// efektywny zna tylko GPU, nic nie trzeba liczyć na CPU.
+/// docelowy shader czyta z rekordu na GPU, nic nie trzeba liczyć na CPU.
 @MainActor
 struct DecalRenderer {
     let assets: AssetRegistry
