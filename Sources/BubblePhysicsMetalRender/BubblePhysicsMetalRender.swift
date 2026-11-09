@@ -16,6 +16,8 @@ public final class BubblePhysicsMetalRender {
     private let device: MTLDevice
     private let assets: AssetRegistry
     private let pipelines: MaterialPipelines
+    /// Biała tekstura 1×1 dla materiałów bez tekstury, bo fragment zawsze próbkuje.
+    private let whiteTexture: MTLTexture
     private var triangulationCache: [[WorldPoint]: [Int]] = [:]
     private static let triangulationCacheLimit = 256
     /// Liczba wywołań rysowania w ostatnio zakodowanej klatce (jedno na ciąg); szew testów grupowania.
@@ -29,6 +31,11 @@ public final class BubblePhysicsMetalRender {
         self.device = device
         self.assets = assets
         pipelines = try MaterialPipelines(device: device)
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: 1, height: 1, mipmapped: false)
+        descriptor.usage = .shaderRead
+        guard let white = device.makeTexture(descriptor: descriptor) else { throw AssetError.textureCreationFailed }
+        white.replace(region: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0, withBytes: [UInt8](repeating: 255, count: 4), bytesPerRow: 4)
+        whiteTexture = white
     }
 
     /// Ciąg sąsiednich obiektów jednego rodzaju geometrii o tym samym trybie mieszania i teksturze; `first` i `count` dotyczą
@@ -87,6 +94,7 @@ public final class BubblePhysicsMetalRender {
         var boundGeometry: MaterialPipelines.Geometry?
         for run in frame.runs {
             encoder.setRenderPipelineState(try pipelines.pipeline(run.geometry, blend: run.blend, format: color.pixelFormat))
+            encoder.setFragmentTexture(run.texture.flatMap { assets.texture(for: $0) } ?? whiteTexture, index: 0)
             switch run.geometry {
             case .bubble:
                 guard let handoff = published.handoff else { continue }
@@ -115,6 +123,7 @@ public final class BubblePhysicsMetalRender {
     /// lokalnymi współrzędnymi i pierścieniami konturu oraz ciągi o wspólnym trybie mieszania i teksturze.
     private func buildFrame(_ state: BubbleWorldRenderState) -> FrameData {
         var frame = FrameData()
+        if let background = state.background { appendBackground(background, region: state.region, to: &frame) }
         for layer in state.layers {
             if let handoff = state.handoff {
                 for bubble in layer.bubbles {
@@ -132,14 +141,34 @@ public final class BubblePhysicsMetalRender {
                 frame.rings += shape.vertices.map { SIMD2($0.x, $0.y) }
                 let info = SIMD4<UInt32>(material, ringStart, ringCount, 0)
                 frame.extendRun(.body, shape.material, first: frame.vertices.count, count: indices.count)
+                // Tekstura rozciągnięta na lokalny prostokąt otaczający, wiersz 0 obrazu u góry; obraca się z bryłą.
+                let xs = shape.localVertices.map(\.x), ys = shape.localVertices.map(\.y)
+                let minimum = SIMD2(xs.min() ?? 0, ys.min() ?? 0), maximum = SIMD2(xs.max() ?? 0, ys.max() ?? 0)
+                let size = SIMD2(max(maximum.x - minimum.x, 1e-6), max(maximum.y - minimum.y, 1e-6))
                 for index in indices {
                     let world = shape.vertices[index], local = shape.localVertices[index]
-                    frame.vertices.append(NativeRenderBodyVertex(world: SIMD2(world.x, world.y),
-                                                                  local: SIMD2(local.x, local.y), info: info))
+                    let uv = SIMD2((local.x - minimum.x) / size.x, 1 - (local.y - minimum.y) / size.y)
+                    frame.vertices.append(NativeRenderBodyVertex(world: SIMD2(world.x, world.y), local: uv, info: info))
                 }
             }
         }
         return frame
+    }
+
+    /// Tło to czworokąt regionu z teksturą rozciągniętą na cały region, rysowany przed warstwami w trybie nieprzezroczystym.
+    private func appendBackground(_ texture: TextureID, region: WorldRectangle, to frame: inout FrameData) {
+        guard let material = try? RenderMaterial(texture: texture) else { return }
+        let index = UInt32(frame.materials.count)
+        frame.materials.append(MaterialPipelines.record(for: material))
+        frame.extendRun(.body, material, first: frame.vertices.count, count: 6)
+        let info = SIMD4<UInt32>(index, 0, 0, 0)
+        let (low, high) = (region.min, region.max)
+        let corners: [(SIMD2<Float>, SIMD2<Float>)] = [
+            (SIMD2(low.x, high.y), SIMD2(0, 0)), (SIMD2(high.x, high.y), SIMD2(1, 0)),
+            (SIMD2(high.x, low.y), SIMD2(1, 1)), (SIMD2(low.x, low.y), SIMD2(0, 1))]
+        for corner in [0, 1, 2, 0, 2, 3] {
+            frame.vertices.append(NativeRenderBodyVertex(world: corners[corner].0, local: corners[corner].1, info: info))
+        }
     }
 
     private struct Arena {
