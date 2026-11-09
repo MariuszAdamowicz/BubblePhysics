@@ -61,6 +61,15 @@ final class MetalRenderIntegrationTests: XCTestCase {
         try assertPassesUnderMetalValidation("DecalRenderTests/testRigidBodyInTheSameLayerCoversABubbleTogetherWithItsDecal")
         try assertPassesUnderMetalValidation("DecalRenderTests/testMergeAndSplitResultsCarryTheDecalFromTheOperation")
     }
+
+    /// Punkty zaczepienia gry (własny potok między warstwami, ponowne wiązanie buforów po haku) bez błędów walidacji Metal.
+    func testRenderHooksPassMetalValidation() throws {
+        try assertPassesUnderMetalValidation("RenderHookTests/testHooksDrawBetweenBackgroundLayersAndOverlay")
+        try assertPassesUnderMetalValidation("RenderHookTests/testMatrixMapsWorldPointsToTheRightPixels")
+        try assertPassesUnderMetalValidation("RenderHookTests/testHooksDrawInAnEmptyWorldBeforeAndAfterTheFirstStep")
+        try assertPassesUnderMetalValidation("RenderHookTests/testHookForALayerWithoutObjectsDrawsInLayerOrder")
+        try assertPassesUnderMetalValidation("RenderHookTests/testThrowingHookRejectsTheFrameAndTheNextFrameSucceeds")
+    }
 #endif
 
     func testRendererAcceptsViewportAndCallerCommandBuffer() async throws {

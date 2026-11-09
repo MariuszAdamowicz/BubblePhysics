@@ -3,6 +3,7 @@ import BubblePhysicsAssets
 import BubblePhysicsModel
 import Metal
 import BubblePhysicsNativeMetal
+import simd
 
 public enum BubblePhysicsMetalRenderError: Error {
     case deviceMismatch, missingColorTarget, renderEncoderUnavailable
@@ -66,6 +67,13 @@ public final class BubblePhysicsMetalRender {
         var decalVertices: [NativeDecalVertex] = []
         var runs: [Run] = []
         var materialIndices: [RenderMaterialID: UInt32] = [:]
+        /// Ciągi tła (od zera) i ciągi każdej warstwy rosnąco; haki gry wchodzą między te zakresy.
+        var backgroundRuns = 0..<0
+        var layerRuns: [Int32: Range<Int>] = [:]
+        /// Ciągi o indeksie poniżej progu nie przyjmują już kolejnych obiektów, więc zakres segmentu zostaje zamknięty.
+        private var mergeFloor = 0
+
+        mutating func beginSegment() { mergeFloor = runs.count }
 
         mutating func materialIndex(_ id: RenderMaterialID, _ material: RenderMaterial) -> UInt32 {
             if let index = materialIndices[id] { return index }
@@ -81,7 +89,8 @@ public final class BubblePhysicsMetalRender {
 
         mutating func extendRun(_ geometry: MaterialPipelines.Geometry, blend: RenderBlendMode, texture: DecalTexture?,
                                 first: Int, count: Int) {
-            if let last = runs.last, last.geometry == geometry, last.blend == blend, last.texture == texture {
+            if runs.count > mergeFloor, let last = runs.last, last.geometry == geometry, last.blend == blend,
+               last.texture == texture {
                 runs[runs.count - 1].count += count
             } else {
                 runs.append(Run(geometry: geometry, blend: blend, texture: texture, first: first, count: count))
@@ -89,6 +98,8 @@ public final class BubblePhysicsMetalRender {
         }
     }
 
+    /// Rysuje klatkę w jednym passie: tło, warstwy rosnąco, a między nimi haki gry. Haki działają także w świecie bez obiektów
+    /// i przed pierwszym krokiem; warstwa z samym hakiem też jest rysowana, w kolejności numerów warstw.
     public func encode(world: BubbleWorld, viewport: Viewport, commandBuffer: MTLCommandBuffer,
                        renderPassDescriptor: MTLRenderPassDescriptor, hooks: RenderHooks = .none) throws {
         guard commandBuffer.device === device, world.assets === assets else { throw BubblePhysicsMetalRenderError.deviceMismatch }
@@ -101,59 +112,85 @@ public final class BubblePhysicsMetalRender {
         defer { encoder.endEncoding() }
         encoder.label = "bubble-physics.direct-render"
         lastDrawCallCount = 0
-        guard let published = world.renderState else { return }
-        let frame = buildFrame(published)
-        guard !frame.runs.isEmpty else { return }
-        let arena = try makeArena(frame, commandBuffer: commandBuffer)
+        let published = world.renderState
+        let frame = published.map(buildFrame) ?? FrameData()
+        let arena = frame.runs.isEmpty ? nil : try makeArena(frame, commandBuffer: commandBuffer)
         var values = SIMD4<Float>(viewport.center.x, viewport.center.y, viewport.size.x, viewport.size.y)
         var boundGeometry: MaterialPipelines.Geometry?
-        for run in frame.runs {
-            encoder.setRenderPipelineState(try pipelines.pipeline(run.geometry, blend: run.blend, format: color.pixelFormat))
-            // Stager odrzuca transakcje z nieznaną teksturą, więc brak tekstury w rejestrze jest nieosiągalny; biała tekstura
-            // jest tylko zabezpieczeniem, które nie ma zepsuć klatki w buildzie bez asercji.
-            let registered: MTLTexture?
-            switch run.texture {
-            case .texture(let id)?: registered = assets.texture(for: id)
-            case .atlas(let source)?: registered = assets.atlas(for: source)?.texture
-            case nil: registered = nil
-            }
-            assert(run.texture == nil || registered != nil, "tekstura \(String(describing: run.texture)) nie jest w rejestrze")
-            encoder.setFragmentTexture(registered ?? whiteTexture, index: 0)
-            switch run.geometry {
-            case .bubble:
-                guard let handoff = published.handoff else { continue }
-                if boundGeometry != .bubble {
-                    handoff.bindBubbles(encoder, viewport: viewport, instances: arena.buffer, instanceOffset: arena.instances)
-                    encoder.setFragmentBuffer(arena.buffer, offset: arena.materials, index: 0)
-                    boundGeometry = .bubble
+        let matrix = Self.clipMatrix(viewport)
+
+        func draw(_ range: Range<Int>) throws {
+            guard let arena else { return }
+            for run in frame.runs[range] {
+                encoder.setRenderPipelineState(try pipelines.pipeline(run.geometry, blend: run.blend, format: color.pixelFormat))
+                // Stager odrzuca transakcje z nieznaną teksturą, więc brak tekstury w rejestrze jest nieosiągalny; biała tekstura
+                // jest tylko zabezpieczeniem, które nie ma zepsuć klatki w buildzie bez asercji.
+                let registered: MTLTexture?
+                switch run.texture {
+                case .texture(let id)?: registered = assets.texture(for: id)
+                case .atlas(let source)?: registered = assets.atlas(for: source)?.texture
+                case nil: registered = nil
                 }
-                handoff.drawBubbles(encoder, first: run.first, count: run.count)
-                lastDrawCallCount += 1
-            case .body:
-                if boundGeometry != .body {
-                    encoder.setVertexBuffer(arena.buffer, offset: arena.vertices, index: 0)
-                    encoder.setVertexBytes(&values, length: MemoryLayout<SIMD4<Float>>.stride, index: 2)
-                    encoder.setFragmentBuffer(arena.buffer, offset: arena.materials, index: 0)
-                    encoder.setFragmentBuffer(arena.buffer, offset: arena.rings, index: 1)
-                    boundGeometry = .body
-                }
-                encoder.drawPrimitives(type: .triangle, vertexStart: run.first, vertexCount: run.count)
-                lastDrawCallCount += 1
-            case .decal:
-                if boundGeometry != .decal {
-                    if let handoff = published.handoff {
-                        handoff.bindDecals(encoder, viewport: viewport, vertices: arena.buffer, vertexOffset: arena.decalVertices,
-                                           instances: arena.buffer, instanceOffset: arena.decalInstances)
-                    } else {
-                        NativeMetalRenderHandoff.bindDecalsWithoutBubbles(encoder, viewport: viewport, vertices: arena.buffer,
-                            vertexOffset: arena.decalVertices, instances: arena.buffer, instanceOffset: arena.decalInstances)
+                assert(run.texture == nil || registered != nil, "tekstura \(String(describing: run.texture)) nie jest w rejestrze")
+                encoder.setFragmentTexture(registered ?? whiteTexture, index: 0)
+                switch run.geometry {
+                case .bubble:
+                    guard let handoff = published?.handoff else { continue }
+                    if boundGeometry != .bubble {
+                        handoff.bindBubbles(encoder, viewport: viewport, instances: arena.buffer, instanceOffset: arena.instances)
+                        encoder.setFragmentBuffer(arena.buffer, offset: arena.materials, index: 0)
+                        boundGeometry = .bubble
                     }
-                    boundGeometry = .decal
+                    handoff.drawBubbles(encoder, first: run.first, count: run.count)
+                    lastDrawCallCount += 1
+                case .body:
+                    if boundGeometry != .body {
+                        encoder.setVertexBuffer(arena.buffer, offset: arena.vertices, index: 0)
+                        encoder.setVertexBytes(&values, length: MemoryLayout<SIMD4<Float>>.stride, index: 2)
+                        encoder.setFragmentBuffer(arena.buffer, offset: arena.materials, index: 0)
+                        encoder.setFragmentBuffer(arena.buffer, offset: arena.rings, index: 1)
+                        boundGeometry = .body
+                    }
+                    encoder.drawPrimitives(type: .triangle, vertexStart: run.first, vertexCount: run.count)
+                    lastDrawCallCount += 1
+                case .decal:
+                    if boundGeometry != .decal {
+                        if let handoff = published?.handoff {
+                            handoff.bindDecals(encoder, viewport: viewport, vertices: arena.buffer, vertexOffset: arena.decalVertices,
+                                               instances: arena.buffer, instanceOffset: arena.decalInstances)
+                        } else {
+                            NativeMetalRenderHandoff.bindDecalsWithoutBubbles(encoder, viewport: viewport, vertices: arena.buffer,
+                                vertexOffset: arena.decalVertices, instances: arena.buffer, instanceOffset: arena.decalInstances)
+                        }
+                        boundGeometry = .decal
+                    }
+                    encoder.drawPrimitives(type: .triangle, vertexStart: run.first, vertexCount: run.count)
+                    lastDrawCallCount += 1
                 }
-                encoder.drawPrimitives(type: .triangle, vertexStart: run.first, vertexCount: run.count)
-                lastDrawCallCount += 1
             }
         }
+
+        /// Hak gry zmienia potok i wiązania encodera, więc po nim następny ciąg wiąże arenę i bufory handoffu od nowa.
+        func call(_ hook: RenderHooks.Hook?) throws {
+            guard let hook else { return }
+            try hook(encoder, matrix)
+            boundGeometry = nil
+        }
+
+        try draw(frame.backgroundRuns)
+        try call(hooks.afterBackground)
+        for layer in Set(frame.layerRuns.keys).union(hooks.afterLayer.keys).sorted() {
+            try draw(frame.layerRuns[layer] ?? 0..<0)
+            try call(hooks.afterLayer[layer])
+        }
+        try call(hooks.overlay)
+    }
+
+    /// Macierz świat → clip tej samej kamery co `nativeClip` w shaderach: (punkt − środek) · 2 / rozmiar.
+    static func clipMatrix(_ viewport: Viewport) -> simd_float4x4 {
+        let scale = SIMD2<Float>(2 / viewport.size.x, 2 / viewport.size.y)
+        return simd_float4x4(columns: (SIMD4(scale.x, 0, 0, 0), SIMD4(0, scale.y, 0, 0), SIMD4(0, 0, 1, 0),
+                                       SIMD4(-viewport.center.x * scale.x, -viewport.center.y * scale.y, 0, 1)))
     }
 
     /// Przekłada listę rysowania świata na dane klatki: instancje baniek (indeks rekordu w uchwycie), trójkąty brył z
@@ -162,7 +199,11 @@ public final class BubblePhysicsMetalRender {
         var frame = FrameData()
         let decals = DecalRenderer(assets: assets)
         if let background = state.background { appendBackground(background, region: state.region, to: &frame) }
+        frame.backgroundRuns = 0..<frame.runs.count
         for layer in state.layers {
+            let firstRun = frame.runs.count
+            frame.beginSegment()
+            defer { frame.layerRuns[layer.layer] = firstRun..<frame.runs.count }
             if let handoff = state.handoff {
                 for bubble in layer.bubbles {
                     guard let index = handoff.bubbleIndexByID[bubble.id] else { continue }
