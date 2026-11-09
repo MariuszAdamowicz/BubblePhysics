@@ -43,6 +43,8 @@ package struct RuntimeObject: Equatable, Sendable {
     package var kinematicExactPose: SIMD3<Double>?
     /// Warstwa rysowania i hit-testu: startuje z deskryptora, a `setLayer` zmienia tylko to pole (deskryptory mają pola `let`).
     package var layer: Int32 = 0
+    /// Naklejka: startuje z deskryptora, a `setDecal` zmienia tylko to pole (deskryptory mają pola `let`).
+    package var decal: Decal?
     package var targetRadius: Float = 0
     package var collisionRadius: Float = 0
     package var effectiveRadius: Float = 0
@@ -70,8 +72,8 @@ package struct RuntimeObject: Equatable, Sendable {
         }
         previousPosition = position
         switch descriptor {
-        case .bubble(let value): layer = value.layer
-        case .rigidBody(let value): layer = value.layer
+        case .bubble(let value): layer = value.layer; decal = value.decal
+        case .rigidBody(let value): layer = value.layer; decal = value.decal
         case .forceField, .sensor: break
         }
         if case .bubble(let bubble) = descriptor {
@@ -140,8 +142,9 @@ package struct StagedTransactionBatch: Sendable {
 package enum TransactionStager {
     /// `textureExists` mówi, czy tekstura jest w rejestrze zasobów świata; Runtime nie zna rejestru.
     package static func stage(_ transaction: WorldTransaction, against state: RuntimeState,
-        textureExists: @escaping (TextureID) -> Bool = { _ in false }) throws -> StagedWorldChange {
-        var candidate = StagingContext(state: state, textureExists: textureExists)
+        textureExists: @escaping (TextureID) -> Bool = { _ in false },
+        glyphLookup: @escaping (GlyphSource, Character) -> GlyphAvailability = { _, _ in .sourceUnknown }) throws -> StagedWorldChange {
+        var candidate = StagingContext(state: state, textureExists: textureExists, glyphLookup: glyphLookup)
         for (index, operation) in transaction.operations.enumerated() {
             do { try candidate.apply(operation) }
             catch let error as TransactionRejectionReason {
@@ -160,14 +163,16 @@ package enum TransactionStager {
     /// To tylko staging: nie wykonuje kroku fizyki ani nie publikuje stanu na zewnątrz.
     package static func stageBatch(_ pending: [PendingTransaction], against state: RuntimeState,
         validate: ((StagedWorldChange) throws -> Void)? = nil,
-        textureExists: @escaping (TextureID) -> Bool = { _ in false }) -> StagedTransactionBatch {
+        textureExists: @escaping (TextureID) -> Bool = { _ in false },
+        glyphLookup: @escaping (GlyphSource, Character) -> GlyphAvailability = { _, _ in .sourceUnknown }) -> StagedTransactionBatch {
         var candidate = state
         var changes: [StagedWorldChange] = []
         var receipts: [TransactionReceipt] = []
         var events: [WorldEvent] = []
         for submission in pending {
             do {
-                let change = try stage(submission.transaction, against: candidate, textureExists: textureExists)
+                let change = try stage(submission.transaction, against: candidate, textureExists: textureExists,
+                                       glyphLookup: glyphLookup)
                 try validate?(change)
                 candidate = change.state
                 changes.append(change)
@@ -192,6 +197,7 @@ package enum TransactionStager {
 private struct StagingContext {
     var state: RuntimeState
     let textureExists: (TextureID) -> Bool
+    let glyphLookup: (GlyphSource, Character) -> GlyphAvailability
     var created: [ObjectID] = []
     var removed: [ObjectID] = []
     var replaced: [ObjectID] = []
@@ -232,6 +238,7 @@ private struct StagingContext {
         case .setBackground(let texture):
             try requireTexture(texture)
             state.background = texture
+        case .setDecal: break
         case .setMotion(let id, let role):
             var existing = try physicalObject(id)
             guard role != .playerDriven || existing.playerDriveTarget != nil else {

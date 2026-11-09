@@ -11,6 +11,10 @@ public enum AssetError: Error, Equatable, Sendable {
     /// Zasób albo rejestr należy do innego `MTLDevice` niż świat lub tekstura.
     case deviceMismatch
     case textureCreationFailed
+    /// Czcionka o tej nazwie nie jest dostępna w systemie ani w pakiecie aplikacji.
+    case fontNotFound
+    /// Atlas glifów bez tekstury `r8Unorm` do odczytu, bez glifów albo z metryką spoza tekstury.
+    case invalidGlyphAtlas
 }
 
 /// Rejestr tekstur gry dla jednego urządzenia Metal. Rejestracja jest synchroniczna i dzieje się poza klatką,
@@ -82,6 +86,25 @@ public final class AssetRegistry {
     public func contains(_ id: TextureID) -> Bool { textures[id] != nil }
 
     package func texture(for id: TextureID) -> MTLTexture? { textures[id] }
+
+    /// Rejestruje czcionkę o danej nazwie z zestawem znaków i raz generuje jej atlas SDF.
+    public func register(font name: String, characters: String) throws -> FontID {
+        throw AssetError.fontNotFound
+    }
+
+    /// Przyjmuje gotowy atlas glifów gry (tekstura i metryki) tego samego urządzenia.
+    public func register(glyphAtlas: GlyphAtlas) throws -> GlyphAtlasID {
+        throw AssetError.invalidGlyphAtlas
+    }
+
+    /// Czy źródło glifów jest zarejestrowane; stager pyta o to przy walidacji naklejki.
+    package func contains(_ source: GlyphSource) -> Bool { false }
+
+    /// Atlas źródła glifów; renderer rysuje z jego tekstury.
+    package func atlas(for source: GlyphSource) -> GlyphAtlas? { nil }
+
+    /// Metryki znaku w źródle; `nil`, gdy źródła albo znaku nie ma.
+    package func glyph(_ character: Character, in source: GlyphSource) -> GlyphMetrics? { nil }
 
     private func store(_ texture: MTLTexture) -> TextureID {
         let id = TextureID(rawValue: nextID)

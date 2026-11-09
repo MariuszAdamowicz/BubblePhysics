@@ -125,6 +125,8 @@ public struct BubbleDescriptor: Equatable, Sendable {
     public let eventInterest: EventInterest
     public let filter: CollisionFilter
     public let layer: Int32
+    /// Naklejka przypięta do bańki; `nil` oznacza brak.
+    public let decal: Decal?
     public var properties: PhysicsBodyProperties { PhysicsBodyProperties(layer: layer, filter: filter, eventInterest: eventInterest) }
 
     public init(id: ObjectID, position: WorldPoint, velocity: WorldPoint = .zero,
@@ -133,7 +135,7 @@ public struct BubbleDescriptor: Equatable, Sendable {
                 renderMaterialID: RenderMaterialID, mergeGroups: MergeGroupSet = [],
                 eventInterest: EventInterest = [],
                 drivePolicy: BubbleDrivePolicy = .standard, filter: CollisionFilter = .default,
-                layer: Int32 = 0) throws {
+                layer: Int32 = 0, decal: Decal? = nil) throws {
         try requireFinite(position, "bubble.position")
         try requireFinite(velocity, "bubble.velocity")
         try requirePositive(targetRadius, "bubble.targetRadius")
@@ -152,6 +154,7 @@ public struct BubbleDescriptor: Equatable, Sendable {
         self.eventInterest = eventInterest
         self.filter = filter
         self.layer = layer
+        self.decal = decal
     }
 }
 
@@ -230,6 +233,8 @@ public struct RigidBodyDescriptor: Equatable, Sendable {
     public let eventInterest: EventInterest
     public let filter: CollisionFilter
     public let layer: Int32
+    /// Naklejka przypięta do bryły; `nil` oznacza brak.
+    public let decal: Decal?
     public var properties: PhysicsBodyProperties { PhysicsBodyProperties(layer: layer, filter: filter, eventInterest: eventInterest) }
 
     /// Moment bezwładności, który widzi solver: podany przez grę albo liczony z kształtu.
@@ -240,7 +245,7 @@ public struct RigidBodyDescriptor: Equatable, Sendable {
                 mass: Float = 1, momentOfInertia: Float? = nil, motionRole: MotionRole = .static,
                 regionExitPolicy: RegionExitPolicy = .remove, physicsMaterialID: PhysicsMaterialID,
                 renderMaterialID: RenderMaterialID, eventInterest: EventInterest = [],
-                filter: CollisionFilter = .default, layer: Int32 = 0) throws {
+                filter: CollisionFilter = .default, layer: Int32 = 0, decal: Decal? = nil) throws {
         try shape.validate()
         try requireFinite(position, "rigidBody.position")
         try requireFinite(rotation, "rigidBody.rotation")
@@ -263,6 +268,7 @@ public struct RigidBodyDescriptor: Equatable, Sendable {
         self.eventInterest = eventInterest
         self.filter = filter
         self.layer = layer
+        self.decal = decal
         // Moment liczony z kształtu może w `Float` zejść do zera przy skrajnie małej bryle.
         try requirePositive(resolvedMomentOfInertia, "rigidBody.momentOfInertia")
     }
@@ -273,12 +279,12 @@ public struct RigidBodyDescriptor: Equatable, Sendable {
                 mass: Float = 1, momentOfInertia: Float? = nil, motionRole: MotionRole = .static,
                 regionExitPolicy: RegionExitPolicy = .remove, physicsMaterialID: PhysicsMaterialID,
                 renderMaterialID: RenderMaterialID, eventInterest: EventInterest = [],
-                filter: CollisionFilter = .default, layer: Int32 = 0) throws {
+                filter: CollisionFilter = .default, layer: Int32 = 0, decal: Decal? = nil) throws {
         try self.init(id: id, shape: .polygon(PolygonGeometry(vertices: vertices)), position: position,
                       rotation: rotation, velocity: velocity, angularVelocity: angularVelocity, mass: mass,
                       momentOfInertia: momentOfInertia, motionRole: motionRole, regionExitPolicy: regionExitPolicy,
                       physicsMaterialID: physicsMaterialID, renderMaterialID: renderMaterialID,
-                      eventInterest: eventInterest, filter: filter, layer: layer)
+                      eventInterest: eventInterest, filter: filter, layer: layer, decal: decal)
     }
 }
 

@@ -27,11 +27,13 @@ public struct BubbleResult: Equatable, Sendable {
     public let eventInterest: EventInterest
     public let filter: CollisionFilter
     public let layer: Int32
+    /// Naklejka wyniku scalenia albo podziału; `nil` oznacza brak.
+    public let decal: Decal?
     public init(id: ObjectID, physicsMaterialID: PhysicsMaterialID, renderMaterialID: RenderMaterialID,
                 motionRole: MotionRole = .dynamic, regionExitPolicy: RegionExitPolicy = .remove,
                 mergeGroups: MergeGroupSet = [], eventInterest: EventInterest = [],
-                filter: CollisionFilter = .default, layer: Int32 = 0) {
-        self.filter = filter; self.layer = layer
+                filter: CollisionFilter = .default, layer: Int32 = 0, decal: Decal? = nil) {
+        self.filter = filter; self.layer = layer; self.decal = decal
         self.id = id; self.physicsMaterialID = physicsMaterialID; self.renderMaterialID = renderMaterialID
         self.motionRole = motionRole; self.regionExitPolicy = regionExitPolicy
         self.mergeGroups = mergeGroups; self.eventInterest = eventInterest
@@ -61,6 +63,8 @@ public enum WorldOperation: Equatable, Sendable {
     case setLayer(ObjectID, Int32)
     /// Tekstura rozciągnięta na region symulacji pod wszystkimi warstwami; `nil` usuwa tło.
     case setBackground(TextureID?)
+    /// Tylko bańka i bryła mają naklejkę; `nil` ją usuwa.
+    case setDecal(ObjectID, Decal?)
     case setGlobalForce(WorldPoint)
     case applyImpulse(ObjectID, WorldPoint)
     case beginPlayerDrive(ObjectID, WorldPoint)
@@ -93,6 +97,7 @@ public struct WorldTransaction: Equatable, Sendable {
     public func setKinematicDrive(_ id: ObjectID, drive: KinematicDrive) -> Self { appending(.setKinematicDrive(id, drive)) }
     public func setLayer(_ id: ObjectID, layer: Int32) -> Self { appending(.setLayer(id, layer)) }
     public func setBackground(_ texture: TextureID?) -> Self { appending(.setBackground(texture)) }
+    public func setDecal(_ id: ObjectID, decal: Decal?) -> Self { appending(.setDecal(id, decal)) }
     public func setGlobalForce(_ force: WorldPoint) -> Self { appending(.setGlobalForce(force)) }
     public func applyImpulse(to id: ObjectID, impulse: WorldPoint) -> Self { appending(.applyImpulse(id, impulse)) }
     public func beginPlayerDrive(_ id: ObjectID, target: WorldPoint) -> Self { appending(.beginPlayerDrive(id, target)) }

@@ -12,6 +12,12 @@ public enum TransactionRejectionReason: Error, Equatable, Sendable {
     case textureNotFound(TextureID)
     /// `setLayer` dotyczy tylko baniek i brył; czujnik i pole sił nie są rysowane.
     case layerNotSupported(ObjectID)
+    case fontNotFound(FontID)
+    case glyphAtlasNotFound(GlyphAtlasID)
+    /// Tekst naklejki zawiera znak spoza zestawu zarejestrowanego z czcionką albo atlasem.
+    case characterNotInGlyphSet(Character)
+    /// `setDecal` dotyczy tylko baniek i brył; czujnik i pole sił nie są rysowane.
+    case decalNotSupported(ObjectID)
     case incompatiblePhysicsMaterial(PhysicsMaterialID, ObjectID)
     case incompatibleObjectKind(ObjectID)
     case jointNotFound(JointID)
