@@ -27,22 +27,23 @@ enum SceneBuilders {
     static func bubble(_ id: UInt64, at position: WorldPoint, radius: Float = 8, velocity: WorldPoint = .zero,
                        filter: CollisionFilter = .default, interest: EventInterest = [],
                        mergeGroups: MergeGroupSet = [], role: MotionRole = .dynamic,
-                       render: RenderMaterialID = style, layer: Int32 = 0) throws -> WorldObject {
+                       render: RenderMaterialID = style, layer: Int32 = 0, decal: Decal? = nil) throws -> WorldObject {
         .bubble(try BubbleDescriptor(id: ObjectID(rawValue: id), position: position, velocity: velocity,
             targetRadius: radius, motionRole: role, physicsMaterialID: bubbleMaterial, renderMaterialID: render, mergeGroups: mergeGroups,
-            eventInterest: interest, filter: filter, layer: layer))
+            eventInterest: interest, filter: filter, layer: layer, decal: decal))
     }
 
     static func box(_ id: UInt64, at center: WorldPoint, half: WorldPoint, role: MotionRole = .static,
                     velocity: WorldPoint = .zero, filter: CollisionFilter = .default,
                     interest: EventInterest = [], materialID: PhysicsMaterialID? = nil,
-                    render: RenderMaterialID = style, layer: Int32 = 0) throws -> WorldObject {
+                    render: RenderMaterialID = style, layer: Int32 = 0, rotation: Float = 0,
+                    decal: Decal? = nil) throws -> WorldObject {
         let width = 2 * half.x, height = 2 * half.y
         return .rigidBody(try RigidBodyDescriptor(id: ObjectID(rawValue: id),
             vertices: [[-half.x, -half.y], [half.x, -half.y], [half.x, half.y], [-half.x, half.y]], position: center,
-            velocity: velocity, mass: 1, momentOfInertia: (width * width + height * height) / 12, motionRole: role,
-            physicsMaterialID: materialID ?? polygonMaterial, renderMaterialID: render, eventInterest: interest, filter: filter,
-            layer: layer))
+            rotation: rotation, velocity: velocity, mass: 1, momentOfInertia: (width * width + height * height) / 12,
+            motionRole: role, physicsMaterialID: materialID ?? polygonMaterial, renderMaterialID: render,
+            eventInterest: interest, filter: filter, layer: layer, decal: decal))
     }
 
     static func circle(_ id: UInt64, at center: WorldPoint, radius: Float, role: MotionRole = .dynamic,
@@ -62,11 +63,11 @@ enum SceneBuilders {
                         role: MotionRole = .dynamic, velocity: WorldPoint = .zero, angularVelocity: Float = 0,
                         mass: Float = 1, filter: CollisionFilter = .default, interest: EventInterest = [],
                         materialID: PhysicsMaterialID? = nil, render: RenderMaterialID = style,
-                        layer: Int32 = 0) throws -> WorldObject {
+                        layer: Int32 = 0, decal: Decal? = nil) throws -> WorldObject {
         .rigidBody(try RigidBodyDescriptor(id: ObjectID(rawValue: id), shape: .capsule(halfLength: halfLength, radius: radius),
             position: center, rotation: rotation, velocity: velocity, angularVelocity: angularVelocity, mass: mass,
             motionRole: role, physicsMaterialID: materialID ?? polygonMaterial, renderMaterialID: render,
-            eventInterest: interest, filter: filter, layer: layer))
+            eventInterest: interest, filter: filter, layer: layer, decal: decal))
     }
 
     static func distanceJoint(_ id: UInt64, _ a: UInt64, _ b: UInt64? = nil, anchorA: WorldPoint = .zero,
