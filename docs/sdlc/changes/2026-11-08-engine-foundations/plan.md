@@ -938,6 +938,15 @@ Każde `verify` uruchamia się z katalogu głównego repozytorium. Testy CPU są
     Executed 50 tests, with 0 failures (0 unexpected) in 17.015 (17.021) seconds
     exit=0
     ```
+
+    Po poprawce promienia odniesienia (7394161):
+
+    ```text
+    $ swift test --filter 'DecalRenderTests|LayerRenderTests|NativeMetalShaderABITests|MetalRenderIntegrationTests'
+    Executed 51 tests, with 0 failures (0 unexpected)
+    exit=0
+    ```
+
 56. Scena strażnika `decals`: `PublicWorldStressBenchmark.Scene.decals`, `"decals"` w `PerfGuard.scenes`, test wyboru sceny w `BubblePhysicsPerfGuardTests`, punkt odniesienia z bezczynnej maszyny w osobnym commicie „perf-guard: punkt odniesienia sceny decals” z uzasadnieniem, covering [P-B-76](#p-b-76) · verify: `swift test --filter BubblePhysicsPerfGuardTests && swift run -c release BubblePhysicsPerfGuard | grep -q 'PASS decals'`
 
     ```text
@@ -950,6 +959,18 @@ Każde `verify` uruchamia się z katalogu głównego repozytorium. Testy CPU są
     ```
 
     `PASS decals` jest. FAIL stress-300 w tym samym przebiegu wynika z obciążenia maszyny (odstępstwo nr 88).
+
+    Po poprawce promienia odniesienia (7394161):
+
+    ```text
+    $ swift test --filter BubblePhysicsPerfGuardTests && swift run -c release BubblePhysicsPerfGuard | grep -q 'PASS decals'
+    Executed 22 tests, with 0 failures (0 unexpected)
+    FAIL stress-300: p95 3.8258 ms, punkt odniesienia 3.3516 ms, limit 3.6867 ms (+14.1%)
+    PASS mixed: p95 5.3759 ms, punkt odniesienia 4.9506 ms, limit 5.4456 ms (+8.6%)
+    PASS decals: p95 4.1268 ms, punkt odniesienia 4.3001 ms, limit 4.7301 ms (-4.0%)
+    exit=0
+    ```
+
 57. Testy interpolacji (czerwone), w trzech klasach, żeby każde następne zadanie miało własny filtr: `InterpolationFractionTests` (α = zaległość / krok, obcięte do [0, 1]; `didRenderLastAdvance`) w `BubblePhysicsRuntimeTests`; w MetalRender `BodyInterpolationTests` i `BubbleInterpolationTests` — przy 120 Hz i kroku 1/60 każde `advance` z buforem zatwierdza bufor i rysuje, a bryła i bańka w klatce pośredniej leżą między krokami ([P-B-50](#p-b-50)), przy zaległości ponad krok α = 1 i jeden krok ([P-B-51](#p-b-51)); `SnapRenderTests` — obiekt utworzony, zawinięty (przy krawędzi docelowej), scalony z istniejącym ID, podzielony i zastąpiony rysuje się w stanie bieżącego kroku ([P-B-52](#p-b-52)); klatka pośrednia po odrzuconym kroku rysuje opublikowane t, a nie stan odrzucony; klatka pośrednia po dodaniu baniek ponad pojemność rysuje istniejące bańki w miejscu, a nie przesunięte od początku układu · verify: `swift build --build-tests && ! swift test --filter 'InterpolationFractionTests|BodyInterpolationTests|BubbleInterpolationTests|SnapRenderTests'`
 
     ```text
@@ -1012,6 +1033,15 @@ Każde `verify` uruchamia się z katalogu głównego repozytorium. Testy CPU są
     Executed 48 tests, with 0 failures (0 unexpected) in 17.130 (17.136) seconds
     exit=0
     ```
+
+    Po poprawce promienia odniesienia (7394161):
+
+    ```text
+    $ swift test --filter 'RenderHookTests|LayerRenderTests|DecalRenderTests|MetalRenderIntegrationTests'
+    Executed 49 tests, with 0 failures (0 unexpected)
+    exit=0
+    ```
+
 65. Sprawdź etap: pełne `swift test` (z determinizmem) i strażnik na bezczynnej maszynie; gdy wynik stress-300 albo sceny mieszanej się poprawił albo interpolacja zamierzenie podniosła koszt, zapisz punkt odniesienia w osobnym commicie „perf-guard: punkt odniesienia po etapie 6” z uzasadnieniem, covering [P-B-43](#p-b-43)–[P-B-52](#p-b-52), [P-B-54](#p-b-54), [P-B-56](#p-b-56), [P-B-76](#p-b-76), [P-B-77](#p-b-77) · verify: `swift test && swift run -c release BubblePhysicsPerfGuard`
 
     ```text
@@ -1027,6 +1057,19 @@ Każde `verify` uruchamia się z katalogu głównego repozytorium. Testy CPU są
 
     `swift test` przechodzi: 1184 testy, 1 pominięty, 0 porażek. Strażnik daje FAIL stress-300 (+12,9%) na maszynie pod obciążeniem (średnia 3,95); mixed, decals i skalowanie mają PASS. Punktu odniesienia nie zapisano, bo wymaga przebiegu na bezczynnej maszynie (odstępstwo nr 88).
 
+    Po poprawce promienia odniesienia (7394161):
+
+    ```text
+    $ swift test && swift run -c release BubblePhysicsPerfGuard
+    Executed 1185 tests, with 1 test skipped and 0 failures (0 unexpected)
+    FAIL stress-300: p95 3.8729 ms, punkt odniesienia 3.3516 ms, limit 3.6867 ms (+15.6%)
+    PASS mixed: p95 5.3034 ms, punkt odniesienia 4.9506 ms, limit 5.4456 ms (+7.1%)
+    PASS decals: p95 4.1883 ms, punkt odniesienia 4.3001 ms, limit 4.7301 ms (-2.6%)
+    scaling 600/300: 1.83 (limit 2.50) PASS
+    load averages: 4,16 4,17 3,34
+    exit=1
+    ```
+
 ## Deviations from Design
 
 | ID | Type | Status | Design updated? | Note |
@@ -1040,6 +1083,7 @@ Każde `verify` uruchamia się z katalogu głównego repozytorium. Testy CPU są
 | [G4-AC1](change-design.md#g4-ac1) | change | approved | yes, §Decisions [CD-D-29](change-design.md#cd-d-29) i §Components (`Objects.swift`) edited 2026-11-09 | Czujniki i pola sił nie są rysowane i tracą identyfikator stylu; w `v1` rysowały się jak kształty. Decyzja właściciela przy replanie etapu 5 ([P-B-73](#p-b-73)). |
 | [CD-D-25](change-design.md#cd-d-25) | change | approved | yes, §Decisions [CD-D-25](change-design.md#cd-d-25) i §Architecture 5 edited 2026-11-09 | Wywołanie rysowania wiąże jeden pipeline i jedną teksturę, więc grupa w warstwie z kilkoma trybami mieszania albo teksturami dzieli się na ciągi sąsiednich po `ObjectID` obiektów, jedno wywołanie na ciąg; bryły rysuje zakres wspólnego bufora wierzchołków zamiast instancji. Kolejność z [G4-AC1](change-design.md#g4-ac1) zostaje dokładna ([P-B-74](#p-b-74)). Zatwierdzone przez właściciela 2026-11-09. |
 | [G12-AC3](change-design.md#g12-ac3) | change | approved | yes, §Testing & verification (strażnik) edited 2026-11-09 | Zestaw scen strażnika dostaje trzecią scenę `decals` (stress-300 z teksturą przyklejoną i naklejką tekstową na każdej bańce), która mierzy koszt przycinania naklejek maską radialną ([P-B-76](#p-b-76)). Projekt wymieniał tylko stress-300 i scenę mieszaną, a wybór metody przycinania wiązał ze strażnikiem. Decyzja właściciela przy replanie etapu 6. |
+| [G5-AC4](change-design.md#g5-ac4) | change | approved | yes, §Goals [G5-AC4](change-design.md#g5-ac4) edited 2026-11-09 | Promieniem odniesienia naklejki bańki jest promień docelowy, a nie efektywny. Efektywny promień to najmniejsza odległość konturu od środka, więc kontur nigdy nie przycinałby naklejki, a naklejka kurczyłaby się przy zgnieceniu. Decyzja właściciela przy bramce odstępstw etapu 6 (odstępstwo nr 79, [P-B-46](#p-b-46)). |
 
 ## Replan log
 
@@ -1198,7 +1242,7 @@ Każde `verify` uruchamia się z katalogu głównego repozytorium. Testy CPU są
 | 76 | 6 | 51 | gap | Strona t−1 po kroku odrzuconym na GPU: plan — wymuszony `guardFailure` nadpisuje stronę t−1 konturów. Sonda pokazała, że `guardFailure` z kroku XPBD zatrzymuje kernele konturów (`safety[3] != 0`), więc strona t−1 przeżywa; nadpisanie zachodzi tylko przy błędach po etapie konturów (np. `commandFailed`), i tak sprawdza je sonda. Flaga `previousContoursValid` gaśnie mimo to przy każdym kroku bez publikacji, zgodnie z planem. Test `testGuardFailureStopsTheContourKernelsButTheFlagStaysConservative` (e4db749) | approved | 2026-11-09 |
 | 77 | 6 | 51 | change | Pola strony t−1 w handoffie (`previousBubbleIDs`, `previousContoursValid`, `debugPreviousContourSnapshot`) powstały już w zadaniu 51, nie w 59, bo sonda musi je czytać. Szew testowy `NativePublicWorld.init(…, commandExecutor:)` do wstrzykiwania błędu po wykonaniu na GPU; po przeglądzie oba na poziomie `internal` (e4db749, 1426fb9) | approved | 2026-11-09 |
 | 78 | 6 | 52, 53 | change | Model i rejestr glifów, których R2 nie nazywa: publiczne `GlyphSource`, `TextureRegion` (współrzędne znormalizowane), `Decal.Content`; `Decal` to struktura `content`/`color`/`scale` z inicjalizatorami `.text`/`.image`, trzymana w jednym niezmiennym obiekcie (0f5488c), bo pole `decal` uczyniło deskryptory nietrywialnymi do kopiowania i kosztowało ok. 4% w strażniku. `GlyphAtlas` (`r8Unorm`) i publiczne `GlyphMetrics` w tekselach; `AssetError.fontNotFound` i `.invalidGlyphAtlas`; `package` `atlas(for:)` i `glyphLookup`. `register(font:characters:)` przyjmuje `String`, skala 1× to `ascent + descent = 32` teksele. Domknięcie stagera ma typ `GlyphLookup` (źródło → test przynależności znaku), żeby pusty tekst też sprawdzał źródło. `glyph(_:in:)` i `contains(_:)` usunięte po przeglądzie, bo wołały je tylko testy (4116acf, 5c4ddf8, 1426fb9) | approved | 2026-11-09 |
-| 79 | 6 | 55 | gap | Przycięcie naklejki bańki konturem: [G5-AC4](change-design.md#g5-ac4) każe użyć efektywnego promienia bańki jako promienia odniesienia, a w solverze to najmniejsza odległość konturu od środka. Koło odniesienia leży więc zawsze wewnątrz konturu i przycięcie konturem nie zmienia żadnego piksela; shader je liczy, ale widoczne jest tylko przycięcie kołem. Zbudowano dosłownie (efektywny promień, `deformation.y`), bez testu przycięcia konturem, bo nie da się zbudować sceny, która je pokazuje. Widoczne cięcie konturem wymagałoby promienia docelowego (9893571) | pending | 2026-11-09 |
+| 79 | 6 | 55 | change | Promień odniesienia naklejki bańki: [G5-AC4](change-design.md#g5-ac4) mówiło o efektywnym promieniu, a ten jest najmniejszą odległością próbek konturu od środka (`NativePostSolveKernels.metal-source:746-760`), więc kontur nigdy nie przycinał naklejki, a naklejka kurczyła się przy zgnieceniu. Zbudowano najpierw dosłownie (9893571); po decyzji właściciela `nativeDecalVertex` bierze promień docelowy (`physical.z`, mieszany t−1 → t): naklejka ma stały rozmiar, a wgłębienie konturu widocznie ją ucina. Nowe testy `testDecalOnADeformedBubbleIsClippedToTheTargetRadiusCircleAndTheDentedContour` i `testDecalOnADeformedBubbleHasTheSameSizeAsOnTheSameBubbleUndeformed`, na liście walidacji Metal; wydajność A/B bez zmian (7394161) | approved — design §Goals G5-AC4 edited 2026-11-09 | 2026-11-09 |
 | 80 | 6 | 55 | change | Renderer naklejek, szczegóły spoza R2: pomiar krawędzi SDF (10%→90%) przez funkcję rozmycia z 16 przesunięć podpikselowych, bo pojedyncze próbki dają do 1,6 px dla ostrej krawędzi; czcionka testowa Menlo-Regular (■ U+25A0); `NativeDecalInstance` 48 B i `package` `NativeDecalVertex` 32 B z sondami ABI, `NativeRenderFunctions.decalVertex`/`decalFragment`; geometria `.decal` zawsze z mieszaniem alfa; klucz ciągu rysowania `DecalTexture` (tekstura albo atlas); obraz zachowuje proporcje fragmentu w kwadracie o boku 2R·skala; naklejki baniek mają stałą orientację (9893571) | approved | 2026-11-09 |
 | 81 | 6 | 56 | change | Scena `decals`: `Scene.decals` z `initialTransaction(assets:)` (`@MainActor`, rejestruje teksturę i czcionkę poza pomiarem), nowe `PerfGuard.benchmarkScene(named:)`; `Scene.configuration()` i `initialTransaction(assets:)` poszerzone do `package` dla testów innych modułów, `Stress300Scene.initialTransaction(bubbleCount:)` (`package`). Punkt odniesienia `decals`: p95 4,3001 ms z 5 przebiegów 4,19–4,37 ms (5b9eb7e, 77d68fa) | approved | 2026-11-09 |
 | 82 | 6 | 57, 58 | change | Klatka bez kroku: commit czerwonych testów zawiera zaślepki `FixedStepDriver.interpolationFraction` i publiczne `WorldDiagnostics.didRenderLastAdvance`; plik pomocniczy testów `Support/InterpolationHarness.swift`. Prywatne `commitAndWait` i `handleAdvanceError` w `BubbleWorld`; `didRenderLastAdvance` jest true tylko po udanym zatwierdzeniu bufora. Dodane `package` `FixedStepDriver.interpolationFractionAfterNextStep` (α po kroku w klatce z krokiem). README i komentarz `advance` poprawione już w zadaniu 58. Test bufora z błędem w klatce bez kroku używa obiektu zastępczego rzutowanego na `MTLCommandBuffer` przez `unsafeBitCast`, bo prawdziwego bufora nie da się zepsuć na żądanie (7360bb2, a37d887, 1426fb9) | approved | 2026-11-09 |
