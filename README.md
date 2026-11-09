@@ -45,7 +45,7 @@ let frame = await world.advance(by: 1.0 / 60)
 for event in frame.events { /* merge, wejście/wyjście z sensora, wyjście z regionu, ... */ }
 
 // Fizyka i render w jednym command bufferze:
-let renderer = try BubblePhysicsMetalRender(device: device)
+let renderer = try BubblePhysicsMetalRender(device: device, assets: world.assets!)
 let rendered = await world.advance(by: 1.0 / 60, commandBuffer: commandBuffer) {
     try renderer.encode(world: world, viewport: Viewport(center: [187.5, 350], size: [375, 700]),
                         commandBuffer: commandBuffer, renderPassDescriptor: passDescriptor)

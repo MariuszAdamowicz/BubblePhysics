@@ -185,4 +185,47 @@ final class LayerRenderTests: XCTestCase {
         try await scene.render()
         scene.assertPixel([0, 0], blue, "ObjectID 3 nad 2 nad 1, choć 1 i 3 dzielą teksturę")
     }
+
+    // P-B-74, CD-D-25: scena z jednym trybem i jedną teksturą rysuje każdą grupę jednym wywołaniem; zmiana trybu dzieli ciąg.
+    func testSameModeAndTextureDrawsEachGroupInOneCallAndAChangeSplitsTheRun() async throws {
+        let scene = try makeScene()
+        let alphaRed = RenderMaterialID(rawValue: 22)
+        scene.world.submit(try WorldTransaction()
+            .updateRenderMaterial(alphaRed, material: RenderMaterial(color: RGBA(1, 0, 0, 0.5), blend: .alpha)))
+        scene.world.submit(try WorldTransaction()
+            .add(B.bubble(1, at: [-10, 0], radius: 3, filter: ghost, role: .static, render: redID))
+            .add(B.bubble(2, at: [-5, 0], radius: 3, filter: ghost, role: .static, render: greenID))
+            .add(B.bubble(3, at: [0, 0], radius: 3, filter: ghost, role: .static, render: blueID))
+            .add(B.box(4, at: [5, 0], half: [2, 2], filter: ghost, render: redID))
+            .add(B.box(5, at: [10, 0], half: [2, 2], filter: ghost, render: greenID)))
+        await scene.step()
+        try await scene.render()
+        XCTAssertEqual(scene.renderer.lastDrawCallCount, 2, "wszystkie bańki jednym wywołaniem, wszystkie bryły drugim")
+        scene.world.submit(try WorldTransaction()
+            .add(B.bubble(6, at: [-10, 8], radius: 3, filter: ghost, role: .static, render: alphaRed))
+            .add(B.bubble(7, at: [-5, 8], radius: 3, filter: ghost, role: .static, render: blueID)))
+        await scene.step()
+        try await scene.render()
+        // Bańki po ObjectID: 1–3 nieprzezroczyste, 6 alfa, 7 nieprzezroczysta, czyli trzy ciągi, plus jeden ciąg brył.
+        XCTAssertEqual(scene.renderer.lastDrawCallCount, 4, "ciągi baniek: opaque, alfa, opaque, plus bryły")
+    }
+
+    // P-B-73: lista rysowania ma warstwy rosnąco, w nich bańki przed bryłami, a czujnik i pole sił się w niej nie pojawiają.
+    func testDrawListHasAscendingLayersBubblesBeforeBodiesAndNoSensorsOrFields() async throws {
+        let scene = try makeScene()
+        scene.world.submit(try WorldTransaction()
+            .add(B.box(1, at: [0, 0], half: [2, 2], filter: ghost, render: redID, layer: 2))
+            .add(B.bubble(5, at: [10, 0], radius: 2, filter: ghost, role: .static, render: greenID, layer: 2))
+            .add(B.bubble(3, at: [-10, 0], radius: 2, filter: ghost, role: .static, render: blueID, layer: -1))
+            .add(.sensor(try SensorDescriptor(id: id(7), position: [0, 10], geometry: .circle(radius: 2))))
+            .add(.forceField(try ForceFieldDescriptor(id: id(8), position: [0, -10], geometry: .circle(radius: 2),
+                field: .directional(force: [0, 0])))))
+        await scene.step()
+        let layers = try XCTUnwrap(scene.world.renderState).layers
+        XCTAssertEqual(layers.map(\.layer), [-1, 2])
+        XCTAssertEqual(layers[0].bubbles.map(\.id), [id(3)]); XCTAssertTrue(layers[0].shapes.isEmpty)
+        XCTAssertEqual(layers[1].bubbles.map(\.id), [id(5)]); XCTAssertEqual(layers[1].shapes.map(\.id), [id(1)])
+        XCTAssertEqual(layers[1].shapes[0].materialID, redID)
+        XCTAssertEqual(layers[1].shapes[0].material.color, red)
+    }
 }

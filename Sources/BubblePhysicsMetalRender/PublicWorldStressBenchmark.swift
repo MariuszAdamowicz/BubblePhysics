@@ -126,7 +126,8 @@ public enum PublicWorldStressBenchmark {
         let height = scene.regionHeight
         let world = try BubbleWorld.makeBenchmarkWorld(configuration: try scene.configuration(),
             device: device, solverIterationLimit: 4)
-        let renderer = try BubblePhysicsMetalRender(device: device)
+        guard let assets = world.assets else { throw StressBenchmarkError.metalUnavailable }
+        let renderer = try BubblePhysicsMetalRender(device: device, assets: assets)
         world.submit(try scene.initialTransaction())
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm,
             width: 375, height: Int(height.rounded(.up)), mipmapped: false)

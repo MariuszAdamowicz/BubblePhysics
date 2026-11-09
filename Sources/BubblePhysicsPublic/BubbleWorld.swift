@@ -5,12 +5,32 @@ import BubblePhysicsModel
 import BubblePhysicsRuntime
 import BubblePhysicsNativeMetal
 
+/// Lista rysowania opublikowanego stanu: tło i warstwy rosnąco, w warstwie bańki, potem bryły, każda grupa rosnąco po
+/// `ObjectID`. Czujniki i pola sił nie mają materiału renderu, więc ich tu nie ma.
 package struct BubbleWorldRenderState {
     package let handoff: NativeMetalRenderHandoff?
+    /// Tekstura tła rozciągnięta na region symulacji; `nil`, gdy tła nie ma.
+    package let background: TextureID?
+    package let region: WorldRectangle
+    package let layers: [BubbleWorldRenderLayer]
+}
+
+package struct BubbleWorldRenderLayer {
+    package let layer: Int32
+    package let bubbles: [BubbleWorldRenderBubble]
     package let shapes: [BubbleWorldRenderShape]
 }
 
+package struct BubbleWorldRenderBubble {
+    package let id: ObjectID
+    package let materialID: RenderMaterialID
+    package let material: RenderMaterial
+}
+
 package struct BubbleWorldRenderShape {
+    package let id: ObjectID
+    package let materialID: RenderMaterialID
+    package let material: RenderMaterial
     /// Pierścień we współrzędnych lokalnych obiektu. Triangulacja zależy tylko od niego,
     /// bo przekształcenie sztywne zachowuje orientację i zawieranie.
     package let localVertices: [WorldPoint]
@@ -109,26 +129,41 @@ public final class BubbleWorld {
     /// Stały limit k kandydatów kontaktu na obiekt, wspólny dla wszystkich rodzajów par.
     package static var contactCandidateLimit: Int { NativeMetalSolver.candidateLimitPerObject }
 
-    /// Renderer widzi tylko opublikowany uchwyt i kształty brył; czujniki i pola sił nie są rysowane.
+    /// Renderer widzi tylko opublikowany uchwyt i listę rysowania; czujniki i pola sił nie są rysowane.
     package var renderState: BubbleWorldRenderState? {
         if let pendingRenderState { return pendingRenderState }
         guard clock.completedSteps > 0 else { return nil }
         return makeRenderState((stepper as? NativeCompleteStepper)?.publishedRenderHandoff, from: state)
     }
 
+    /// Lista rysowania z `source`: warstwy rosnąco, w nich bańki i bryły rosnąco po `ObjectID`. Obiekt bez materiału renderu
+    /// (czujnik, pole sił) nie jest rysowany.
     private func makeRenderState(_ handoff: NativeMetalRenderHandoff?,
                                  from source: RuntimeState) -> BubbleWorldRenderState {
-        let shapes = source.objects.sorted { $0.key.rawValue < $1.key.rawValue }.compactMap { _, object -> BubbleWorldRenderShape? in
-            guard case .rigidBody(let body) = object.descriptor else { return nil }
-            let ring = Self.rigidRing(body.shape)
-            let cosine = cos(object.rotation), sine = sin(object.rotation)
-            let vertices = ring.map { point in
-                WorldPoint(object.position.x + point.x * cosine - point.y * sine,
-                           object.position.y + point.x * sine + point.y * cosine)
+        var bubbles: [Int32: [BubbleWorldRenderBubble]] = [:], shapes: [Int32: [BubbleWorldRenderShape]] = [:]
+        for (id, object) in source.objects.sorted(by: { $0.key.rawValue < $1.key.rawValue }) {
+            guard let materialID = object.renderMaterialID, let material = source.renderMaterials[materialID] else { continue }
+            switch object.descriptor {
+            case .bubble:
+                bubbles[object.layer, default: []].append(
+                    BubbleWorldRenderBubble(id: id, materialID: materialID, material: material))
+            case .rigidBody(let body):
+                let ring = Self.rigidRing(body.shape)
+                let cosine = cos(object.rotation), sine = sin(object.rotation)
+                let vertices = ring.map { point in
+                    WorldPoint(object.position.x + point.x * cosine - point.y * sine,
+                               object.position.y + point.x * sine + point.y * cosine)
+                }
+                shapes[object.layer, default: []].append(BubbleWorldRenderShape(id: id, materialID: materialID,
+                    material: material, localVertices: ring, vertices: vertices))
+            case .sensor, .forceField: continue
             }
-            return BubbleWorldRenderShape(localVertices: ring, vertices: vertices)
         }
-        return BubbleWorldRenderState(handoff: handoff, shapes: shapes)
+        let layers = Set(bubbles.keys).union(shapes.keys).sorted().map {
+            BubbleWorldRenderLayer(layer: $0, bubbles: bubbles[$0] ?? [], shapes: shapes[$0] ?? [])
+        }
+        return BubbleWorldRenderState(handoff: handoff, background: source.background,
+                                      region: source.configuration.simulationRegion, layers: layers)
     }
 
     /// Obrys bryły do rysowania jako pierścień; koło i kapsuła to wielokąty o 48 wierzchołkach na pełny obrót.

@@ -86,7 +86,7 @@ package struct RuntimeObject: Equatable, Sendable {
         }
     }
     /// Materiał renderu obiektu; czujnik i pole sił nie są rysowane, więc go nie mają.
-    var renderMaterialID: RenderMaterialID? {
+    package var renderMaterialID: RenderMaterialID? {
         switch descriptor {
         case .bubble(let value): return value.renderMaterialID
         case .rigidBody(let value): return value.renderMaterialID

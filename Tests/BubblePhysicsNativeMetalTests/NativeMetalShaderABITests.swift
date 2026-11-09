@@ -157,6 +157,28 @@ final class NativeMetalShaderABITests: XCTestCase {
         assertMatches(probes, try measure(probes, sources: [try source("NativeRenderKernels")], device: device))
     }
 
+    /// Rekordy renderu materiałów: materiał na obiekt, instancja bańki i wierzchołek bryły mają ten sam układ w Swift i w shaderze.
+    func testRenderMaterialRecordsMatchShaderLayouts() throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let probes = [
+            Probe(name: "material", mslSize: "NativeRenderMaterial", swiftSize: MemoryLayout<NativeRenderMaterial>.stride, fields: [
+                ("color", MemoryLayout<NativeRenderMaterial>.offset(of: \.color)),
+                ("outlineColor", MemoryLayout<NativeRenderMaterial>.offset(of: \.outlineColor)),
+                ("parameters", MemoryLayout<NativeRenderMaterial>.offset(of: \.parameters)),
+                ("uv", MemoryLayout<NativeRenderMaterial>.offset(of: \.uv))]),
+            Probe(name: "instance", mslSize: "NativeRenderInstance", swiftSize: MemoryLayout<NativeRenderInstance>.stride, fields: [
+                ("bubble", MemoryLayout<NativeRenderInstance>.offset(of: \.bubble)),
+                ("material", MemoryLayout<NativeRenderInstance>.offset(of: \.material))]),
+            Probe(name: "bodyVertex", mslSize: "NativeRenderBodyVertex", swiftSize: MemoryLayout<NativeRenderBodyVertex>.stride, fields: [
+                ("world", MemoryLayout<NativeRenderBodyVertex>.offset(of: \.world)),
+                ("local", MemoryLayout<NativeRenderBodyVertex>.offset(of: \.local)),
+                ("info", MemoryLayout<NativeRenderBodyVertex>.offset(of: \.info))])]
+        assertMatches(probes, try measure(probes, sources: [try source("NativeRenderKernels")], device: device))
+        XCTAssertEqual(MemoryLayout<NativeRenderMaterial>.stride, 64)
+        XCTAssertEqual(MemoryLayout<NativeRenderInstance>.stride, 8)
+        XCTAssertEqual(MemoryLayout<NativeRenderBodyVertex>.stride, 32)
+    }
+
     /// P-B-71: warstwa w `filter.w` to Int32 z odwróconym bitem znaku, więc porządek uint zgadza się z porządkiem Int32.
     func testLayerEncodingKeepsSignedOrderAndRoundTrips() {
         let layers: [Int32] = [.min, -70_000, -2, -1, 0, 1, 2, 70_000, .max - 1, .max]

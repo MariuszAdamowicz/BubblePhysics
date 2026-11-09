@@ -173,7 +173,7 @@ final class RigidShapeContactTests: XCTestCase {
             .add(B.circle(1, at: [100, 100], radius: 9, role: .static))
             .add(B.capsule(2, at: [300, 150], halfLength: 20, radius: 5, role: .static)))
         _ = await B.advance(world, steps: 1)
-        let shapes = try XCTUnwrap(world.renderState).shapes
+        let shapes = try XCTUnwrap(world.renderState).layers.flatMap(\.shapes)
         XCTAssertEqual(shapes.count, 2)
         let circle = shapes[0], capsule = shapes[1]
         XCTAssertEqual(circle.localVertices.count, 48)
