@@ -6,17 +6,17 @@ import XCTest
 @MainActor
 final class NativeMetalEventCompactionTests: XCTestCase {
     private let material = PhysicsMaterialID(rawValue: 1)
-    private let style = RenderStyleID(rawValue: 1)
+    private let style = RenderMaterialID(rawValue: 1)
 
     private func bubble(_ id: UInt64, x: Float, interest: EventInterest = [], groups: MergeGroupSet = []) throws -> NativePublicObject {
         NativePublicObject(descriptor: .bubble(try BubbleDescriptor(id: ObjectID(rawValue: id), position: [x, 0],
-            targetRadius: 1, physicsMaterialID: material, renderStyleID: style,
+            targetRadius: 1, physicsMaterialID: material, renderMaterialID: style,
             mergeGroups: groups, eventInterest: interest)))
     }
 
     private func step(_ world: NativePublicWorld, _ objects: [NativePublicObject], capacity: Int = 8) async throws -> NativePublicFrame {
         try await world.step(objects: objects, materials: [material: PhysicsMaterial(kind: .bubble)],
-            styles: [style: RenderStyle()], region: WorldRectangle(min: [-20, -20], max: [20, 20]),
+            region: WorldRectangle(min: [-20, -20], max: [20, 20]),
             duration: 1.0 / 60.0, eventBufferCapacity: capacity)
     }
 
@@ -37,7 +37,7 @@ final class NativeMetalEventCompactionTests: XCTestCase {
     func testSensorPublishesOnlyEnterAndExit() async throws {
         let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         let sensor = NativePublicObject(descriptor: .sensor(try SensorDescriptor(id: ObjectID(rawValue: 9),
-            position: .zero, geometry: RangeGeometry.circle(radius: 2), renderStyleID: style,
+            position: .zero, geometry: RangeGeometry.circle(radius: 2),
             eventInterest: [.enteredSensor, .exitedSensor])))
         var body = try bubble(1, x: 0)
         let entered = try await step(world, [body, sensor])
@@ -54,7 +54,7 @@ final class NativeMetalEventCompactionTests: XCTestCase {
         let sensorID = ObjectID(rawValue: 9)
         let low = ObjectID(rawValue: 1), high = ObjectID(rawValue: UInt64.max)
         let sensor = NativePublicObject(descriptor: .sensor(try SensorDescriptor(id: sensorID,
-            position: .zero, geometry: RangeGeometry.circle(radius: 5), renderStyleID: style,
+            position: .zero, geometry: RangeGeometry.circle(radius: 5),
             eventInterest: [.enteredSensor, .exitedSensor])))
         var first = try bubble(low.rawValue, x: -2)
         var second = try bubble(high.rawValue, x: 2)
@@ -76,7 +76,7 @@ final class NativeMetalEventCompactionTests: XCTestCase {
         let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         let sensorID = ObjectID(rawValue: 9), observedID = ObjectID(rawValue: 1)
         let sensor = NativePublicObject(descriptor: .sensor(try SensorDescriptor(id: sensorID,
-            position: .zero, geometry: RangeGeometry.circle(radius: 3), renderStyleID: style,
+            position: .zero, geometry: RangeGeometry.circle(radius: 3),
             eventInterest: [.enteredSensor, .exitedSensor])))
         let observed = try bubble(observedID.rawValue, x: 0)
         let other = try bubble(2, x: 10)
@@ -92,7 +92,7 @@ final class NativeMetalEventCompactionTests: XCTestCase {
         let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         let sensorID = ObjectID(rawValue: 9)
         let sensor = NativePublicObject(descriptor: .sensor(try SensorDescriptor(id: sensorID,
-            position: .zero, geometry: RangeGeometry.circle(radius: 3), renderStyleID: style,
+            position: .zero, geometry: RangeGeometry.circle(radius: 3),
             eventInterest: [.enteredSensor, .exitedSensor])))
         let first = try bubble(1, x: -1), second = try bubble(2, x: 1)
         _ = try await step(world, [first, second, sensor], capacity: 2)
@@ -111,7 +111,7 @@ final class NativeMetalEventCompactionTests: XCTestCase {
     func testEventBufferOverflowIsReportedInsteadOfSilentlyDroppingIt() async throws {
         let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         let sensor = NativePublicObject(descriptor: .sensor(try SensorDescriptor(id: ObjectID(rawValue: 9),
-            position: .zero, geometry: RangeGeometry.circle(radius: 3), renderStyleID: style,
+            position: .zero, geometry: RangeGeometry.circle(radius: 3),
             eventInterest: .enteredSensor)))
         let frame = try await step(world, [try bubble(1, x: -1), try bubble(2, x: 1), sensor], capacity: 1)
         XCTAssertEqual(frame.events.count, 1)
@@ -122,14 +122,13 @@ final class NativeMetalEventCompactionTests: XCTestCase {
         let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         let polygonMaterial = PhysicsMaterialID(rawValue: 2)
         let sensor = NativePublicObject(descriptor: .sensor(try SensorDescriptor(id: ObjectID(rawValue: 9),
-            position: .zero, geometry: RangeGeometry.polygon(vertices: [[-2, -2], [2, -2], [2, 2], [-2, 2]]),
-            renderStyleID: style, eventInterest: [.enteredSensor, .exitedSensor])))
+            position: .zero, geometry: RangeGeometry.polygon(vertices: [[-2, -2], [2, -2], [2, 2], [-2, 2]]), eventInterest: [.enteredSensor, .exitedSensor])))
         var body = NativePublicObject(descriptor: .rigidBody(try RigidBodyDescriptor(id: ObjectID(rawValue: 3),
             vertices: [[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]],
-            physicsMaterialID: polygonMaterial, renderStyleID: style)))
+            physicsMaterialID: polygonMaterial, renderMaterialID: style)))
         func run() async throws -> NativePublicFrame {
             try await world.step(objects: [body, sensor], materials: [polygonMaterial: PhysicsMaterial(kind: .rigid)],
-                styles: [style: RenderStyle()], region: WorldRectangle(min: [-20, -20], max: [20, 20]),
+                region: WorldRectangle(min: [-20, -20], max: [20, 20]),
                 duration: 1.0 / 60.0)
         }
         let entered = try await run()
@@ -146,14 +145,14 @@ final class NativeMetalEventCompactionTests: XCTestCase {
         let polygonMaterial = PhysicsMaterialID(rawValue: 2)
         let sensorID = ObjectID(rawValue: 9), bodyID = ObjectID(rawValue: 3)
         let sensor = NativePublicObject(descriptor: .sensor(try SensorDescriptor(id: sensorID,
-            position: .zero, geometry: RangeGeometry.circle(radius: 3), renderStyleID: style,
+            position: .zero, geometry: RangeGeometry.circle(radius: 3),
             eventInterest: [.enteredSensor, .exitedSensor])))
         let body = NativePublicObject(descriptor: .rigidBody(try RigidBodyDescriptor(id: bodyID,
             vertices: [[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]],
-            physicsMaterialID: polygonMaterial, renderStyleID: style)))
+            physicsMaterialID: polygonMaterial, renderMaterialID: style)))
         func run(_ objects: [NativePublicObject]) async throws -> NativePublicFrame {
             try await world.step(objects: objects, materials: [polygonMaterial: PhysicsMaterial(kind: .rigid)],
-                styles: [style: RenderStyle()], region: WorldRectangle(min: [-20, -20], max: [20, 20]),
+                region: WorldRectangle(min: [-20, -20], max: [20, 20]),
                 duration: 1.0 / 60.0)
         }
         let entered = try await run([body, sensor])
@@ -168,9 +167,9 @@ final class NativeMetalEventCompactionTests: XCTestCase {
         let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         let interested = NativePublicObject(descriptor: .bubble(try BubbleDescriptor(id: ObjectID(rawValue: 1),
             position: [9, 5], velocity: [20, 0], targetRadius: 1, regionExitPolicy: .wrap,
-            physicsMaterialID: material, renderStyleID: style, eventInterest: .didWrap)))
+            physicsMaterialID: material, renderMaterialID: style, eventInterest: .didWrap)))
         let frame = try await world.step(objects: [interested], materials: [material: PhysicsMaterial(kind: .bubble)],
-            styles: [style: RenderStyle()], region: WorldRectangle(min: [0, 0], max: [10, 10]), duration: 0.25)
+            region: WorldRectangle(min: [0, 0], max: [10, 10]), duration: 0.25)
         XCTAssertEqual(frame.events, [.didWrap(ObjectID(rawValue: 1))])
     }
 
@@ -178,14 +177,13 @@ final class NativeMetalEventCompactionTests: XCTestCase {
         let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         let polygonMaterial = PhysicsMaterialID(rawValue: 2)
         let sensor = NativePublicObject(descriptor: .sensor(try SensorDescriptor(id: ObjectID(rawValue: 9),
-            position: .zero, geometry: RangeGeometry.polygon(vertices: [[-2, -2], [2, -2], [2, 2], [-2, 2]]),
-            renderStyleID: style, eventInterest: .enteredSensor)))
+            position: .zero, geometry: RangeGeometry.polygon(vertices: [[-2, -2], [2, -2], [2, 2], [-2, 2]]), eventInterest: .enteredSensor)))
         let body = NativePublicObject(descriptor: .rigidBody(try RigidBodyDescriptor(id: ObjectID(rawValue: 3),
             vertices: [[-0.5, -2], [0.5, -2], [0, -1]], position: [7, 0],
-            physicsMaterialID: polygonMaterial, renderStyleID: style)))
+            physicsMaterialID: polygonMaterial, renderMaterialID: style)))
         let frame = try await world.step(objects: [body, sensor],
             materials: [polygonMaterial: PhysicsMaterial(kind: .rigid)],
-            styles: [style: RenderStyle()], region: WorldRectangle(min: [-20, -20], max: [20, 20]),
+            region: WorldRectangle(min: [-20, -20], max: [20, 20]),
             duration: 1.0 / 60.0)
         XCTAssertTrue(frame.events.isEmpty)
     }

@@ -4,14 +4,8 @@ import BubblePhysicsModel
 import BubblePhysicsRuntime
 import BubblePhysicsNativeMetal
 
-package struct BubbleWorldRenderItem {
-    package let shader: RenderShader
-    package let channels: [ParameterID: Float]
-}
-
 package struct BubbleWorldRenderState {
     package let handoff: NativeMetalRenderHandoff?
-    package let items: [BubbleWorldRenderItem?]
     package let shapes: [BubbleWorldRenderShape]
 }
 
@@ -20,7 +14,6 @@ package struct BubbleWorldRenderShape {
     /// bo przekształcenie sztywne zachowuje orientację i zawieranie.
     package let localVertices: [WorldPoint]
     package let vertices: [WorldPoint]
-    package let item: BubbleWorldRenderItem
 }
 
 /// Jedyny właściciel świata i kolejki transakcji. Publikuje wyłącznie ukończone kroki.
@@ -99,7 +92,7 @@ public final class BubbleWorld {
     /// Stały limit k kandydatów kontaktu na obiekt, wspólny dla wszystkich rodzajów par.
     package static var contactCandidateLimit: Int { NativeMetalSolver.candidateLimitPerObject }
 
-    /// Renderer widzi tylko opublikowany uchwyt i kanały prezentacyjne.
+    /// Renderer widzi tylko opublikowany uchwyt i kształty brył; czujniki i pola sił nie są rysowane.
     package var renderState: BubbleWorldRenderState? {
         if let pendingRenderState { return pendingRenderState }
         guard clock.completedSteps > 0 else { return nil }
@@ -108,31 +101,17 @@ public final class BubbleWorld {
 
     private func makeRenderState(_ handoff: NativeMetalRenderHandoff?,
                                  from source: RuntimeState) -> BubbleWorldRenderState {
-        let items: [BubbleWorldRenderItem?] = (handoff?.bubbleIDs ?? []).map { id in
-            guard let object = source.objects[id], case .bubble(let bubble) = object.descriptor,
-                  let style = source.renderStyles[bubble.renderStyleID] else { return nil }
-            return BubbleWorldRenderItem(shader: style.shader,
-                channels: style.resolvedChannels(overrides: object.presentation))
-        }
         let shapes = source.objects.sorted { $0.key.rawValue < $1.key.rawValue }.compactMap { _, object -> BubbleWorldRenderShape? in
-            guard let style = source.renderStyles[object.style] else { return nil }
-            let ring: [WorldPoint]
-            switch object.descriptor {
-            case .bubble: return nil
-            case .rigidBody(let body): ring = Self.rigidRing(body.shape)
-            case .sensor(let sensor): ring = Self.rangeRing(sensor.geometry)
-            case .forceField(let field): ring = Self.rangeRing(field.geometry)
-            }
+            guard case .rigidBody(let body) = object.descriptor else { return nil }
+            let ring = Self.rigidRing(body.shape)
             let cosine = cos(object.rotation), sine = sin(object.rotation)
             let vertices = ring.map { point in
                 WorldPoint(object.position.x + point.x * cosine - point.y * sine,
                            object.position.y + point.x * sine + point.y * cosine)
             }
-            return BubbleWorldRenderShape(localVertices: ring, vertices: vertices,
-                item: BubbleWorldRenderItem(shader: style.shader,
-                    channels: style.resolvedChannels(overrides: object.presentation)))
+            return BubbleWorldRenderShape(localVertices: ring, vertices: vertices)
         }
-        return BubbleWorldRenderState(handoff: handoff, items: items, shapes: shapes)
+        return BubbleWorldRenderState(handoff: handoff, shapes: shapes)
     }
 
     /// Obrys bryły do rysowania jako pierścień; koło i kapsuła to wielokąty o 48 wierzchołkach na pełny obrót.
@@ -156,17 +135,6 @@ public final class BubbleWorld {
                 return WorldPoint(-halfLength + radius * cos(angle), radius * sin(angle))
             }
             return right + left
-        }
-    }
-
-    private static func rangeRing(_ geometry: RangeGeometry) -> [WorldPoint] {
-        switch geometry.shape {
-        case .polygon(let polygon): return polygon.vertices
-        case .circle(let radius):
-            return (0..<48).map { index in
-                let angle = Float(index) * 2 * Float.pi / 48
-                return WorldPoint(radius * cos(angle), radius * sin(angle))
-            }
         }
     }
 

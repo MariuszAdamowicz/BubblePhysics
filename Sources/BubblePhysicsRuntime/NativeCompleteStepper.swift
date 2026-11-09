@@ -120,11 +120,10 @@ package final class NativeCompleteStepper: CompleteStepper {
             value.angularVelocity = object.angularVelocity; value.motionRole = object.motionRole
             value.collisionRadius = object.collisionRadius; value.rigidity = object.rigidity
             value.structuralShape = object.structuralShape
-            value.presentation = object.presentation
             return value
         }
         let frame = try await native.step(objects: input, materials: state.physicsMaterials,
-            styles: state.renderStyles, region: state.configuration.simulationRegion, duration: duration,
+            region: state.configuration.simulationRegion, duration: duration,
             joints: Array(state.joints.values), hitTests: hitTests,
             eventBufferCapacity: state.configuration.eventBufferCapacity,
             commandBuffer: commandBuffer,

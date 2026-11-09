@@ -319,7 +319,7 @@ final class JointWorldTests: XCTestCase {
             .addJoint(B.distanceJoint(1, 1, nil, anchorB: pivot, length: 50)))
         _ = await B.advance(world, steps: 5)
         world.submit(WorldTransaction().mergeBubbles([ObjectID(rawValue: 1), ObjectID(rawValue: 2)],
-            result: BubbleResult(id: ObjectID(rawValue: 9), physicsMaterialID: B.bubbleMaterial, renderStyleID: B.style)))
+            result: BubbleResult(id: ObjectID(rawValue: 9), physicsMaterialID: B.bubbleMaterial, renderMaterialID: B.style)))
         var removed: [JointID] = []
         let result = await B.advance(world, steps: 90) { _, frame in
             for receipt in frame.transactionReceipts { removed += receipt.removedJointIDs }

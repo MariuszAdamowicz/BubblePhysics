@@ -6,19 +6,19 @@ import XCTest
 
 @MainActor
 final class NativeMetalStructuralOperationTests: XCTestCase {
-    let material = PhysicsMaterialID(rawValue: 1), style = RenderStyleID(rawValue: 1)
+    let material = PhysicsMaterialID(rawValue: 1), style = RenderMaterialID(rawValue: 1)
     func id(_ n: UInt64) -> ObjectID { .init(rawValue: n) }
-    func result(_ n: UInt64) -> BubbleResult { .init(id: id(n), physicsMaterialID: material, renderStyleID: style) }
+    func result(_ n: UInt64) -> BubbleResult { .init(id: id(n), physicsMaterialID: material, renderMaterialID: style) }
     func initial(_ bubbles: [BubbleDescriptor]) throws -> RuntimeState {
         var tx = try WorldTransaction().updatePhysicsMaterial(material, material: PhysicsMaterial(kind: .bubble, deformability: 1))
-            .updateRenderStyle(style, style: RenderStyle())
+            .updateRenderMaterial(style, material: try RenderMaterial())
         for b in bubbles { tx = tx.add(.bubble(b)) }
         return try TransactionStager.stage(tx, against: RuntimeState(configuration:
             WorldConfiguration(simulationRegion: WorldRectangle(min: [-100,-100], max: [100,100])))).state
     }
     func bubble(_ n: UInt64, x: Float = 0, radius: Float = 1, mass: Float = 1, vx: Float = 0) throws -> BubbleDescriptor {
         try .init(id: id(n), position: [x,0], velocity: [vx,0], targetRadius: radius,
-            mass: mass, physicsMaterialID: material, renderStyleID: style)
+            mass: mass, physicsMaterialID: material, renderMaterialID: style)
     }
     func step(_ stepper: NativeCompleteStepper, _ state: RuntimeState, _ tx: WorldTransaction) async throws -> RuntimeState {
         let batch = TransactionStager.stageBatch([.init(token: .init(rawValue: 1), transaction: tx)], against: state,
@@ -89,14 +89,14 @@ final class NativeMetalStructuralOperationTests: XCTestCase {
         let polygonMaterial = PhysicsMaterialID(rawValue: 2)
         func polygon(_ n: UInt64, _ x: Float) throws -> RigidBodyDescriptor {
             try RigidBodyDescriptor(id: id(n), vertices: [[0,0],[1,0],[0,1]], position: [x,0],
-                physicsMaterialID: polygonMaterial, renderStyleID: style)
+                physicsMaterialID: polygonMaterial, renderMaterialID: style)
         }
         let one = try polygon(10, -5), two = try polygon(20, 5), replacement = try polygon(30, -4)
         let base = RuntimeState(configuration: try WorldConfiguration(
             simulationRegion: WorldRectangle(min: [-100,-100], max: [100,100])))
         let state = try TransactionStager.stage(try WorldTransaction()
             .updatePhysicsMaterial(polygonMaterial, material: PhysicsMaterial(kind: .rigid))
-            .updateRenderStyle(style, style: RenderStyle())
+            .updateRenderMaterial(style, material: try RenderMaterial())
             .add(.rigidBody(one)).add(.rigidBody(two)), against: base).state
         let invalid = WorldTransaction().replaceRigidBodies([one.id], with: [two])
         XCTAssertThrowsError(try TransactionStager.stage(invalid, against: state))
@@ -108,85 +108,68 @@ final class NativeMetalStructuralOperationTests: XCTestCase {
         XCTAssertEqual(staged.createdObjectIDs, [replacement.id])
         let native = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         let materials = [polygonMaterial: try PhysicsMaterial(kind: .rigid)]
-        let styles = [style: try RenderStyle()]
         let region = try WorldRectangle(min: [-100,-100], max: [100,100])
         _ = try await native.step(objects: state.objects.values.map { NativePublicObject(descriptor: $0.descriptor) },
-            materials: materials, styles: styles, region: region, duration: 1.0/60)
+            materials: materials, region: region, duration: 1.0/60)
         let frame = try await native.step(objects: staged.state.objects.values.map { NativePublicObject(descriptor: $0.descriptor) },
-            materials: materials, styles: styles, region: region, duration: 1.0/60)
+            materials: materials, region: region, duration: 1.0/60)
         XCTAssertEqual(frame.profile.segmentUploadCount, 3)
-    }
-
-    func testLocalPresentationTransitionIsVisibleInNativeFrame() async throws {
-        let channel = ParameterID(rawValue: "highlight")
-        var state = try initial([bubble(1)])
-        state = try TransactionStager.stage(WorldTransaction().startTransition(.init(
-            target: .objectPresentation(id(1), channel), value: .scalar(1), duration: 1)), against: state).state
-        try MotionControllers.prepare(&state, duration: 0.5)
-        var input = NativePublicObject(descriptor: try XCTUnwrap(state.objects[id(1)]).descriptor)
-        input.presentation = try XCTUnwrap(state.objects[id(1)]).presentation
-        let native = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
-        let frame = try await native.step(objects: [input], materials: state.physicsMaterials,
-            styles: state.renderStyles, region: state.configuration.simulationRegion, duration: 1.0/60)
-        XCTAssertEqual(frame.presentation[id(1)]?[channel], 0.5)
     }
 
     func testMergeSeedsPreviousGPUDeformationWhenSourceWasCompressed() async throws {
         let left = try BubbleDescriptor(id: id(1), position: [-0.2,0], targetRadius: 1,
-            motionRole: .static, physicsMaterialID: material, renderStyleID: style)
+            motionRole: .static, physicsMaterialID: material, renderMaterialID: style)
         let right = try BubbleDescriptor(id: id(2), position: [0,0], targetRadius: 1,
-            motionRole: .static, physicsMaterialID: material, renderStyleID: style)
+            motionRole: .static, physicsMaterialID: material, renderMaterialID: style)
         var state = try initial([left, right])
         let wallMaterial = PhysicsMaterialID(rawValue: 2)
         let wall = try RigidBodyDescriptor(id: id(100), vertices: [[0.5,-4],[2,-4],[2,4],[0.5,4]],
-            physicsMaterialID: wallMaterial, renderStyleID: style)
+            physicsMaterialID: wallMaterial, renderMaterialID: style)
         state = try TransactionStager.stage(WorldTransaction()
             .updatePhysicsMaterial(wallMaterial, material: PhysicsMaterial(kind: .rigid))
             .add(.rigidBody(wall)), against: state).state
         let native = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         let first = try await native.step(objects: state.objects.values.map { NativePublicObject(descriptor: $0.descriptor) },
-            materials: state.physicsMaterials, styles: state.renderStyles,
-            region: state.configuration.simulationRegion, duration: 1.0/60)
+            materials: state.physicsMaterials, region: state.configuration.simulationRegion, duration: 1.0/60)
         XCTAssertLessThan(try XCTUnwrap(first.objects[id(2)]).effectiveRadius, 0.7)
         let merged = try TransactionStager.stage(WorldTransaction().mergeBubbles([id(1), id(2)],
-            result: .init(id: id(3), physicsMaterialID: material, renderStyleID: style, motionRole: .static)),
+            result: .init(id: id(3), physicsMaterialID: material, renderMaterialID: style, motionRole: .static)),
             against: state).state
         let object = try XCTUnwrap(merged.objects[id(3)])
         var input = NativePublicObject(descriptor: object.descriptor)
         input.position = object.position
         input.structuralShape = object.structuralShape
         let second = try await native.step(objects: [input], materials: merged.physicsMaterials,
-            styles: merged.renderStyles, region: merged.configuration.simulationRegion, duration: 1.0/60)
+            region: merged.configuration.simulationRegion, duration: 1.0/60)
         XCTAssertLessThan(try XCTUnwrap(second.objects[id(3)]).effectiveRadius, 0.7)
     }
 
     func testMergeContourDoesNotDependOnWhetherOutputReusesSourceID() async throws {
         func mergedRadius(_ outputID: UInt64) async throws -> Float {
             let left = try BubbleDescriptor(id: id(1), position: [-0.2,0], targetRadius: 1,
-                motionRole: .static, physicsMaterialID: material, renderStyleID: style)
+                motionRole: .static, physicsMaterialID: material, renderMaterialID: style)
             let right = try BubbleDescriptor(id: id(2), position: [0,0], targetRadius: 1,
-                motionRole: .static, physicsMaterialID: material, renderStyleID: style)
+                motionRole: .static, physicsMaterialID: material, renderMaterialID: style)
             var state = try initial([left, right])
             let wallMaterial = PhysicsMaterialID(rawValue: 2)
             let wall = try RigidBodyDescriptor(id: id(100), vertices: [[0.5,-4],[2,-4],[2,4],[0.5,4]],
-                physicsMaterialID: wallMaterial, renderStyleID: style)
+                physicsMaterialID: wallMaterial, renderMaterialID: style)
             state = try TransactionStager.stage(WorldTransaction()
                 .updatePhysicsMaterial(wallMaterial, material: PhysicsMaterial(kind: .rigid))
                 .add(.rigidBody(wall)), against: state).state
             let native = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
             let first = try await native.step(objects: state.objects.values.map { NativePublicObject(descriptor: $0.descriptor) },
-                materials: state.physicsMaterials, styles: state.renderStyles,
-                region: state.configuration.simulationRegion, duration: 1.0/60)
+                materials: state.physicsMaterials, region: state.configuration.simulationRegion, duration: 1.0/60)
             XCTAssertLessThan(try XCTUnwrap(first.objects[id(2)]).effectiveRadius, 0.7)
             let merged = try TransactionStager.stage(WorldTransaction().mergeBubbles([id(1), id(2)],
-                result: .init(id: id(outputID), physicsMaterialID: material, renderStyleID: style, motionRole: .static)),
+                result: .init(id: id(outputID), physicsMaterialID: material, renderMaterialID: style, motionRole: .static)),
                 against: state).state
             let object = try XCTUnwrap(merged.objects[id(outputID)])
             var input = NativePublicObject(descriptor: object.descriptor)
             input.position = object.position
             input.structuralShape = object.structuralShape
             let second = try await native.step(objects: [input], materials: merged.physicsMaterials,
-                styles: merged.renderStyles, region: merged.configuration.simulationRegion, duration: 1.0/60)
+                region: merged.configuration.simulationRegion, duration: 1.0/60)
             return try XCTUnwrap(second.objects[id(outputID)]).effectiveRadius
         }
         let fresh = try await mergedRadius(3)

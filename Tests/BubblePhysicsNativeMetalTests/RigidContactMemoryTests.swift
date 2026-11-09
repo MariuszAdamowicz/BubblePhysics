@@ -8,7 +8,7 @@ import XCTest
 final class RigidContactMemoryTests: XCTestCase {
     private let bubbleMaterial = PhysicsMaterialID(rawValue: 1)
     private let polygonMaterial = PhysicsMaterialID(rawValue: 2)
-    private let style = RenderStyleID(rawValue: 1)
+    private let style = RenderMaterialID(rawValue: 1)
     private var limit: Int { NativeMetalSolver.candidateLimitPerObject }
 
     /// 300 baniek na siatce co 30 i P dynamicznych brył w środkach komórek (bez kontaktów).
@@ -17,13 +17,13 @@ final class RigidContactMemoryTests: XCTestCase {
         for index in 0..<300 {
             objects.append(NativePublicObject(descriptor: .bubble(try BubbleDescriptor(id: ObjectID(rawValue: UInt64(index + 1)),
                 position: [Float(index % 20) * 30 + 15, Float(index / 20) * 30 + 15], targetRadius: 5,
-                physicsMaterialID: bubbleMaterial, renderStyleID: style))))
+                physicsMaterialID: bubbleMaterial, renderMaterialID: style))))
         }
         for index in 0..<bodies {
             objects.append(NativePublicObject(descriptor: .rigidBody(try RigidBodyDescriptor(id: ObjectID(rawValue: UInt64(10_000 + index)),
                 vertices: [[-2, -2], [2, -2], [2, 2], [-2, 2]],
                 position: [Float(index % 20) * 30 + 30, Float(index / 20) * 30 + 30], motionRole: .dynamic,
-                physicsMaterialID: polygonMaterial, renderStyleID: style))))
+                physicsMaterialID: polygonMaterial, renderMaterialID: style))))
         }
         return objects
     }
@@ -32,7 +32,7 @@ final class RigidContactMemoryTests: XCTestCase {
         let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         _ = try await world.step(objects: scene(bodies: bodies),
             materials: [bubbleMaterial: try PhysicsMaterial(kind: .bubble), polygonMaterial: try PhysicsMaterial(kind: .rigid)],
-            styles: [style: try RenderStyle()], region: WorldRectangle(min: [0, 0], max: [700, 700]), duration: 1.0 / 60)
+            region: WorldRectangle(min: [0, 0], max: [700, 700]), duration: 1.0 / 60)
         return (world.rigidContactMemoryBytes, world.rigidContactMemoryBytes + world.contactMemoryBytes)
     }
 
@@ -67,19 +67,19 @@ final class RigidContactMemoryTests: XCTestCase {
             let offsets: [WorldPoint] = [[u, -23], [23, u], [-u, 23], [-23, -u]]
             objects.append(NativePublicObject(descriptor: .bubble(try BubbleDescriptor(id: ObjectID(rawValue: UInt64(index + 1)),
                 position: [100 + offsets[min(side, 3)].x, 100 + offsets[min(side, 3)].y], targetRadius: 1,
-                physicsMaterialID: bubbleMaterial, renderStyleID: style))))
+                physicsMaterialID: bubbleMaterial, renderMaterialID: style))))
         }
         objects.append(NativePublicObject(descriptor: .rigidBody(try RigidBodyDescriptor(id: ObjectID(rawValue: 10_000),
             vertices: [[-20, -20], [20, -20], [20, 20], [-20, 20]], position: [100, 100], motionRole: .dynamic,
-            physicsMaterialID: polygonMaterial, renderStyleID: style))))
+            physicsMaterialID: polygonMaterial, renderMaterialID: style))))
         var frame = try await world.step(objects: objects,
             materials: [bubbleMaterial: try PhysicsMaterial(kind: .bubble), polygonMaterial: try PhysicsMaterial(kind: .rigid)],
-            styles: [style: try RenderStyle()], region: WorldRectangle(min: [-200, -200], max: [400, 400]), duration: 1.0 / 60)
+            region: WorldRectangle(min: [-200, -200], max: [400, 400]), duration: 1.0 / 60)
         XCTAssertGreaterThan(frame.contactCandidateOverflowCount, 0)
         XCTAssertGreaterThanOrEqual(frame.maximumContactCandidatesPerObject, limit)
         frame = try await world.step(objects: Array(frame.objects.values),
             materials: [bubbleMaterial: try PhysicsMaterial(kind: .bubble), polygonMaterial: try PhysicsMaterial(kind: .rigid)],
-            styles: [style: try RenderStyle()], region: WorldRectangle(min: [-200, -200], max: [400, 400]), duration: 1.0 / 60)
+            region: WorldRectangle(min: [-200, -200], max: [400, 400]), duration: 1.0 / 60)
         XCTAssertEqual(frame.objects.count, limit + 13)
         for object in frame.objects.values {
             XCTAssertTrue(object.position.x.isFinite && object.position.y.isFinite)

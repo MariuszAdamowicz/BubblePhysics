@@ -8,26 +8,26 @@ import simd
 final class QueryIndexTests: XCTestCase {
     private let bubbleMaterial = PhysicsMaterialID(rawValue: 1)
     private let rigidMaterial = PhysicsMaterialID(rawValue: 2)
-    private let style = RenderStyleID(rawValue: 1)
+    private let style = RenderMaterialID(rawValue: 1)
     private func id(_ value: UInt64) -> ObjectID { ObjectID(rawValue: value) }
 
     private func transaction() throws -> WorldTransaction {
         try WorldTransaction()
             .updatePhysicsMaterial(bubbleMaterial, material: PhysicsMaterial(kind: .bubble))
             .updatePhysicsMaterial(rigidMaterial, material: PhysicsMaterial(kind: .rigid))
-            .updateRenderStyle(style, style: RenderStyle())
+            .updateRenderMaterial(style, material: try RenderMaterial())
     }
 
     private func bubble(_ value: UInt64, at position: WorldPoint, radius: Float = 5,
                         filter: CollisionFilter = .default) throws -> WorldObject {
         .bubble(try BubbleDescriptor(id: id(value), position: position, targetRadius: radius,
-            physicsMaterialID: bubbleMaterial, renderStyleID: style, filter: filter))
+            physicsMaterialID: bubbleMaterial, renderMaterialID: style, filter: filter))
     }
 
     private func rigid(_ value: UInt64, shape: RigidShape, at position: WorldPoint, rotation: Float = 0,
                        filter: CollisionFilter = .default) throws -> WorldObject {
         .rigidBody(try RigidBodyDescriptor(id: id(value), shape: shape, position: position, rotation: rotation,
-            motionRole: .static, physicsMaterialID: rigidMaterial, renderStyleID: style, filter: filter))
+            motionRole: .static, physicsMaterialID: rigidMaterial, renderMaterialID: style, filter: filter))
     }
 
     private func box(half: Float) throws -> RigidShape {
@@ -154,9 +154,9 @@ final class QueryIndexTests: XCTestCase {
     }
 
     func testSensorsAndForceFieldsAreNotQueryable() throws {
-        let sensor = try SensorDescriptor(id: id(20), position: [60, 60], geometry: .circle(radius: 5), renderStyleID: style)
+        let sensor = try SensorDescriptor(id: id(20), position: [60, 60], geometry: .circle(radius: 5))
         let field = try ForceFieldDescriptor(id: id(21), position: [60, 60], geometry: .circle(radius: 5),
-            field: .directional(force: [1, 0]), renderStyleID: style)
+            field: .directional(force: [1, 0]))
         let index = try scene(extra: [.sensor(sensor), .forceField(field)])
         XCTAssertEqual(index.objects(at: [60, 60]), [])
         XCTAssertEqual(index.objects(inCircle: [60, 60], radius: 10), [])

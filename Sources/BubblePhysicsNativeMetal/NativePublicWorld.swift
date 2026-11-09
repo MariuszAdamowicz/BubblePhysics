@@ -17,7 +17,6 @@ package struct NativePublicObject: Equatable, Sendable {
     package var bounds: WorldRectangle?
     package var rigidity: Float = 0
     package var structuralShape: NativeStructuralShape?
-    package var presentation: PresentationParameters = .empty
 
     package init(descriptor: WorldObject) {
         self.descriptor = descriptor
@@ -25,17 +24,13 @@ package struct NativePublicObject: Equatable, Sendable {
         case .bubble(let b):
             position = b.position; velocity = b.velocity; rotation = 0; angularVelocity = 0; motionRole = b.motionRole
             collisionRadius = b.targetRadius; effectiveRadius = b.targetRadius
-            presentation = b.presentation
         case .rigidBody(let p):
             position = p.position; velocity = p.velocity; rotation = p.rotation
             angularVelocity = p.angularVelocity; motionRole = p.motionRole
-            presentation = p.presentation
         case .sensor(let s):
             position = s.position; velocity = .zero; rotation = s.rotation; angularVelocity = 0; motionRole = .static
-            presentation = s.presentation
         case .forceField(let f):
             position = f.position; velocity = .zero; rotation = f.rotation; angularVelocity = 0; motionRole = .static
-            presentation = f.presentation
         }
         previousPosition = position
     }
@@ -43,7 +38,6 @@ package struct NativePublicObject: Equatable, Sendable {
 
 package struct NativePublicFrame {
     package var objects: [ObjectID: NativePublicObject]
-    package let presentation: [ObjectID: [ParameterID: Float]]
     package let profile: NativeMetalFrameProfile
     package var contacts: [ObjectID: [DriveBlockingContact]] = [:]
     package var events: [WorldEvent] = []
@@ -58,7 +52,7 @@ struct NativePublicProperties: Equatable, Sendable {
     var flags: SIMD4<UInt32> // enabled, static, wrap, region result (0 unchanged, 1 removed, 2 wrapped)
     var material: SIMD4<Float> // damping, deformability, rigidity, friction
     var restitution: Float
-    var resources: SIMD2<UInt64> // material ID, style ID
+    var resources: SIMD2<UInt64> // material ID, render material ID
     var eventData: SIMD2<UInt64> // interest, merge groups
     var filter: CollisionFilter = .default
     /// Limity prędkości z materiału: liniowa, kątowa (0 = bez limitu); w rekordzie bańki jako `deformation.zw`.
@@ -104,7 +98,7 @@ package final class NativePublicWorld {
     package var rigidContactMemoryBytes: Int { solver.rigidContactMemoryBytes }
 
     package func step(objects: [NativePublicObject], materials: [PhysicsMaterialID: PhysicsMaterial],
-                      styles: [RenderStyleID: RenderStyle], region: WorldRectangle, duration: Double,
+                      region: WorldRectangle, duration: Double,
                       joints: [Joint] = [], hitTests: [WorldPoint] = [], eventBufferCapacity: Int = 1024, commandBuffer: MTLCommandBuffer? = nil,
                       beforeCommit: ((NativeMetalRenderHandoff) throws -> Void)? = nil) async throws -> NativePublicFrame {
         let dt = Float(duration)
@@ -116,12 +110,9 @@ package final class NativePublicWorld {
         var candidatePolygons: [ObjectID: (geometry: PolygonGeometry, position: WorldPoint, rotation: Float, segments: [NativeSolverSegment])] = [:]
         var candidateNextSegmentID = nextSegmentID
         var result = Dictionary(uniqueKeysWithValues: objects.map { ($0.descriptor.id, $0) })
-        var presentation: [ObjectID: [ParameterID: Float]] = [:]
         var rigidPolygons: [NativeRigidPolygonInput] = []
         var structuralShapes: [ObjectID: NativeStructuralShape] = [:]
         for object in objects.sorted(by: { $0.descriptor.id.rawValue < $1.descriptor.id.rawValue }) {
-            let styleID: RenderStyleID
-            let local: PresentationParameters
             switch object.descriptor {
             case .bubble(let b):
                 guard let material = materials[b.physicsMaterialID],
@@ -139,18 +130,16 @@ package final class NativePublicWorld {
                     flags: SIMD4(1, object.motionRole == .static ? 1 : 0, b.regionExitPolicy == .wrap ? 1 : 0, 0),
                     material: SIMD4(material.damping, material.deformability, object.rigidity, material.friction),
                     restitution: material.restitution,
-                    resources: SIMD2(b.physicsMaterialID.rawValue, b.renderStyleID.rawValue),
+                    resources: SIMD2(b.physicsMaterialID.rawValue, b.renderMaterialID.rawValue),
                     eventData: SIMD2(b.eventInterest.rawValue, b.mergeGroups.rawValue), filter: b.filter,
                     speedLimits: SIMD2(material.maximumLinearSpeed ?? 0, material.maximumAngularSpeed ?? 0))
                 if let shape = object.structuralShape { structuralShapes[b.id] = shape }
-                styleID = b.renderStyleID; local = object.presentation
             case .rigidBody(let p):
                 guard let material = materials[p.physicsMaterialID] else { throw NativeMetalSolverError.invalidSnapshot }
                 rigidPolygons.append(.init(object: object, damping: material.damping,
                     friction: material.friction, restitution: material.restitution,
                     maximumLinearSpeed: material.maximumLinearSpeed ?? 0,
                     maximumAngularSpeed: material.maximumAngularSpeed ?? 0))
-                styleID = p.renderStyleID; local = object.presentation
                 // Statyczne krawędzie zachowują dotychczasowy cache i guardy baniek.
                 // Bryły dynamiczne trafiają wyłącznie do obustronnego solvera brył.
                 if object.motionRole != .static { break }
@@ -174,11 +163,8 @@ package final class NativePublicWorld {
                 }
                 candidatePolygons[p.id] = entry
                 solverSegments.append(contentsOf: entry.segments.map { var segment = $0; segment.filter = p.filter; return segment })
-            case .sensor(let s): styleID = s.renderStyleID; local = object.presentation
-            case .forceField(let f): styleID = f.renderStyleID; local = object.presentation
+            case .sensor, .forceField: break
             }
-            guard let style = styles[styleID] else { throw NativeMetalSolverError.invalidSnapshot }
-            presentation[object.descriptor.id] = style.resolvedChannels(overrides: local)
         }
         let staticPolygonMaterials = Dictionary(uniqueKeysWithValues: objects.compactMap { object -> (ObjectID, PhysicsMaterial)? in
             guard case .rigidBody(let polygon) = object.descriptor, object.motionRole == .static,
@@ -199,10 +185,10 @@ package final class NativePublicWorld {
         let frame = try await solver.executeFrame(input: input, scenarioStep: 0,
             commandBuffer: commandBuffer, beforeCommit: beforeCommit)
         for (id, object) in solver.publishedPolygons { result[id] = object }
-        for id in solver.removedPolygons { result.removeValue(forKey: id); presentation.removeValue(forKey: id) }
+        for id in solver.removedPolygons { result.removeValue(forKey: id) }
         for bubble in frame.bubbles {
             let id = ObjectID(rawValue: UInt64(bitPattern: Int64(bubble.id.rawValue)))
-            if frame.regionRemovals.contains(bubble.id) { result.removeValue(forKey: id); presentation.removeValue(forKey: id); continue }
+            if frame.regionRemovals.contains(bubble.id) { result.removeValue(forKey: id); continue }
             result[id]?.position = bubble.center
             result[id]?.previousPosition = bubble.previousCenter
             result[id]?.velocity = bubble.velocity
@@ -267,7 +253,7 @@ package final class NativePublicWorld {
         polygons = candidatePolygons
         nextSegmentID = candidateNextSegmentID
         publishedProfile = frame.profile
-        return NativePublicFrame(objects: result, presentation: presentation, profile: frame.profile,
+        return NativePublicFrame(objects: result, profile: frame.profile,
             contacts: contacts, events: discreteEvents, eventOverflow: WorldEventOverflow(droppedCount: dropped),
             contactCandidateOverflowCount: frame.contactCandidateOverflowCount,
             maximumContactCandidatesPerObject: frame.maximumContactCandidatesPerObject,

@@ -13,17 +13,17 @@ final class NativeMetalRigidPolygonTests: XCTestCase {
         NativePublicObject(descriptor: .rigidBody(try RigidBodyDescriptor(id: polygonID,
             vertices: vertices, position: position, velocity: velocity, angularVelocity: angular,
             mass: 2, momentOfInertia: 2, motionRole: role,
-            physicsMaterialID: .init(rawValue: 2), renderStyleID: .init(rawValue: 1))))
+            physicsMaterialID: .init(rawValue: 2), renderMaterialID: .init(rawValue: 1))))
     }
     private func bubble(position: WorldPoint = [-1.6,0.6], velocity: WorldPoint = [6,0], radius: Float = 0.5) throws -> NativePublicObject {
         NativePublicObject(descriptor: .bubble(try BubbleDescriptor(id: bubbleID,
             position: position, velocity: velocity, targetRadius: radius,
-            physicsMaterialID: .init(rawValue: 1), renderStyleID: .init(rawValue: 1))))
+            physicsMaterialID: .init(rawValue: 1), renderMaterialID: .init(rawValue: 1))))
     }
     private func step(_ world: NativePublicWorld, _ objects: [NativePublicObject], dt: Double = 1.0/60) async throws -> NativePublicFrame {
         try await world.step(objects: objects,
             materials: [.init(rawValue: 1): PhysicsMaterial(kind: .bubble), .init(rawValue: 2): PhysicsMaterial(kind: .rigid)],
-            styles: [.init(rawValue: 1): RenderStyle()], region: WorldRectangle(min: [-100,-100], max: [100,100]), duration: dt)
+            region: WorldRectangle(min: [-100,-100], max: [100,100]), duration: dt)
     }
 
     // Brak reakcji drugiego ciała lub momentu kontaktowego musi złamać ten test.
@@ -66,7 +66,7 @@ final class NativeMetalRigidPolygonTests: XCTestCase {
         let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         let wall = NativePublicObject(descriptor: .rigidBody(try RigidBodyDescriptor(id: .init(rawValue: 3),
             vertices: [[2,-10],[2.25,-10],[2.25,10],[2,10]],
-            physicsMaterialID: .init(rawValue: 2), renderStyleID: .init(rawValue: 1))))
+            physicsMaterialID: .init(rawValue: 2), renderMaterialID: .init(rawValue: 1))))
         var frame = try await step(world, [polygon(velocity: [8,0], angular: 0.5), wall])
         for _ in 0..<60 {
             frame = try await step(world, Array(frame.objects.values))
@@ -109,7 +109,7 @@ final class NativeMetalRigidPolygonTests: XCTestCase {
         let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         let wall = NativePublicObject(descriptor: .rigidBody(try RigidBodyDescriptor(id: .init(rawValue: 3),
             vertices: [[1,-10],[1.1,-10],[1.1,10],[1,10]],
-            physicsMaterialID: .init(rawValue: 2), renderStyleID: .init(rawValue: 1))))
+            physicsMaterialID: .init(rawValue: 2), renderMaterialID: .init(rawValue: 1))))
         var frame = try await step(world, [polygon(), bubble(position: [-1.6,0], velocity: [60,0]), wall])
         for _ in 0..<30 {
             frame = try await step(world, Array(frame.objects.values))
@@ -123,7 +123,7 @@ final class NativeMetalRigidPolygonTests: XCTestCase {
         let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         let earlier = NativePublicObject(descriptor: .rigidBody(try RigidBodyDescriptor(id: .init(rawValue: 3),
             vertices: [[-1,-1],[1,-1],[1,1],[-1,1]], position: [-10,0],
-            physicsMaterialID: .init(rawValue: 2), renderStyleID: .init(rawValue: 1))))
+            physicsMaterialID: .init(rawValue: 2), renderMaterialID: .init(rawValue: 1))))
         var frame = try await step(world, [polygon(velocity: [2,0]), earlier], dt: 0.25)
         frame = try await step(world, [XCTUnwrap(frame.objects[polygonID])], dt: 0.25)
         XCTAssertEqual(try XCTUnwrap(frame.objects[polygonID]).position.x, 1, accuracy: 0.0001)
@@ -164,7 +164,7 @@ final class NativeMetalRigidPolygonTests: XCTestCase {
         let right = NativePublicObject(descriptor: .rigidBody(try RigidBodyDescriptor(id: .init(rawValue: 3),
             vertices: [[-1,-1],[1,-1],[1,1],[-1,1]], position: [3,0], velocity: [-360,0],
             mass: 2, momentOfInertia: 2, motionRole: .dynamic,
-            physicsMaterialID: .init(rawValue: 2), renderStyleID: .init(rawValue: 1))))
+            physicsMaterialID: .init(rawValue: 2), renderMaterialID: .init(rawValue: 1))))
         let frame = try await step(world, [left, right])
         let a = try XCTUnwrap(frame.objects[polygonID]), b = try XCTUnwrap(frame.objects[.init(rawValue: 3)])
         XCTAssertLessThan(a.position.x, b.position.x)
@@ -177,7 +177,7 @@ final class NativeMetalRigidPolygonTests: XCTestCase {
         let object = NativePublicObject(descriptor: .rigidBody(try RigidBodyDescriptor(id: id,
             vertices: [[0,0],[1,0],[1,1],[0,1]], position: [Float(index) * 3 + x, 0],
             mass: 2, momentOfInertia: 2, motionRole: .static,
-            physicsMaterialID: .init(rawValue: 2), renderStyleID: .init(rawValue: 1))))
+            physicsMaterialID: .init(rawValue: 2), renderMaterialID: .init(rawValue: 1))))
         return NativeRigidPolygonInput(object: object, damping: 0, friction: 0.5, restitution: 0.1)
     }
 

@@ -9,25 +9,25 @@ import XCTest
 final class NativeMetalHitTestTests: XCTestCase {
     private let bubbleMaterial = PhysicsMaterialID(rawValue: 1)
     private let rigidMaterial = PhysicsMaterialID(rawValue: 2)
-    private let style = RenderStyleID(rawValue: 1)
+    private let style = RenderMaterialID(rawValue: 1)
     private func id(_ value: UInt64) -> ObjectID { ObjectID(rawValue: value) }
 
     private func step(_ objects: [WorldObject], hitTests: [WorldPoint], world: NativePublicWorld? = nil) async throws -> NativePublicFrame {
         let world = try world ?? NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         return try await world.step(objects: objects.map { NativePublicObject(descriptor: $0) },
             materials: [bubbleMaterial: PhysicsMaterial(kind: .bubble), rigidMaterial: PhysicsMaterial(kind: .rigid)],
-            styles: [style: RenderStyle()], region: WorldRectangle(min: [-100, -100], max: [100, 100]),
+            region: WorldRectangle(min: [-100, -100], max: [100, 100]),
             duration: 1.0 / 60, hitTests: hitTests)
     }
 
     private func bubble(_ value: UInt64, at position: WorldPoint, radius: Float = 5) throws -> WorldObject {
         .bubble(try BubbleDescriptor(id: id(value), position: position, targetRadius: radius, motionRole: .static,
-            physicsMaterialID: bubbleMaterial, renderStyleID: style))
+            physicsMaterialID: bubbleMaterial, renderMaterialID: style))
     }
 
     private func rigid(_ value: UInt64, _ shape: RigidShape, at position: WorldPoint, rotation: Float = 0) throws -> WorldObject {
         .rigidBody(try RigidBodyDescriptor(id: id(value), shape: shape, position: position, rotation: rotation,
-            motionRole: .static, physicsMaterialID: rigidMaterial, renderStyleID: style))
+            motionRole: .static, physicsMaterialID: rigidMaterial, renderMaterialID: style))
     }
 
     func testResultsFollowThePointOrderAndNameBubblesAndBodies() async throws {
@@ -63,7 +63,7 @@ final class NativeMetalHitTestTests: XCTestCase {
     func testBubbleContourAnswersOnTheStateOfTheSameStep() async throws {
         // Bańka dynamiczna leci z prędkością 60/s, więc po kroku jej środek jest 1 jednostkę dalej.
         let moving = try WorldObject.bubble(BubbleDescriptor(id: id(1), position: [0, 0], velocity: [60, 0],
-            targetRadius: 5, physicsMaterialID: bubbleMaterial, renderStyleID: style))
+            targetRadius: 5, physicsMaterialID: bubbleMaterial, renderMaterialID: style))
         let frame = try await step([moving], hitTests: [[5.5, 0], [-5.5, 0]])
         XCTAssertEqual(frame.hitTestResults, [id(1), nil], "kontur z kroku t+1, nie z wejścia")
     }
@@ -71,7 +71,7 @@ final class NativeMetalHitTestTests: XCTestCase {
     func testObjectsRemovedByTheRegionDoNotTakePart() async throws {
         // Bańka w całości poza regionem jest usuwana w tym kroku, więc jej kontur nie bierze udziału.
         let outside = try WorldObject.bubble(BubbleDescriptor(id: id(1), position: [110, 0], targetRadius: 2,
-            physicsMaterialID: bubbleMaterial, renderStyleID: style))
+            physicsMaterialID: bubbleMaterial, renderMaterialID: style))
         let frame = try await step([outside, bubble(2, at: [0, 0])], hitTests: [[110, 0], [0, 0]])
         XCTAssertNil(frame.objects[id(1)])
         XCTAssertEqual(frame.hitTestResults, [nil, id(2)])
@@ -81,7 +81,7 @@ final class NativeMetalHitTestTests: XCTestCase {
         // Dynamiczna bryła w całości poza regionem jest usuwana w tym kroku (`flags.z == 1`), więc nie bierze udziału.
         let box = try PolygonGeometry(vertices: [[-5, -5], [5, -5], [5, 5], [-5, 5]])
         let outside = try WorldObject.rigidBody(RigidBodyDescriptor(id: id(1), shape: .polygon(box), position: [150, 0],
-            motionRole: .dynamic, physicsMaterialID: rigidMaterial, renderStyleID: style))
+            motionRole: .dynamic, physicsMaterialID: rigidMaterial, renderMaterialID: style))
         let frame = try await step([outside, rigid(2, .polygon(box), at: [0, 0])], hitTests: [[150, 0], [0, 0]])
         XCTAssertNil(frame.objects[id(1)])
         XCTAssertEqual(frame.hitTestResults, [nil, id(2)])

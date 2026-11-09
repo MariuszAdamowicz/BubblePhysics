@@ -6,7 +6,7 @@ import XCTest
 final class KinematicStagingTests: XCTestCase {
     private let materialID = PhysicsMaterialID(rawValue: 1)
     private let polygonMaterialID = PhysicsMaterialID(rawValue: 2)
-    private let styleID = RenderStyleID(rawValue: 1)
+    private let styleID = RenderMaterialID(rawValue: 1)
     private func id(_ value: UInt64) -> ObjectID { ObjectID(rawValue: value) }
     private func state() throws -> RuntimeState {
         RuntimeState(configuration: try WorldConfiguration(simulationRegion:
@@ -16,15 +16,15 @@ final class KinematicStagingTests: XCTestCase {
         WorldTransaction()
             .updatePhysicsMaterial(materialID, material: try PhysicsMaterial(kind: .bubble))
             .updatePhysicsMaterial(polygonMaterialID, material: try PhysicsMaterial(kind: .rigid))
-            .updateRenderStyle(styleID, style: try RenderStyle())
+            .updateRenderMaterial(styleID, material: try RenderMaterial())
     }
     private func bubble(_ value: UInt64, role: MotionRole = .dynamic) throws -> BubbleDescriptor {
         try BubbleDescriptor(id: id(value), position: .zero, targetRadius: 1, motionRole: role,
-                             physicsMaterialID: materialID, renderStyleID: styleID)
+                             physicsMaterialID: materialID, renderMaterialID: styleID)
     }
     private func box(_ value: UInt64, role: MotionRole) throws -> RigidBodyDescriptor {
         try RigidBodyDescriptor(id: id(value), vertices: [[0, 0], [2, 0], [2, 2], [0, 2]], motionRole: role,
-                              physicsMaterialID: polygonMaterialID, renderStyleID: styleID)
+                              physicsMaterialID: polygonMaterialID, renderMaterialID: styleID)
     }
     private func assertRejected(_ transaction: WorldTransaction, against state: RuntimeState, index: Int,
                                 reason: TransactionRejectionReason, file: StaticString = #filePath, line: UInt = #line) {

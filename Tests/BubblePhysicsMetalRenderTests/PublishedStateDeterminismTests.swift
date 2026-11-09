@@ -99,17 +99,17 @@ final class PublishedStateDeterminismTests: XCTestCase {
     /// 300 baniek na siatce (kroki 1-10 bez kontaktów), potem transakcja `replace` ściska je w kwadracie 6×6,
     /// gdzie wiersz kandydatów przekracza limit k.
     private func squeezeRun(steps: Int, device: MTLDevice) async throws -> SqueezeRun {
-        let material = PhysicsMaterialID(rawValue: 1), style = RenderStyleID(rawValue: 1)
+        let material = PhysicsMaterialID(rawValue: 1), style = RenderMaterialID(rawValue: 1)
         let world = try BubbleWorld.makeBenchmarkWorld(configuration: WorldConfiguration(
             simulationRegion: WorldRectangle(min: [0, 0], max: [700, 500]), fixedTimeStep: 1.0 / 60),
             device: device, solverIterationLimit: 4)
         func descriptor(_ id: Int, _ position: WorldPoint, radius: Float) throws -> WorldObject {
             .bubble(try BubbleDescriptor(id: ObjectID(rawValue: UInt64(id)), position: position, targetRadius: radius,
-                physicsMaterialID: material, renderStyleID: style))
+                physicsMaterialID: material, renderMaterialID: style))
         }
         var initial = try WorldTransaction()
             .updatePhysicsMaterial(material, material: PhysicsMaterial(kind: .bubble))
-            .updateRenderStyle(style, style: RenderStyle())
+            .updateRenderMaterial(style, material: try RenderMaterial())
         for index in 0..<300 {
             initial = initial.add(try descriptor(index + 1, [Float(index % 20) * 30 + 40, Float(index / 20) * 30 + 40], radius: 5))
         }

@@ -222,11 +222,11 @@ package enum Stress300Scene {
         let height = regionHeight(bubbleCount: bubbleCount)
         let materialID = PhysicsMaterialID(rawValue: 1)
         let polygonMaterialID = PhysicsMaterialID(rawValue: 2)
-        let styleID = RenderStyleID(rawValue: 1)
+        let styleID = RenderMaterialID(rawValue: 1)
         var transaction = WorldTransaction()
             .updatePhysicsMaterial(materialID, material: try PhysicsMaterial(kind: .bubble))
             .updatePhysicsMaterial(polygonMaterialID, material: try PhysicsMaterial(kind: .rigid))
-            .updateRenderStyle(styleID, style: try RenderStyle())
+            .updateRenderMaterial(styleID, material: try RenderMaterial())
         var random = StressLCG(seed: 0x2B_60_F5)
         let horizontalSpacing: Float = 345 / 15
         let verticalSpacing: Float = 33.5
@@ -241,7 +241,7 @@ package enum Stress300Scene {
                 position: [15 + (Float(column) + 0.5) * horizontalSpacing + jitterX,
                            15 + (Float(row) + 0.5) * verticalSpacing + jitterY],
                 targetRadius: radius, mass: max(1, radius * radius * 0.02),
-                physicsMaterialID: materialID, renderStyleID: styleID)))
+                physicsMaterialID: materialID, renderMaterialID: styleID)))
         }
         let walls: [[WorldPoint]] = [
             [[0,0], [1,0], [1,height], [0,height]],
@@ -252,7 +252,7 @@ package enum Stress300Scene {
         for (index, vertices) in walls.enumerated() {
             transaction = transaction.add(.rigidBody(try RigidBodyDescriptor(
                 id: ObjectID(rawValue: UInt64(10_001 + index)), vertices: vertices,
-                physicsMaterialID: polygonMaterialID, renderStyleID: styleID)))
+                physicsMaterialID: polygonMaterialID, renderMaterialID: styleID)))
         }
         transaction = transaction.add(.rigidBody(try triangle(step: 0)))
         return transaction
@@ -265,7 +265,7 @@ package enum Stress300Scene {
 
     private static func triangle(step: Int) throws -> RigidBodyDescriptor {
         let polygonMaterialID = PhysicsMaterialID(rawValue: 2)
-        let styleID = RenderStyleID(rawValue: 1)
+        let styleID = RenderMaterialID(rawValue: 1)
         let triangleVertices: [WorldPoint] = [[-46,34], [46,34], [0,-52]]
         let waypoints: [WorldPoint] = [[187.5,350], [65,105], [310,595], [310,105], [65,595]]
         let leg = (step / 40) % waypoints.count
@@ -275,7 +275,7 @@ package enum Stress300Scene {
             waypoints[leg].x + (waypoints[next].x - waypoints[leg].x) * t,
             waypoints[leg].y + (waypoints[next].y - waypoints[leg].y) * t)
         return try RigidBodyDescriptor(id: ObjectID(rawValue: 10_000), vertices: triangleVertices,
-            position: center, physicsMaterialID: polygonMaterialID, renderStyleID: styleID)
+            position: center, physicsMaterialID: polygonMaterialID, renderMaterialID: styleID)
     }
 }
 
@@ -290,7 +290,7 @@ package enum MixedScene {
     private static let bodyRows = 5
     private static let bubbleMaterial = PhysicsMaterialID(rawValue: 1)
     private static let rigidMaterial = PhysicsMaterialID(rawValue: 2)
-    private static let style = RenderStyleID(rawValue: 1)
+    private static let style = RenderMaterialID(rawValue: 1)
     private static let bubbleSpacing: Float = 345 / 20
     private static let bodySpacing: Float = 345 / 11
     private static let bodyRowY: [Float] = [450, 500, 550, 600, 650]
@@ -320,13 +320,13 @@ package enum MixedScene {
         var transaction = try WorldTransaction()
             .updatePhysicsMaterial(bubbleMaterial, material: PhysicsMaterial(kind: .bubble))
             .updatePhysicsMaterial(rigidMaterial, material: PhysicsMaterial(kind: .rigid, friction: 0.2, maximumLinearSpeed: 90, maximumAngularSpeed: 8))
-            .updateRenderStyle(style, style: RenderStyle())
+            .updateRenderMaterial(style, material: try RenderMaterial())
         var random = StressLCG(seed: 0x4D_1C_5E)
         for index in 0..<bubbleCount {
             let radius = bubbleSpacing * 0.4 * (0.78 + random.nextUnit() * 0.44)
             transaction = transaction.add(.bubble(try BubbleDescriptor(id: bubbleID(index), position: bubblePosition(index),
                 targetRadius: radius, mass: max(1, radius * radius * 0.02),
-                physicsMaterialID: bubbleMaterial, renderStyleID: style)))
+                physicsMaterialID: bubbleMaterial, renderMaterialID: style)))
         }
         for index in 0..<(bodyColumns * bodyRows) {
             transaction = transaction.add(.rigidBody(try dynamicBody(index, scale: 0.8 + random.nextUnit() * 0.4,
@@ -336,7 +336,7 @@ package enum MixedScene {
         for index in 0..<barY.count {
             transaction = transaction.add(.rigidBody(try RigidBodyDescriptor(id: barID(index),
                 vertices: [[-30, -4], [30, -4], [30, 4], [-30, 4]], position: [100, barY[index]], motionRole: .kinematic,
-                physicsMaterialID: rigidMaterial, renderStyleID: style)))
+                physicsMaterialID: rigidMaterial, renderMaterialID: style)))
             transaction = transaction.setKinematicDrive(barID(index), drive: .velocity(linear: [barSpeed, 0], angular: 0))
         }
         let walls: [[WorldPoint]] = [
@@ -347,7 +347,7 @@ package enum MixedScene {
         ]
         for (index, vertices) in walls.enumerated() {
             transaction = transaction.add(.rigidBody(try RigidBodyDescriptor(id: ObjectID(rawValue: UInt64(10_001 + index)),
-                vertices: vertices, physicsMaterialID: rigidMaterial, renderStyleID: style)))
+                vertices: vertices, physicsMaterialID: rigidMaterial, renderMaterialID: style)))
         }
         for joint in try joints() { transaction = transaction.addJoint(joint) }
         return transaction
@@ -361,18 +361,18 @@ package enum MixedScene {
         case 0:
             return try RigidBodyDescriptor(id: id, vertices: [[-9, -6], [9, -6], [9, 6], [-9, 6]].map { $0 * scale },
                 position: position, velocity: velocity, angularVelocity: angularVelocity, motionRole: .dynamic,
-                physicsMaterialID: rigidMaterial, renderStyleID: style)
+                physicsMaterialID: rigidMaterial, renderMaterialID: style)
         case 1:
             return try RigidBodyDescriptor(id: id, shape: .circle(radius: 8 * scale), position: position,
-                velocity: velocity, angularVelocity: angularVelocity, motionRole: .dynamic, physicsMaterialID: rigidMaterial, renderStyleID: style)
+                velocity: velocity, angularVelocity: angularVelocity, motionRole: .dynamic, physicsMaterialID: rigidMaterial, renderMaterialID: style)
         case 2:
             return try RigidBodyDescriptor(id: id, shape: .capsule(halfLength: 6 * scale, radius: 5 * scale),
                 position: position, velocity: velocity, angularVelocity: angularVelocity, motionRole: .dynamic,
-                physicsMaterialID: rigidMaterial, renderStyleID: style)
+                physicsMaterialID: rigidMaterial, renderMaterialID: style)
         default:
             return try RigidBodyDescriptor(id: id, vertices: [[-9, 7], [9, 7], [0, -9]].map { $0 * scale },
                 position: position, velocity: velocity, angularVelocity: angularVelocity, motionRole: .dynamic,
-                physicsMaterialID: rigidMaterial, renderStyleID: style)
+                physicsMaterialID: rigidMaterial, renderMaterialID: style)
         }
     }
 

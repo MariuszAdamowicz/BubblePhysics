@@ -248,11 +248,9 @@ final class RigidShapeContactTests: XCTestCase {
     // Czujnik widzi koło i kapsułę przez rdzeń z promieniem: okrągły i wielokątny zasięg, bliski i daleki obiekt.
     func testSensorsDetectCircleAndCapsuleByCoreAndRadius() async throws {
         let world = try world()
-        let round = try SensorDescriptor(id: ObjectID(rawValue: 90), position: [100, 100], geometry: RangeGeometry.circle(radius: 10),
-            renderStyleID: B.style, eventInterest: .enteredSensor)
+        let round = try SensorDescriptor(id: ObjectID(rawValue: 90), position: [100, 100], geometry: RangeGeometry.circle(radius: 10), eventInterest: .enteredSensor)
         let square = try SensorDescriptor(id: ObjectID(rawValue: 91), position: [300, 100],
-            geometry: RangeGeometry.polygon(vertices: [[-10, -10], [10, -10], [10, 10], [-10, 10]]),
-            renderStyleID: B.style, eventInterest: .enteredSensor)
+            geometry: RangeGeometry.polygon(vertices: [[-10, -10], [10, -10], [10, 10], [-10, 10]]), eventInterest: .enteredSensor)
         world.submit(try B.baseTransaction()
             .add(.sensor(round)).add(.sensor(square))
             // Odległość rdzenia od środka okrągłego czujnika 12 ≤ 10 + 5; kapsuła daleko: 17 > 10 + 3.

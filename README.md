@@ -26,13 +26,13 @@ let configuration = try WorldConfiguration(
 let world = try BubbleWorld(configuration: configuration)
 
 let material = PhysicsMaterialID(rawValue: 1)
-let style = RenderStyleID(rawValue: 1)
+let look = RenderMaterialID(rawValue: 1)
 world.submit(WorldTransaction()
     .updatePhysicsMaterial(material, material: try PhysicsMaterial(kind: .bubble))
-    .updateRenderStyle(style, style: try RenderStyle())
+    .updateRenderMaterial(look, material: try RenderMaterial())
     .add(.bubble(try BubbleDescriptor(id: ObjectID(rawValue: 1), position: [187, 350],
                                       targetRadius: 20, mass: 8,
-                                      physicsMaterialID: material, renderStyleID: style))))
+                                      physicsMaterialID: material, renderMaterialID: look))))
 
 // Sam krok fizyki:
 let frame = await world.advance(by: 1.0 / 60)
@@ -47,7 +47,7 @@ let rendered = await world.advance(by: 1.0 / 60, commandBuffer: commandBuffer) {
 // Drawable prezentuj tylko wtedy, gdy `world.diagnostics.lastAdvanceIssue == nil`.
 ```
 
-`BubbleWorld` jest `@MainActor`. Każda zmiana świata przechodzi przez atomową `WorldTransaction` (dodanie/usunięcie/zamiana obiektów, materiały i style, role ruchu, napędy ścieżki/silnika/gracza, siła globalna, impulsy, przejścia parametrów, łączenie i dzielenie baniek, zamiana wielokątów). Każda `WorldFrame` zawiera potwierdzenia transakcji, zdarzenia opt-in, informację o przepełnieniu zdarzeń i feedback napędów.
+`BubbleWorld` jest `@MainActor`. Każda zmiana świata przechodzi przez atomową `WorldTransaction` (dodanie/usunięcie/zamiana obiektów, materiały fizyki i renderu, warstwy i tło, role ruchu, napędy ścieżki/silnika/gracza, siła globalna, impulsy, przejścia parametrów, łączenie i dzielenie baniek, zamiana wielokątów). Każda `WorldFrame` zawiera potwierdzenia transakcji, zdarzenia opt-in, informację o przepełnieniu zdarzeń i feedback napędów.
 
 ## Zachowanie w czasie działania, o którym warto wiedzieć
 

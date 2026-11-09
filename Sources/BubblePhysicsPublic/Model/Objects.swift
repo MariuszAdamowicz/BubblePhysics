@@ -92,12 +92,14 @@ public struct RangeGeometry: Equatable, Sendable {
     }
 }
 
-/// Wspólne dla baniek i brył: filtr kolizji i zainteresowania zdarzeniami.
+/// Wspólne dla baniek i brył: warstwa rysowania, filtr kolizji i zainteresowania zdarzeniami.
 public struct PhysicsBodyProperties: Equatable, Hashable, Sendable {
+    /// Wyższa warstwa jest rysowana później, czyli nad niższą.
+    public let layer: Int32
     public let filter: CollisionFilter
     public let eventInterest: EventInterest
-    public init(filter: CollisionFilter = .default, eventInterest: EventInterest = []) {
-        self.filter = filter; self.eventInterest = eventInterest
+    public init(layer: Int32 = 0, filter: CollisionFilter = .default, eventInterest: EventInterest = []) {
+        self.layer = layer; self.filter = filter; self.eventInterest = eventInterest
     }
 }
 
@@ -118,19 +120,20 @@ public struct BubbleDescriptor: Equatable, Sendable {
     public let motionRole: MotionRole
     public let regionExitPolicy: RegionExitPolicy
     public let physicsMaterialID: PhysicsMaterialID
-    public let renderStyleID: RenderStyleID
+    public let renderMaterialID: RenderMaterialID
     public let mergeGroups: MergeGroupSet
     public let eventInterest: EventInterest
     public let filter: CollisionFilter
-    public var properties: PhysicsBodyProperties { PhysicsBodyProperties(filter: filter, eventInterest: eventInterest) }
-    public let presentation: PresentationParameters
+    public let layer: Int32
+    public var properties: PhysicsBodyProperties { PhysicsBodyProperties(layer: layer, filter: filter, eventInterest: eventInterest) }
 
     public init(id: ObjectID, position: WorldPoint, velocity: WorldPoint = .zero,
                 targetRadius: Float, mass: Float = 1, motionRole: MotionRole = .dynamic,
                 regionExitPolicy: RegionExitPolicy = .remove, physicsMaterialID: PhysicsMaterialID,
-                renderStyleID: RenderStyleID, mergeGroups: MergeGroupSet = [],
-                eventInterest: EventInterest = [], presentation: PresentationParameters = .empty,
-                drivePolicy: BubbleDrivePolicy = .standard, filter: CollisionFilter = .default) throws {
+                renderMaterialID: RenderMaterialID, mergeGroups: MergeGroupSet = [],
+                eventInterest: EventInterest = [],
+                drivePolicy: BubbleDrivePolicy = .standard, filter: CollisionFilter = .default,
+                layer: Int32 = 0) throws {
         try requireFinite(position, "bubble.position")
         try requireFinite(velocity, "bubble.velocity")
         try requirePositive(targetRadius, "bubble.targetRadius")
@@ -144,11 +147,11 @@ public struct BubbleDescriptor: Equatable, Sendable {
         self.motionRole = motionRole
         self.regionExitPolicy = regionExitPolicy
         self.physicsMaterialID = physicsMaterialID
-        self.renderStyleID = renderStyleID
+        self.renderMaterialID = renderMaterialID
         self.mergeGroups = mergeGroups
         self.eventInterest = eventInterest
         self.filter = filter
-        self.presentation = presentation
+        self.layer = layer
     }
 }
 
@@ -223,11 +226,11 @@ public struct RigidBodyDescriptor: Equatable, Sendable {
     public let motionRole: MotionRole
     public let regionExitPolicy: RegionExitPolicy
     public let physicsMaterialID: PhysicsMaterialID
-    public let renderStyleID: RenderStyleID
+    public let renderMaterialID: RenderMaterialID
     public let eventInterest: EventInterest
     public let filter: CollisionFilter
-    public var properties: PhysicsBodyProperties { PhysicsBodyProperties(filter: filter, eventInterest: eventInterest) }
-    public let presentation: PresentationParameters
+    public let layer: Int32
+    public var properties: PhysicsBodyProperties { PhysicsBodyProperties(layer: layer, filter: filter, eventInterest: eventInterest) }
 
     /// Moment bezwładności, który widzi solver: podany przez grę albo liczony z kształtu.
     public var resolvedMomentOfInertia: Float { momentOfInertia ?? shape.momentOfInertia(mass: mass) }
@@ -236,8 +239,8 @@ public struct RigidBodyDescriptor: Equatable, Sendable {
                 rotation: Float = 0, velocity: WorldPoint = .zero, angularVelocity: Float = 0,
                 mass: Float = 1, momentOfInertia: Float? = nil, motionRole: MotionRole = .static,
                 regionExitPolicy: RegionExitPolicy = .remove, physicsMaterialID: PhysicsMaterialID,
-                renderStyleID: RenderStyleID, eventInterest: EventInterest = [],
-                presentation: PresentationParameters = .empty, filter: CollisionFilter = .default) throws {
+                renderMaterialID: RenderMaterialID, eventInterest: EventInterest = [],
+                filter: CollisionFilter = .default, layer: Int32 = 0) throws {
         try shape.validate()
         try requireFinite(position, "rigidBody.position")
         try requireFinite(rotation, "rigidBody.rotation")
@@ -256,10 +259,10 @@ public struct RigidBodyDescriptor: Equatable, Sendable {
         self.motionRole = motionRole
         self.regionExitPolicy = regionExitPolicy
         self.physicsMaterialID = physicsMaterialID
-        self.renderStyleID = renderStyleID
+        self.renderMaterialID = renderMaterialID
         self.eventInterest = eventInterest
         self.filter = filter
-        self.presentation = presentation
+        self.layer = layer
         // Moment liczony z kształtu może w `Float` zejść do zera przy skrajnie małej bryle.
         try requirePositive(resolvedMomentOfInertia, "rigidBody.momentOfInertia")
     }
@@ -269,13 +272,13 @@ public struct RigidBodyDescriptor: Equatable, Sendable {
                 rotation: Float = 0, velocity: WorldPoint = .zero, angularVelocity: Float = 0,
                 mass: Float = 1, momentOfInertia: Float? = nil, motionRole: MotionRole = .static,
                 regionExitPolicy: RegionExitPolicy = .remove, physicsMaterialID: PhysicsMaterialID,
-                renderStyleID: RenderStyleID, eventInterest: EventInterest = [],
-                presentation: PresentationParameters = .empty, filter: CollisionFilter = .default) throws {
+                renderMaterialID: RenderMaterialID, eventInterest: EventInterest = [],
+                filter: CollisionFilter = .default, layer: Int32 = 0) throws {
         try self.init(id: id, shape: .polygon(PolygonGeometry(vertices: vertices)), position: position,
                       rotation: rotation, velocity: velocity, angularVelocity: angularVelocity, mass: mass,
                       momentOfInertia: momentOfInertia, motionRole: motionRole, regionExitPolicy: regionExitPolicy,
-                      physicsMaterialID: physicsMaterialID, renderStyleID: renderStyleID,
-                      eventInterest: eventInterest, presentation: presentation, filter: filter)
+                      physicsMaterialID: physicsMaterialID, renderMaterialID: renderMaterialID,
+                      eventInterest: eventInterest, filter: filter, layer: layer)
     }
 }
 
@@ -306,14 +309,12 @@ public struct ForceFieldDescriptor: Equatable, Sendable {
     public let field: ForceField
     public let filter: ObjectFilter
     public let regionExitPolicy: RegionExitPolicy
-    public let renderStyleID: RenderStyleID
     public let eventInterest: EventInterest
-    public let presentation: PresentationParameters
 
     public init(id: ObjectID, position: WorldPoint, rotation: Float = 0,
                 geometry: RangeGeometry, field: ForceField, filter: ObjectFilter = ObjectFilter(),
-                regionExitPolicy: RegionExitPolicy = .remove, renderStyleID: RenderStyleID,
-                eventInterest: EventInterest = [], presentation: PresentationParameters = .empty) throws {
+                regionExitPolicy: RegionExitPolicy = .remove,
+                eventInterest: EventInterest = []) throws {
         try requireFinite(position, "field.position")
         try requireFinite(rotation, "field.rotation")
         try field.validate()
@@ -324,9 +325,7 @@ public struct ForceFieldDescriptor: Equatable, Sendable {
         self.field = field
         self.filter = filter
         self.regionExitPolicy = regionExitPolicy
-        self.renderStyleID = renderStyleID
         self.eventInterest = eventInterest
-        self.presentation = presentation
     }
 }
 
@@ -337,14 +336,12 @@ public struct SensorDescriptor: Equatable, Sendable {
     public let geometry: RangeGeometry
     public let filter: ObjectFilter
     public let regionExitPolicy: RegionExitPolicy
-    public let renderStyleID: RenderStyleID
     public let eventInterest: EventInterest
-    public let presentation: PresentationParameters
 
     public init(id: ObjectID, position: WorldPoint, rotation: Float = 0,
                 geometry: RangeGeometry, filter: ObjectFilter = ObjectFilter(),
-                regionExitPolicy: RegionExitPolicy = .remove, renderStyleID: RenderStyleID,
-                eventInterest: EventInterest = [], presentation: PresentationParameters = .empty) throws {
+                regionExitPolicy: RegionExitPolicy = .remove,
+                eventInterest: EventInterest = []) throws {
         try requireFinite(position, "sensor.position")
         try requireFinite(rotation, "sensor.rotation")
         self.id = id
@@ -353,8 +350,6 @@ public struct SensorDescriptor: Equatable, Sendable {
         self.geometry = geometry
         self.filter = filter
         self.regionExitPolicy = regionExitPolicy
-        self.renderStyleID = renderStyleID
         self.eventInterest = eventInterest
-        self.presentation = presentation
     }
 }

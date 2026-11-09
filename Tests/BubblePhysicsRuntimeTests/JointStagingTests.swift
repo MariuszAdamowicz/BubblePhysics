@@ -6,7 +6,7 @@ import XCTest
 final class JointStagingTests: XCTestCase {
     private let bubbleMaterial = PhysicsMaterialID(rawValue: 1)
     private let rigidMaterial = PhysicsMaterialID(rawValue: 2)
-    private let styleID = RenderStyleID(rawValue: 1)
+    private let styleID = RenderMaterialID(rawValue: 1)
     private func id(_ value: UInt64) -> ObjectID { ObjectID(rawValue: value) }
     private func joint(_ value: UInt64) -> JointID { JointID(rawValue: value) }
 
@@ -19,22 +19,22 @@ final class JointStagingTests: XCTestCase {
         WorldTransaction()
             .updatePhysicsMaterial(bubbleMaterial, material: try PhysicsMaterial(kind: .bubble))
             .updatePhysicsMaterial(rigidMaterial, material: try PhysicsMaterial(kind: .rigid))
-            .updateRenderStyle(styleID, style: try RenderStyle())
+            .updateRenderMaterial(styleID, material: try RenderMaterial())
     }
 
     private func bubble(_ value: UInt64, role: MotionRole = .dynamic, at x: Float = 0) throws -> WorldObject {
         .bubble(try BubbleDescriptor(id: id(value), position: [x, 0], targetRadius: 2, mass: 2, motionRole: role,
-                                     physicsMaterialID: bubbleMaterial, renderStyleID: styleID))
+                                     physicsMaterialID: bubbleMaterial, renderMaterialID: styleID))
     }
 
     private func box(_ value: UInt64, role: MotionRole = .dynamic, at x: Float = 0) throws -> WorldObject {
         .rigidBody(try RigidBodyDescriptor(id: id(value), vertices: [[-1, -1], [1, -1], [1, 1], [-1, 1]],
-            position: [x, 0], motionRole: role, physicsMaterialID: rigidMaterial, renderStyleID: styleID))
+            position: [x, 0], motionRole: role, physicsMaterialID: rigidMaterial, renderMaterialID: styleID))
     }
 
     private func circle(_ value: UInt64, role: MotionRole = .dynamic, at x: Float = 0) throws -> WorldObject {
         .rigidBody(try RigidBodyDescriptor(id: id(value), shape: .circle(radius: 1), position: [x, 0], motionRole: role,
-                                           physicsMaterialID: rigidMaterial, renderStyleID: styleID))
+                                           physicsMaterialID: rigidMaterial, renderMaterialID: styleID))
     }
 
     // Fabryki więzów nie rzucają (stałe, poprawne argumenty); testy sprawdzają staging, nie konstruktor.
@@ -165,7 +165,7 @@ final class JointStagingTests: XCTestCase {
     // MARK: Istnienie ciał i identyfikatorów więzów
 
     func testMissingBodyAndNonPhysicalBodyAreRejected() throws {
-        let sensor = try SensorDescriptor(id: id(3), position: .zero, geometry: .circle(radius: 1), renderStyleID: styleID)
+        let sensor = try SensorDescriptor(id: id(3), position: .zero, geometry: .circle(radius: 1))
         let state = try TransactionStager.stage(WorldTransaction().add(.sensor(sensor)), against: world([box(1), box(2, at: 5)])).state
         assertRejected(WorldTransaction().addJoint(weld(1, 1, 99)), against: state, reason: .objectNotFound(id(99)))
         assertRejected(WorldTransaction().addJoint(weld(1, 99, 1)), against: state, reason: .objectNotFound(id(99)))
@@ -211,7 +211,7 @@ final class JointStagingTests: XCTestCase {
         let joined = try TransactionStager.stage(WorldTransaction().addJoint(weld(1, 1, 2)).addJoint(weld(2, 2, 3)).addJoint(hinge(3, 3, nil)),
             against: state).state
         let replacements = [try RigidBodyDescriptor(id: id(10), vertices: [[0, 0], [1, 0], [0, 1]], motionRole: .dynamic,
-                                                    physicsMaterialID: rigidMaterial, renderStyleID: styleID)]
+                                                    physicsMaterialID: rigidMaterial, renderMaterialID: styleID)]
         let change = try assertAccepted(WorldTransaction().replaceRigidBodies([id(1), id(2)], with: replacements), against: joined)
         XCTAssertEqual(Set(change.state.joints.keys), [joint(3)])
         XCTAssertEqual(change.removedJointIDs, [joint(1), joint(2)])
@@ -222,14 +222,14 @@ final class JointStagingTests: XCTestCase {
         let joined = try TransactionStager.stage(WorldTransaction()
             .addJoint(distance(1, 1, 3)).addJoint(distance(2, 2, nil)).addJoint(distance(3, 1, 2)).addJoint(distance(4, 4, 3)),
             against: state).state
-        let result = BubbleResult(id: id(5), physicsMaterialID: bubbleMaterial, renderStyleID: styleID)
+        let result = BubbleResult(id: id(5), physicsMaterialID: bubbleMaterial, renderMaterialID: styleID)
         let merged = try assertAccepted(WorldTransaction().mergeBubbles([id(1), id(2)], result: result), against: joined)
         XCTAssertEqual(Set(merged.state.joints.keys), [joint(4)])
         XCTAssertEqual(merged.removedJointIDs, [joint(1), joint(2), joint(3)])
         XCTAssertFalse(merged.state.joints.values.contains { $0.bodyA == id(5) || $0.bodyB == id(5) })
 
-        let partA = BubbleSplitPart(result: BubbleResult(id: id(6), physicsMaterialID: bubbleMaterial, renderStyleID: styleID), share: 0.5)
-        let partB = BubbleSplitPart(result: BubbleResult(id: id(7), physicsMaterialID: bubbleMaterial, renderStyleID: styleID), share: 0.5)
+        let partA = BubbleSplitPart(result: BubbleResult(id: id(6), physicsMaterialID: bubbleMaterial, renderMaterialID: styleID), share: 0.5)
+        let partB = BubbleSplitPart(result: BubbleResult(id: id(7), physicsMaterialID: bubbleMaterial, renderMaterialID: styleID), share: 0.5)
         let split = try assertAccepted(WorldTransaction().splitBubble(id(4), first: partA, second: partB), against: joined)
         XCTAssertEqual(Set(split.state.joints.keys), [joint(1), joint(2), joint(3)])
         XCTAssertEqual(split.removedJointIDs, [joint(4)])

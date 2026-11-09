@@ -3,7 +3,7 @@ import XCTest
 
 final class RigidShapeTests: XCTestCase {
     private let material = PhysicsMaterialID(rawValue: 1)
-    private let style = RenderStyleID(rawValue: 1)
+    private let style = RenderMaterialID(rawValue: 1)
 
     private func assertRelativelyEqual(_ actual: Float, _ expected: Float, tolerance: Float,
                                        _ message: String = "", file: StaticString = #filePath, line: UInt = #line) {
@@ -13,7 +13,7 @@ final class RigidShapeTests: XCTestCase {
 
     private func body(_ shape: RigidShape, mass: Float = 1, inertia: Float? = nil) throws -> RigidBodyDescriptor {
         try RigidBodyDescriptor(id: ObjectID(rawValue: 1), shape: shape, mass: mass, momentOfInertia: inertia,
-                                physicsMaterialID: material, renderStyleID: style)
+                                physicsMaterialID: material, renderMaterialID: style)
     }
 
     func testCircleInertiaIsHalfMassTimesRadiusSquaredWithinTenthOfPercent() throws {
@@ -98,7 +98,7 @@ final class RigidShapeTests: XCTestCase {
         XCTAssertEqual(capsule.shape, .capsule(halfLength: 2, radius: 0.5))
         let vertices: [WorldPoint] = [[0, 0], [1, 0], [0, 1]]
         let shortcut = try RigidBodyDescriptor(id: ObjectID(rawValue: 2), vertices: vertices,
-                                               physicsMaterialID: material, renderStyleID: style)
+                                               physicsMaterialID: material, renderMaterialID: style)
         XCTAssertEqual(shortcut.shape, .polygon(try PolygonGeometry(vertices: vertices)))
     }
 

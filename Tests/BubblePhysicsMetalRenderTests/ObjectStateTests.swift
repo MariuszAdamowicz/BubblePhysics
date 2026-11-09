@@ -9,7 +9,7 @@ import simd
 final class ObjectStateTests: XCTestCase {
     private let bubbleMaterial = PhysicsMaterialID(rawValue: 1)
     private let polygonMaterial = PhysicsMaterialID(rawValue: 2)
-    private let style = RenderStyleID(rawValue: 1)
+    private let style = RenderMaterialID(rawValue: 1)
 
     private func makeWorld(device: MTLDevice) throws -> BubbleWorld {
         try BubbleWorld.makeBenchmarkWorld(configuration: try WorldConfiguration(
@@ -21,13 +21,13 @@ final class ObjectStateTests: XCTestCase {
         try WorldTransaction()
             .updatePhysicsMaterial(bubbleMaterial, material: PhysicsMaterial(kind: .bubble))
             .updatePhysicsMaterial(polygonMaterial, material: PhysicsMaterial(kind: .rigid))
-            .updateRenderStyle(style, style: RenderStyle())
+            .updateRenderMaterial(style, material: try RenderMaterial())
     }
 
     private func bubble(_ id: UInt64, at position: WorldPoint, radius: Float,
                         velocity: WorldPoint = .zero) throws -> WorldObject {
         .bubble(try BubbleDescriptor(id: ObjectID(rawValue: id), position: position, velocity: velocity,
-            targetRadius: radius, physicsMaterialID: bubbleMaterial, renderStyleID: style))
+            targetRadius: radius, physicsMaterialID: bubbleMaterial, renderMaterialID: style))
     }
 
     private func box(_ id: UInt64, center: WorldPoint, half: Float, role: MotionRole = .dynamic,
@@ -35,7 +35,7 @@ final class ObjectStateTests: XCTestCase {
         .rigidBody(try RigidBodyDescriptor(id: ObjectID(rawValue: id),
             vertices: [[-half, -half], [half, -half], [half, half], [-half, half]], position: center,
             velocity: velocity, angularVelocity: angularVelocity, motionRole: role,
-            physicsMaterialID: polygonMaterial, renderStyleID: style))
+            physicsMaterialID: polygonMaterial, renderMaterialID: style))
     }
 
     func testEveryBubbleAndRigidBodyHasStateWithKinematicsAndBounds() async throws {
@@ -123,7 +123,7 @@ final class ObjectStateTests: XCTestCase {
         let world = try makeWorld(device: device)
         world.submit(try baseTransaction().add(.rigidBody(try RigidBodyDescriptor(id: ObjectID(rawValue: 7),
             vertices: [[-10, -10], [10, -10], [10, 10], [-10, 10]], position: [100, 100], rotation: .pi / 4,
-            motionRole: .static, physicsMaterialID: polygonMaterial, renderStyleID: style))))
+            motionRole: .static, physicsMaterialID: polygonMaterial, renderMaterialID: style))))
         let frame = await world.advance(by: 1.0 / 60)
         let state = try XCTUnwrap(frame.objects[ObjectID(rawValue: 7)])
         XCTAssertEqual(state.rotation, .pi / 4, accuracy: 1e-5)
@@ -138,7 +138,7 @@ final class ObjectStateTests: XCTestCase {
         let id = ObjectID(rawValue: 1)
         world.submit(try baseTransaction().add(.bubble(try BubbleDescriptor(id: id, position: [190, 100],
             velocity: [900, 0], targetRadius: 8, regionExitPolicy: .wrap, physicsMaterialID: bubbleMaterial,
-            renderStyleID: style, eventInterest: [.didWrap]))))
+            renderMaterialID: style, eventInterest: [.didWrap]))))
         var wrapped = false
         var frame = WorldFrame(transactionReceipts: [], events: [])
         for _ in 0..<20 {

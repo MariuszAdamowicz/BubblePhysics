@@ -8,7 +8,10 @@ public enum TransactionRejectionReason: Error, Equatable, Sendable {
     case duplicateObjectID(ObjectID)
     case replacementIDMismatch(ObjectID, ObjectID)
     case physicsMaterialNotFound(PhysicsMaterialID)
-    case renderStyleNotFound(RenderStyleID)
+    case renderMaterialNotFound(RenderMaterialID)
+    case textureNotFound(TextureID)
+    /// `setLayer` dotyczy tylko baniek i brył; czujnik i pole sił nie są rysowane.
+    case layerNotSupported(ObjectID)
     case incompatiblePhysicsMaterial(PhysicsMaterialID, ObjectID)
     case incompatibleObjectKind(ObjectID)
     case jointNotFound(JointID)

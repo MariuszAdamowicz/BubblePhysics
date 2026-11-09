@@ -5,15 +5,15 @@ import XCTest
 /// P-B-23 po stronie runtime: moment silnika `motorDriven` dzieli przez inercję liczoną z `RigidShape`.
 final class RigidInertiaControllerTests: XCTestCase {
     private let duration = 1.0 / 60
-    private let materialID = PhysicsMaterialID(rawValue: 2), styleID = RenderStyleID(rawValue: 1)
+    private let materialID = PhysicsMaterialID(rawValue: 2), styleID = RenderMaterialID(rawValue: 1)
 
     private func angularVelocityAfterOneStep(shape: RigidShape, mass: Float, inertia: Float?, torque: Float) throws -> Float {
         let id = ObjectID(rawValue: 1)
         let body = try RigidBodyDescriptor(id: id, shape: shape, mass: mass, momentOfInertia: inertia,
-            motionRole: .dynamic, physicsMaterialID: materialID, renderStyleID: styleID)
+            motionRole: .dynamic, physicsMaterialID: materialID, renderMaterialID: styleID)
         var transaction = WorldTransaction()
             .updatePhysicsMaterial(materialID, material: try PhysicsMaterial(kind: .rigid))
-            .updateRenderStyle(styleID, style: try RenderStyle())
+            .updateRenderMaterial(styleID, material: try RenderMaterial())
             .add(.rigidBody(body))
         transaction = transaction.setMotorDrive(id, drive: try MotorDrive(torque: torque))
         var state = RuntimeState(configuration: try WorldConfiguration(

@@ -20,9 +20,8 @@ public final class BubblePhysicsMetalRender {
     /// `setVertexBytes` jest udokumentowane dla danych do 4 KB.
     private static let inlineVertexByteLimit = 4096
     private static let triangulationCacheLimit = 256
-    public var customPipelines: [String: RenderStylePipeline]
 
-    public init(device: MTLDevice, customPipelines: [String: RenderStylePipeline] = [:]) throws {
+    public init(device: MTLDevice) throws {
         self.device = device
         guard let polygonBubblePlaceholder = device.makeBuffer(length: NativeMetalRenderHandoff.bubbleRecordByteCount,
                                                                 options: .storageModeShared) else {
@@ -32,11 +31,7 @@ public final class BubblePhysicsMetalRender {
         let functions = try NativeMetalRenderHandoff.makeFunctions(device: device)
         self.vertexFunction = functions.vertex
         self.technicalFragment = functions.fragment
-        self.customPipelines = customPipelines
     }
-
-    /// Ta funkcja definiuje ABI wierzchołków dla niestandardowego fragment shaderu.
-    public func makeContourVertexFunction() -> MTLFunction { vertexFunction }
 
     public func encode(world: BubbleWorld, viewport: Viewport, commandBuffer: MTLCommandBuffer,
                        renderPassDescriptor: MTLRenderPassDescriptor) throws {
@@ -53,17 +48,8 @@ public final class BubblePhysicsMetalRender {
         guard let published = world.renderState else { return }
         if let handoff = published.handoff {
             handoff.bind(encoder, viewport: viewport)
-            if published.items.count == handoff.bubbleCount,
-               published.items.allSatisfy({ $0?.shader == .technical }) {
-                encoder.setRenderPipelineState(technical)
-                handoff.drawAll(encoder)
-            } else {
-                for (index, item) in published.items.enumerated() {
-                    guard let item else { continue }
-                    selectPipeline(for: item, encoder: encoder, technical: technical)
-                    handoff.draw(encoder, bubbleIndex: index)
-                }
-            }
+            encoder.setRenderPipelineState(technical)
+            handoff.drawAll(encoder)
         }
         for shape in published.shapes {
             let indices = triangulation(for: shape.localVertices)
@@ -94,7 +80,7 @@ public final class BubblePhysicsMetalRender {
             encoder.setVertexBytes(&stride, length: MemoryLayout<UInt32>.stride, index: 3)
             var mode: UInt32 = 1
             encoder.setVertexBytes(&mode, length: MemoryLayout<UInt32>.stride, index: 6)
-            selectPipeline(for: shape.item, encoder: encoder, technical: technical)
+            encoder.setRenderPipelineState(technical)
             encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: coordinates.count)
         }
     }
@@ -106,18 +92,6 @@ public final class BubblePhysicsMetalRender {
         let indices = Self.triangulate(ring)
         triangulationCache[ring] = indices
         return indices
-    }
-
-    private func selectPipeline(for item: BubbleWorldRenderItem, encoder: MTLRenderCommandEncoder,
-                                technical: MTLRenderPipelineState) {
-        switch item.shader {
-        case .technical: encoder.setRenderPipelineState(technical)
-        case .custom(let key):
-            if let pipeline = customPipelines[key] {
-                encoder.setRenderPipelineState(pipeline.state)
-                pipeline.encodeChannels(encoder, item.channels)
-            } else { encoder.setRenderPipelineState(technical) }
-        }
     }
 
     /// Ear clipping obsługuje także wklęsłe proste pierścienie z modelu.

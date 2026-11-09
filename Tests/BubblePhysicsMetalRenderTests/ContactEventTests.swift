@@ -214,7 +214,7 @@ final class ContactEventTests: XCTestCase {
             let corner = WorldObject.rigidBody(try RigidBodyDescriptor(id: ObjectID(rawValue: floorID),
                 vertices: [[0, 0], [100, 0], [100, 10], [10, 10], [10, 60], [0, 60]], position: [100, 100],
                 mass: 1, momentOfInertia: 1000, motionRole: .static, physicsMaterialID: B.polygonMaterial,
-                renderStyleID: B.style))
+                renderMaterialID: B.style))
             world.submit(try B.baseTransaction().add(corner).add(B.bubble(1, at: position, interest: .contact)))
             let result = await B.advance(world, steps: 2)
             let began = B.began(result.events).filter { B.isPair($0.a, $0.b, 1, floorID) }
@@ -314,7 +314,7 @@ final class ContactEventTests: XCTestCase {
         let settled = await B.advance(world, steps: 60)
         XCTAssertEqual(B.began(settled.events).filter { B.isPair($0.a, $0.b, 3, 1) }.count, 1)
         XCTAssertTrue(B.ended(settled.events).isEmpty, "trwały styk nie daje contactEnded")
-        let result = BubbleResult(id: ObjectID(rawValue: 4), physicsMaterialID: B.bubbleMaterial, renderStyleID: B.style)
+        let result = BubbleResult(id: ObjectID(rawValue: 4), physicsMaterialID: B.bubbleMaterial, renderMaterialID: B.style)
         world.submit(WorldTransaction().mergeBubbles([ObjectID(rawValue: 1), ObjectID(rawValue: 2)], result: result))
         let merge = await world.advance(by: B.step)
         XCTAssertEqual(B.ended(merge.events).filter { B.isPair($0.0, $0.1, 3, 1) }.count, 1,

@@ -5,7 +5,7 @@ import XCTest
 /// P-B-11 (strona modelu): filtr kolizji, jego warunek obustronny i przekazanie do wyniku scalenia i podziału.
 final class CollisionFilterTests: XCTestCase {
     private let materialID = PhysicsMaterialID(rawValue: 1)
-    private let styleID = RenderStyleID(rawValue: 1)
+    private let styleID = RenderMaterialID(rawValue: 1)
     private func id(_ value: UInt64) -> ObjectID { ObjectID(rawValue: value) }
     private func state() throws -> RuntimeState {
         RuntimeState(configuration: try WorldConfiguration(simulationRegion:
@@ -14,7 +14,7 @@ final class CollisionFilterTests: XCTestCase {
     private func resources() throws -> WorldTransaction {
         WorldTransaction()
             .updatePhysicsMaterial(materialID, material: try PhysicsMaterial(kind: .bubble))
-            .updateRenderStyle(styleID, style: try RenderStyle())
+            .updateRenderMaterial(styleID, material: try RenderMaterial())
     }
 
     func testDefaultFilterCollidesWithEverythingIncludingItself() {
@@ -39,28 +39,28 @@ final class CollisionFilterTests: XCTestCase {
     func testDescriptorsCarryTheFilterAndDefaultToTheDefaultFilter() throws {
         let filter = CollisionFilter(category: 4, mask: 8)
         let bubble = try BubbleDescriptor(id: id(1), position: .zero, targetRadius: 1, physicsMaterialID: materialID,
-                                          renderStyleID: styleID, filter: filter)
+                                          renderMaterialID: styleID, filter: filter)
         let polygon = try RigidBodyDescriptor(id: id(2), vertices: [[0, 0], [1, 0], [0, 1]], physicsMaterialID: materialID,
-                                            renderStyleID: styleID, filter: filter)
+                                            renderMaterialID: styleID, filter: filter)
         XCTAssertEqual(bubble.filter, filter)
         XCTAssertEqual(polygon.filter, filter)
         XCTAssertEqual(try BubbleDescriptor(id: id(3), position: .zero, targetRadius: 1, physicsMaterialID: materialID,
-                                            renderStyleID: styleID).filter, .default)
+                                            renderMaterialID: styleID).filter, .default)
     }
 
     func testMergeAndSplitResultsTakeTheFilterFromBubbleResult() throws {
         let filter = CollisionFilter(category: 2, mask: 6)
-        let a = try BubbleDescriptor(id: id(1), position: [0, 0], targetRadius: 1, physicsMaterialID: materialID, renderStyleID: styleID)
-        let b = try BubbleDescriptor(id: id(2), position: [1, 0], targetRadius: 1, physicsMaterialID: materialID, renderStyleID: styleID)
+        let a = try BubbleDescriptor(id: id(1), position: [0, 0], targetRadius: 1, physicsMaterialID: materialID, renderMaterialID: styleID)
+        let b = try BubbleDescriptor(id: id(2), position: [1, 0], targetRadius: 1, physicsMaterialID: materialID, renderMaterialID: styleID)
         let seeded = try TransactionStager.stage(resources().add(.bubble(a)).add(.bubble(b)), against: state()).state
         let merged = try TransactionStager.stage(WorldTransaction().mergeBubbles([id(1), id(2)],
-            result: BubbleResult(id: id(3), physicsMaterialID: materialID, renderStyleID: styleID, filter: filter)),
+            result: BubbleResult(id: id(3), physicsMaterialID: materialID, renderMaterialID: styleID, filter: filter)),
             against: seeded).state
         guard case .bubble(let result) = try XCTUnwrap(merged.objects[id(3)]).descriptor else { return XCTFail("brak bańki") }
         XCTAssertEqual(result.filter, filter)
 
-        let parts = [BubbleSplitPart(result: BubbleResult(id: id(4), physicsMaterialID: materialID, renderStyleID: styleID, filter: filter), share: 0.5),
-                     BubbleSplitPart(result: BubbleResult(id: id(5), physicsMaterialID: materialID, renderStyleID: styleID), share: 0.5)]
+        let parts = [BubbleSplitPart(result: BubbleResult(id: id(4), physicsMaterialID: materialID, renderMaterialID: styleID, filter: filter), share: 0.5),
+                     BubbleSplitPart(result: BubbleResult(id: id(5), physicsMaterialID: materialID, renderMaterialID: styleID), share: 0.5)]
         let split = try TransactionStager.stage(WorldTransaction().splitBubble(id(1), first: parts[0], second: parts[1]),
                                                 against: seeded).state
         guard case .bubble(let first) = try XCTUnwrap(split.objects[id(4)]).descriptor,

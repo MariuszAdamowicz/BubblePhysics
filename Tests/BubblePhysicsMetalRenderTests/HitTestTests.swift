@@ -80,7 +80,7 @@ final class HitTestTests: XCTestCase {
         let world = try makeWorld()
         let diamond = try RigidBodyDescriptor(id: id(2), shape: .polygon(PolygonGeometry(vertices:
             [[-5, -5], [5, -5], [5, 5], [-5, 5]])), position: [300, 100], rotation: .pi / 4, motionRole: .static,
-            physicsMaterialID: B.polygonMaterial, renderStyleID: B.style)
+            physicsMaterialID: B.polygonMaterial, renderMaterialID: B.style)
         try await settle(world, WorldTransaction()
             .add(B.box(1, at: [100, 100], half: [10, 10]))
             .add(.rigidBody(diamond))
@@ -125,7 +125,7 @@ final class HitTestTests: XCTestCase {
         var results = await hitTests(world, [[10, 10], [0, 0]])
         XCTAssertEqual(results, [nil, nil])
         world.submit(try B.baseTransaction().add(.sensor(SensorDescriptor(id: id(1), position: [50, 50],
-            geometry: .circle(radius: 20), renderStyleID: B.style))))
+            geometry: .circle(radius: 20)))))
         _ = await world.advance(by: B.step)
         results = await hitTests(world, [[50, 50]])
         XCTAssertEqual(results, [nil], "czujnik nie jest trafiany")

@@ -10,13 +10,13 @@ final class NativeMetalMotionRoleTests: XCTestCase {
         var transaction = try WorldTransaction()
             .updatePhysicsMaterial(.init(rawValue: 1), material: PhysicsMaterial(kind: .bubble, deformability: soft))
             .updatePhysicsMaterial(.init(rawValue: 2), material: PhysicsMaterial(kind: .rigid))
-            .updateRenderStyle(.init(rawValue: 1), style: RenderStyle())
+            .updateRenderMaterial(.init(rawValue: 1), material: try RenderMaterial())
             .add(.bubble(BubbleDescriptor(id: ball, position: .zero, targetRadius: 1, motionRole: role,
-                physicsMaterialID: .init(rawValue: 1), renderStyleID: .init(rawValue: 1))))
+                physicsMaterialID: .init(rawValue: 1), renderMaterialID: .init(rawValue: 1))))
         if let x {
             transaction = try transaction.add(.rigidBody(RigidBodyDescriptor(id: wall,
                 vertices: [[x,-10],[x+0.25,-10],[x+0.25,10],[x,10]],
-                physicsMaterialID: .init(rawValue: 2), renderStyleID: .init(rawValue: 1))))
+                physicsMaterialID: .init(rawValue: 2), renderMaterialID: .init(rawValue: 1))))
         }
         return try TransactionStager.stage(transaction, against: RuntimeState(configuration:
             WorldConfiguration(simulationRegion: WorldRectangle(min: [-50,-50], max: [50,50])))).state
@@ -46,7 +46,7 @@ final class NativeMetalMotionRoleTests: XCTestCase {
         for role in [MotionRole.dynamic, .motorDriven, .pathDriven, .playerDriven, .static] {
             let stepper = try NativeCompleteStepper(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
             let field = try ForceFieldDescriptor(id: .init(rawValue: 3), position: .zero,
-                geometry: .circle(radius: 20), field: .directional(force: [12,0]), renderStyleID: .init(rawValue: 1))
+                geometry: .circle(radius: 20), field: .directional(force: [12,0]))
             var commands = WorldTransaction().add(.forceField(field)).setGlobalForce([0,6])
             if role == .playerDriven { commands = commands.beginPlayerDrive(ball, target: .zero) }
             let complete = try await step(stepper, initial(role: role), commands)
@@ -127,7 +127,7 @@ final class NativeMetalMotionRoleTests: XCTestCase {
     func testPlayerDrivenPolygonReportsWallAndMotorTorqueChangesRotation() async throws {
         let stepper = try NativeCompleteStepper(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         let polygon = try RigidBodyDescriptor(id: ball, vertices: [[-0.5,-0.5],[0.5,-0.5],[0.5,0.5],[-0.5,0.5]],
-            motionRole: .dynamic, physicsMaterialID: .init(rawValue: 2), renderStyleID: .init(rawValue: 1))
+            motionRole: .dynamic, physicsMaterialID: .init(rawValue: 2), renderMaterialID: .init(rawValue: 1))
         var complete = try await step(stepper, initial(wallAt: 2), WorldTransaction()
             .replace(ball, with: .rigidBody(polygon)).beginPlayerDrive(ball, target: [8,0]))
         for _ in 0..<60 { complete = try await step(stepper, complete.state) }
@@ -149,8 +149,7 @@ final class NativeMetalMotionRoleTests: XCTestCase {
             var state = try initial()
             state.objects[ball]?.position = [5,0]; state.objects[ball]?.previousPosition = [5,0]
             let descriptor = try ForceFieldDescriptor(id: .init(rawValue: 3), position: .zero,
-                geometry: .circle(radius: 10), field: field, filter: ObjectFilter(objectIDs: [ball]),
-                renderStyleID: .init(rawValue: 1))
+                geometry: .circle(radius: 10), field: field, filter: ObjectFilter(objectIDs: [ball]))
             let complete = try await step(stepper, state, WorldTransaction().add(.forceField(descriptor)))
             let velocity = try XCTUnwrap(complete.state.objects[ball]).velocity
             XCTAssertEqual(velocity.x, expected.x, accuracy: 0.0001)
@@ -159,7 +158,7 @@ final class NativeMetalMotionRoleTests: XCTestCase {
         let stepper = try NativeCompleteStepper(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         let excluded = try ForceFieldDescriptor(id: .init(rawValue: 3), position: .zero,
             geometry: .circle(radius: 10), field: .directional(force: [100,100]),
-            filter: ObjectFilter(objectIDs: []), renderStyleID: .init(rawValue: 1))
+            filter: ObjectFilter(objectIDs: []))
         let complete = try await step(stepper, initial(), WorldTransaction().add(.forceField(excluded)))
         XCTAssertEqual(complete.state.objects[ball]?.velocity, .zero)
     }

@@ -23,7 +23,7 @@ final class VelocityLimitTests: XCTestCase {
 
     private func bubble(_ id: UInt64, at position: WorldPoint) throws -> WorldObject {
         .bubble(try BubbleDescriptor(id: ObjectID(rawValue: id), position: position, targetRadius: 8,
-            physicsMaterialID: limitedBubbleMaterial, renderStyleID: B.style))
+            physicsMaterialID: limitedBubbleMaterial, renderMaterialID: B.style))
     }
 
     // Silna siła globalna (1e5) rozpędziłaby każde ciało do ponad 1600 jednostek na sekundę już w pierwszym kroku.

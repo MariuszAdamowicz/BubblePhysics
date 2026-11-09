@@ -48,7 +48,7 @@ final class QueryWorldTests: XCTestCase {
         let world = try B.makeWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         let l = try RigidBodyDescriptor(id: ObjectID(rawValue: 5),
             vertices: [[0, 0], [10, 0], [10, 2], [2, 2], [2, 10], [0, 10]], position: [300, 100], rotation: .pi / 2,
-            motionRole: .static, physicsMaterialID: B.polygonMaterial, renderStyleID: B.style)
+            motionRole: .static, physicsMaterialID: B.polygonMaterial, renderMaterialID: B.style)
         world.submit(try B.baseTransaction().add(.rigidBody(l)))
         _ = await B.advance(world, steps: 2)
         // Obrót o π/2: lokalny (x, y) trafia do (300 − y, 100 + x).

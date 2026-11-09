@@ -178,12 +178,6 @@ package enum MotionControllers {
                 case .friction: start = .scalar(material.friction)
                 case .restitution: start = .scalar(material.restitution)
                 }
-            case .renderStyle(let id, let parameter):
-                start = .scalar(original.renderStyles[id]?.presentation.channels[parameter] ?? 0)
-            case .objectPresentation(let id, let parameter):
-                guard let object = original.objects[id] else { continue }
-                start = .scalar(object.presentation.channels[parameter]
-                    ?? original.renderStyles[object.style]?.presentation.channels[parameter] ?? 0)
             }
             var progress = state.transitionProgress[target] ?? PhysicalTransitionProgress(initial: start, elapsed: 0)
             progress.elapsed += duration
@@ -206,16 +200,6 @@ package enum MotionControllers {
                         friction: parameter == .friction ? scalar : m.friction,
                         restitution: parameter == .restitution ? scalar : m.restitution,
                         maximumLinearSpeed: m.maximumLinearSpeed, maximumAngularSpeed: m.maximumAngularSpeed)
-                }
-            case (.renderStyle(let id, let parameter), .scalar(let scalar)):
-                if let style = state.renderStyles[id] {
-                    var channels = style.presentation.channels; channels[parameter] = scalar
-                    state.renderStyles[id] = try RenderStyle(shader: style.shader, channels: channels)
-                }
-            case (.objectPresentation(let id, let parameter), .scalar(let scalar)):
-                if let object = state.objects[id] {
-                    var channels = object.presentation.channels; channels[parameter] = scalar
-                    state.objects[id]?.presentation = try PresentationParameters(channels: channels)
                 }
             default: break
             }

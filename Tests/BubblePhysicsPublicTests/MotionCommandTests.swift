@@ -10,9 +10,9 @@ final class MotionCommandTests: XCTestCase {
         let id = ObjectID(rawValue: 1)
         world.submit(try WorldTransaction()
             .updatePhysicsMaterial(.init(rawValue: 1), material: PhysicsMaterial(kind: .bubble))
-            .updateRenderStyle(.init(rawValue: 1), style: RenderStyle())
+            .updateRenderMaterial(.init(rawValue: 1), material: try RenderMaterial())
             .add(.bubble(BubbleDescriptor(id: id, position: .zero, targetRadius: 0.5,
-                physicsMaterialID: .init(rawValue: 1), renderStyleID: .init(rawValue: 1))))
+                physicsMaterialID: .init(rawValue: 1), renderMaterialID: .init(rawValue: 1))))
             .beginPlayerDrive(id, target: [5,0]))
         let first = await world.advance(by: 1.0/60)
         XCTAssertEqual(first.transactionReceipts.count, 1)
@@ -46,9 +46,9 @@ final class MotionCommandTests: XCTestCase {
             let policy = try BubbleDrivePolicy(maximumSpeed: 12, distanceResponse: 6)
             let transaction = try WorldTransaction()
                 .updatePhysicsMaterial(.init(rawValue: 1), material: PhysicsMaterial(kind: .bubble))
-                .updateRenderStyle(.init(rawValue: 1), style: RenderStyle())
+                .updateRenderMaterial(.init(rawValue: 1), material: try RenderMaterial())
                 .add(.bubble(BubbleDescriptor(id: id, position: .zero, targetRadius: 0.5,
-                    physicsMaterialID: .init(rawValue: 1), renderStyleID: .init(rawValue: 1), drivePolicy: policy)))
+                    physicsMaterialID: .init(rawValue: 1), renderMaterialID: .init(rawValue: 1), drivePolicy: policy)))
                 .beginPlayerDrive(id, target: [targetX, 0])
             world.submit(transaction)
             let frame = await world.advance(by: 1.0 / 60)

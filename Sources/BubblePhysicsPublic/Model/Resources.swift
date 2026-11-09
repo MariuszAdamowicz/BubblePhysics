@@ -37,36 +37,61 @@ public struct PhysicsMaterial: Equatable, Sendable {
     }
 }
 
-/// Identyfikacja shaderu bez zależności od API platformy graficznej.
-public enum RenderShader: Hashable, Sendable {
-    case technical
-    /// Klucz rozwiązywany przez renderer gry.
-    case custom(String)
+/// Kolor w przestrzeni liniowej o składowych w [0, 1]; zakres sprawdza `RenderMaterial`.
+public struct RGBA: Equatable, Hashable, Sendable {
+    public var red: Float
+    public var green: Float
+    public var blue: Float
+    public var alpha: Float
+    public init(_ red: Float, _ green: Float, _ blue: Float, _ alpha: Float = 1) {
+        self.red = red; self.green = green; self.blue = blue; self.alpha = alpha
+    }
+    public static let white = RGBA(1, 1, 1, 1)
 }
 
-public struct PresentationParameters: Equatable, Sendable {
-    public let channels: [ParameterID: Float]
-    public static let empty = PresentationParameters()
-
-    private init() { channels = [:] }
-
-    public init(channels: [ParameterID: Float]) throws {
-        for (id, value) in channels { try requireFinite(value, id.rawValue) }
-        self.channels = channels
-    }
+/// Sposób składania obiektu z tym, co pod nim.
+public enum RenderBlendMode: Hashable, Sendable {
+    case opaque
+    case alpha
+    case additive
 }
 
-public struct RenderStyle: Equatable, Sendable {
-    public let shader: RenderShader
-    public let presentation: PresentationParameters
+/// Obrys wewnątrz konturu; szerokość 0 oznacza brak obrysu.
+public struct RenderOutline: Equatable, Hashable, Sendable {
+    public var color: RGBA
+    /// Szerokość w jednostkach świata.
+    public var width: Float
+    public init(color: RGBA = .white, width: Float = 0) { self.color = color; self.width = width }
+    public static let none = RenderOutline(color: .white, width: 0)
+}
 
-    public init(shader: RenderShader = .technical, channels: [ParameterID: Float] = [:]) throws {
-        self.shader = shader
-        self.presentation = try PresentationParameters(channels: channels)
-    }
+/// Jak tekstura leży na bańce, która się deformuje.
+public enum BubbleTextureMapping: Hashable, Sendable {
+    /// Punkt tekstury zostaje przy punkcie konturu.
+    case attached
+    /// Tekstura to koło o promieniu docelowym, które przycina kontur.
+    case masked
+}
 
-    /// Wartość lokalna zastępuje kanał stylu o tym samym identyfikatorze.
-    public func resolvedChannels(overrides local: PresentationParameters) -> [ParameterID: Float] {
-        presentation.channels.merging(local.channels) { _, local in local }
+/// Wygląd bańki albo bryły. Tekstura jest identyfikatorem z rejestru zasobów, a nie obrazem.
+public struct RenderMaterial: Equatable, Sendable {
+    public let texture: TextureID?
+    public let color: RGBA
+    public let blend: RenderBlendMode
+    public let outline: RenderOutline
+    public let bubbleMapping: BubbleTextureMapping
+    public let uvOffset: SIMD2<Float>
+    public let uvScale: SIMD2<Float>
+
+    public init(texture: TextureID? = nil, color: RGBA = .white, blend: RenderBlendMode = .opaque,
+                outline: RenderOutline = .none, bubbleMapping: BubbleTextureMapping = .attached,
+                uvOffset: SIMD2<Float> = .zero, uvScale: SIMD2<Float> = SIMD2(1, 1)) throws {
+        self.texture = texture
+        self.color = color
+        self.blend = blend
+        self.outline = outline
+        self.bubbleMapping = bubbleMapping
+        self.uvOffset = uvOffset
+        self.uvScale = uvScale
     }
 }

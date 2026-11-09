@@ -12,14 +12,9 @@ public struct PhysicsMaterialID: RawRepresentable, Hashable, Sendable {
     public init(rawValue: UInt64) { self.rawValue = rawValue }
 }
 
-public struct RenderStyleID: RawRepresentable, Hashable, Sendable {
+public struct RenderMaterialID: RawRepresentable, Hashable, Sendable {
     public let rawValue: UInt64
     public init(rawValue: UInt64) { self.rawValue = rawValue }
-}
-
-public struct ParameterID: RawRepresentable, Hashable, Sendable {
-    public let rawValue: String
-    public init(rawValue: String) { self.rawValue = rawValue }
 }
 
 /// Dokładnie 64 grupy zarządzane przez grę. Pusta maska nie pasuje do żadnej grupy.

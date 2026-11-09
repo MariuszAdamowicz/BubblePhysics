@@ -3,13 +3,13 @@ import XCTest
 
 final class ModelValidationTests: XCTestCase {
     private let material = PhysicsMaterialID(rawValue: 1)
-    private let style = RenderStyleID(rawValue: 1)
+    private let style = RenderMaterialID(rawValue: 1)
 
     private func polygon(_ vertices: [WorldPoint], role: MotionRole = .static,
                          position: WorldPoint = .zero, rotation: Float = 0) throws -> RigidBodyDescriptor {
         try RigidBodyDescriptor(id: ObjectID(rawValue: 1), vertices: vertices,
                               position: position, rotation: rotation, motionRole: role,
-                              physicsMaterialID: material, renderStyleID: style)
+                              physicsMaterialID: material, renderMaterialID: style)
     }
 
     func testConcaveSimplePolygonIsAcceptedButHoleAndSelfIntersectionAreRejected() throws {
@@ -79,7 +79,7 @@ final class ModelValidationTests: XCTestCase {
             XCTAssertNoThrow(try configuration.validate(polygon([[20, 20], [22, 20], [20, 22]], role: role)))
         }
         let bubble = try BubbleDescriptor(id: ObjectID(rawValue: 2), position: [0, 5], targetRadius: 1,
-                                          motionRole: .static, physicsMaterialID: material, renderStyleID: style)
+                                          motionRole: .static, physicsMaterialID: material, renderMaterialID: style)
         XCTAssertThrowsError(try configuration.validate(bubble))
     }
 
@@ -113,48 +113,41 @@ final class ModelValidationTests: XCTestCase {
     func testBubbleAndPolygonValidatePhysicalValues() throws {
         for radius: Float in [0, -1, .nan, .infinity] {
             XCTAssertThrowsError(try BubbleDescriptor(id: ObjectID(rawValue: 1), position: .zero,
-                                                      targetRadius: radius, physicsMaterialID: material, renderStyleID: style))
+                                                      targetRadius: radius, physicsMaterialID: material, renderMaterialID: style))
         }
         XCTAssertThrowsError(try BubbleDescriptor(id: ObjectID(rawValue: 1), position: [.nan, 0], targetRadius: 1,
-                                                  physicsMaterialID: material, renderStyleID: style))
+                                                  physicsMaterialID: material, renderMaterialID: style))
         XCTAssertThrowsError(try BubbleDescriptor(id: ObjectID(rawValue: 1), position: .zero, targetRadius: 1, mass: 0,
-                                                  physicsMaterialID: material, renderStyleID: style))
+                                                  physicsMaterialID: material, renderMaterialID: style))
         XCTAssertThrowsError(try RigidBodyDescriptor(id: ObjectID(rawValue: 1), vertices: [[0, 0], [1, 0], [0, 1]],
-                                                   momentOfInertia: 0, physicsMaterialID: material, renderStyleID: style))
+                                                   momentOfInertia: 0, physicsMaterialID: material, renderMaterialID: style))
         XCTAssertThrowsError(try polygon([[0, 0], [1, 0], [0, 1]], rotation: .infinity))
     }
 
     func testFieldAndSensorValidateRangesAndFieldParameters() throws {
         let circle = try RangeGeometry.circle(radius: 3)
         XCTAssertNoThrow(try ForceFieldDescriptor(id: ObjectID(rawValue: 3), position: .zero, geometry: circle,
-                                                 field: .radial(strength: -2, falloff: 1), renderStyleID: style))
+                                                 field: .radial(strength: -2, falloff: 1)))
         XCTAssertThrowsError(try RangeGeometry.circle(radius: 0))
         XCTAssertThrowsError(try ForceFieldDescriptor(id: ObjectID(rawValue: 3), position: .zero, geometry: circle,
-                                                     field: .directional(force: [.nan, 0]), renderStyleID: style))
+                                                     field: .directional(force: [.nan, 0])))
         XCTAssertThrowsError(try ForceFieldDescriptor(id: ObjectID(rawValue: 3), position: .zero, geometry: circle,
-                                                     field: .vortex(strength: 1, falloff: -1), renderStyleID: style))
+                                                     field: .vortex(strength: 1, falloff: -1)))
         XCTAssertThrowsError(try SensorDescriptor(id: ObjectID(rawValue: 4), position: [.infinity, 0],
-                                                 geometry: circle, renderStyleID: style))
+                                                 geometry: circle))
         let configuration = try WorldConfiguration(simulationRegion: WorldRectangle(min: [-2, -2], max: [2, 2]))
-        let sensor = try SensorDescriptor(id: ObjectID(rawValue: 4), position: .zero, geometry: circle, renderStyleID: style)
+        let sensor = try SensorDescriptor(id: ObjectID(rawValue: 4), position: .zero, geometry: circle)
         XCTAssertThrowsError(try configuration.validate(sensor))
         let field = try ForceFieldDescriptor(id: ObjectID(rawValue: 3), position: .zero, geometry: circle,
-                                             field: .directional(force: [1, 0]), renderStyleID: style)
+                                             field: .directional(force: [1, 0]))
         XCTAssertThrowsError(try configuration.validate(field))
     }
 
-    func testResourcesValidatePhysicsAndLocalChannelsOverrideStyle() throws {
+    func testPhysicsMaterialValidatesRanges() throws {
         XCTAssertThrowsError(try PhysicsMaterial(kind: .bubble, deformability: 1.1))
         XCTAssertThrowsError(try PhysicsMaterial(kind: .rigid, friction: -1))
         XCTAssertThrowsError(try PhysicsMaterial(kind: .bubble, damping: .nan))
         XCTAssertThrowsError(try PhysicsMaterial(kind: .bubble, restitution: 2))
-        let saturation = ParameterID(rawValue: "saturation")
-        let highlight = ParameterID(rawValue: "selectionHighlight")
-        let renderStyle = try RenderStyle(shader: .custom("game.bubble"), channels: [saturation: 0.5, highlight: 0])
-        let local = try PresentationParameters(channels: [highlight: 1])
-        XCTAssertEqual(renderStyle.resolvedChannels(overrides: local), [saturation: 0.5, highlight: 1])
-        XCTAssertThrowsError(try PresentationParameters(channels: [saturation: .nan]))
-        XCTAssertThrowsError(try RenderStyle(shader: .technical, channels: [saturation: .infinity]))
     }
 
     func testMaterialSpeedLimitsAreOptionalAndMustBePositiveAndFinite() throws {
@@ -174,7 +167,7 @@ final class ModelValidationTests: XCTestCase {
         let configuration = try WorldConfiguration(simulationRegion: WorldRectangle(min: [0, 0], max: [10, 10]))
         func body(_ shape: RigidShape, position: WorldPoint, rotation: Float = 0) throws -> RigidBodyDescriptor {
             try RigidBodyDescriptor(id: ObjectID(rawValue: 1), shape: shape, position: position, rotation: rotation,
-                                    motionRole: .static, physicsMaterialID: material, renderStyleID: style)
+                                    motionRole: .static, physicsMaterialID: material, renderMaterialID: style)
         }
         XCTAssertNoThrow(try configuration.validate(body(.circle(radius: 2), position: [5, 5])))
         XCTAssertThrowsError(try configuration.validate(body(.circle(radius: 2), position: [1, 5]))) {

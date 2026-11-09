@@ -7,8 +7,6 @@ public enum PhysicsParameter: Hashable, Sendable {
 public enum TransitionTarget: Hashable, Sendable {
     case physicsMaterial(PhysicsMaterialID, PhysicsParameter)
     case globalForce
-    case renderStyle(RenderStyleID, ParameterID)
-    case objectPresentation(ObjectID, ParameterID)
     case bubbleRadius(ObjectID)
 }
 

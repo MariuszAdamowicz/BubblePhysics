@@ -20,21 +20,21 @@ public enum WorldObject: Equatable, Sendable {
 public struct BubbleResult: Equatable, Sendable {
     public let id: ObjectID
     public let physicsMaterialID: PhysicsMaterialID
-    public let renderStyleID: RenderStyleID
+    public let renderMaterialID: RenderMaterialID
     public let motionRole: MotionRole
     public let regionExitPolicy: RegionExitPolicy
     public let mergeGroups: MergeGroupSet
     public let eventInterest: EventInterest
     public let filter: CollisionFilter
-    public let presentation: PresentationParameters
-    public init(id: ObjectID, physicsMaterialID: PhysicsMaterialID, renderStyleID: RenderStyleID,
+    public let layer: Int32
+    public init(id: ObjectID, physicsMaterialID: PhysicsMaterialID, renderMaterialID: RenderMaterialID,
                 motionRole: MotionRole = .dynamic, regionExitPolicy: RegionExitPolicy = .remove,
                 mergeGroups: MergeGroupSet = [], eventInterest: EventInterest = [],
-                presentation: PresentationParameters = .empty, filter: CollisionFilter = .default) {
-        self.filter = filter
-        self.id = id; self.physicsMaterialID = physicsMaterialID; self.renderStyleID = renderStyleID
+                filter: CollisionFilter = .default, layer: Int32 = 0) {
+        self.filter = filter; self.layer = layer
+        self.id = id; self.physicsMaterialID = physicsMaterialID; self.renderMaterialID = renderMaterialID
         self.motionRole = motionRole; self.regionExitPolicy = regionExitPolicy
-        self.mergeGroups = mergeGroups; self.eventInterest = eventInterest; self.presentation = presentation
+        self.mergeGroups = mergeGroups; self.eventInterest = eventInterest
     }
 }
 
@@ -52,11 +52,15 @@ public enum WorldOperation: Equatable, Sendable {
     case replace(ObjectID, WorldObject)
     /// Tworzy zasób, jeśli identyfikator nie został wcześniej zarejestrowany.
     case updatePhysicsMaterial(PhysicsMaterialID, PhysicsMaterial)
-    case updateRenderStyle(RenderStyleID, RenderStyle)
+    case updateRenderMaterial(RenderMaterialID, RenderMaterial)
     case setMotion(ObjectID, MotionRole)
     case setPathDrive(ObjectID, PathDrive)
     case setMotorDrive(ObjectID, MotorDrive)
     case setKinematicDrive(ObjectID, KinematicDrive)
+    /// Tylko bańka i bryła mają warstwę; wyższa rysuje się nad niższą.
+    case setLayer(ObjectID, Int32)
+    /// Tekstura rozciągnięta na region symulacji pod wszystkimi warstwami; `nil` usuwa tło.
+    case setBackground(TextureID?)
     case setGlobalForce(WorldPoint)
     case applyImpulse(ObjectID, WorldPoint)
     case beginPlayerDrive(ObjectID, WorldPoint)
@@ -82,11 +86,13 @@ public struct WorldTransaction: Equatable, Sendable {
     public func remove(_ id: ObjectID) -> Self { appending(.remove(id)) }
     public func replace(_ id: ObjectID, with object: WorldObject) -> Self { appending(.replace(id, object)) }
     public func updatePhysicsMaterial(_ id: PhysicsMaterialID, material: PhysicsMaterial) -> Self { appending(.updatePhysicsMaterial(id, material)) }
-    public func updateRenderStyle(_ id: RenderStyleID, style: RenderStyle) -> Self { appending(.updateRenderStyle(id, style)) }
+    public func updateRenderMaterial(_ id: RenderMaterialID, material: RenderMaterial) -> Self { appending(.updateRenderMaterial(id, material)) }
     public func setMotion(_ id: ObjectID, role: MotionRole) -> Self { appending(.setMotion(id, role)) }
     public func setPathDrive(_ id: ObjectID, drive: PathDrive) -> Self { appending(.setPathDrive(id, drive)) }
     public func setMotorDrive(_ id: ObjectID, drive: MotorDrive) -> Self { appending(.setMotorDrive(id, drive)) }
     public func setKinematicDrive(_ id: ObjectID, drive: KinematicDrive) -> Self { appending(.setKinematicDrive(id, drive)) }
+    public func setLayer(_ id: ObjectID, layer: Int32) -> Self { appending(.setLayer(id, layer)) }
+    public func setBackground(_ texture: TextureID?) -> Self { appending(.setBackground(texture)) }
     public func setGlobalForce(_ force: WorldPoint) -> Self { appending(.setGlobalForce(force)) }
     public func applyImpulse(to id: ObjectID, impulse: WorldPoint) -> Self { appending(.applyImpulse(id, impulse)) }
     public func beginPlayerDrive(_ id: ObjectID, target: WorldPoint) -> Self { appending(.beginPlayerDrive(id, target)) }

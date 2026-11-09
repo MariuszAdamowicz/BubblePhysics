@@ -7,7 +7,6 @@ package struct RuntimeState: Equatable, Sendable {
     package let configuration: WorldConfiguration
     package var objects: [ObjectID: RuntimeObject] = [:]
     package var physicsMaterials: [PhysicsMaterialID: PhysicsMaterial] = [:]
-    package var renderStyles: [RenderStyleID: RenderStyle] = [:]
     package var transitions: [TransitionTarget: ParameterTransition] = [:]
     package var joints: [JointID: Joint] = [:]
     package var globalForce: WorldPoint
@@ -46,7 +45,6 @@ package struct RuntimeObject: Equatable, Sendable {
     package var bounds: WorldRectangle?
     package var capturedRadius: Float?
     package var rigidity: Float = 0
-    package var presentation: PresentationParameters = .empty
     package var structuralShape: NativeStructuralShape?
     package var radiusBlendStart: Float = 0
     package var rigidityBlendStart: Float = 0
@@ -66,12 +64,6 @@ package struct RuntimeObject: Equatable, Sendable {
         case .sensor(let value): position = value.position; rotation = value.rotation; angularVelocity = 0
         }
         previousPosition = position
-        switch descriptor {
-        case .bubble(let b): presentation = b.presentation
-        case .rigidBody(let p): presentation = p.presentation
-        case .sensor(let s): presentation = s.presentation
-        case .forceField(let f): presentation = f.presentation
-        }
         if case .bubble(let bubble) = descriptor {
             targetRadius = bubble.targetRadius; collisionRadius = bubble.targetRadius; effectiveRadius = bubble.targetRadius
         }
@@ -81,14 +73,6 @@ package struct RuntimeObject: Equatable, Sendable {
         case .bubble(let value): return (value.physicsMaterialID, .bubble)
         case .rigidBody(let value): return (value.physicsMaterialID, .rigid)
         case .forceField, .sensor: return nil
-        }
-    }
-    package var style: RenderStyleID {
-        switch descriptor {
-        case .bubble(let value): return value.renderStyleID
-        case .rigidBody(let value): return value.renderStyleID
-        case .forceField(let value): return value.renderStyleID
-        case .sensor(let value): return value.renderStyleID
         }
     }
     var interests: EventInterest {
@@ -212,7 +196,8 @@ private struct StagingContext {
             for objectID in state.objects.keys.sorted(by: { $0.rawValue < $1.rawValue }) {
                 if let existing = state.objects[objectID], existing.material?.0 == id { try validate(existing) }
             }
-        case .updateRenderStyle(let id, let style): state.renderStyles[id] = style
+        // Zaślepki etapu 5: operacje przyjęte bez skutku, dopóki rejestr, materiały, warstwy i tło nie wejdą do `RuntimeState`.
+        case .updateRenderMaterial, .setLayer, .setBackground: break
         case .setMotion(let id, let role):
             var existing = try physicalObject(id)
             guard role != .playerDriven || existing.playerDriveTarget != nil else {
@@ -378,7 +363,7 @@ private struct StagingContext {
     mutating func discardObjectTransitions(_ id: ObjectID) {
         state.transitions = state.transitions.filter { target, _ in
             switch target {
-            case .bubbleRadius(let targetID), .objectPresentation(let targetID, _): return targetID != id
+            case .bubbleRadius(let targetID): return targetID != id
             default: return true
             }
         }
@@ -389,7 +374,6 @@ private struct StagingContext {
             guard let material = state.physicsMaterials[id] else { throw TransactionRejectionReason.physicsMaterialNotFound(id) }
             guard material.kind == kind else { throw TransactionRejectionReason.incompatiblePhysicsMaterial(id, object.descriptor.id) }
         }
-        guard state.renderStyles[object.style] != nil else { throw TransactionRejectionReason.renderStyleNotFound(object.style) }
         switch object.descriptor {
         case .bubble(let value):
             guard object.motionRole != .kinematic else {
@@ -403,13 +387,13 @@ private struct StagingContext {
                 }
                 try state.configuration.validate(BubbleDescriptor(id: value.id, position: object.position,
                     targetRadius: maximumRadius, motionRole: .static,
-                    physicsMaterialID: value.physicsMaterialID, renderStyleID: value.renderStyleID))
+                    physicsMaterialID: value.physicsMaterialID, renderMaterialID: value.renderMaterialID))
             }
         case .rigidBody(let value):
             if object.motionRole == .static {
                 try state.configuration.validate(RigidBodyDescriptor(id: value.id, shape: value.shape,
                     position: object.position, rotation: object.rotation, motionRole: .static,
-                    physicsMaterialID: value.physicsMaterialID, renderStyleID: value.renderStyleID))
+                    physicsMaterialID: value.physicsMaterialID, renderMaterialID: value.renderMaterialID))
             }
         case .forceField(let value): try state.configuration.validate(value)
         case .sensor(let value): try state.configuration.validate(value)
@@ -434,12 +418,6 @@ private struct StagingContext {
             if parameter == .deformability || parameter == .restitution {
                 guard value <= 1 else { throw ModelValidationError.valueOutOfRange("transition.material") }
             }
-        case (.renderStyle(let id, _), .scalar(let value)):
-            guard state.renderStyles[id] != nil else { throw TransactionRejectionReason.renderStyleNotFound(id) }
-            try requireFinite(value, "transition.style")
-        case (.objectPresentation(let id, _), .scalar(let value)):
-            _ = try object(id)
-            try requireFinite(value, "transition.presentation")
         case (.bubbleRadius(let id), .scalar(let radius)):
             let existing = try object(id)
             guard case .bubble(let bubble) = existing.descriptor else { throw TransactionRejectionReason.incompatibleObjectKind(id) }
@@ -447,7 +425,7 @@ private struct StagingContext {
             if existing.motionRole == .static {
                 try state.configuration.validate(BubbleDescriptor(id: id, position: bubble.position,
                     targetRadius: radius, motionRole: .static,
-                    physicsMaterialID: bubble.physicsMaterialID, renderStyleID: bubble.renderStyleID))
+                    physicsMaterialID: bubble.physicsMaterialID, renderMaterialID: bubble.renderMaterialID))
             }
         default: throw TransactionRejectionReason.incompatibleTransitionValue
         }
@@ -463,8 +441,8 @@ private struct StagingContext {
         .bubble(try BubbleDescriptor(id: result.id, position: position, velocity: velocity,
             targetRadius: radius, mass: mass, motionRole: result.motionRole,
             regionExitPolicy: result.regionExitPolicy, physicsMaterialID: result.physicsMaterialID,
-            renderStyleID: result.renderStyleID, mergeGroups: result.mergeGroups,
-            eventInterest: result.eventInterest, presentation: result.presentation, filter: result.filter))
+            renderMaterialID: result.renderMaterialID, mergeGroups: result.mergeGroups,
+            eventInterest: result.eventInterest, filter: result.filter, layer: result.layer))
     }
     mutating func merge(_ sources: [ObjectID], result: BubbleResult) throws {
         guard sources.count >= 2, Set(sources).count == sources.count else { throw TransactionRejectionReason.invalidStructuralOperation }

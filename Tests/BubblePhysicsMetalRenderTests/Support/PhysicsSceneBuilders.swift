@@ -7,7 +7,7 @@ import XCTest
 enum SceneBuilders {
     static let bubbleMaterial = PhysicsMaterialID(rawValue: 1)
     static let polygonMaterial = PhysicsMaterialID(rawValue: 2)
-    static let style = RenderStyleID(rawValue: 1)
+    static let style = RenderMaterialID(rawValue: 1)
     static let step = 1.0 / 60
 
     @MainActor
@@ -21,14 +21,14 @@ enum SceneBuilders {
         try WorldTransaction()
             .updatePhysicsMaterial(bubbleMaterial, material: PhysicsMaterial(kind: .bubble, friction: friction))
             .updatePhysicsMaterial(polygonMaterial, material: PhysicsMaterial(kind: .rigid, friction: friction))
-            .updateRenderStyle(style, style: RenderStyle())
+            .updateRenderMaterial(style, material: try RenderMaterial())
     }
 
     static func bubble(_ id: UInt64, at position: WorldPoint, radius: Float = 8, velocity: WorldPoint = .zero,
                        filter: CollisionFilter = .default, interest: EventInterest = [],
                        mergeGroups: MergeGroupSet = [], role: MotionRole = .dynamic) throws -> WorldObject {
         .bubble(try BubbleDescriptor(id: ObjectID(rawValue: id), position: position, velocity: velocity,
-            targetRadius: radius, motionRole: role, physicsMaterialID: bubbleMaterial, renderStyleID: style, mergeGroups: mergeGroups,
+            targetRadius: radius, motionRole: role, physicsMaterialID: bubbleMaterial, renderMaterialID: style, mergeGroups: mergeGroups,
             eventInterest: interest, filter: filter))
     }
 
@@ -39,7 +39,7 @@ enum SceneBuilders {
         return .rigidBody(try RigidBodyDescriptor(id: ObjectID(rawValue: id),
             vertices: [[-half.x, -half.y], [half.x, -half.y], [half.x, half.y], [-half.x, half.y]], position: center,
             velocity: velocity, mass: 1, momentOfInertia: (width * width + height * height) / 12, motionRole: role,
-            physicsMaterialID: materialID ?? polygonMaterial, renderStyleID: style, eventInterest: interest, filter: filter))
+            physicsMaterialID: materialID ?? polygonMaterial, renderMaterialID: style, eventInterest: interest, filter: filter))
     }
 
     static func circle(_ id: UInt64, at center: WorldPoint, radius: Float, role: MotionRole = .dynamic,
@@ -50,7 +50,7 @@ enum SceneBuilders {
         .rigidBody(try RigidBodyDescriptor(id: ObjectID(rawValue: id), shape: .circle(radius: radius), position: center,
             velocity: velocity, angularVelocity: angularVelocity, mass: mass, motionRole: role,
             regionExitPolicy: regionExitPolicy, physicsMaterialID: materialID ?? polygonMaterial,
-            renderStyleID: style, eventInterest: interest, filter: filter))
+            renderMaterialID: style, eventInterest: interest, filter: filter))
     }
 
     /// Kapsuła o osi wzdłuż lokalnej osi X.
@@ -60,7 +60,7 @@ enum SceneBuilders {
                         materialID: PhysicsMaterialID? = nil) throws -> WorldObject {
         .rigidBody(try RigidBodyDescriptor(id: ObjectID(rawValue: id), shape: .capsule(halfLength: halfLength, radius: radius),
             position: center, rotation: rotation, velocity: velocity, angularVelocity: angularVelocity, mass: mass,
-            motionRole: role, physicsMaterialID: materialID ?? polygonMaterial, renderStyleID: style,
+            motionRole: role, physicsMaterialID: materialID ?? polygonMaterial, renderMaterialID: style,
             eventInterest: interest, filter: filter))
     }
 

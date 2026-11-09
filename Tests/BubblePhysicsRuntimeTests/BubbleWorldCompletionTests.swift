@@ -43,11 +43,11 @@ final class BubbleWorldCompletionTests: XCTestCase {
         let stepper = ScriptedStepper([.fail(safety(.guardFailure)), .complete])
         let world = try world(stepper: stepper)
         let initial = await world.advance(by: 0)
-        let style = RenderStyleID(rawValue: 1)
+        let style = RenderMaterialID(rawValue: 1)
         let object = ObjectID(rawValue: 1)
-        let add = world.submit(try WorldTransaction().updateRenderStyle(style, style: RenderStyle())
+        let add = world.submit(try WorldTransaction().updateRenderMaterial(style, material: try RenderMaterial())
             .add(.sensor(SensorDescriptor(id: object, position: .zero,
-                geometry: .circle(radius: 1), renderStyleID: style))))
+                geometry: .circle(radius: 1)))))
         let failed = await world.advance(by: 0.125)
         XCTAssertEqual(failed, initial)
         XCTAssertEqual(world.diagnostics.backlogSeconds, 0.125)
@@ -265,18 +265,18 @@ final class BubbleWorldCompletionTests: XCTestCase {
     func testNativeStepperChangesContactHistoryOnlyInDidPublish() async throws {
         let stepper = try NativeCompleteStepper(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         let bubbleMaterial = PhysicsMaterialID(rawValue: 1), rigidMaterial = PhysicsMaterialID(rawValue: 2)
-        let style = RenderStyleID(rawValue: 1)
+        let style = RenderMaterialID(rawValue: 1)
         var state = RuntimeState(configuration: try WorldConfiguration(simulationRegion:
             WorldRectangle(min: [0, 0], max: [600, 300]), fixedTimeStep: 1.0 / 60, globalForce: [0, -400]))
         let floor = try RigidBodyDescriptor(id: ObjectID(rawValue: 100),
             vertices: [[-300, -5], [300, -5], [300, 5], [-300, 5]], position: [300, 5], mass: 1,
-            momentOfInertia: 1, motionRole: .static, physicsMaterialID: rigidMaterial, renderStyleID: style)
+            momentOfInertia: 1, motionRole: .static, physicsMaterialID: rigidMaterial, renderMaterialID: style)
         let bubble = try BubbleDescriptor(id: ObjectID(rawValue: 1), position: [150, 18.3], targetRadius: 8,
-            physicsMaterialID: bubbleMaterial, renderStyleID: style, eventInterest: .contact)
+            physicsMaterialID: bubbleMaterial, renderMaterialID: style, eventInterest: .contact)
         state = try TransactionStager.stage(WorldTransaction()
             .updatePhysicsMaterial(bubbleMaterial, material: PhysicsMaterial(kind: .bubble))
             .updatePhysicsMaterial(rigidMaterial, material: PhysicsMaterial(kind: .rigid))
-            .updateRenderStyle(style, style: RenderStyle()).add(.rigidBody(floor)).add(.bubble(bubble)),
+            .updateRenderMaterial(style, material: try RenderMaterial()).add(.rigidBody(floor)).add(.bubble(bubble)),
             against: state).state
         for _ in 0..<45 {
             state = try await stepper.completePublishedStep(TransactionStager.stageBatch([], against: state),

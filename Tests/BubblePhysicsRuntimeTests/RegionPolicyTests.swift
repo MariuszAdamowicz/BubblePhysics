@@ -33,7 +33,7 @@ final class RegionPolicyTests: XCTestCase {
         var state = try initial(policy: .remove)
         state = try TransactionStager.stage(WorldTransaction()
             .add(.bubble(BubbleDescriptor(id: .init(rawValue: 2), position: [5, 8], targetRadius: 1,
-                physicsMaterialID: .init(rawValue: 1), renderStyleID: .init(rawValue: 1))))
+                physicsMaterialID: .init(rawValue: 1), renderMaterialID: .init(rawValue: 1))))
             // Długość równa odległości środków (10,8 – 5, 8 do rogu), więc więz niczego nie przesuwa przed wyjściem.
             .addJoint(Joint(id: JointID(rawValue: 7), bodyA: .init(rawValue: 1), bodyB: .init(rawValue: 2),
                             kind: .distance(length: simd_distance(WorldPoint(10.8, 10.8), WorldPoint(5, 8)),
@@ -80,10 +80,10 @@ final class RegionPolicyTests: XCTestCase {
         for role in [MotionRole.pathDriven, .playerDriven] {
             let world = try BubbleWorld(configuration: initial(policy: .remove).configuration)
             world.submit(try WorldTransaction()
-                .updateRenderStyle(.init(rawValue: 1), style: RenderStyle())
+                .updateRenderMaterial(.init(rawValue: 1), material: try RenderMaterial())
                 .updatePhysicsMaterial(.init(rawValue: 2), material: PhysicsMaterial(kind: .rigid))
                 .add(.rigidBody(RigidBodyDescriptor(id: .init(rawValue: 3), vertices: [[0, 0], [1, 0], [0, 1]],
-                    position: [3, 3], motionRole: role, physicsMaterialID: .init(rawValue: 2), renderStyleID: .init(rawValue: 1)))))
+                    position: [3, 3], motionRole: role, physicsMaterialID: .init(rawValue: 2), renderMaterialID: .init(rawValue: 1)))))
             let frame = await world.advance(by: 0.25)
             XCTAssertEqual(frame.stepIndex, 1)
             XCTAssertEqual(frame.transactionReceipts.count, 1)
@@ -115,7 +115,7 @@ final class RegionPolicyTests: XCTestCase {
         let world = try await seededWorld()
         let token = world.submit(WorldTransaction().mergeBubbles([.init(rawValue: 1), .init(rawValue: 2)],
             result: BubbleResult(id: .init(rawValue: 3), physicsMaterialID: .init(rawValue: 1),
-                renderStyleID: .init(rawValue: 1), motionRole: .motorDriven)))
+                renderMaterialID: .init(rawValue: 1), motionRole: .motorDriven)))
         let frame = await world.advance(by: 0.25)
         XCTAssertEqual(frame.stepIndex, 2)
         XCTAssertEqual(frame.events, [.transactionRejected(token, TransactionRejection(operationIndex: 0,
@@ -126,9 +126,9 @@ final class RegionPolicyTests: XCTestCase {
     func testUnsupportedSplitResultRoleIsRejectedWithoutRetryingFrame() async throws {
         let world = try await seededWorld()
         let first = BubbleSplitPart(result: BubbleResult(id: .init(rawValue: 3),
-            physicsMaterialID: .init(rawValue: 1), renderStyleID: .init(rawValue: 1)), share: 0.5)
+            physicsMaterialID: .init(rawValue: 1), renderMaterialID: .init(rawValue: 1)), share: 0.5)
         let second = BubbleSplitPart(result: BubbleResult(id: .init(rawValue: 4),
-            physicsMaterialID: .init(rawValue: 1), renderStyleID: .init(rawValue: 1), motionRole: .pathDriven), share: 0.5)
+            physicsMaterialID: .init(rawValue: 1), renderMaterialID: .init(rawValue: 1), motionRole: .pathDriven), share: 0.5)
         let token = world.submit(WorldTransaction().splitBubble(.init(rawValue: 1), first: first, second: second))
         let frame = await world.advance(by: 0.25)
         XCTAssertEqual(frame.stepIndex, 2)
@@ -141,14 +141,14 @@ final class RegionPolicyTests: XCTestCase {
         let world = try await seededWorld()
         let merge = world.submit(WorldTransaction().mergeBubbles([.init(rawValue: 1), .init(rawValue: 2)],
             result: BubbleResult(id: .init(rawValue: 3), physicsMaterialID: .init(rawValue: 1),
-                renderStyleID: .init(rawValue: 1), motionRole: .kinematic)))
+                renderMaterialID: .init(rawValue: 1), motionRole: .kinematic)))
         var frame = await world.advance(by: 0.25)
         XCTAssertEqual(frame.events, [.transactionRejected(merge, TransactionRejection(operationIndex: 0,
             reason: .unsupportedMotionRole(.init(rawValue: 3), .kinematic)))])
         let first = BubbleSplitPart(result: BubbleResult(id: .init(rawValue: 3),
-            physicsMaterialID: .init(rawValue: 1), renderStyleID: .init(rawValue: 1), motionRole: .kinematic), share: 0.5)
+            physicsMaterialID: .init(rawValue: 1), renderMaterialID: .init(rawValue: 1), motionRole: .kinematic), share: 0.5)
         let second = BubbleSplitPart(result: BubbleResult(id: .init(rawValue: 4),
-            physicsMaterialID: .init(rawValue: 1), renderStyleID: .init(rawValue: 1)), share: 0.5)
+            physicsMaterialID: .init(rawValue: 1), renderMaterialID: .init(rawValue: 1)), share: 0.5)
         let split = world.submit(WorldTransaction().splitBubble(.init(rawValue: 1), first: first, second: second))
         frame = await world.advance(by: 0.25)
         XCTAssertEqual(frame.events, [.transactionRejected(split, TransactionRejection(operationIndex: 0,
@@ -201,7 +201,7 @@ final class RegionPolicyTests: XCTestCase {
         var state = try initial(policy: .wrap)
         // Opposite-edge bubble overlaps only a toroidal image, never the real collider.
         let other = try BubbleDescriptor(id: .init(rawValue: 2), position: [0.25, 5], targetRadius: 1,
-            physicsMaterialID: .init(rawValue: 1), renderStyleID: .init(rawValue: 1))
+            physicsMaterialID: .init(rawValue: 1), renderMaterialID: .init(rawValue: 1))
         state = try TransactionStager.stage(WorldTransaction().add(.bubble(other)), against: state).state
         state = try await stepper.completePublishedStep(TransactionStager.stageBatch([], against: state), duration: 0.25).state
         XCTAssertEqual(try XCTUnwrap(state.objects[other.id]).position.x, 0.25, accuracy: 0.0001)
@@ -220,7 +220,7 @@ final class RegionPolicyTests: XCTestCase {
         let object = try XCTUnwrap(state.objects[.init(rawValue: 1)])
         world.submit(try WorldTransaction()
             .updatePhysicsMaterial(.init(rawValue: 1), material: PhysicsMaterial(kind: .bubble))
-            .updateRenderStyle(.init(rawValue: 1), style: RenderStyle()).add(object.descriptor))
+            .updateRenderMaterial(.init(rawValue: 1), material: try RenderMaterial()).add(object.descriptor))
         // Limit backlogu (0,25 s) pozwala na jeden krok na wywołanie przy kroku 0,25 s.
         for _ in 0..<3 { _ = await world.advance(by: 0.25) }
         let token = world.submit(WorldTransaction().remove(.init(rawValue: 1)))
@@ -234,21 +234,21 @@ final class RegionPolicyTests: XCTestCase {
             WorldRectangle(min: [0, 0], max: [10, 10]), fixedTimeStep: 0.25))
         return try TransactionStager.stage(WorldTransaction()
             .updatePhysicsMaterial(.init(rawValue: 1), material: PhysicsMaterial(kind: .bubble))
-            .updateRenderStyle(.init(rawValue: 1), style: RenderStyle())
+            .updateRenderMaterial(.init(rawValue: 1), material: try RenderMaterial())
             .add(.bubble(BubbleDescriptor(id: .init(rawValue: 1), position: [9, 5], velocity: [4, 0],
                 targetRadius: 1, regionExitPolicy: policy, physicsMaterialID: .init(rawValue: 1),
-                renderStyleID: .init(rawValue: 1)))), against: state).state
+                renderMaterialID: .init(rawValue: 1)))), against: state).state
     }
 
     private func seededWorld() async throws -> BubbleWorld {
         let world = try BubbleWorld(configuration: initial(policy: .remove).configuration)
         let transaction = try WorldTransaction()
             .updatePhysicsMaterial(.init(rawValue: 1), material: PhysicsMaterial(kind: .bubble))
-            .updateRenderStyle(.init(rawValue: 1), style: RenderStyle())
+            .updateRenderMaterial(.init(rawValue: 1), material: try RenderMaterial())
             .add(.bubble(BubbleDescriptor(id: .init(rawValue: 1), position: [3, 3], targetRadius: 0.5,
-                physicsMaterialID: .init(rawValue: 1), renderStyleID: .init(rawValue: 1))))
+                physicsMaterialID: .init(rawValue: 1), renderMaterialID: .init(rawValue: 1))))
             .add(.bubble(BubbleDescriptor(id: .init(rawValue: 2), position: [7, 3], targetRadius: 0.5,
-                physicsMaterialID: .init(rawValue: 1), renderStyleID: .init(rawValue: 1))))
+                physicsMaterialID: .init(rawValue: 1), renderMaterialID: .init(rawValue: 1))))
         world.submit(transaction)
         let frame = await world.advance(by: 0.25)
         XCTAssertEqual(frame.stepIndex, 1)

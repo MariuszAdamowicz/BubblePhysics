@@ -10,7 +10,7 @@ package enum RegionPolicy {
         }
         state.transitions = state.transitions.filter { target, _ in
             switch target {
-            case .bubbleRadius(let id), .objectPresentation(let id, _): return !ids.contains(id)
+            case .bubbleRadius(let id): return !ids.contains(id)
             default: return true
             }
         }

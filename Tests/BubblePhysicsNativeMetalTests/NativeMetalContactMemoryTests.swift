@@ -9,7 +9,7 @@ import XCTest
 final class NativeMetalContactMemoryTests: XCTestCase {
     private let bubbleMaterial = PhysicsMaterialID(rawValue: 1)
     private let polygonMaterial = PhysicsMaterialID(rawValue: 2)
-    private let style = RenderStyleID(rawValue: 1)
+    private let style = RenderMaterialID(rawValue: 1)
     private var limit: Int { NativeMetalSolver.candidateLimitPerObject }
 
     private struct LCG {
@@ -22,13 +22,13 @@ final class NativeMetalContactMemoryTests: XCTestCase {
 
     private func bubble(_ id: UInt64, _ position: WorldPoint, radius: Float) throws -> NativePublicObject {
         NativePublicObject(descriptor: .bubble(try BubbleDescriptor(id: ObjectID(rawValue: id), position: position,
-            targetRadius: radius, physicsMaterialID: bubbleMaterial, renderStyleID: style)))
+            targetRadius: radius, physicsMaterialID: bubbleMaterial, renderMaterialID: style)))
     }
 
     private func box(_ id: UInt64, _ center: WorldPoint, half: Float) throws -> NativePublicObject {
         NativePublicObject(descriptor: .rigidBody(try RigidBodyDescriptor(id: ObjectID(rawValue: id),
             vertices: [[-half, -half], [half, -half], [half, half], [-half, half]], position: center,
-            physicsMaterialID: polygonMaterial, renderStyleID: style)))
+            physicsMaterialID: polygonMaterial, renderMaterialID: style)))
     }
 
     /// Bańki na siatce co 30 (promień 5, bez kontaktów) i co dziesiąta komórka ze statycznym pudełkiem (4 odcinki).
@@ -48,7 +48,7 @@ final class NativeMetalContactMemoryTests: XCTestCase {
     private func step(_ world: NativePublicWorld, _ objects: [NativePublicObject]) async throws -> NativePublicFrame {
         try await world.step(objects: objects,
             materials: [bubbleMaterial: try PhysicsMaterial(kind: .bubble), polygonMaterial: try PhysicsMaterial(kind: .rigid)],
-            styles: [style: try RenderStyle()], region: WorldRectangle(min: [0, 0], max: [1400, 1100]), duration: 1.0 / 60)
+            region: WorldRectangle(min: [0, 0], max: [1400, 1100]), duration: 1.0 / 60)
     }
 
     private func memory(bubbles n: Int, boxes: Int) async throws -> Int {

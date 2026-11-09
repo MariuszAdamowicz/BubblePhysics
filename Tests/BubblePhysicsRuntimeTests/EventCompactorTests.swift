@@ -8,7 +8,7 @@ final class EventCompactorTests: XCTestCase {
         var state = RuntimeState(configuration: config)
         let id = ObjectID(rawValue: 1), blocker = ObjectID(rawValue: 2)
         let descriptor = try BubbleDescriptor(id: id, position: .zero, targetRadius: 1,
-            physicsMaterialID: PhysicsMaterialID(rawValue: 1), renderStyleID: RenderStyleID(rawValue: 1),
+            physicsMaterialID: PhysicsMaterialID(rawValue: 1), renderMaterialID: RenderMaterialID(rawValue: 1),
             eventInterest: .driveBlocked)
         state.objects[id] = RuntimeObject(.bubble(descriptor))
         let feedback = DriveFeedback(objectID: id, playerDriveID: nil, target: [3, 0], achievedPoint: .zero,
@@ -30,7 +30,7 @@ final class EventCompactorTests: XCTestCase {
         for id in ids {
             state.objects[ObjectID(rawValue: id)] = RuntimeObject(.bubble(try BubbleDescriptor(
                 id: ObjectID(rawValue: id), position: .zero, targetRadius: 1,
-                physicsMaterialID: PhysicsMaterialID(rawValue: 1), renderStyleID: RenderStyleID(rawValue: 1),
+                physicsMaterialID: PhysicsMaterialID(rawValue: 1), renderMaterialID: RenderMaterialID(rawValue: 1),
                 eventInterest: interest)))
         }
         return state
