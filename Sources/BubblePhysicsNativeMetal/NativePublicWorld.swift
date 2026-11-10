@@ -121,10 +121,14 @@ package final class NativePublicWorld {
         var properties: [NativeSolverBubbleID: NativePublicProperties] = [:]
         var candidatePolygons: [ObjectID: (geometry: PolygonGeometry, position: WorldPoint, rotation: Float, segments: [NativeSolverSegment])] = [:]
         var candidateNextSegmentID = nextSegmentID
-        var result = Dictionary(uniqueKeysWithValues: objects.map { ($0.descriptor.id, $0) })
+        var result = Dictionary(uniqueKeysWithValues: objects.lazy.map { ($0.descriptor.id, $0) })
         var rigidPolygons: [NativeRigidPolygonInput] = []
         var structuralShapes: [ObjectID: NativeStructuralShape] = [:]
-        for object in objects.sorted(by: { $0.descriptor.id.rawValue < $1.descriptor.id.rawValue }) {
+        // Kolejność po ID liczy się z kluczy, bez przenoszenia dużych rekordów obiektów przy sortowaniu.
+        let order = objects.indices.map { (id: objects[$0].descriptor.id.rawValue, index: $0) }
+            .sorted { $0.id < $1.id }
+        for position in order {
+            let object = objects[position.index]
             switch object.descriptor {
             case .bubble(let b):
                 guard let material = materials[b.physicsMaterialID],

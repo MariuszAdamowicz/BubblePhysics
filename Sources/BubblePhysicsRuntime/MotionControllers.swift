@@ -13,60 +13,77 @@ package enum MotionControllers {
     package static func prepare(_ state: inout RuntimeState, duration: Double) throws {
         try advanceTransitions(&state, duration: duration)
         let dt = Float(duration)
-        let fields = state.objects.values.sorted { $0.descriptor.id.rawValue < $1.descriptor.id.rawValue }.compactMap { object -> (RuntimeObject, ForceFieldDescriptor)? in
-            if case .forceField(let field) = object.descriptor { return (object, field) }; return nil
+        let globalForce = state.globalForce
+        var fields: [(RuntimeObject, ForceFieldDescriptor)] = []
+        for object in state.objects.values {
+            if case .forceField(let field) = object.descriptor { fields.append((object, field)) }
         }
-        for id in state.objects.keys.sorted(by: { $0.rawValue < $1.rawValue }) {
-            guard var object = state.objects[id], let mass = object.mass else { continue }
-            if case .bubble(let bubble) = object.descriptor {
-                let active = object.playerDriveTarget != nil && bubble.drivePolicy.rigidifies
-                if active || object.capturedRadius != nil {
-                    object.shapeElapsed += duration
-                    let seconds = active ? bubble.drivePolicy.rigidificationDuration : bubble.drivePolicy.relaxationDuration
-                    let t = seconds == 0 ? Float(1) : Float(min(1, object.shapeElapsed / seconds))
-                    let radius = active ? (object.capturedRadius ?? object.targetRadius) : object.targetRadius
-                    object.collisionRadius = object.radiusBlendStart + (radius - object.radiusBlendStart) * t
-                    object.rigidity = object.rigidityBlendStart + ((active ? 1 : 0) - object.rigidityBlendStart) * t
-                    if !active && t == 1 { object.capturedRadius = nil }
-                } else { object.collisionRadius = object.targetRadius }
+        fields.sort { $0.0.descriptor.id.rawValue < $1.0.descriptor.id.rawValue }
+        // Obiekty są niezależne od siebie, więc idą w kolejności słownika i zapisują się w miejscu, bez sortowania kluczy,
+        // kopii obiektu i ponownego szukania po haszu. Błąd zgłasza obiekt o najmniejszym ID, jak przy przejściu po
+        // posortowanych kluczach.
+        var failure: (id: UInt64, error: Error)?
+        for index in state.objects.values.indices {
+            let id = state.objects.keys[index]
+            do {
+                try prepare(&state.objects.values[index], id: id, fields: fields, globalForce: globalForce, duration: duration, dt: dt)
+            } catch {
+                if failure.map({ id.rawValue < $0.id }) ?? true { failure = (id.rawValue, error) }
             }
-            switch object.motionRole {
-            case .static: object.velocity = .zero; object.angularVelocity = 0
-            case .kinematic: applyKinematicDrive(&object, duration: duration)
-            case .dynamic, .motorDriven:
-                var force = state.globalForce
-                for (source, field) in fields where field.filter.objectIDs?.contains(id) ?? true {
-                    force += fieldForce(field, source: source, point: object.position)
-                }
-                if object.motionRole == .motorDriven, let motor = object.motorDrive {
-                    force += motor.force
-                    let inertia: Float
-                    if case .rigidBody(let body) = object.descriptor { inertia = body.resolvedMomentOfInertia }
-                    else { inertia = 0.5 * mass * object.collisionRadius * object.collisionRadius }
-                    object.angularVelocity += motor.torque / inertia * dt
-                }
-                object.velocity += force / mass * dt
-            case .playerDriven:
-                object.velocity = object.playerDriveTarget.map { target in
-                    let delta = target - object.position
-                    let speed = bubbleDriveSpeed(distance: length(delta), policy: {
-                        guard case .bubble(let bubble) = object.descriptor else { return nil }
-                        return bubble.drivePolicy
-                    }())
-                    return velocity(to: target, from: object.position, speed: speed, dt: dt)
-                } ?? .zero
-            case .pathDriven:
-                if let path = object.pathDrive, !object.pathStopped {
-                    while object.pathIndex < path.points.count - 1 && length(path.points[object.pathIndex] - object.position) <= 0.0001 {
-                        object.pathIndex += 1
-                    }
-                    object.velocity = velocity(to: path.points[object.pathIndex], from: object.position, speed: path.speed, dt: dt)
-                } else { object.velocity = .zero; object.angularVelocity = 0 }
-            }
-            try requireFinite(object.velocity, "motion.velocity")
-            try requireFinite(object.angularVelocity, "motion.angularVelocity")
-            state.objects[id] = object
         }
+        if let failure { throw failure.error }
+    }
+
+    private static func prepare(_ object: inout RuntimeObject, id: ObjectID, fields: [(RuntimeObject, ForceFieldDescriptor)],
+                                globalForce: WorldPoint, duration: Double, dt: Float) throws {
+        guard let mass = object.mass else { return }
+        if case .bubble(let bubble) = object.descriptor {
+            let active = object.playerDriveTarget != nil && bubble.drivePolicy.rigidifies
+            if active || object.capturedRadius != nil {
+                object.shapeElapsed += duration
+                let seconds = active ? bubble.drivePolicy.rigidificationDuration : bubble.drivePolicy.relaxationDuration
+                let t = seconds == 0 ? Float(1) : Float(min(1, object.shapeElapsed / seconds))
+                let radius = active ? (object.capturedRadius ?? object.targetRadius) : object.targetRadius
+                object.collisionRadius = object.radiusBlendStart + (radius - object.radiusBlendStart) * t
+                object.rigidity = object.rigidityBlendStart + ((active ? 1 : 0) - object.rigidityBlendStart) * t
+                if !active && t == 1 { object.capturedRadius = nil }
+            } else { object.collisionRadius = object.targetRadius }
+        }
+        switch object.motionRole {
+        case .static: object.velocity = .zero; object.angularVelocity = 0
+        case .kinematic: applyKinematicDrive(&object, duration: duration)
+        case .dynamic, .motorDriven:
+            var force = globalForce
+            for (source, field) in fields where field.filter.objectIDs?.contains(id) ?? true {
+                force += fieldForce(field, source: source, point: object.position)
+            }
+            if object.motionRole == .motorDriven, let motor = object.motorDrive {
+                force += motor.force
+                let inertia: Float
+                if case .rigidBody(let body) = object.descriptor { inertia = body.resolvedMomentOfInertia }
+                else { inertia = 0.5 * mass * object.collisionRadius * object.collisionRadius }
+                object.angularVelocity += motor.torque / inertia * dt
+            }
+            object.velocity += force / mass * dt
+        case .playerDriven:
+            object.velocity = object.playerDriveTarget.map { target in
+                let delta = target - object.position
+                let speed = bubbleDriveSpeed(distance: length(delta), policy: {
+                    guard case .bubble(let bubble) = object.descriptor else { return nil }
+                    return bubble.drivePolicy
+                }())
+                return velocity(to: target, from: object.position, speed: speed, dt: dt)
+            } ?? .zero
+        case .pathDriven:
+            if let path = object.pathDrive, !object.pathStopped {
+                while object.pathIndex < path.points.count - 1 && length(path.points[object.pathIndex] - object.position) <= 0.0001 {
+                    object.pathIndex += 1
+                }
+                object.velocity = velocity(to: path.points[object.pathIndex], from: object.position, speed: path.speed, dt: dt)
+            } else { object.velocity = .zero; object.angularVelocity = 0 }
+        }
+        try requireFinite(object.velocity, "motion.velocity")
+        try requireFinite(object.angularVelocity, "motion.angularVelocity")
     }
 
     /// Narzucona prędkość kinematycznej bryły: ruch zawsze wynika z `KinematicDrive`, nigdy z sił ani kontaktów.

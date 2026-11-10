@@ -214,29 +214,35 @@ package struct NativeMetalSnapshot: Sendable {
         sourceSegments = input.segments
         previousBubbles = previous?.sourceBubbles
         previousSegments = previous?.sourceSegments
-        let previousByID = Dictionary(uniqueKeysWithValues: (previous?.sourceBubbles ?? []).enumerated().map {
-            ($0.element.id, (index: $0.offset, bubble: $0.element))
-        })
-        bubbleChanges = input.bubbles.enumerated().compactMap { index, bubble in
+        // Jedno wyszukiwanie poprzedniego rekordu na bańkę służy zmianom i przesunięciom; słownik trzyma tylko indeks.
+        let previousBubbleList = previous?.sourceBubbles ?? []
+        let previousByID = Dictionary(uniqueKeysWithValues: previousBubbleList.indices.lazy.map { (previousBubbleList[$0].id, $0) })
+        let previousProperties = previous?.publicSettings?.properties
+        var changes: [NativeMetalBubbleChange] = []
+        var remaps: [NativeMetalBubbleRemap] = []
+        for (index, bubble) in input.bubbles.enumerated() {
+            let existing = previousByID[bubble.id]
+            let unchanged = existing.map { previousBubbleList[$0] == bubble } ?? false
             let properties = publicSettings?.properties[bubble.id]
-            guard previousByID[bubble.id]?.bubble != bubble || properties != previous?.publicSettings?.properties[bubble.id] else { return nil }
-            var value = NativeMetalBubble(bubble)
-            if let properties {
-                value.publicFlags = properties.flags; value.material = properties.material; value.resources = properties.resources
-                // GPU nie rozwiązuje po ID zasobu; wolny lane niesie stabilną
-                // restitucję bez współdzielenia bufora deformacji konturu.
-                value.resources.x = UInt64(properties.restitution.bitPattern)
-                value.eventData = properties.eventData
-                value.filter = NativeMetalFilter.pack(properties.filter, layer: properties.layer)
-                value.deformation = SIMD4(0, 0, properties.speedLimits.x, properties.speedLimits.y)
+            if !unchanged || properties != previousProperties?[bubble.id] {
+                var value = NativeMetalBubble(bubble)
+                if let properties {
+                    value.publicFlags = properties.flags; value.material = properties.material; value.resources = properties.resources
+                    // GPU nie rozwiązuje po ID zasobu; wolny lane niesie stabilną
+                    // restitucję bez współdzielenia bufora deformacji konturu.
+                    value.resources.x = UInt64(properties.restitution.bitPattern)
+                    value.eventData = properties.eventData
+                    value.filter = NativeMetalFilter.pack(properties.filter, layer: properties.layer)
+                    value.deformation = SIMD4(0, 0, properties.speedLimits.x, properties.speedLimits.y)
+                }
+                changes.append(.init(index: index, value: value))
             }
-            return .init(index: index, value: value)
+            if unchanged, let existing, existing != index {
+                remaps.append(.init(sourceIndex: existing, destinationIndex: index))
+            }
         }
-        bubbleRemaps = input.bubbles.enumerated().compactMap { index, bubble in
-            guard let existing = previousByID[bubble.id], existing.bubble == bubble,
-                  existing.index != index else { return nil }
-            return .init(sourceIndex: existing.index, destinationIndex: index)
-        }
+        bubbleChanges = changes
+        bubbleRemaps = remaps
         let previousSegmentsByID = Dictionary(uniqueKeysWithValues: (previous?.sourceSegments ?? []).enumerated().map {
             ($0.element.id, (index: $0.offset, segment: $0.element))
         })
