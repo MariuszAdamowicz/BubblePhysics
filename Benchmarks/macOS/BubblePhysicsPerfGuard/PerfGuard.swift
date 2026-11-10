@@ -1,4 +1,5 @@
 import BubblePhysicsMetalRender
+import CoreGraphics
 import Foundation
 import Metal
 
@@ -74,11 +75,11 @@ struct PerfGuardReport {
 
 struct PerfGuardOptions: Equatable {
     var recordScene: String?
-    /// `--scene`: mierzy tylko tę scenę. Na razie przyjmowana bez działania.
+    /// `--scene`: mierzy tylko tę scenę (bez skalowania 600/300).
     var scene: String?
-    /// `--calibrate`: ścieżka raportu iPhone'a. Na razie przyjmowana bez działania.
+    /// `--calibrate`: ścieżka raportu iPhone'a; zapisuje plik kalibracji z pomiaru sceny `acceptance` na Macu.
     var calibrateReportPath: String?
-    /// `--check-prediction`: ścieżka raportu iPhone'a. Na razie przyjmowana bez działania.
+    /// `--check-prediction`: ścieżka raportu iPhone'a; porównuje z nim prognozę, kod 1 przy błędzie > 10%.
     var checkPredictionReportPath: String?
     var runs = 5
     var warmupFrames = 30
@@ -94,7 +95,7 @@ struct PerfGuardOptions: Equatable {
         }
     }
 
-    static let usage = "Użycie: BubblePhysicsPerfGuard [--record <scena>] [--runs N] [--warmup N] [--measured N] [--baseline ścieżka] [--inject-slowdown ułamek] [--note tekst]\nSceny: \(PerfGuard.scenes.joined(separator: ", "))"
+    static let usage = "Użycie: BubblePhysicsPerfGuard [--record <scena>] [--scene <scena>] [--calibrate <raport>] [--check-prediction <raport>] [--runs N] [--warmup N] [--measured N] [--baseline ścieżka] [--inject-slowdown ułamek] [--note tekst]\nSceny: \(PerfGuard.scenes.joined(separator: ", "))"
 
     static func parse(_ arguments: [String]) throws -> PerfGuardOptions {
         var result = PerfGuardOptions()
@@ -116,7 +117,15 @@ struct PerfGuardOptions: Equatable {
                 case "--warmup": result.warmupFrames = count
                 default: result.measuredFrames = count
                 }
-            case "--scene", "--calibrate", "--check-prediction": break
+            case "--scene":
+                guard PerfGuard.scenes.contains(value) else { throw ParseError.invalidArgument(value) }
+                result.scene = value
+            case "--calibrate":
+                guard result.checkPredictionReportPath == nil else { throw ParseError.invalidArgument(option) }
+                result.calibrateReportPath = value
+            case "--check-prediction":
+                guard result.calibrateReportPath == nil else { throw ParseError.invalidArgument(option) }
+                result.checkPredictionReportPath = value
             case "--baseline": result.baselinePath = value
             case "--inject-slowdown":
                 guard let fraction = Double(value), fraction.isFinite, fraction >= 0 else {
@@ -128,13 +137,23 @@ struct PerfGuardOptions: Equatable {
             }
             index += 2
         }
+        if result.calibrateReportPath != nil || result.checkPredictionReportPath != nil,
+           let scene = result.scene, scene != PerfGuard.predictionScene {
+            throw ParseError.invalidArgument(scene)
+        }
         return result
     }
 }
 
 enum PerfGuard {
     /// Sceny, które strażnik umie zmierzyć.
-    static let scenes = ["stress-300", "mixed", "decals"]
+    static let scenes = ["stress-300", "mixed", "decals", "acceptance"]
+    /// Scena prognozy iPhone'a X i kalibracji.
+    static let predictionScene = "acceptance"
+    /// Plik kalibracji z jednego commitu raportu iPhone'a i pomiaru na Macu.
+    static let calibrationPath = "docs/benchmarks/iphone-x-calibration.json"
+    /// Natywna rozdzielczość iPhone'a X w pikselach, w jakiej strażnik mierzy scenę `acceptance`.
+    static let acceptanceRenderSize = CGSize(width: 1125, height: 2436)
     /// Dopuszczalne pogorszenie względem punktu odniesienia (G12-AC3).
     static let regressionTolerance = 0.10
     /// Liczby obiektów porównywane przy skalowaniu CPU.
@@ -216,16 +235,40 @@ enum PerfGuard {
         try await measureScene(.stress300, device: device, warmupFrames: warmupFrames, measuredFrames: measuredFrames)
     }
 
-    /// Jeden przebieg sceny przez `BubbleWorld` i bezpośredni renderer; zwraca p95 pełnej klatki.
+    /// Rozmiar celu renderu w pikselach dla sceny; `nil` to 375 × wysokość regionu sceny.
+    static func renderSize(for scene: PublicWorldStressBenchmark.Scene) -> CGSize? {
+        scene == .acceptance ? acceptanceRenderSize : nil
+    }
+
+    /// Jeden przebieg sceny przez `BubbleWorld` i bezpośredni renderer; zwraca pełny raport przebiegu.
     @MainActor
-    static func measureScene(_ scene: PublicWorldStressBenchmark.Scene, device: MTLDevice, warmupFrames: Int,
-                             measuredFrames: Int) async throws -> Double {
+    static func measureSceneReport(_ scene: PublicWorldStressBenchmark.Scene, device: MTLDevice, warmupFrames: Int,
+                                   measuredFrames: Int) async throws -> PublicWorldStressReport {
         let report = try await PublicWorldStressBenchmark.run(device: device, scene: scene,
-            warmupFrames: warmupFrames, measuredFrames: measuredFrames, progress: { _, _ in })
+            renderSize: renderSize(for: scene), warmupFrames: warmupFrames, measuredFrames: measuredFrames,
+            progress: { _, _ in })
         guard report.safetyPassed else {
             throw PerfGuardError.unsafeRun("\(scene.name): nieudane klatki=\(report.failedFrames), wartości nieskończone=\(report.nonFiniteFrames), odczyty konturów=\(report.contourCPUReadbacks)")
         }
-        return report.p95Milliseconds
+        return report
+    }
+
+    /// Jeden przebieg sceny; zwraca p95 pełnej klatki.
+    @MainActor
+    static func measureScene(_ scene: PublicWorldStressBenchmark.Scene, device: MTLDevice, warmupFrames: Int,
+                             measuredFrames: Int) async throws -> Double {
+        try await measureSceneReport(scene, device: device, warmupFrames: warmupFrames,
+            measuredFrames: measuredFrames).p95Milliseconds
+    }
+
+    /// Składowe czasu klatki z raportu przebiegu: p95 każdej składowej (kodowanie, oczekiwanie i inne).
+    static func components(of report: PublicWorldStressReport) -> StageComponents {
+        StageComponents(hostPreparationMilliseconds: report.hostPreparationP95Milliseconds,
+            hostEncodingMilliseconds: report.hostEncodingP95Milliseconds,
+            hostWaitingMilliseconds: report.hostWaitingP95Milliseconds,
+            hostPublicationMilliseconds: report.hostPublicationP95Milliseconds,
+            hostNonGPUMilliseconds: report.hostNonGPUP95Milliseconds, gpuMilliseconds: report.gpuP95Milliseconds,
+            gpuPhysicsMilliseconds: report.gpuPhysicsP95Milliseconds)
     }
 
     /// Jeden przebieg sceny o `bubbleCount` bańkach; zwraca p95 czasu klatki po stronie CPU (poza czasem GPU),
@@ -252,6 +295,7 @@ enum PerfGuard {
         case "stress-300": return .stress300
         case "mixed": return .mixed
         case "decals": return .decals
+        case "acceptance": return .acceptance
         default: throw PerfGuardOptions.ParseError.invalidArgument(scene)
         }
     }
@@ -260,6 +304,56 @@ enum PerfGuard {
     static func measure(scene: String, device: MTLDevice, options: PerfGuardOptions) async throws -> Double {
         try await measureScene(benchmarkScene(named: scene), device: device, warmupFrames: options.warmupFrames,
             measuredFrames: options.measuredFrames)
+    }
+
+    /// Sceny, które mierzy dany przebieg: `--scene`, scena prognozy przy `--calibrate` i `--check-prediction`,
+    /// inaczej wszystkie.
+    static func scenesToMeasure(_ options: PerfGuardOptions) -> [String] {
+        if let scene = options.scene { return [scene] }
+        if options.calibrateReportPath != nil || options.checkPredictionReportPath != nil { return [predictionScene] }
+        return scenes
+    }
+
+    /// Skalowanie 600/300 dotyczy całego zestawu; pomiar jednej sceny je pomija.
+    static func measuresScaling(_ options: PerfGuardOptions) -> Bool { scenesToMeasure(options) == scenes }
+
+    private static func git(_ arguments: [String]) throws -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        process.arguments = arguments
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        try process.run()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { throw PerfGuardError.gitFailed(arguments.joined(separator: " ")) }
+        return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Linie składowych i prognozy po pomiarze sceny `acceptance`; `--calibrate` zapisuje plik kalibracji,
+    /// `--check-prediction` porównuje prognozę z raportem iPhone'a. Zwraca kod wyjścia wyznaczony przez prognozę
+    /// (`nil`, gdy prognoza go nie zmienia) i linie do wypisania.
+    static func predictionLines(options: PerfGuardOptions, mac: StageComponents,
+                                calibrationURL: URL, commit: () throws -> String) throws -> (lines: [String], exitCode: Int32?) {
+        var lines = [DevicePrediction.stagesLine(scene: predictionScene, mac: mac)]
+        var calibration = try DeviceCalibration.loadIfPresent(from: calibrationURL)
+        if let path = options.calibrateReportPath {
+            let report = try DevicePrediction.parse(report: String(contentsOfFile: path, encoding: .utf8))
+            calibration = try DevicePrediction.calibrate(iPhone: report, mac: mac, commit: commit())
+            try calibration?.write(to: calibrationURL)
+            lines.append("Zapisano kalibrację iPhone'a X w \(calibrationURL.path) (commit \(calibration?.commit ?? ""))")
+        }
+        guard let calibration else {
+            if options.checkPredictionReportPath != nil { throw PerfGuardError.missingCalibration(calibrationURL.path) }
+            return (lines, nil)
+        }
+        lines.append(DevicePrediction.predictLine(scene: predictionScene,
+            try DevicePrediction.predict(calibration: calibration, mac: mac)))
+        guard let path = options.checkPredictionReportPath else { return (lines, nil) }
+        let check = try DevicePrediction.checkPrediction(report: String(contentsOfFile: path, encoding: .utf8),
+            calibration: calibration, mac: mac)
+        lines.append(check.text)
+        return (lines, check.exitCode)
     }
 
     /// Punkt wejścia z `main.swift`; zwraca kod wyjścia procesu.
@@ -282,15 +376,35 @@ enum PerfGuard {
                 print("Zapisano punkt odniesienia \(scene): p95 \(String(format: "%.4f", median(runs))) ms (\(device.name)) w \(options.baselinePath)")
                 return 0
             }
-            let report = try await check(scenes: scenes, baseline: existing, device: device.name,
-                runs: options.runs, injectedSlowdown: options.injectedSlowdown,
-                measure: { scene in try await measure(scene: scene, device: device, options: options) },
-                scalingMeasure: { count in
+            let stages = StageCollector()
+            var scalingMeasure: (@MainActor (Int) async throws -> Double)?
+            if measuresScaling(options) {
+                scalingMeasure = { count in
                     try await measureHostCPU(device: device, bubbleCount: count,
                         warmupFrames: options.warmupFrames, measuredFrames: options.measuredFrames)
-                })
+                }
+            }
+            let report = try await check(scenes: scenesToMeasure(options), baseline: existing, device: device.name,
+                runs: options.runs, injectedSlowdown: options.injectedSlowdown,
+                measure: { scene in
+                    let result = try await measureSceneReport(benchmarkScene(named: scene), device: device,
+                        warmupFrames: options.warmupFrames, measuredFrames: options.measuredFrames)
+                    if scene == predictionScene { stages.values.append(components(of: result)) }
+                    return result.p95Milliseconds
+                },
+                scalingMeasure: scalingMeasure)
             print(report.text)
-            return report.passed ? 0 : 1
+            var exitCode: Int32 = report.passed ? 0 : 1
+            if !stages.values.isEmpty {
+                if options.calibrateReportPath != nil, try !git(["status", "--porcelain", "--untracked-files=no"]).isEmpty {
+                    print("UWAGA: drzewo robocze ma niezatwierdzone zmiany; kalibracja ma pochodzić z jednego commitu")
+                }
+                let prediction = try predictionLines(options: options, mac: StageComponents.median(of: stages.values),
+                    calibrationURL: URL(fileURLWithPath: calibrationPath), commit: { try git(["rev-parse", "HEAD"]) })
+                prediction.lines.forEach { print($0) }
+                if let code = prediction.exitCode { exitCode = code }
+            }
+            return exitCode
         } catch {
             print("Błąd strażnika: \(error)")
             print(PerfGuardOptions.usage)
@@ -299,7 +413,17 @@ enum PerfGuard {
     }
 }
 
-enum PerfGuardError: Error { case unsafeRun(String) }
+/// Składowe z kolejnych przebiegów sceny prognozy.
+@MainActor
+private final class StageCollector {
+    var values: [StageComponents] = []
+}
+
+enum PerfGuardError: Error {
+    case unsafeRun(String)
+    case gitFailed(String)
+    case missingCalibration(String)
+}
 
 private extension Optional {
     func asyncMap<T>(_ transform: (Wrapped) async throws -> T) async rethrows -> T? {

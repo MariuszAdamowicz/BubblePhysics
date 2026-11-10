@@ -101,6 +101,27 @@ xcodebuild -project Benchmarks/iOS/BubblePhysicsBench/BubblePhysicsBench.xcodepr
 
 Bramka sceny akceptacyjnej to p95 pełnej klatki nie większe niż 16,67 ms (`PublicWorldStressBenchmark.acceptanceGateMilliseconds`) na iPhonie X w natywnej rozdzielczości, przy zerze nieudanych klatek, zerze klatek `non-finite`, bez readbacku konturów na CPU, z zerem przepełnień kandydatów kontaktu i z największą liczbą kandydatów na obiekt nie większą niż połowa limitu (`candidate_limit`). Pozostałe sceny mają bramkę `PublicWorldStressBenchmark.p95GateMilliseconds` (10,4568 ms). Raport wypisuje bramkę jako `p95_gate_ms`, rozmiar celu jako `render_px`, a liczniki kandydatów w linii `contact_candidate_overflow`. Ponowny pomiar sceny `acceptance` na iPhonie X z 2026-11-10 przy renderze `1125×2436`: p95 `24,2744 ms`, bramka `16,67 ms` niespełniona; jakość `native_quality_envelope` nie została oceniona. Pełny wynik: [v2-iphone-x-2026-11-10-retest.md](docs/benchmarks/v2-iphone-x-2026-11-10-retest.md).
 
+### Pomiar zastępczy na Macu
+
+Strażnik wydajności mierzy na Macu te same sceny i prognozuje p95 iPhone'a X, więc optymalizacja nie czeka na każdy pomiar na urządzeniu. Uruchamia się go na bezczynnej maszynie (średnie obciążenie ≤ 2 w `uptime`):
+
+```bash
+swift run -c release BubblePhysicsPerfGuard                         # wszystkie sceny i skalowanie 600/300
+swift run -c release BubblePhysicsPerfGuard --scene acceptance      # tylko scena akceptacyjna w 1125×2436
+swift run -c release BubblePhysicsPerfGuard --scene acceptance --calibrate docs/benchmarks/<raport>.md
+swift run -c release BubblePhysicsPerfGuard --scene acceptance --check-prediction docs/benchmarks/<raport>.md
+```
+
+Scena `acceptance` ma w `docs/benchmarks/perf-guard.json` punkt odniesienia i limit +10% jak pozostałe. Linia `STAGES` rozkłada klatkę na składowe (mediany p95 z przebiegów, w ms): `host_preparation`, `host_encoding`, `host_waiting`, `host_publication`, `host_non_gpu` (CPU poza GPU), `gpu` i `gpu_physics` (druga seria bez renderu). Raport z iPhone'a ma te same składowe w liniach `*_p95_ms`.
+
+`--calibrate` czyta raport z iPhone'a (jego commit z nagłówka `Mierzony kod: ...` musi być bieżącym commitem) i zapisuje `docs/benchmarks/iphone-x-calibration.json`: składowe iPhone'a i Maca z jednego commitu, mnożniki `cpu` i `physics` oraz koszt renderu GPU iPhone'a. Gdy plik istnieje, strażnik wypisuje linię `PREDICT`:
+
+```text
+prognoza = r_cpu · host_non_gpu(Mac) + r_fiz · gpu_physics(Mac) + render_GPU(iPhone)
+```
+
+Prognoza celuje w 15,0 ms przy bramce 16,67 ms. Na commicie kalibracji równa się `host_non_gpu_p95_ms + gpu_p95_ms` raportu. `--check-prediction` porównuje prognozę z p95 nowego raportu z urządzenia, wypisuje `PREDICTION_ERROR` i kończy się kodem 1 przy błędzie większym niż 10%. Kalibrację powtarza się tylko wtedy, gdy punkt kontrolny rozjedzie się z prognozą o ponad 10%.
+
 ## Układ repozytorium
 
 - `Sources/BubblePhysicsPublic`, `Sources/BubblePhysicsRuntime`, `Sources/BubblePhysicsNativeMetal`, `Sources/BubblePhysicsMetalRender` — ścieżka produkcyjna.

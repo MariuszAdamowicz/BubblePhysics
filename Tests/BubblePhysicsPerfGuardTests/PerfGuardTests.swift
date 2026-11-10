@@ -1,3 +1,4 @@
+import BubblePhysicsMetalRender
 import Foundation
 import Metal
 import XCTest
@@ -459,5 +460,98 @@ final class PerfGuardTests: XCTestCase {
         XCTAssertEqual(line, "PREDICT iphone-x acceptance: p95=24.3971 cpu=9.6007 physics=12.0000 render=2.7964 target=15.00 gate=16.67")
         XCTAssertEqual(DevicePrediction.targetMilliseconds, 15.0)
         XCTAssertEqual(DevicePrediction.gateMilliseconds, 16.67)
+    }
+
+    // MARK: - Okablowanie `run` (P-B-79, P-B-81)
+
+    func testScenesToMeasureFollowTheSceneAndPredictionOptions() throws {
+        XCTAssertEqual(PerfGuard.scenesToMeasure(try PerfGuardOptions.parse([])), PerfGuard.scenes)
+        XCTAssertEqual(PerfGuard.scenesToMeasure(try PerfGuardOptions.parse(["--scene", "acceptance"])), ["acceptance"])
+        XCTAssertEqual(PerfGuard.scenesToMeasure(try PerfGuardOptions.parse(["--calibrate", "r.md"])), ["acceptance"])
+        XCTAssertEqual(PerfGuard.scenesToMeasure(try PerfGuardOptions.parse(["--check-prediction", "r.md"])), ["acceptance"])
+        // Skalowanie 600/300 dotyczy tylko pełnego zestawu.
+        XCTAssertTrue(PerfGuard.measuresScaling(try PerfGuardOptions.parse([])))
+        XCTAssertFalse(PerfGuard.measuresScaling(try PerfGuardOptions.parse(["--scene", "mixed"])))
+        XCTAssertFalse(PerfGuard.measuresScaling(try PerfGuardOptions.parse(["--check-prediction", "r.md"])))
+        // Prognoza dotyczy tylko sceny `acceptance`.
+        XCTAssertThrowsError(try PerfGuardOptions.parse(["--scene", "mixed", "--calibrate", "r.md"]))
+        XCTAssertThrowsError(try PerfGuardOptions.parse(["--check-prediction", "r.md", "--scene", "decals"]))
+    }
+
+    func testOnlyTheAcceptanceSceneIsMeasuredInTheNativeResolutionOfTheIPhoneX() throws {
+        XCTAssertEqual(PerfGuard.renderSize(for: .acceptance), CGSize(width: 1125, height: 2436))
+        for scene: PublicWorldStressBenchmark.Scene in [.stress300, .mixed, .decals] {
+            XCTAssertNil(PerfGuard.renderSize(for: scene))
+        }
+    }
+
+    /// Prawdziwy krótki przebieg `acceptance`: cel renderu 1125×2436 i składowe z raportu bez luk.
+    func testAcceptanceMeasurementRendersInNativeResolutionAndReportsAllStages() async throws {
+        let gpu = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let report = try await PerfGuard.measureSceneReport(.acceptance, device: gpu, warmupFrames: 2, measuredFrames: 6)
+        XCTAssertEqual(report.scene, "acceptance")
+        XCTAssertEqual(report.renderWidth, 1125)
+        XCTAssertEqual(report.renderHeight, 2436)
+        let stages = PerfGuard.components(of: report)
+        for value in [stages.hostPreparationMilliseconds, stages.hostEncodingMilliseconds, stages.hostWaitingMilliseconds,
+                      stages.hostPublicationMilliseconds, stages.hostNonGPUMilliseconds, stages.gpuMilliseconds,
+                      stages.gpuPhysicsMilliseconds] {
+            XCTAssertTrue(value.isFinite && value > 0, "\(stages)")
+        }
+        XCTAssertEqual(stages.hostNonGPUMilliseconds, report.hostNonGPUP95Milliseconds)
+    }
+
+    private func temporaryURL(_ name: String) -> URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent("\(name)-\(UUID().uuidString)")
+    }
+
+    func testCalibrateOptionWritesTheCalibrationAndPrintsStagesAndPrediction() throws {
+        let reportURL = temporaryURL("report.md"), calibrationURL = temporaryURL("calibration.json")
+        defer { for url in [reportURL, calibrationURL] { try? FileManager.default.removeItem(at: url) } }
+        try report().write(to: reportURL, atomically: true, encoding: .utf8)
+        let options = try PerfGuardOptions.parse(["--calibrate", reportURL.path])
+        let result = try PerfGuard.predictionLines(options: options, mac: mac, calibrationURL: calibrationURL,
+            commit: { "a367bd0567f01d4ccf142691958c53e6249e8d3f" })
+        XCTAssertNil(result.exitCode, "kalibracja nie zmienia kodu wyjścia")
+        XCTAssertEqual(try DeviceCalibration.load(from: calibrationURL), try calibration())
+        XCTAssertEqual(result.lines.count, 3)
+        XCTAssertTrue(result.lines[0].hasPrefix("STAGES acceptance:"))
+        XCTAssertTrue(result.lines[2].hasPrefix("PREDICT iphone-x acceptance:"))
+        // Raport z innego commitu niż bieżący nie jest zapisywany jako kalibracja.
+        let other = temporaryURL("other.json")
+        XCTAssertThrowsError(try PerfGuard.predictionLines(options: options, mac: mac, calibrationURL: other,
+            commit: { "0000000000000000000000000000000000000000" }))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: other.path))
+    }
+
+    func testPredictLineAppearsWheneverTheCalibrationFileExistsAndDoesNotChangeTheExitCode() throws {
+        let calibrationURL = temporaryURL("calibration.json")
+        defer { try? FileManager.default.removeItem(at: calibrationURL) }
+        let none = try PerfGuard.predictionLines(options: PerfGuardOptions(), mac: mac, calibrationURL: calibrationURL,
+            commit: { "abc" })
+        XCTAssertEqual(none.lines.count, 1, "bez pliku kalibracji jest tylko STAGES")
+        try calibration().write(to: calibrationURL)
+        let with = try PerfGuard.predictionLines(options: PerfGuardOptions(), mac: mac, calibrationURL: calibrationURL,
+            commit: { "abc" })
+        XCTAssertEqual(with.lines.count, 2)
+        XCTAssertNil(with.exitCode)
+    }
+
+    func testCheckPredictionOptionSetsTheExitCodeFromTheError() throws {
+        let reportURL = temporaryURL("checkpoint.md"), calibrationURL = temporaryURL("calibration.json")
+        defer { for url in [reportURL, calibrationURL] { try? FileManager.default.removeItem(at: url) } }
+        try calibration().write(to: calibrationURL)
+        let options = try PerfGuardOptions.parse(["--check-prediction", reportURL.path])
+        let predicted = 9.6007 + 14.7964
+        try report(p95: predicted / 1.09).write(to: reportURL, atomically: true, encoding: .utf8)
+        let near = try PerfGuard.predictionLines(options: options, mac: mac, calibrationURL: calibrationURL, commit: { "a" })
+        XCTAssertEqual(near.exitCode, 0)
+        XCTAssertTrue(try XCTUnwrap(near.lines.last).hasPrefix("PREDICTION_ERROR p95="))
+        try report(p95: predicted / 1.11).write(to: reportURL, atomically: true, encoding: .utf8)
+        let far = try PerfGuard.predictionLines(options: options, mac: mac, calibrationURL: calibrationURL, commit: { "a" })
+        XCTAssertEqual(far.exitCode, 1)
+        // Bez pliku kalibracji nie ma z czym porównać.
+        XCTAssertThrowsError(try PerfGuard.predictionLines(options: options, mac: mac,
+            calibrationURL: temporaryURL("missing.json"), commit: { "a" }))
     }
 }
