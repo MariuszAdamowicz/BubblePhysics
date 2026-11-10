@@ -1,6 +1,18 @@
 {
   "device" : "Apple M1 Pro",
   "scenes" : {
+    "acceptance" : {
+      "note" : "scena acceptance po etapie 7 w 1125×2436 (decals, trójkąt kinematyczny, dwie warstwy, materiały alfa); 5 przebiegów po 30+300 klatek, maszyna bezczynna",
+      "p95Milliseconds" : 4.128583,
+      "recordedAt" : "2026-11-10T18:06:00Z",
+      "runs" : [
+        4.314834,
+        4.057167,
+        4.262833,
+        4.128583,
+        4.044791
+      ]
+    },
     "decals" : {
       "note" : "scena decals po etapie 6: stress-300 z teksturą przyklejoną i naklejką tekstową na każdej bańce (maska radialna w shaderze); 5 przebiegów po 30+300 klatek",
       "p95Milliseconds" : 4.300125,
