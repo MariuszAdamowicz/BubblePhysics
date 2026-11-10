@@ -2,51 +2,51 @@
   "device" : "Apple M1 Pro",
   "scenes" : {
     "acceptance" : {
-      "note" : "scena acceptance po etapie 7 w 1125×2436 (decals, trójkąt kinematyczny, dwie warstwy, materiały alfa); 5 przebiegów po 30+300 klatek, maszyna bezczynna",
-      "p95Milliseconds" : 4.128583,
-      "recordedAt" : "2026-11-10T18:06:00Z",
+      "note" : "scena acceptance po etapie 7 w 1125×2436 (decals, trójkąt kinematyczny, dwie warstwy, materiały alfa) — po etapie 8 (optymalizacja CPU klatki: przygotowanie, publikacja, kodowanie); 5 przebiegów po 30+300 klatek, maszyna bezczynna (obciążenie 1 min 0,6–1,0)",
+      "p95Milliseconds" : 3.008,
+      "recordedAt" : "2026-11-10T19:54:41Z",
       "runs" : [
-        4.314834,
-        4.057167,
-        4.262833,
-        4.128583,
-        4.044791
+        2.9932,
+        3.0361,
+        2.9876,
+        4.3358,
+        3.008
       ]
     },
     "decals" : {
-      "note" : "scena decals po etapie 6: stress-300 z teksturą przyklejoną i naklejką tekstową na każdej bańce (maska radialna w shaderze); 5 przebiegów po 30+300 klatek",
-      "p95Milliseconds" : 4.300125,
-      "recordedAt" : "2026-11-09T16:33:58Z",
+      "note" : "scena decals po etapie 6: stress-300 z teksturą przyklejoną i naklejką tekstową na każdej bańce (maska radialna w shaderze) — po etapie 8 (optymalizacja CPU klatki: przygotowanie, publikacja, kodowanie); 5 przebiegów po 30+300 klatek, maszyna bezczynna (obciążenie 1 min 0,6–1,0)",
+      "p95Milliseconds" : 2.5761,
+      "recordedAt" : "2026-11-10T19:54:41Z",
       "runs" : [
-        4.367083,
-        4.300125,
-        4.275792,
-        4.343583,
-        4.190625
+        2.594,
+        2.5761,
+        2.5678,
+        2.5423,
+        2.5861
       ]
     },
     "mixed" : {
-      "note" : "scena mieszana po etapie 3 (200 baniek, 55 brył dynamicznych, 5 belek kinematycznych, 10 więzów, k = 128); 5 przebiegów po 30+300 klatek",
-      "p95Milliseconds" : 4.950583,
-      "recordedAt" : "2026-11-08T21:20:53Z",
+      "note" : "scena mieszana po etapie 3 (200 baniek, 55 brył dynamicznych, 5 belek kinematycznych, 10 więzów, k = 128) — po etapie 8 (optymalizacja CPU klatki: przygotowanie, publikacja, kodowanie); 5 przebiegów po 30+300 klatek, maszyna bezczynna (obciążenie 1 min 0,6–1,0)",
+      "p95Milliseconds" : 4.4348,
+      "recordedAt" : "2026-11-10T19:54:41Z",
       "runs" : [
-        4.984458,
-        4.944959,
-        4.955375,
-        4.950583,
-        4.943167
+        4.3947,
+        4.4405,
+        4.4463,
+        4.4209,
+        4.4348
       ]
     },
     "stress-300" : {
-      "note" : "stress-300 po etapie 2 (wiersze kandydatów n·k, filtr kolizji, kontakty brył po liście kandydatów, kinematyka, zdarzenia kontaktu); 5 przebiegów po 30+300 klatek",
-      "p95Milliseconds" : 3.351583,
-      "recordedAt" : "2026-11-08T18:04:36Z",
+      "note" : "stress-300 po etapie 2 (wiersze kandydatów n·k, filtr kolizji, kontakty brył po liście kandydatów, kinematyka, zdarzenia kontaktu) — po etapie 8 (optymalizacja CPU klatki: przygotowanie, publikacja, kodowanie); 5 przebiegów po 30+300 klatek, maszyna bezczynna (obciążenie 1 min 0,6–1,0)",
+      "p95Milliseconds" : 2.3449,
+      "recordedAt" : "2026-11-10T19:54:41Z",
       "runs" : [
-        3.432625,
-        3.379125,
-        3.338459,
-        3.351583,
-        3.314166
+        2.4871,
+        2.341,
+        2.328,
+        2.3449,
+        2.4583
       ]
     }
   }
