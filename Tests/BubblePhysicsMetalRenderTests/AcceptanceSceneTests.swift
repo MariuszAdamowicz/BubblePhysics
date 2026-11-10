@@ -153,4 +153,99 @@ final class AcceptanceSceneTests: XCTestCase {
         XCTAssertEqual(stress.gateMilliseconds, PublicWorldStressBenchmark.p95GateMilliseconds, accuracy: 1e-9)
         XCTAssertTrue(stress.text.contains("p95_gate_ms=10.4568"))
     }
+
+    // MARK: - Składowe raportu (P-B-78)
+
+    private func p95(_ values: [Double]) -> Double {
+        let sorted = values.sorted()
+        return sorted.isEmpty ? .infinity : sorted[min(sorted.count - 1, Int(ceil(Double(sorted.count) * 0.95)) - 1)]
+    }
+
+    private struct ObservedRun {
+        let report: PublicWorldStressReport
+        let samples: [PublicWorldStressFrameSample]
+        let renderTargets: Int
+        let warmup: Int
+        let measured: Int
+        func series(_ kind: PublicWorldStressFrameSample.Series) -> [PublicWorldStressFrameSample] {
+            samples.filter { $0.series == kind }.sorted { $0.index < $1.index }
+        }
+    }
+
+    private func observedRun(warmup: Int = 4, measured: Int = 12) async throws -> ObservedRun {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        var samples: [PublicWorldStressFrameSample] = []
+        var targets = 0
+        let report = try await PublicWorldStressBenchmark.run(device: device, scene: .acceptance,
+            renderTargetObserver: { _ in targets += 1 }, frameObserver: { samples.append($0) },
+            warmupFrames: warmup, measuredFrames: measured, progress: { _, _ in })
+        XCTAssertEqual(report.failedFrames, 0)
+        return ObservedRun(report: report, samples: samples, renderTargets: targets, warmup: warmup, measured: measured)
+    }
+
+    func testReportHasPreparationPublicationAndPhysicsLinesAndFields() async throws {
+        let run = try await observedRun()
+        let report = run.report
+        for value in [report.hostPreparationP95Milliseconds, report.hostPublicationP95Milliseconds,
+                      report.gpuPhysicsP95Milliseconds] {
+            XCTAssertTrue(value.isFinite && value > 0, "składowa raportu \(value)")
+        }
+        XCTAssertEqual(report.gpuRenderEstimateMilliseconds, report.gpuP95Milliseconds - report.gpuPhysicsP95Milliseconds,
+                       accuracy: 1e-12)
+        let lines = report.text.split(separator: "\n").map(String.init)
+        func fixed(_ value: Double) -> String { String(format: "%.4f", value) }
+        XCTAssertTrue(lines.contains("host_preparation_p95_ms=\(fixed(report.hostPreparationP95Milliseconds)); host_publication_p95_ms=\(fixed(report.hostPublicationP95Milliseconds))"),
+                      report.text)
+        XCTAssertTrue(lines.contains("gpu_physics_p95_ms=\(fixed(report.gpuPhysicsP95Milliseconds)); gpu_render_estimate_ms=\(fixed(report.gpuRenderEstimateMilliseconds))"),
+                      report.text)
+        // Dotychczasowe linie zostają, bo parser raportu iPhone'a i raporty z urządzenia z 2026-11-10 na nich stoją.
+        XCTAssertTrue(lines.contains { $0.hasPrefix("host_encoding_p95_ms=") && $0.contains("; host_waiting_p95_ms=") })
+        XCTAssertTrue(lines.contains { $0.hasPrefix("gpu_p95_ms=") && $0.contains("; host_non_gpu_p95_ms=") })
+    }
+
+    func testReportComponentsAreTheP95OfTheMeasuredFramesOfTheirSeries() async throws {
+        let run = try await observedRun()
+        let full = run.series(.full).filter { $0.index >= run.warmup }
+        let physics = run.series(.physicsOnly).filter { $0.index >= run.warmup }
+        XCTAssertEqual(full.count, run.measured)
+        XCTAssertEqual(physics.count, run.measured)
+        XCTAssertEqual(run.report.hostPreparationP95Milliseconds, p95(full.map(\.preparationMilliseconds)), accuracy: 1e-9)
+        XCTAssertEqual(run.report.hostPublicationP95Milliseconds, p95(full.map(\.publicationMilliseconds)), accuracy: 1e-9)
+        XCTAssertEqual(run.report.hostEncodingP95Milliseconds, p95(full.map(\.encodingMilliseconds)), accuracy: 1e-9)
+        XCTAssertEqual(run.report.hostWaitingP95Milliseconds, p95(full.map(\.waitingMilliseconds)), accuracy: 1e-9)
+        XCTAssertEqual(run.report.gpuPhysicsP95Milliseconds, p95(physics.map(\.gpuMilliseconds)), accuracy: 1e-9,
+                       "gpu_physics_p95_ms pochodzi z drugiej serii, nie z serii z renderem")
+        XCTAssertEqual(run.report.gpuP95Milliseconds, p95(full.map(\.gpuMilliseconds)), accuracy: 1e-9)
+    }
+
+    func testSecondSeriesRunsTheSameStepsOnAFreshWorldWithoutRenderingAndWithIdenticalPhysics() async throws {
+        let run = try await observedRun()
+        let total = run.warmup + run.measured
+        let full = run.series(.full), physics = run.series(.physicsOnly)
+        XCTAssertEqual(full.map(\.index), Array(0..<total), "ta sama rozgrzewka i te same indeksy kroków")
+        XCTAssertEqual(physics.map(\.index), Array(0..<total), "ta sama rozgrzewka i te same indeksy kroków")
+        XCTAssertTrue(full.allSatisfy(\.renderEncoded), "seria z renderem koduje render w każdej klatce")
+        XCTAssertTrue(physics.allSatisfy { !$0.renderEncoded }, "druga seria ma pusty encodeRender")
+        XCTAssertEqual(run.renderTargets, 1, "druga seria nie tworzy własnego celu renderu")
+        for (a, b) in zip(full, physics) {
+            XCTAssertEqual(a.frame.stepIndex, UInt64(a.index + 1))
+            XCTAssertEqual(b.frame.stepIndex, a.frame.stepIndex, "świeży świat dochodzi do tego samego kroku")
+            XCTAssertEqual(a.frame.objects, b.frame.objects, "fizyka obu serii jest identyczna w klatce \(a.index)")
+        }
+    }
+
+    func testStageComponentsAddUpToTheFrameTimeInEveryFrame() async throws {
+        let run = try await observedRun()
+        let full = run.series(.full)
+        XCTAssertEqual(full.count, run.warmup + run.measured)
+        for sample in full {
+            let parts = [sample.preparationMilliseconds, sample.encodingMilliseconds, sample.waitingMilliseconds,
+                         sample.publicationMilliseconds]
+            XCTAssertTrue(parts.allSatisfy { $0.isFinite && $0 > 0 }, "klatka \(sample.index): \(parts)")
+            let sum = parts.reduce(0, +)
+            XCTAssertLessThanOrEqual(sum, sample.elapsedMilliseconds + 1e-6, "klatka \(sample.index)")
+            XCTAssertGreaterThanOrEqual(sum, sample.elapsedMilliseconds * 0.99,
+                "składowe pokrywają czas klatki, bez dziur, klatka \(sample.index)")
+        }
+    }
 }

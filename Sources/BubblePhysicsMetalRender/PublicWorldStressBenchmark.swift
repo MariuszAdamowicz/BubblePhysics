@@ -22,6 +22,14 @@ public struct PublicWorldStressReport: Sendable {
     public let hostEncodingP95Milliseconds: Double
     /// Czas od commit do zakończenia tego samego command buffera.
     public let hostWaitingP95Milliseconds: Double
+    /// Czas od początku `advance` do początku kodowania solvera (przygotowanie wejścia kroku po stronie CPU).
+    public let hostPreparationP95Milliseconds: Double
+    /// Czas od zakończenia oczekiwania na GPU do powrotu z `advance` (odczyt, scalanie i publikacja kroku).
+    public let hostPublicationP95Milliseconds: Double
+    /// Czas GPU fizyki: druga seria na świeżym świecie tej samej sceny, z pustym `encodeRender`.
+    public let gpuPhysicsP95Milliseconds: Double
+    /// Szacunek kosztu renderu GPU: czas GPU klatki z renderem minus czas GPU fizyki.
+    public var gpuRenderEstimateMilliseconds: Double { gpuP95Milliseconds - gpuPhysicsP95Milliseconds }
     public let maximumMilliseconds: Double
     public let guardCorrections: Int
     public let nonFiniteFrames: Int
@@ -67,6 +75,23 @@ public struct PublicWorldStressReport: Sendable {
         p95_gate_ms=\(String(format: "%.4f", gateMilliseconds)); p95_gate=\(passesP95Gate ? "pass" : "fail")
         """
     }
+}
+
+/// Próbka jednej klatki benchmarku dla testów: składowe czasu klatki w milisekundach.
+package struct PublicWorldStressFrameSample {
+    package enum Series: Equatable { case full, physicsOnly }
+    package let series: Series
+    /// Numer klatki w serii od 0, wliczając rozgrzewkę.
+    package let index: Int
+    package let frame: WorldFrame
+    package let elapsedMilliseconds: Double
+    package let preparationMilliseconds: Double
+    package let encodingMilliseconds: Double
+    package let waitingMilliseconds: Double
+    package let publicationMilliseconds: Double
+    package let gpuMilliseconds: Double
+    /// Czy klatka wywołała `BubblePhysicsMetalRender.encode`.
+    package let renderEncoded: Bool
 }
 
 @MainActor
@@ -193,6 +218,7 @@ public enum PublicWorldStressBenchmark {
     /// `renderTargetObserver` dostaje cel renderu zaraz po utworzeniu (szew testowy: rozmiar zamiast pól raportu).
     package static func run(device: MTLDevice, scene: Scene = .stress300, renderSize: CGSize? = nil,
                             renderTargetObserver: ((MTLTexture) -> Void)? = nil,
+                            frameObserver: ((PublicWorldStressFrameSample) -> Void)? = nil,
                             warmupFrames: Int, measuredFrames: Int,
                             progress: @escaping @MainActor (Int, Int) -> Void) async throws
         -> PublicWorldStressReport {
@@ -275,6 +301,7 @@ public enum PublicWorldStressBenchmark {
             gpuP95Milliseconds: p95(gpuMeasured), hostNonGPUP95Milliseconds: p95(hostNonGPUMeasured),
             hostEncodingP95Milliseconds: p95(hostEncodingMeasured),
             hostWaitingP95Milliseconds: p95(hostWaitingMeasured),
+            hostPreparationP95Milliseconds: 0, hostPublicationP95Milliseconds: 0, gpuPhysicsP95Milliseconds: 0,
             maximumMilliseconds: measured.last ?? .infinity, guardCorrections: guardCorrections,
             nonFiniteFrames: nonFiniteFrames, fallbackFrames: fallbackFrames, failedFrames: failedFrames,
             contourCPUReadbacks: world.benchmarkContourCPUReadbackCount, renderWidth: pixelWidth,

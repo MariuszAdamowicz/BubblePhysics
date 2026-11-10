@@ -74,6 +74,12 @@ struct PerfGuardReport {
 
 struct PerfGuardOptions: Equatable {
     var recordScene: String?
+    /// `--scene`: mierzy tylko tę scenę. Na razie przyjmowana bez działania.
+    var scene: String?
+    /// `--calibrate`: ścieżka raportu iPhone'a. Na razie przyjmowana bez działania.
+    var calibrateReportPath: String?
+    /// `--check-prediction`: ścieżka raportu iPhone'a. Na razie przyjmowana bez działania.
+    var checkPredictionReportPath: String?
     var runs = 5
     var warmupFrames = 30
     var measuredFrames = 300
@@ -110,6 +116,7 @@ struct PerfGuardOptions: Equatable {
                 case "--warmup": result.warmupFrames = count
                 default: result.measuredFrames = count
                 }
+            case "--scene", "--calibrate", "--check-prediction": break
             case "--baseline": result.baselinePath = value
             case "--inject-slowdown":
                 guard let fraction = Double(value), fraction.isFinite, fraction >= 0 else {

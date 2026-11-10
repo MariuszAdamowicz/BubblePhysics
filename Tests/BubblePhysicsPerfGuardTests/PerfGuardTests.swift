@@ -19,11 +19,33 @@ final class PerfGuardTests: XCTestCase {
             runs: 5, injectedSlowdown: slowdown, measure: measure)
     }
 
-    // P-B-65, P-B-76: strażnik zna sceny stress-300, mieszaną i `decals`.
-    func testGuardKnowsStressMixedAndDecalsScenes() throws {
-        XCTAssertEqual(PerfGuard.scenes, ["stress-300", "mixed", "decals"])
+    // P-B-65, P-B-76, P-B-79: strażnik zna sceny stress-300, mieszaną, `decals` i `acceptance`.
+    func testGuardKnowsStressMixedDecalsAndAcceptanceScenes() throws {
+        XCTAssertEqual(PerfGuard.scenes, ["stress-300", "mixed", "decals", "acceptance"])
         XCTAssertNoThrow(try PerfGuardOptions.parse(["--record", "mixed"]))
         XCTAssertEqual(try PerfGuardOptions.parse(["--record", "decals"]).recordScene, "decals")
+        XCTAssertEqual(try PerfGuardOptions.parse(["--record", "acceptance"]).recordScene, "acceptance")
+    }
+
+    // P-B-79: `--scene` zawęża pomiar do jednej sceny; nieznana scena to błąd; pozostałe opcje nie znikają.
+    func testSceneOptionSelectsOneSceneAndRejectsUnknownOnes() throws {
+        XCTAssertNil(try PerfGuardOptions.parse([]).scene)
+        XCTAssertEqual(try PerfGuardOptions.parse(["--scene", "acceptance"]).scene, "acceptance")
+        XCTAssertEqual(try PerfGuardOptions.parse(["--scene", "mixed", "--runs", "2"]).scene, "mixed")
+        XCTAssertThrowsError(try PerfGuardOptions.parse(["--scene", "unknown-scene"]))
+        XCTAssertThrowsError(try PerfGuardOptions.parse(["--scene"]))
+    }
+
+    // P-B-81: `--calibrate` i `--check-prediction` biorą ścieżkę raportu iPhone'a i nie biorą się nawzajem.
+    func testCalibrateAndCheckPredictionOptionsTakeAReportPath() throws {
+        let calibrate = try PerfGuardOptions.parse(["--scene", "acceptance", "--calibrate", "docs/benchmarks/r.md"])
+        XCTAssertEqual(calibrate.calibrateReportPath, "docs/benchmarks/r.md")
+        XCTAssertNil(calibrate.checkPredictionReportPath)
+        let check = try PerfGuardOptions.parse(["--scene", "acceptance", "--check-prediction", "r.md"])
+        XCTAssertEqual(check.checkPredictionReportPath, "r.md")
+        XCTAssertNil(check.calibrateReportPath)
+        XCTAssertThrowsError(try PerfGuardOptions.parse(["--calibrate", "a.md", "--check-prediction", "b.md"]))
+        XCTAssertThrowsError(try PerfGuardOptions.parse(["--calibrate"]))
     }
 
     // P-B-76: nazwa sceny wybiera scenę benchmarku; każda nazwa strażnika ma scenę o tej samej nazwie.
@@ -31,6 +53,7 @@ final class PerfGuardTests: XCTestCase {
         XCTAssertEqual(try PerfGuard.benchmarkScene(named: "stress-300"), .stress300)
         XCTAssertEqual(try PerfGuard.benchmarkScene(named: "mixed"), .mixed)
         XCTAssertEqual(try PerfGuard.benchmarkScene(named: "decals"), .decals)
+        XCTAssertEqual(try PerfGuard.benchmarkScene(named: "acceptance"), .acceptance)
         XCTAssertThrowsError(try PerfGuard.benchmarkScene(named: "unknown-scene"))
         for name in PerfGuard.scenes { XCTAssertEqual(try PerfGuard.benchmarkScene(named: name).name, name) }
     }
@@ -202,5 +225,239 @@ final class PerfGuardTests: XCTestCase {
         let gpu = try XCTUnwrap(MTLCreateSystemDefaultDevice())
         let value = try await PerfGuard.measureStress300(device: gpu, warmupFrames: 2, measuredFrames: 5)
         XCTAssertTrue(value.isFinite && value > 0)
+    }
+
+    // MARK: - Prognoza p95 iPhone'a X (P-B-81)
+
+    /// Raport iPhone'a z liniami składowymi: liczby z pomiaru 2026-11-10 (v2-iphone-x-2026-11-10-retest.md) plus nowe linie.
+    private func report(p95: Double = 24.2744, commit: String? = "a367bd0567f01d4ccf142691958c53e6249e8d3f") -> String {
+        let header = commit.map { "- Mierzony kod: `\($0)`, gałąź `feature/engine-foundations`.\n\n" } ?? ""
+        return header + """
+        ```text
+        path=public BubbleWorld + BubblePhysicsMetalRender, same command buffer
+        device=Apple A11 GPU
+        scene=acceptance; solver_iteration_limit=4
+        render_px=1125x2436
+        warmup=30; measured=300
+        p95_ms=\(String(format: "%.4f", p95)); max_ms=25.4957
+        gpu_p95_ms=14.7964; host_non_gpu_p95_ms=9.6007
+        host_preparation_p95_ms=3.9000; host_publication_p95_ms=3.1000
+        host_encoding_p95_ms=1.9882; host_waiting_p95_ms=15.8875
+        gpu_physics_p95_ms=12.0000; gpu_render_estimate_ms=2.7964
+        failed_frames=0
+        ```
+        """
+    }
+
+    private let mac = StageComponents(hostPreparationMilliseconds: 1.0, hostEncodingMilliseconds: 0.57,
+        hostWaitingMilliseconds: 1.0, hostPublicationMilliseconds: 0.9, hostNonGPUMilliseconds: 2.5,
+        gpuMilliseconds: 1.9, gpuPhysicsMilliseconds: 1.6)
+
+    private func calibration() throws -> DeviceCalibration {
+        try DevicePrediction.calibrate(iPhone: DevicePrediction.parse(report: report()), mac: mac,
+                                       commit: "a367bd0567f01d4ccf142691958c53e6249e8d3f")
+    }
+
+    func testParserReadsEveryComponentLineAndTheCommitFromAnIPhoneReport() throws {
+        let parsed = try DevicePrediction.parse(report: report())
+        XCTAssertEqual(parsed.commit, "a367bd0567f01d4ccf142691958c53e6249e8d3f")
+        XCTAssertEqual(parsed.p95Milliseconds, 24.2744, accuracy: 1e-9)
+        XCTAssertEqual(parsed.components, StageComponents(hostPreparationMilliseconds: 3.9, hostEncodingMilliseconds: 1.9882,
+            hostWaitingMilliseconds: 15.8875, hostPublicationMilliseconds: 3.1, hostNonGPUMilliseconds: 9.6007,
+            gpuMilliseconds: 14.7964, gpuPhysicsMilliseconds: 12.0))
+        XCTAssertNil(try DevicePrediction.parse(report: report(commit: nil)).commit)
+    }
+
+    func testParserTellsApartGPUP95FromFramePercentileLines() throws {
+        // `gpu_p95_ms=` kończy się tak samo jak `p95_ms=`; klucze muszą pasować w całości.
+        let parsed = try DevicePrediction.parse(report: report())
+        XCTAssertNotEqual(parsed.p95Milliseconds, parsed.components.gpuMilliseconds)
+    }
+
+    func testParserRejectsTheReportFrom20261110WithTheNameOfTheFirstMissingLine() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let old = try String(contentsOf: root.appendingPathComponent("docs/benchmarks/v2-iphone-x-2026-11-10-retest.md"),
+                             encoding: .utf8)
+        XCTAssertThrowsError(try DevicePrediction.parse(report: old)) { error in
+            XCTAssertEqual(error as? DevicePredictionError, .missingLine("host_preparation_p95_ms"))
+        }
+    }
+
+    func testParserNamesEachMissingLineAndRejectsNonNumericValues() throws {
+        for key in ["p95_ms", "gpu_p95_ms", "host_non_gpu_p95_ms", "host_preparation_p95_ms", "host_encoding_p95_ms",
+                    "host_waiting_p95_ms", "host_publication_p95_ms", "gpu_physics_p95_ms"] {
+            let text = report().split(separator: "\n", omittingEmptySubsequences: false)
+                .map { line in
+                    line.split(separator: ";", omittingEmptySubsequences: false)
+                        .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("\(key)=") }
+                        .joined(separator: ";")
+                }.joined(separator: "\n")
+            XCTAssertThrowsError(try DevicePrediction.parse(report: text), key) { error in
+                XCTAssertEqual(error as? DevicePredictionError, .missingLine(key))
+            }
+        }
+        let broken = report().replacingOccurrences(of: "gpu_physics_p95_ms=12.0000", with: "gpu_physics_p95_ms=abc")
+        XCTAssertThrowsError(try DevicePrediction.parse(report: broken)) { error in
+            XCTAssertEqual(error as? DevicePredictionError, .invalidValue(line: "gpu_physics_p95_ms", value: "abc"))
+        }
+        let infinite = report().replacingOccurrences(of: "gpu_physics_p95_ms=12.0000", with: "gpu_physics_p95_ms=inf")
+        XCTAssertThrowsError(try DevicePrediction.parse(report: infinite))
+    }
+
+    func testCalibrationStoresCommitComponentsAndRatiosFromOneCommit() throws {
+        let value = try calibration()
+        XCTAssertEqual(value.commit, "a367bd0567f01d4ccf142691958c53e6249e8d3f")
+        XCTAssertEqual(value.mac, mac)
+        XCTAssertEqual(value.iphone.hostNonGPUMilliseconds, 9.6007, accuracy: 1e-9)
+        XCTAssertEqual(value.ratios.cpu, 9.6007 / 2.5, accuracy: 1e-9)
+        XCTAssertEqual(value.ratios.physics, 12.0 / 1.6, accuracy: 1e-9)
+        XCTAssertEqual(value.iphoneRenderMilliseconds, 14.7964 - 12.0, accuracy: 1e-9)
+    }
+
+    func testCalibrationRejectsAReportFromAnotherCommitAndNonPositiveMacComponents() throws {
+        let parsed = try DevicePrediction.parse(report: report())
+        XCTAssertThrowsError(try DevicePrediction.calibrate(iPhone: parsed, mac: mac, commit: "0000000000000000000000000000000000000000")) { error in
+            XCTAssertEqual(error as? DevicePredictionError, .commitMismatch(report: "a367bd0567f01d4ccf142691958c53e6249e8d3f",
+                current: "0000000000000000000000000000000000000000"))
+        }
+        // Skrócony SHA tego samego commitu to ten sam commit.
+        XCTAssertNoThrow(try DevicePrediction.calibrate(iPhone: parsed, mac: mac, commit: "a367bd0"))
+        // Raport bez commitu w nagłówku nie blokuje kalibracji.
+        let anonymous = try DevicePrediction.parse(report: report(commit: nil))
+        XCTAssertNoThrow(try DevicePrediction.calibrate(iPhone: anonymous, mac: mac, commit: "abc1234"))
+        var noCPU = mac
+        noCPU.hostNonGPUMilliseconds = 0
+        XCTAssertThrowsError(try DevicePrediction.calibrate(iPhone: parsed, mac: noCPU, commit: "a367bd0")) { error in
+            XCTAssertEqual(error as? DevicePredictionError, .nonPositiveComponent("hostNonGPUMilliseconds"))
+        }
+        var noPhysics = mac
+        noPhysics.gpuPhysicsMilliseconds = 0
+        XCTAssertThrowsError(try DevicePrediction.calibrate(iPhone: parsed, mac: noPhysics, commit: "a367bd0")) { error in
+            XCTAssertEqual(error as? DevicePredictionError, .nonPositiveComponent("gpuPhysicsMilliseconds"))
+        }
+    }
+
+    func testCalibrationFileUsesTheKeysTheVerifyStepsRead() throws {
+        let value = try calibration()
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("calibration-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try value.write(to: url)
+        XCTAssertEqual(try DeviceCalibration.load(from: url), value)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        XCTAssertEqual(json["commit"] as? String, value.commit)
+        XCTAssertEqual((json["ratios"] as? [String: Double])?["cpu"] ?? 0, value.ratios.cpu, accuracy: 1e-12)
+        XCTAssertEqual((json["ratios"] as? [String: Double])?["physics"] ?? 0, value.ratios.physics, accuracy: 1e-12)
+        XCTAssertEqual(json["iphoneRenderMilliseconds"] as? Double ?? 0, value.iphoneRenderMilliseconds, accuracy: 1e-12)
+        let macKeys = Set((json["mac"] as? [String: Double] ?? [:]).keys)
+        XCTAssertEqual(macKeys, ["hostPreparationMilliseconds", "hostEncodingMilliseconds", "hostWaitingMilliseconds",
+            "hostPublicationMilliseconds", "hostNonGPUMilliseconds", "gpuMilliseconds", "gpuPhysicsMilliseconds"])
+        XCTAssertEqual(Set((json["iphone"] as? [String: Double] ?? [:]).keys), macKeys)
+    }
+
+    // P-B-81: na commicie kalibracji prognoza równa `host_non_gpu_p95_ms + gpu_p95_ms` raportu.
+    func testPredictionAtTheCalibrationCommitEqualsNonGPUPlusGPUOfTheReport() throws {
+        let prediction = try DevicePrediction.predict(calibration: calibration(), mac: mac)
+        XCTAssertEqual(prediction.p95Milliseconds, 9.6007 + 14.7964, accuracy: 1e-9)
+        XCTAssertEqual(prediction.cpuMilliseconds, 9.6007, accuracy: 1e-9)
+        XCTAssertEqual(prediction.physicsMilliseconds, 12.0, accuracy: 1e-9)
+        XCTAssertEqual(prediction.renderMilliseconds, 14.7964 - 12.0, accuracy: 1e-9)
+        XCTAssertEqual(prediction.cpuMilliseconds + prediction.physicsMilliseconds + prediction.renderMilliseconds,
+                       prediction.p95Milliseconds, accuracy: 1e-9)
+    }
+
+    func testPredictionScalesCPUAndPhysicsWithTheirOwnRatiosAndKeepsTheRenderCost() throws {
+        let value = try calibration()
+        var faster = mac
+        faster.hostNonGPUMilliseconds = 1.25
+        let cpuOnly = try DevicePrediction.predict(calibration: value, mac: faster)
+        XCTAssertEqual(cpuOnly.cpuMilliseconds, 9.6007 / 2, accuracy: 1e-9)
+        XCTAssertEqual(cpuOnly.physicsMilliseconds, 12.0, accuracy: 1e-9)
+        XCTAssertEqual(cpuOnly.renderMilliseconds, 14.7964 - 12.0, accuracy: 1e-9)
+        faster.gpuPhysicsMilliseconds = 0.8
+        let both = try DevicePrediction.predict(calibration: value, mac: faster)
+        XCTAssertEqual(both.physicsMilliseconds, 6.0, accuracy: 1e-9)
+        XCTAssertEqual(both.p95Milliseconds, 9.6007 / 2 + 6.0 + (14.7964 - 12.0), accuracy: 1e-9)
+        // Składowe Maca, które nie wchodzą do prognozy (kodowanie, GPU z renderem), jej nie zmieniają.
+        var other = mac
+        other.gpuMilliseconds = 9.0
+        other.hostEncodingMilliseconds = 9.0
+        XCTAssertEqual(try DevicePrediction.predict(calibration: value, mac: other).p95Milliseconds,
+                       try DevicePrediction.predict(calibration: value, mac: mac).p95Milliseconds, accuracy: 1e-12)
+    }
+
+    // P-B-81: `--check-prediction` kończy się kodem 1 przy błędzie > 10%, 0 przy ≤ 10%.
+    func testCheckPredictionPassesAtNinePercentAndFailsAtElevenPercent() throws {
+        let nine = try DevicePrediction.check(predictedP95: 21.8, reportedP95: 20)
+        XCTAssertEqual(nine.errorFraction, 0.09, accuracy: 1e-9)
+        XCTAssertTrue(nine.passed)
+        XCTAssertEqual(nine.exitCode, 0)
+        XCTAssertTrue(nine.text.hasPrefix("PREDICTION_ERROR p95=20.0000 predicted=21.8000 error=9.0%"), nine.text)
+        let eleven = try DevicePrediction.check(predictedP95: 22.2, reportedP95: 20)
+        XCTAssertFalse(eleven.passed)
+        XCTAssertEqual(eleven.exitCode, 1)
+        XCTAssertTrue(eleven.text.hasPrefix("PREDICTION_ERROR p95=20.0000 predicted=22.2000 error=11.0%"), eleven.text)
+        // Zaniżona prognoza liczy się tak samo jak zawyżona; błąd ma znak.
+        let under = try DevicePrediction.check(predictedP95: 17.8, reportedP95: 20)
+        XCTAssertEqual(under.exitCode, 1)
+        XCTAssertEqual(under.errorFraction, -0.11, accuracy: 1e-9)
+        XCTAssertTrue(under.text.contains("error=-11.0%"), under.text)
+        XCTAssertEqual(try DevicePrediction.check(predictedP95: 22.0, reportedP95: 20).exitCode, 0, "10% to jeszcze zgodność")
+        XCTAssertEqual(try DevicePrediction.check(predictedP95: 18.0, reportedP95: 20).exitCode, 0)
+    }
+
+    func testCheckPredictionRejectsNonPositiveOrNonFiniteReportedTimes() throws {
+        XCTAssertEqual(try DevicePrediction.check(predictedP95: 10, reportedP95: 10).exitCode, 0, "poprawne dane nie rzucają")
+        for reported in [0.0, -1.0, .nan, .infinity] {
+            XCTAssertThrowsError(try DevicePrediction.check(predictedP95: 10, reportedP95: reported), "\(reported)")
+        }
+        XCTAssertThrowsError(try DevicePrediction.check(predictedP95: .nan, reportedP95: 10))
+    }
+
+    func testCheckPredictionAgainstAReportComparesThePredictionToItsP95() throws {
+        let value = try calibration()
+        let same = try DevicePrediction.checkPrediction(report: report(), calibration: value, mac: mac)
+        XCTAssertEqual(same.exitCode, 0)
+        XCTAssertEqual(same.predictedMilliseconds, 9.6007 + 14.7964, accuracy: 1e-9)
+        XCTAssertEqual(same.reportedMilliseconds, 24.2744, accuracy: 1e-9)
+        // p95 z raportu przy prognozie 24,3971 ms: 9% błędu przechodzi, 11% nie.
+        let predicted = 9.6007 + 14.7964
+        let nine = try DevicePrediction.checkPrediction(report: report(p95: predicted / 1.09), calibration: value, mac: mac)
+        XCTAssertEqual(nine.errorFraction, 0.09, accuracy: 1e-3)
+        XCTAssertEqual(nine.exitCode, 0)
+        let eleven = try DevicePrediction.checkPrediction(report: report(p95: predicted / 1.11), calibration: value, mac: mac)
+        XCTAssertEqual(eleven.errorFraction, 0.11, accuracy: 1e-3)
+        XCTAssertEqual(eleven.exitCode, 1)
+        XCTAssertThrowsError(try DevicePrediction.checkPrediction(report: "p95_ms=20.0", calibration: value, mac: mac))
+    }
+
+    // Mediany z przebiegów dla linii STAGES i prognozy: każde pole osobno, odporne na jeden skrajny przebieg.
+    func testMedianOfComponentsTakesEachFieldSeparately() {
+        func components(_ base: Double) -> StageComponents {
+            StageComponents(hostPreparationMilliseconds: base, hostEncodingMilliseconds: base * 2,
+                hostWaitingMilliseconds: base * 3, hostPublicationMilliseconds: base * 4,
+                hostNonGPUMilliseconds: base * 5, gpuMilliseconds: base * 6, gpuPhysicsMilliseconds: base * 7)
+        }
+        var odd = components(5)
+        odd.hostPreparationMilliseconds = 1  // przebieg z inną kolejnością pól
+        let median = StageComponents.median(of: [components(3), components(100), odd, components(1), components(2)])
+        XCTAssertEqual(median.hostPreparationMilliseconds, 2, accuracy: 1e-12)
+        XCTAssertEqual(median.hostEncodingMilliseconds, 6, accuracy: 1e-12)
+        XCTAssertEqual(median.hostWaitingMilliseconds, 9, accuracy: 1e-12)
+        XCTAssertEqual(median.hostPublicationMilliseconds, 12, accuracy: 1e-12)
+        XCTAssertEqual(median.hostNonGPUMilliseconds, 15, accuracy: 1e-12)
+        XCTAssertEqual(median.gpuMilliseconds, 18, accuracy: 1e-12)
+        XCTAssertEqual(median.gpuPhysicsMilliseconds, 21, accuracy: 1e-12)
+    }
+
+    // Weryfikacje zadań 84–87 wycinają liczby `sed`-em z linii STAGES i PREDICT; format jest częścią kontraktu.
+    func testStagesAndPredictLinesCarryTheKeysTheVerifyStepsCut() throws {
+        let stages = DevicePrediction.stagesLine(scene: "acceptance", mac: mac)
+        XCTAssertEqual(stages, "STAGES acceptance: host_preparation=1.0000 host_encoding=0.5700 host_waiting=1.0000 host_publication=0.9000 host_non_gpu=2.5000 gpu=1.9000 gpu_physics=1.6000")
+        let prediction = try DevicePrediction.predict(calibration: calibration(), mac: mac)
+        let line = DevicePrediction.predictLine(scene: "acceptance", prediction)
+        XCTAssertEqual(line, "PREDICT iphone-x acceptance: p95=24.3971 cpu=9.6007 physics=12.0000 render=2.7964 target=15.00 gate=16.67")
+        XCTAssertEqual(DevicePrediction.targetMilliseconds, 15.0)
+        XCTAssertEqual(DevicePrediction.gateMilliseconds, 16.67)
     }
 }
