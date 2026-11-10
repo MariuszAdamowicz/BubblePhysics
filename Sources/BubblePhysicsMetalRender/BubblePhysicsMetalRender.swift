@@ -205,19 +205,30 @@ public final class BubblePhysicsMetalRender {
             frame.beginSegment()
             defer { frame.layerRuns[layer.layer] = firstRun..<frame.runs.count }
             if let handoff = state.handoff {
+                // Słowniki uchwytu i zbiór obiektów bez interpolacji raz na warstwę, nie raz na bańkę.
+                let bubbleIndexByID = handoff.bubbleIndexByID
+                let previousIndexByID = handoff.previousBubbleIndexByID
+                let snapped = state.snapped
+                // Indeks rekordu bańki na stronie t−1. Bez ważnej strony t−1 albo dla obiektu, który pojawił się w tym kroku,
+                // bańka rysuje się w stanie t; zawinięcie wykrywa shader po fladze rekordu (znane dopiero po kroku GPU).
+                func previous(_ id: ObjectID) -> UInt32 {
+                    if !snapped.isEmpty, snapped.contains(id) { return NativeRenderInstance.noPrevious }
+                    return previousIndexByID[id].map { UInt32($0) } ?? NativeRenderInstance.noPrevious
+                }
+                frame.instances.reserveCapacity(frame.instances.count + layer.bubbles.count)
                 for bubble in layer.bubbles {
-                    guard let index = handoff.bubbleIndexByID[bubble.id] else { continue }
+                    guard let index = bubbleIndexByID[bubble.id] else { continue }
                     let material = frame.materialIndex(bubble.materialID, bubble.material)
                     frame.extendRun(.bubble, bubble.material, first: frame.instances.count, count: 1)
                     frame.instances.append(NativeRenderInstance(bubble: UInt32(index), material: material,
-                        previous: previousIndex(of: bubble.id, state, handoff), alpha: state.interpolation))
+                        previous: previous(bubble.id), alpha: state.interpolation))
                 }
                 // Naklejki baniek po wszystkich bańkach warstwy; kotwica i promień odniesienia z rekordu bańki w shaderze,
                 // interpolowane t−1 → t razem z bańką.
                 for bubble in layer.bubbles {
-                    guard let decal = bubble.decal, let index = handoff.bubbleIndexByID[bubble.id] else { continue }
+                    guard let decal = bubble.decal, let index = bubbleIndexByID[bubble.id] else { continue }
                     appendDecal(decal, placement: .zero, bubbleIndex: UInt32(index),
-                                previousBubbleIndex: previousIndex(of: bubble.id, state, handoff), alpha: state.interpolation,
+                                previousBubbleIndex: previous(bubble.id), alpha: state.interpolation,
                                 renderer: decals, to: &frame)
                 }
             }
@@ -251,13 +262,6 @@ public final class BubblePhysicsMetalRender {
             }
         }
         return frame
-    }
-
-    /// Indeks rekordu bańki na stronie t−1. Bez ważnej strony t−1 albo dla obiektu, który pojawił się w tym kroku, bańka rysuje
-    /// się w stanie t; zawinięcie wykrywa shader po fladze rekordu (znane dopiero po kroku GPU).
-    private func previousIndex(of id: ObjectID, _ state: BubbleWorldRenderState, _ handoff: NativeMetalRenderHandoff) -> UInt32 {
-        if state.snapped.contains(id) { return NativeRenderInstance.noPrevious }
-        return handoff.previousBubbleIndexByID[id].map { UInt32($0) } ?? NativeRenderInstance.noPrevious
     }
 
     /// Waga stanu t w obrazie obiektu: 1 (bez interpolacji) dla obiektu, który pojawił się w ostatnim kroku.

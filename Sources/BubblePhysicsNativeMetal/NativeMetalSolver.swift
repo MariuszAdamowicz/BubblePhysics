@@ -320,10 +320,17 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         let segmentCount = snapshot.sourceSegments.count
         try rigidState.prepare(snapshot.publicSettings?.rigidPolygons ?? [], bubbleCount: count,
             timeStep: snapshot.configuration.timeStep)
-        try jointState.prepare(snapshot.publicSettings?.joints ?? [],
-            bubbleIDs: snapshot.sourceBubbles.map { ObjectID(rawValue: UInt64(bitPattern: Int64($0.id.rawValue))) },
-            bodyIDs: (snapshot.publicSettings?.rigidPolygons ?? []).map { $0.object.descriptor.id },
-            iterations: configuration.solverIterationCount)
+        let joints = snapshot.publicSettings?.joints ?? []
+        if joints.isEmpty {
+            // Bez więzów lista identyfikatorów i słownik encji nie są potrzebne, wystarczą liczby.
+            try jointState.prepareWithoutJoints(bubbleCount: count,
+                bodyCount: snapshot.publicSettings?.rigidPolygons.count ?? 0, iterations: configuration.solverIterationCount)
+        } else {
+            try jointState.prepare(joints,
+                bubbleIDs: snapshot.sourceBubbles.map { ObjectID(rawValue: UInt64(bitPattern: Int64($0.id.rawValue))) },
+                bodyIDs: (snapshot.publicSettings?.rigidPolygons ?? []).map { $0.object.descriptor.id },
+                iterations: configuration.solverIterationCount)
+        }
         let hasJoints = jointState.count > 0
         let hasRigidBodies = snapshot.publicSettings?.rigidPolygons.contains { $0.object.motionRole != .static || $0.hasRoundCore } == true
         guard frameNumber < UInt32.max else { throw NativeMetalSolverError.invalidSnapshot }
@@ -409,19 +416,27 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         state.containmentRepairActive.contents().storeBytes(of: UInt32(1), as: UInt32.self)
         memset(state.scratch.contents(), 0, state.scratch.length)
         // Wyłącznie zmiany wejścia gry mogą oznaczać teleport; normalna predykcja nie resetuje cache.
-        let previousBubbles = Dictionary(uniqueKeysWithValues: (lastSnapshot?.sourceBubbles ?? []).map { ($0.id, $0) })
-        let previousSegments = Dictionary(uniqueKeysWithValues: (lastSnapshot?.sourceSegments ?? []).map { ($0.id, $0) })
+        // Poprzedni krok zwykle ma te same obiekty w tej samej kolejności, więc para po indeksie zastępuje słownik;
+        // słownik powstaje tylko wtedy, gdy zestaw albo kolejność się zmieniły.
+        let previousBubbleList = lastSnapshot?.sourceBubbles ?? []
+        let previousSegmentList = lastSnapshot?.sourceSegments ?? []
+        let bubblesAligned = previousBubbleList.count == snapshot.sourceBubbles.count
+            && zip(previousBubbleList, snapshot.sourceBubbles).allSatisfy { $0.id == $1.id }
+        let segmentsAligned = previousSegmentList.count == snapshot.sourceSegments.count
+            && zip(previousSegmentList, snapshot.sourceSegments).allSatisfy { $0.id == $1.id }
+        let previousBubbles = bubblesAligned ? [:] : Dictionary(uniqueKeysWithValues: previousBubbleList.map { ($0.id, $0) })
+        let previousSegments = segmentsAligned ? [:] : Dictionary(uniqueKeysWithValues: previousSegmentList.map { ($0.id, $0) })
         var invalidationRecords: [SIMD2<Int64>] = []
         var teleportedBubbles: Set<Int64> = []
-        for bubble in snapshot.sourceBubbles {
-            if let previous = previousBubbles[bubble.id],
+        for (index, bubble) in snapshot.sourceBubbles.enumerated() {
+            if let previous = bubblesAligned ? previousBubbleList[index] : previousBubbles[bubble.id],
                (bubble.center - previous.center).euclideanLength > configuration.teleportDistanceMultiplier * bubble.targetRadius {
                 invalidationRecords.append(SIMD2(Int64(bubble.id.rawValue), 0))
                 teleportedBubbles.insert(Int64(bubble.id.rawValue))
             }
         }
-        for segment in snapshot.sourceSegments {
-            if let previous = previousSegments[segment.id], previous != segment {
+        for (index, segment) in snapshot.sourceSegments.enumerated() {
+            if let previous = segmentsAligned ? previousSegmentList[index] : previousSegments[segment.id], previous != segment {
                 invalidationRecords.append(SIMD2(Int64(segment.id), 1))
             }
         }

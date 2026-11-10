@@ -15,6 +15,16 @@ enum DecalTexture: Hashable {
 @MainActor
 struct DecalRenderer {
     let assets: AssetRegistry
+    /// Układ tekstu zależy od atlasu i napisu, które powtarzają się między naklejkami klatki, więc raz na klatkę wystarczy
+    /// jedno wyszukanie zamiast atlasu i glifu na każdy znak każdej naklejki. Renderer żyje jedną klatkę, więc rejestr
+    /// nie zmienia się pod pamięcią podręczną.
+    private let textCache = TextCache()
+
+    private final class TextCache {
+        struct Key: Hashable { let source: GlyphSource; let string: String }
+        struct Entry { let atlas: GlyphAtlas; let glyphs: [GlyphMetrics]; let totalAdvance: Float }
+        var entries: [Key: Entry?] = [:]
+    }
 
     struct Layout {
         let instance: NativeDecalInstance
@@ -41,12 +51,10 @@ struct DecalRenderer {
                                                  previousBubbleIndex: previousBubbleIndex, alpha: alpha, bodyIndex: bodyIndex),
                           vertices: vertices, texture: .texture(textureID))
         case .text(let string, let source):
-            guard let atlas = assets.atlas(for: source) else { return nil }
+            guard let entry = textEntry(string, source) else { return nil }
+            let atlas = entry.atlas, glyphs = entry.glyphs, totalAdvance = entry.totalAdvance
             // Wysokość linii to promień odniesienia razy skala; jednostka atlasu to więc skala / wysokość linii promienia.
             let unit = decal.scale / atlas.lineHeight
-            let glyphs = string.compactMap { character in atlas.glyphs[character] }
-            guard !glyphs.isEmpty else { return nil }
-            let totalAdvance = glyphs.reduce(Float(0)) { $0 + $1.advance }
             // Linia wyśrodkowana w kotwicy: poziomo po sumie przesuwów, pionowo po pudle linii (ascent nad linią bazową,
             // descent pod nią).
             var penX = -totalAdvance * unit / 2
@@ -66,6 +74,21 @@ struct DecalRenderer {
                                                  previousBubbleIndex: previousBubbleIndex, alpha: alpha, bodyIndex: bodyIndex),
                           vertices: vertices, texture: .atlas(source))
         }
+    }
+
+    /// Atlas, glify napisu i suma ich przesuwów; `nil`, gdy źródła nie ma w rejestrze albo napis nie ma żadnego glifu.
+    private func textEntry(_ string: String, _ source: GlyphSource) -> TextCache.Entry? {
+        let key = TextCache.Key(source: source, string: string)
+        if let cached = textCache.entries[key] { return cached }
+        var entry: TextCache.Entry?
+        if let atlas = assets.atlas(for: source) {
+            let glyphs = string.compactMap { character in atlas.glyphs[character] }
+            if !glyphs.isEmpty {
+                entry = .init(atlas: atlas, glyphs: glyphs, totalAdvance: glyphs.reduce(Float(0)) { $0 + $1.advance })
+            }
+        }
+        textCache.entries[key] = .some(entry)
+        return entry
     }
 
     /// Dwa trójkąty; wiersz 0 tekstury (`uvMin.y`) leży na górze czworokąta.

@@ -51,7 +51,9 @@ extension BubbleWorld {
     func makeRenderState(_ handoff: NativeMetalRenderHandoff?, from source: RuntimeState, interpolation: Float,
                                  snapped: Set<ObjectID>) -> BubbleWorldRenderState {
         var bubbles: [Int32: [BubbleWorldRenderBubble]] = [:], shapes: [Int32: [BubbleWorldRenderShape]] = [:]
-        for (id, object) in source.objects.sorted(by: { $0.key.rawValue < $1.key.rawValue }) {
+        // Sortuje same klucze: rekordy obiektów nie przechodzą przez tablicę par.
+        for id in source.objects.keys.sorted(by: { $0.rawValue < $1.rawValue }) {
+            guard let object = source.objects[id] else { continue }
             guard let materialID = object.renderMaterialID, let material = source.renderMaterials[materialID] else { continue }
             switch object.descriptor {
             case .bubble:

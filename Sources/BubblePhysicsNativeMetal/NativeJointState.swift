@@ -47,12 +47,24 @@ final class NativeJointState {
         return value
     }
 
-    func prepare(_ joints: [Joint], bubbleIDs: [ObjectID], bodyIDs: [ObjectID], iterations: Int) throws {
-        let entityCount = bubbleIDs.count + bodyIDs.count
-        // Bufory z kernelami zawsze istnieją: bez więzów to jednoelementowe zera i puste listy.
+    /// Krok bez więzów: ten sam stan co `prepare([], …)`, bez list identyfikatorów i słownika encji.
+    func prepareWithoutJoints(bubbleCount: Int, bodyCount: Int, iterations: Int) throws {
+        let control = try prepareBuffers(entityCount: bubbleCount + bodyCount)
+        count = 0
+        control.contents().storeBytes(of: SIMD4(UInt32(0), UInt32(bubbleCount), UInt32(bodyCount),
+                                                UInt32(clamping: iterations)), as: SIMD4<UInt32>.self)
+    }
+
+    /// Bufory z kernelami zawsze istnieją: bez więzów to jednoelementowe zera i puste listy.
+    private func prepareBuffers(entityCount: Int) throws -> MTLBuffer {
         _ = try buffer("zeroRanges", count: entityCount, stride: MemoryLayout<SIMD4<UInt32>>.stride, zeroed: true)
         _ = try buffer("exclusions", count: 1, stride: MemoryLayout<UInt64>.stride)
-        let control = try buffer("control", count: 1, stride: 16)
+        return try buffer("control", count: 1, stride: 16)
+    }
+
+    func prepare(_ joints: [Joint], bubbleIDs: [ObjectID], bodyIDs: [ObjectID], iterations: Int) throws {
+        let entityCount = bubbleIDs.count + bodyIDs.count
+        let control = try prepareBuffers(entityCount: entityCount)
         var entity: [ObjectID: UInt32] = [:]
         entity.reserveCapacity(entityCount)
         for (index, id) in bubbleIDs.enumerated() { entity[id] = UInt32(index) }
