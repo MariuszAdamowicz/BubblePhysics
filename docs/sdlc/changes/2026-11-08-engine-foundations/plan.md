@@ -1199,6 +1199,16 @@ Każde `verify` uruchamia się z katalogu głównego repozytorium. Testy statycz
    ** BUILD SUCCEEDED ** (oba)
    ```
 77. (właściciel: iPhone X i jego podpis w `Signing.local.xcconfig`) Pomiar: Release, scena akceptacyjna, „Kopiuj raport” do `docs/benchmarks/v2-iphone-x-<data>.md`; agent dopisuje wynik i odnośnik do pliku w sekcji benchmarku w README, covering [P-B-61](#p-b-61) · verify: `f=$(ls docs/benchmarks/v2-iphone-x-*.md) && grep -q 'scene=acceptance' $f && grep -q 'p95_gate=pass' $f && grep -q 'failed_frames=0' $f && grep -q 'non_finite_frames=0' $f && grep -q 'contour_cpu_readbacks=0' $f && grep -q 'contact_candidate_overflow=0' $f && awk -F'max_candidates_per_object=' 'NF>1{split($2,a,";"); split($0,b,"candidate_limit="); ok=(a[1]*2<=b[2]+0)} END{exit !ok}' $f && grep -q "$(basename $f)" README.md`
+   ```text
+   $ (verify zadania 77) na docs/benchmarks/v2-iphone-x-2026-11-10-retest.md — FAIL
+   render_px=1125x2436
+   p95_ms=24.2744; max_ms=25.4957
+   gpu_p95_ms=14.7964; host_non_gpu_p95_ms=9.6007; host_waiting_p95_ms=15.8875
+   failed_frames=0; non_finite_frames=0; contour_cpu_readbacks=0
+   contact_candidate_overflow=0; max_candidates_per_object=32; candidate_limit=128
+   p95_gate_ms=16.6700; p95_gate=fail
+   (pierwszy pomiar v2-iphone-x-2026-11-10.md: render_px=960x1440 w trybie zgodności, p95 19.9473 ms, fail — wiersz 98)
+   ```
 78. (właściciel: dostęp do zdalnego repozytorium) Wydanie: PR gałęzi do `main` scalony commitem scalającym, jak PR #1 (nie squash ani rebase); po scaleniu tag `v2.0.0` na tym commicie scalającym na `main`, wypchnięty do `origin`. Etap dostaje status `done` i dowody zadań 66–77 w `plan.md` przed otwarciem PR. Dowód zadania 78 to osobny mały commit dokumentacji bezpośrednio na `main`, już po tagu, albo zostaje tylko w wiadomości końcowej sesji; na gałęzi po scaleniu nie powstaje żaden commit, covering [P-B-10](#p-b-10) · verify: `git fetch origin --tags && git ls-remote --tags origin v2.0.0 | grep -q v2.0.0 && git merge-base --is-ancestor v2.0.0 origin/main && test "$(git rev-list --parents -n 1 'v2.0.0^{commit}' | wc -w)" -ge 3 && git log -1 --format=%s 'v2.0.0^{commit}' | grep -q 'feature/engine-foundations'`
 
 ## Deviations from Design
