@@ -706,22 +706,7 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         }
         dispatchReduction("nativePrepareGrid", buffers: [state.workingBubbles, state.control, state.contactControl])
         dispatch("nativeBuildGrid", buffers: [state.workingBubbles, state.control, state.contactControl, state.grid], threads: state.bubbleCapacity)
-        var size = 2
-        while size <= state.bubbleCapacity {
-            var distance = size / 2
-            while distance > 0 {
-                encoder.memoryBarrier(scope: .buffers)
-                let pipeline = pipelines["nativeSortGrid"]!
-                encoder.setComputePipelineState(pipeline)
-                encoder.setBuffer(state.grid, offset: 0, index: 0)
-                var pass = SIMD2(UInt32(size), UInt32(distance))
-                encoder.setBytes(&pass, length: MemoryLayout<SIMD2<UInt32>>.stride, index: 1)
-                encoder.dispatchThreads(.init(width: state.bubbleCapacity, height: 1, depth: 1),
-                    threadsPerThreadgroup: .init(width: pipeline.threadExecutionWidth, height: 1, depth: 1))
-                distance /= 2
-            }
-            size *= 2
-        }
+        NativeMetalGridSort.encode(encoder, pipelines: pipelines, grid: state.grid, capacity: state.bubbleCapacity)
         dispatch("nativeEmitCandidates", buffers: [state.workingBubbles, state.control, state.contactControl,
             state.grid, state.workingSegments, state.candidateRows, state.candidateRowCounts, state.candidateOverflow,
             jointState.ranges, jointState.exclusions], threads: count)
@@ -879,14 +864,11 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
                 state.control, state.contourControl, state.safetyControl, state.publishedBubbles,
                 state.publishedDeformation, state.publishedContourCounts], threads: count * state.contourStride)
         }
-        var contourInput = state.contourScratch
-        var contourOutput = state.workingDeformation
-        // Liczba nieparzysta: wynik pozostaje w roboczym buforze ping-pong.
-        for _ in 0..<13 {
-            dispatch("nativeGenerateContours", buffers: [contourInput, contourOutput, state.workingContourCounts,
-                state.control, state.contourControl, state.safetyControl], threads: count * state.contourStride)
-            swap(&contourInput, &contourOutput)
-        }
+        // Liczba przejść jest nieparzysta: wynik pozostaje w roboczym buforze deformacji.
+        NativeMetalContourSmoothing.encode(encoder, pipelines: pipelines, input: state.contourScratch,
+            output: state.workingDeformation, counts: state.workingContourCounts, control: state.control,
+            contour: state.contourControl, safety: state.safetyControl, bubbleCount: count,
+            stride: state.contourStride, fused: true)
         dispatch("nativePrepareRenderData", buffers: [state.workingBubbles, state.workingDeformation,
             state.workingContourCounts, state.workingContourPoints, state.renderPackets, state.control,
             state.contourControl, state.safetyControl], threads: count)
@@ -1297,7 +1279,7 @@ enum NativeMetalPipelineCache {
 
     private static var compiled: [UInt64: Compiled] = [:]
 
-    static let stageNames: [String] = ["nativePrepareGrid", "nativeBuildGrid", "nativeSortGrid", "nativeEmitCandidates",
+    static let stageNames: [String] = ["nativePrepareGrid", "nativeBuildGrid", "nativeSortGrid", "nativeSortGridChunk", "nativeEmitCandidates",
         "nativePrepareCandidateCounts", "nativeCompactCandidates", "nativeBuildContacts",
         "nativePrepareContactFlags", "nativeCompactActiveContacts", "nativeMatchContactCache",
         "nativeRetainContactCache", "nativeCompactContactCache", "nativeScanBlocks", "nativePrepareIndirectArguments",
@@ -1308,7 +1290,7 @@ enum NativeMetalPipelineCache {
         "nativeUpdateVelocities", "nativeDampContactNormalMotion", "nativeFinalizeSolverContacts", "nativeFindFastCandidates",
         "nativeResolveCCD", "nativeApplyCenterGuards", "nativeSeparateContainedBubbles",
         "nativeReapplyCenterGuards", "nativeValidateBubbleContainment", "nativeInvalidateSafetyCache", "nativeCheckFinite",
-        "nativeAccumulateContactPressure", "nativeSeedStructuralContours", "nativeGenerateContours", "nativePrepareRenderData",
+        "nativeAccumulateContactPressure", "nativeSeedStructuralContours", "nativeGenerateContours", "nativeGenerateContoursFused", "nativePrepareRenderData",
         "nativeApplyPublicRegion", "nativeInvalidateRegionCache",
         "nativeCompactMergeEvents",
         "nativeCompactSensorEvents",

@@ -699,6 +699,35 @@ kernel void nativeGenerateContours(device float4 *input [[buffer(0)]], device fl
     output[index] = value;
 }
 
+// Trzynaście przejść `nativeGenerateContours` w jednej grupie na bańkę: nacisk w pamięci grupy, jeden wątek na próbkę.
+// Wynik trafia do `output` (liczba przejść jest nieparzysta), bity są te same co po trzynastu dispatchach.
+kernel void nativeGenerateContoursFused(device float4 *input [[buffer(0)]], device float4 *output [[buffer(1)]],
+    device uint *counts [[buffer(2)]], constant NativeControl &control [[buffer(3)]],
+    constant NativeContourControl &contour [[buffer(4)]], device atomic_uint *safety [[buffer(5)]],
+    threadgroup float *pressure [[threadgroup(0)]],
+    uint bubbleIndex [[threadgroup_position_in_grid]], uint sample [[thread_position_in_threadgroup]]) {
+    // Warunek jest jednolity dla grupy, więc żaden wątek nie omija barier.
+    if (bubbleIndex >= control.counts.x || atomic_load_explicit(safety + 3, memory_order_relaxed)) return;
+    uint count = counts[bubbleIndex];
+    uint base = bubbleIndex * contour.counts.x;
+    bool active = sample < count;
+    float4 value = active ? input[base + sample] : float4(0);
+    pressure[sample] = value.x;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    float tension = min(0.8f, contour.shape.z / (contour.shape.z + 10));
+    for (uint pass = 0; pass < 13; ++pass) {
+        if (active) {
+            float neighbor = (pressure[(sample + count - 1) % count] + pressure[(sample + 1) % count]) * 0.5f;
+            value.x = clamp(max(value.y, mix(value.x, neighbor, tension)), 0.0f, 1.0f);
+            if (!all(isfinite(value))) nativeSafetyFailure(safety, 1);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        pressure[sample] = value.x;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if (active) output[base + sample] = value;
+}
+
 kernel void nativePrepareRenderData(device NativeBubble *bubbles [[buffer(0)]],
     device float4 *deformation [[buffer(1)]], device uint *counts [[buffer(2)]],
     device float2 *points [[buffer(3)]], device NativeRenderPacket *packets [[buffer(4)]],

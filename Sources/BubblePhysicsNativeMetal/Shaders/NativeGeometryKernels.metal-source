@@ -217,6 +217,29 @@ kernel void nativeSortGrid(device NativeGridEntry *grid [[buffer(0)]],
     if (ascending ? nativeGridLess(b, a) : nativeGridLess(a, b)) { grid[index] = b; grid[other] = a; }
 }
 
+// Ta sama sieć bitoniczna co `nativeSortGrid`, ale kroki o odległości mniejszej niż szerokość grupy wykonuje jedna grupa
+// w pamięci grupy. `pass`: rozmiar początkowy i końcowy sieci, górna granica odległości, szerokość grupy.
+// Wpisy mają porządek całkowity (remis rozstrzyga indeks), więc wynik jest ten sam bit w bit.
+kernel void nativeSortGridChunk(device NativeGridEntry *grid [[buffer(0)]], constant uint4 &pass [[buffer(1)]],
+    threadgroup NativeGridEntry *tile [[threadgroup(0)]],
+    uint local [[thread_position_in_threadgroup]], uint group [[threadgroup_position_in_grid]]) {
+    uint index = group * pass.w + local;
+    tile[local] = grid[index];
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint size = pass.x; size <= pass.y; size *= 2) {
+        for (uint distance = min(size / 2, pass.z); distance > 0; distance /= 2) {
+            uint other = local ^ distance;
+            if (other > local) {
+                NativeGridEntry a = tile[local], b = tile[other];
+                bool ascending = (index & size) == 0;
+                if (ascending ? nativeGridLess(b, a) : nativeGridLess(a, b)) { tile[local] = b; tile[other] = a; }
+            }
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+        }
+    }
+    grid[index] = tile[local];
+}
+
 bool nativeKeyLess(NativeCandidate a, NativeCandidate b) {
     if (a.metadata.x != b.metadata.x) return a.metadata.x < b.metadata.x;
     if (a.participants.x != b.participants.x) return a.participants.x < b.participants.x;
