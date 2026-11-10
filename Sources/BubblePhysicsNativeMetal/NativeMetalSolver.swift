@@ -248,6 +248,8 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
     private(set) var cachedContacts: [NativeContactCacheRecord] = []
     private var publishedCandidateCount = 0
     /// Klucze kandydatów ostatniej publikacji, czytane z bufora dopiero na żądanie (szew testów; klatka ich nie kopiuje).
+    /// Bufor kandydatów jest współdzielony z następnym krokiem, więc `executeSnapshot` zeruje licznik przy kodowaniu:
+    /// po odrzuconym kroku lub z klatką w locie wartość to `[]`, nigdy klucze innego kroku niż ostatnia publikacja.
     var candidateKeys: [NativeContactKey] {
         guard publishedCandidateCount > 0, let buffer = persistentState?.candidates else { return [] }
         let records = buffer.contents().bindMemory(to: NativeMetalCandidate.self, capacity: publishedCandidateCount)
@@ -386,6 +388,8 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
                 }
             }
         }
+        // Kodowanie nadpisze bufor kandydatów: klucze poprzedniej publikacji przestają być czytelne (jedno przypisanie liczby).
+        publishedCandidateCount = 0
         let bubbleStride = MemoryLayout<NativeMetalBubble>.stride
         let segmentStride = MemoryLayout<NativeMetalSegment>.stride
         for change in snapshot.bubbleChanges {

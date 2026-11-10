@@ -33,19 +33,38 @@ final class MotionControllersPrepareTests: XCTestCase {
         }
     }
 
-    func testTheErrorComesFromTheObjectWithTheSmallestIDRegardlessOfDictionaryOrder() throws {
-        var prepared = try state(bodies: 40)
-        // Obiekt 30 psuje prędkość, obiekt 7 prędkość kątową: jak przy przejściu po posortowanych kluczach błąd zgłasza 7.
-        prepared.objects[ObjectID(rawValue: 30)]?.velocity = [.nan, 0]
-        prepared.objects[ObjectID(rawValue: 7)]?.angularVelocity = .infinity
-        XCTAssertThrowsError(try MotionControllers.prepare(&prepared, duration: duration)) { error in
-            XCTAssertEqual(error as? ModelValidationError, .nonFiniteValue("motion.angularVelocity"))
+    /// Deterministyczny generator (xorshift), by zestawy identyfikatorów były powtarzalne między uruchomieniami.
+    private struct Sequence64 {
+        var value: UInt64
+        mutating func next(below bound: Int) -> Int {
+            value ^= value << 13; value ^= value >> 7; value ^= value << 17
+            return Int(value % UInt64(bound))
         }
-        prepared = try state(bodies: 40)
-        prepared.objects[ObjectID(rawValue: 7)]?.velocity = [.nan, 0]
-        prepared.objects[ObjectID(rawValue: 30)]?.angularVelocity = .infinity
-        XCTAssertThrowsError(try MotionControllers.prepare(&prepared, duration: duration)) { error in
-            XCTAssertEqual(error as? ModelValidationError, .nonFiniteValue("motion.velocity"))
+    }
+
+    func testTheErrorComesFromTheObjectWithTheSmallestIDRegardlessOfDictionaryOrder() throws {
+        var random = Sequence64(value: 0x9E37_79B9_7F4A_7C15)
+        // Rozmiary słownika i położenia uszkodzonych identyfikatorów zmieniają kolejność iteracji między przypadkami.
+        for trial in 0..<48 {
+            let size = 2 + random.next(below: 79)
+            let first = 1 + random.next(below: size), second = 1 + random.next(below: size)
+            guard first != second else { continue }
+            let small = min(first, second), large = max(first, second)
+            // Przy naprzemiennych rodzajach uszkodzenia błąd wskazuje, który obiekt został zgłoszony.
+            let smallBreaksVelocity = trial.isMultiple(of: 2)
+            var prepared = try state(bodies: size)
+            if smallBreaksVelocity {
+                prepared.objects[ObjectID(rawValue: UInt64(small))]?.velocity = [.nan, 0]
+                prepared.objects[ObjectID(rawValue: UInt64(large))]?.angularVelocity = .infinity
+            } else {
+                prepared.objects[ObjectID(rawValue: UInt64(small))]?.angularVelocity = .infinity
+                prepared.objects[ObjectID(rawValue: UInt64(large))]?.velocity = [.nan, 0]
+            }
+            let expected = ModelValidationError.nonFiniteValue(smallBreaksVelocity ? "motion.velocity" : "motion.angularVelocity")
+            XCTAssertThrowsError(try MotionControllers.prepare(&prepared, duration: duration),
+                                 "rozmiar \(size), uszkodzone \(small) i \(large)") { error in
+                XCTAssertEqual(error as? ModelValidationError, expected, "rozmiar \(size), uszkodzone \(small) i \(large)")
+            }
         }
     }
 }

@@ -134,6 +134,7 @@ package final class NativeCompleteStepper: CompleteStepper {
                 { handoff in try callback(handoff, renderPreparedState) }
             })
         // Solver zwraca podzbiór obiektów wejścia, więc przy równej liczbie nikt nie wypadł z regionu.
+        assert(frame.objects.keys.allSatisfy { state.objects[$0] != nil }, "frame.objects musi być podzbiorem obiektów stanu")
         if frame.objects.count != state.objects.count {
             RegionPolicy.remove(Set(state.objects.keys).subtracting(frame.objects.keys), from: &state)
         }

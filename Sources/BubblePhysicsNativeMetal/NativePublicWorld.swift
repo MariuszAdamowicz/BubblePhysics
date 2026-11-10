@@ -21,7 +21,7 @@ package struct NativePublicObject: Equatable, Sendable {
     package var layer: Int32 = 0
 
     /// Stan bańki po kroku solvera: poza, prędkości, promień efektywny i obwiednia konturu.
-    mutating func adopt(_ bubble: NativeSolverBubble, effectiveRadius: Float, bounds: SIMD4<Float>?) {
+    fileprivate mutating func adopt(_ bubble: NativeSolverBubble, effectiveRadius: Float, bounds: SIMD4<Float>?) {
         position = bubble.center
         previousPosition = bubble.previousCenter
         velocity = bubble.velocity
