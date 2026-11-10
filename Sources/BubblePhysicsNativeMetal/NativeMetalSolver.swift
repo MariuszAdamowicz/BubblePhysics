@@ -762,23 +762,12 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         // Bounded GPU repair of pairs introduced by CCD/obstacle projection.
         // Every repair rechecks obstacle invariants, in the same command buffer.
         for pass in 0..<8 {
-            encoder.memoryBarrier(scope: .buffers)
-            let pipeline = pipelines["nativeSeparateContainedBubbles"]!
-            encoder.setComputePipelineState(pipeline)
-            encoder.setThreadgroupMemoryLength(pipeline.threadExecutionWidth * MemoryLayout<SIMD2<Float>>.stride, index: 0)
-            for (index, buffer) in [state.workingBubbles, inputPositions, outputPositions,
-                state.control, state.solverControl, state.guardedBubbles, state.safetyControl,
-                state.containmentRepairActive].enumerated() { encoder.setBuffer(buffer, offset: 0, index: index) }
-            var repairPass = UInt32(pass)
-            encoder.setBytes(&repairPass, length: MemoryLayout<UInt32>.stride, index: 8)
-            if count > 0 {
-                encoder.dispatchThreadgroups(.init(width: count, height: 1, depth: 1),
-                    threadsPerThreadgroup: .init(width: pipeline.threadExecutionWidth, height: 1, depth: 1))
-            }
+            NativeMetalContainmentRepair.encodePass(encoder, pipelines: pipelines, bubbles: state.workingBubbles,
+                segments: state.workingSegments, input: inputPositions, output: outputPositions, control: state.control,
+                solver: state.solverControl, contacts: state.contactControl, changed: state.guardedBubbles,
+                safety: state.safetyControl, statistics: state.dispatchStatistics, repairActive: state.containmentRepairActive,
+                pass: pass, bubbleCount: count, fused: true)
             swap(&inputPositions, &outputPositions)
-            dispatch("nativeReapplyCenterGuards", buffers: [state.workingBubbles, state.workingSegments, inputPositions,
-                state.control, state.contactControl, state.guardedBubbles, state.safetyControl, state.dispatchStatistics],
-                threads: count)
         }
         dispatch("nativeValidateBubbleContainment", buffers: [state.workingBubbles, inputPositions,
             state.control, state.solverControl, state.safetyControl], threads: count * count)
@@ -1245,7 +1234,7 @@ enum NativeMetalPipelineCache {
         "nativeSolveJacobi", "nativeMeasureResidual", "nativeReduceSolverResidual",
         "nativeCapturePositions",
         "nativeUpdateVelocities", "nativeDampContactNormalMotion", "nativeFinalizeSolverContacts", "nativeFindFastCandidates",
-        "nativeResolveCCD", "nativeApplyCenterGuards", "nativeSeparateContainedBubbles",
+        "nativeResolveCCD", "nativeApplyCenterGuards", "nativeSeparateContainedBubbles", "nativeSeparateAndGuardContainedBubbles",
         "nativeReapplyCenterGuards", "nativeValidateBubbleContainment", "nativeInvalidateSafetyCache", "nativeCheckFinite",
         "nativeAccumulateContactPressure", "nativeSeedStructuralContours", "nativeGenerateContours", "nativeGenerateContoursFused", "nativePrepareRenderData", "nativePrepareRenderDataGrouped",
         "nativeApplyPublicRegion", "nativeInvalidateRegionCache",

@@ -272,6 +272,64 @@ kernel void nativeSeparateContainedBubbles(device NativeBubble *bubbles [[buffer
     }
 }
 
+// Ten sam przebieg co nativeSeparateContainedBubbles, z guardem środków (nativeReapplyCenterGuards) w tym samym dispatchu.
+kernel void nativeSeparateAndGuardContainedBubbles(device NativeBubble *bubbles [[buffer(0)]],
+    device float4 *input [[buffer(1)]], device float4 *output [[buffer(2)]],
+    constant NativeControl &control [[buffer(3)]], device NativeSolverControl &solver [[buffer(4)]],
+    device uint *changed [[buffer(5)]], device atomic_uint *safety [[buffer(6)]],
+    device atomic_uint *repairActive [[buffer(7)]], constant uint &pass [[buffer(8)]],
+    device NativeSegment *segments [[buffer(9)]], device NativeContactControl &contacts [[buffer(10)]],
+    device atomic_uint *statistics [[buffer(11)]],
+    threadgroup float2 *laneCorrections [[threadgroup(0)]],
+    uint i [[threadgroup_position_in_grid]], uint lane [[thread_index_in_simdgroup]],
+    uint width [[threads_per_simdgroup]]) {
+    if (i >= control.counts.x) return;
+    if (!atomic_load_explicit(repairActive + pass, memory_order_relaxed)) {
+        if (lane == 0) output[i] = float4(input[i].xy, 0, 0);
+        return;
+    }
+    NativeBubble a = bubbles[i];
+    float2 center = input[i].xy, correction = 0;
+    for (uint j = lane; j < control.counts.x; j += width) {
+        if (i == j) continue;
+        NativeBubble b = bubbles[j];
+        if (!nativeFilterAccepts(a.filter, b.filter)) continue;
+        float minimum = abs(a.physical.z - b.physical.z);
+        if (minimum <= solver.physics.y) continue;
+        float2 delta = center - input[j].xy;
+        float distance = length(delta);
+        // Preserve elastic overlap: only prohibit full nominal containment.
+        // A small outward margin covers float rounding and obstacle reprojection.
+        float margin = max(2 * solver.physics.y, 8 * FLT_EPSILON * max(a.physical.z, b.physical.z));
+        if (distance >= minimum + margin) continue;
+        float2 normal = distance > margin ? delta / distance
+            : float2(0, a.identity.x < b.identity.x ? -1.0f : 1.0f);
+        float weight = a.physical.y + b.physical.y;
+        if (weight <= 0) continue;
+        correction += normal * ((minimum + margin - distance) * a.physical.y / weight);
+    }
+    // Threadgroup memory works on Apple4 (iPhone X); simd_sum requires Apple7.
+    // Fixed lane order makes the reduction independent of scheduling, with no
+    // float atomics or cross-SIMD permute requirement.
+    laneCorrections[lane] = correction;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (lane != 0) return;
+    correction = 0;
+    for (uint k = 0; k < width; ++k) correction += laneCorrections[k];
+    float2 next = center + correction;
+    // A sub-ULP correction that rounds back to the same position cannot create
+    // a new pair or require obstacle projection in a subsequent pass.
+    bool moved = any(next != center);
+    output[i] = float4(next, moved ? 1.0f : 0.0f, 0);
+    if (moved) {
+        changed[i] = 1; nativeSafetyEvent(safety, 1);
+        atomic_fetch_or_explicit(repairActive + pass + 1, 1, memory_order_relaxed);
+        // Jak nativeReapplyCenterGuards na wyniku tego przebiegu: guard dotyka tylko pozycji tej bańki.
+        nativeGuardCenter(bubbles, segments, output, control, contacts, changed, safety, statistics, i);
+    }
+}
+
+
 kernel void nativeReapplyCenterGuards(device NativeBubble *bubbles [[buffer(0)]],
     device NativeSegment *segments [[buffer(1)]], device float4 *positions [[buffer(2)]],
     constant NativeControl &control [[buffer(3)]], device NativeContactControl &contacts [[buffer(4)]],

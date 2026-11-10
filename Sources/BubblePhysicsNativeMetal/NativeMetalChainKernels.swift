@@ -252,3 +252,45 @@ enum NativeMetalScan {
         return dispatches + 1
     }
 }
+
+/// Jeden przebieg naprawy zawierania: rozsunięcie baniek i guard środków po nim. `fused`: jeden dispatch zamiast dwóch
+/// (nativeSeparateContainedBubbles, potem nativeReapplyCenterGuards na wyniku); guard dotyka tylko własnej pozycji
+/// bańki i danych tylko do odczytu, więc może iść tym samym wątkiem zaraz po zapisie pozycji.
+enum NativeMetalContainmentRepair {
+    /// Zwraca liczbę zakodowanych dispatchy.
+    @discardableResult
+    static func encodePass(_ encoder: MTLComputeCommandEncoder, pipelines: [String: MTLComputePipelineState],
+                           bubbles: MTLBuffer, segments: MTLBuffer, input: MTLBuffer, output: MTLBuffer,
+                           control: MTLBuffer, solver: MTLBuffer, contacts: MTLBuffer, changed: MTLBuffer,
+                           safety: MTLBuffer, statistics: MTLBuffer, repairActive: MTLBuffer, pass: Int,
+                           bubbleCount: Int, fused: Bool) -> Int {
+        let pipeline = pipelines[fused ? "nativeSeparateAndGuardContainedBubbles" : "nativeSeparateContainedBubbles"]!
+        encoder.memoryBarrier(scope: .buffers)
+        encoder.setComputePipelineState(pipeline)
+        encoder.setThreadgroupMemoryLength(pipeline.threadExecutionWidth * MemoryLayout<SIMD2<Float>>.stride, index: 0)
+        for (index, buffer) in [bubbles, input, output, control, solver, changed, safety, repairActive].enumerated() {
+            encoder.setBuffer(buffer, offset: 0, index: index)
+        }
+        var repairPass = UInt32(pass)
+        encoder.setBytes(&repairPass, length: MemoryLayout<UInt32>.stride, index: 8)
+        if fused { for (index, buffer) in [segments, contacts, statistics].enumerated() { encoder.setBuffer(buffer, offset: 0, index: 9 + index) } }
+        if bubbleCount > 0 {
+            encoder.dispatchThreadgroups(.init(width: bubbleCount, height: 1, depth: 1),
+                threadsPerThreadgroup: .init(width: pipeline.threadExecutionWidth, height: 1, depth: 1))
+        }
+        guard !fused else { return 1 }
+        // Dawna wersja: guard na wyniku rozsunięcia (z flagą ruchu w `.z`).
+        let guardPipeline = pipelines["nativeReapplyCenterGuards"]!
+        encoder.memoryBarrier(scope: .buffers)
+        encoder.setComputePipelineState(guardPipeline)
+        for (index, buffer) in [bubbles, segments, output, control, contacts, changed, safety, statistics].enumerated() {
+            encoder.setBuffer(buffer, offset: 0, index: index)
+        }
+        if bubbleCount > 0 {
+            encoder.dispatchThreads(.init(width: bubbleCount, height: 1, depth: 1),
+                threadsPerThreadgroup: .init(width: min(guardPipeline.threadExecutionWidth, guardPipeline.maxTotalThreadsPerThreadgroup),
+                                             height: 1, depth: 1))
+        }
+        return 2
+    }
+}
