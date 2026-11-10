@@ -1,26 +1,26 @@
 {
-  "commit" : "4adf6122cd83e37b9f506ea167eca64c993d39a6",
+  "commit" : "2c22f8434ab5cd2c8471dd210b69cf2ab69f8f7a",
   "iphone" : {
-    "gpuMilliseconds" : 15.0523,
-    "gpuPhysicsMilliseconds" : 8.633,
-    "hostEncodingMilliseconds" : 1.9975,
-    "hostNonGPUMilliseconds" : 9.7247,
-    "hostPreparationMilliseconds" : 1.6347,
-    "hostPublicationMilliseconds" : 5.0364,
-    "hostWaitingMilliseconds" : 16.1812
+    "gpuMilliseconds" : 14.8024,
+    "gpuPhysicsMilliseconds" : 8.4717,
+    "hostEncodingMilliseconds" : 2.4216,
+    "hostNonGPUMilliseconds" : 7.052,
+    "hostPreparationMilliseconds" : 1.3465,
+    "hostPublicationMilliseconds" : 2.167,
+    "hostWaitingMilliseconds" : 16.0126
   },
-  "iphoneRenderMilliseconds" : 6.419300000000002,
+  "iphoneRenderMilliseconds" : 6.3307,
   "mac" : {
-    "gpuMilliseconds" : 1.8988750234711915,
-    "gpuPhysicsMilliseconds" : 1.6351666417904198,
-    "hostEncodingMilliseconds" : 0.549833,
-    "hostNonGPUMilliseconds" : 2.476250335885778,
-    "hostPreparationMilliseconds" : 0.426583,
-    "hostPublicationMilliseconds" : 0.997875,
-    "hostWaitingMilliseconds" : 2.240833
+    "gpuMilliseconds" : 1.8990833195857704,
+    "gpuPhysicsMilliseconds" : 1.6433749697171152,
+    "hostEncodingMilliseconds" : 0.433167,
+    "hostNonGPUMilliseconds" : 1.2047499602697789,
+    "hostPreparationMilliseconds" : 0.175084,
+    "hostPublicationMilliseconds" : 0.3105,
+    "hostWaitingMilliseconds" : 2.179459
   },
   "ratios" : {
-    "cpu" : 3.9271877560478488,
-    "physics" : 5.279584220570527
+    "cpu" : 5.853496769089621,
+    "physics" : 5.155062086322447
   }
 }
