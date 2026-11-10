@@ -183,6 +183,10 @@ void nativeGuardCenter(device NativeBubble *bubbles, device NativeSegment *segme
     // Walidacja po WSZYSTKICH korekcjach: ostatnia przeszkoda może zepsuć
     // wcześniejszą. Niespójne ściany/rotacje odrzucają klatkę, bez pętli hosta.
     if (!all(isfinite(end))) nativeSafetyFailure(safety, 1);
+    // Wynik testu wnętrza zależy tylko od właściciela i `end`, a zapala bit idempotentnie, więc kolejne krawędzie
+    // tego samego właściciela nie powtarzają przeglądu odcinków (trzy, cztery krawędzie na wielokąt).
+    long testedOwner = -1;
+    bool testedInside = false;
     for (uint j = 0; j < control.counts.y; ++j) {
         NativeSegment s = segments[j];
         if (!nativeFilterAccepts(bubbles[i].filter, s.filter)) continue;
@@ -193,8 +197,13 @@ void nativeGuardCenter(device NativeBubble *bubbles, device NativeSegment *segme
         }
         if (s.flags.z && dot(end - s.current.xy, nativeSegmentNormal(s.current)) * s.collision.x < 0)
             nativeSafetyFailure(safety, 2);
-        if (s.flags.y && nativeInsideOwner(end, segments, control.counts.y, s.identity.y, false))
-            nativeSafetyFailure(safety, 2);
+        if (s.flags.y) {
+            if (testedOwner != s.identity.y) {
+                testedOwner = s.identity.y;
+                testedInside = nativeInsideOwner(end, segments, control.counts.y, s.identity.y, false);
+            }
+            if (testedInside) nativeSafetyFailure(safety, 2);
+        }
     }
 }
 
