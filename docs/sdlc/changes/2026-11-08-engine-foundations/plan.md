@@ -1313,11 +1313,75 @@ Każde `verify` uruchamia się z katalogu głównego repozytorium. Pomiary stra�
     ```
 
 83. (właściciel: iPhone X) Kalibracja: build Release z commitu po zadaniu 82, raport „Kopiuj raport” w `docs/benchmarks/v2-iphone-x-calibration.md` z commitem w nagłówku; agent na tym samym commicie uruchamia `--calibrate` i zapisuje `docs/benchmarks/iphone-x-calibration.json`, covering [P-B-81](#p-b-81) · verify: `grep -q 'gpu_physics_p95_ms=' docs/benchmarks/v2-iphone-x-calibration.md && jq -e '.ratios.cpu > 0 and .ratios.physics > 0' docs/benchmarks/iphone-x-calibration.json && swift run -c release BubblePhysicsPerfGuard --scene acceptance > .build/guard-acceptance.txt && grep -q '^PREDICT' .build/guard-acceptance.txt`
+
+    ```text
+    $ grep -q 'gpu_physics_p95_ms=' docs/benchmarks/v2-iphone-x-calibration.md && jq -e '.ratios.cpu > 0 and .ratios.physics > 0' docs/benchmarks/iphone-x-calibration.json && swift run -c release BubblePhysicsPerfGuard --scene acceptance > .build/guard-acceptance.txt && grep -q '^PREDICT' .build/guard-acceptance.txt   # HEAD 3a97c1f; kalibracja z 36151c2 na mierzonym commicie 4adf612
+    true
+    {"commit":"4adf6122cd83e37b9f506ea167eca64c993d39a6","ratios":{"cpu":3.9271877560478488,"physics":5.279584220570527}}
+    pierwszy przebieg (maszyna zakłócona, średnia 15 min 2,29): guard exit=1, FAIL acceptance +100.9% (gpu=4.5591), więc łańcuch verify nie przeszedł
+    powtórzenie po uspokojeniu maszyny, load { 1,33 2,25 2,37 }: guard exit=0
+    PASS acceptance: p95 2.9856 ms, punkt odniesienia 3.0080 ms, limit 3.3088 ms (-0.7%)
+    PREDICT iphone-x acceptance: p95=19.7321 cpu=4.5837 physics=8.7291 render=6.4193 target=15.00 gate=16.67
+    grep exit=0
+    ```
+
 84. CPU przed kodowaniem: `MotionControllers.prepare` (sortowania, kopia słownika przy zapisie), wejście w `NativeCompleteStepper` i `NativePublicWorld.step` (słowniki, ponowne sortowanie), `NativeMetalSnapshot.init` (przed `NativeMetalSolver.swift:312`), covering [P-B-80](#p-b-80), [P-B-82](#p-b-82) · verify: `swift test --filter 'AcceptanceEquivalenceTests|PublishedStateDeterminismTests|KinematicMotionTests' && swift run -c release BubblePhysicsPerfGuard --scene acceptance > .build/guard-acceptance.txt && m=$(sed -n 's/^STAGES.* host_preparation=\([0-9.]*\).*/\1/p' .build/guard-acceptance.txt) && test -n "$m" && awk -v m="$m" -v c="$(jq .mac.hostPreparationMilliseconds docs/benchmarks/iphone-x-calibration.json)" 'BEGIN{exit !(m < 0.9*c)}'`
+
+    ```text
+    $ swift test --filter 'AcceptanceEquivalenceTests|PublishedStateDeterminismTests|KinematicMotionTests' && swift run -c release BubblePhysicsPerfGuard --scene acceptance > .build/guard-acceptance.txt && … host_preparation < 0.9 × mac   # HEAD 3a97c1f, load { 1,33 2,25 2,37 }
+    Executed 14 tests, with 0 failures (0 unexpected) in 17.777 (17.779) seconds
+    PASS acceptance: p95 2.9856 ms, punkt odniesienia 3.0080 ms, limit 3.3088 ms (-0.7%)
+    STAGES acceptance: host_preparation=0.1718 host_encoding=0.4229 host_waiting=2.1779 host_publication=0.3034 host_non_gpu=1.1672 gpu=1.8891 gpu_physics=1.6534
+    host_preparation 0.1718 < 0.9 * 0.426583 → VERIFY_OK
+    ```
+
 85. CPU po GPU: odczyt w `NativeMetalSolver` (kopie kandydatów i cache kontaktów bez odbiorcy w klatce), scalanie w `NativePublicWorld.step` i `NativeCompleteStepper.performStep` (wyszukiwania na obiekt, zbiory kluczy), `MotionControllers.feedback`, `publishedObjectStates` bez zmiany publicznego API, covering [P-B-80](#p-b-80), [P-B-82](#p-b-82) · verify: `swift test --filter 'AcceptanceEquivalenceTests|PublishedStateDeterminismTests|ContactEventTests|ObjectStateTests' && swift run -c release BubblePhysicsPerfGuard --scene acceptance > .build/guard-acceptance.txt && m=$(sed -n 's/^STAGES.* host_publication=\([0-9.]*\).*/\1/p' .build/guard-acceptance.txt) && test -n "$m" && awk -v m="$m" -v c="$(jq .mac.hostPublicationMilliseconds docs/benchmarks/iphone-x-calibration.json)" 'BEGIN{exit !(m < 0.9*c)}'`
+
+    ```text
+    $ swift test --filter 'AcceptanceEquivalenceTests|PublishedStateDeterminismTests|ContactEventTests|ObjectStateTests' && swift run -c release BubblePhysicsPerfGuard --scene acceptance > .build/guard-acceptance.txt && … host_publication < 0.9 × mac   # HEAD 3a97c1f, load { 1,38 2,14 2,33 }
+    Executed 41 tests, with 0 failures (0 unexpected) in 19.234 (19.241) seconds
+    PASS acceptance: p95 2.9862 ms, punkt odniesienia 3.0080 ms, limit 3.3088 ms (-0.7%)
+    host_publication 0.2953 < 0.9 * 0.997875 → VERIFY_OK
+    ```
+
 86. Kodowanie (okno `NativeMetalSolver.swift:312-966`: przygotowanie solvera w `executeSnapshot` i render z `beforeCommit`): słowniki poprzedniego kroku (`:406-407`), `makeRenderState` bez ponownego sortowania i tablic pierścieni, `DecalRenderer.layout` bez tablic na naklejkę i glif, covering [P-B-80](#p-b-80), [P-B-82](#p-b-82) · verify: `swift test --filter 'AcceptanceEquivalenceTests|DecalRenderTests|LayerRenderTests' && swift run -c release BubblePhysicsPerfGuard --scene acceptance > .build/guard-acceptance.txt && m=$(sed -n 's/^STAGES.* host_encoding=\([0-9.]*\).*/\1/p' .build/guard-acceptance.txt) && test -n "$m" && awk -v m="$m" -v c="$(jq .mac.hostEncodingMilliseconds docs/benchmarks/iphone-x-calibration.json)" 'BEGIN{exit !(m < 0.9*c)}'`
+
+    ```text
+    $ swift test --filter 'AcceptanceEquivalenceTests|DecalRenderTests|LayerRenderTests' && swift run -c release BubblePhysicsPerfGuard --scene acceptance > .build/guard-acceptance.txt && … host_encoding < 0.9 × mac   # HEAD 3a97c1f, load { 1,34 2,08 2,30 }
+    Executed 30 tests, with 0 failures (0 unexpected) in 5.326 (5.330) seconds
+    PASS acceptance: p95 2.9735 ms, punkt odniesienia 3.0080 ms, limit 3.3088 ms (-1.1%)
+    host_encoding 0.3757 < 0.9 * 0.549833 → VERIFY_OK
+    ```
+
 87. Domknięcie celu CPU: kolejne zmiany w składowej o największym udziale według linii `STAGES`, aż składowa CPU prognozy spadnie do ≤ 5,0 ms; gdy cel wymaga zmiany zachowania albo publicznego API, stop i decyzja właściciela zamiast słabszego progu, covering [P-B-80](#p-b-80), [P-B-82](#p-b-82) · verify: `swift test --filter 'AcceptanceEquivalenceTests|PublishedStateDeterminismTests' && swift run -c release BubblePhysicsPerfGuard --scene acceptance > .build/guard-acceptance.txt && m=$(sed -n 's/^PREDICT.* cpu=\([0-9.]*\).*/\1/p' .build/guard-acceptance.txt) && test -n "$m" && awk -v m="$m" 'BEGIN{exit !(m <= 5.0)}'`
+
+    ```text
+    $ swift test --filter 'AcceptanceEquivalenceTests|PublishedStateDeterminismTests' && swift run -c release BubblePhysicsPerfGuard --scene acceptance > .build/guard-acceptance.txt && … PREDICT cpu <= 5.0   # HEAD 3a97c1f, load { 1,25 2,13 2,31 }
+    Executed 7 tests, with 0 failures (0 unexpected) in 15.797 (15.799) seconds
+    PASS acceptance: p95 2.9768 ms, punkt odniesienia 3.0080 ms, limit 3.3088 ms (-1.0%)
+    PREDICT iphone-x acceptance: p95=19.6255 cpu=4.3464 physics=8.8598 render=6.4193 target=15.00 gate=16.67 → VERIFY_OK
+    kolejne 3 przebiegi: cpu=4.3628, 4.3742, 4.3117 (wszystkie PASS)
+    ```
+
 88. Sprawdź etap: pełne `swift test`, strażnik wszystkich scen na bezczynnej maszynie (poprawione sceny dostają nowe punkty odniesienia w osobnym commicie), ponownie wygenerowany diff API identyczny z plikiem jak w zadaniu 76, build aplikacji benchmarku; potem, za zgodą właściciela, wypchnięcie gałęzi (`git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push origin feature/engine-foundations`), a sesja implement kończy się statusem `wip` i następna wznawia od zadania 89, covering [P-B-79](#p-b-79), [P-B-82](#p-b-82) · verify: `swift test && swift run -c release BubblePhysicsPerfGuard > .build/guard-all.txt && m=$(sed -n 's/^PREDICT.* cpu=\([0-9.]*\).*/\1/p' .build/guard-all.txt) && test -n "$m" && awk -v m="$m" 'BEGIN{exit !(m <= 5.0)}'` i polecenie `-diagnose-sdk` z nagłówka `docs/migration/v1-api-diff.txt` porównane `cmp` z treścią pliku jak w zadaniu 76, potem `git diff --exit-code docs/migration/v1-api-diff.txt && xcodebuild -project Benchmarks/iOS/BubblePhysicsBench/BubblePhysicsBench.xcodeproj -scheme BubblePhysicsBench -configuration Release -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build`
+
+    ```text
+    $ swift test && swift run -c release BubblePhysicsPerfGuard > .build/guard-all.txt && … PREDICT cpu <= 5.0   # HEAD 3a97c1f, load { 1,30 2,27 2,37 }
+    Executed 1240 tests, with 1 test skipped and 0 failures (0 unexpected) in 420.125 (420.237) seconds
+    PASS stress-300: p95 2.3565 ms, punkt odniesienia 2.3449 ms, limit 2.5794 ms (+0.5%)
+    PASS mixed: p95 4.4634 ms, punkt odniesienia 4.4348 ms, limit 4.8783 ms (+0.6%)
+    PASS decals: p95 2.5526 ms, punkt odniesienia 2.5761 ms, limit 2.8337 ms (-0.9%)
+    PASS acceptance: p95 2.9795 ms, punkt odniesienia 3.0080 ms, limit 3.3088 ms (-0.9%)
+    scaling 600/300: 1.57 (limit 2.50) PASS
+    PREDICT iphone-x acceptance: p95=19.6750 cpu=4.4595 physics=8.7962 render=6.4193 target=15.00 gate=16.67
+    guard exit=0, PREDICT_OK
+    $ (polecenia -diagnose-sdk z nagłówka docs/migration/v1-api-diff.txt, 2>&1) ; cmp z treścią pliku od wiersza 15
+    CMP_OK
+    $ git diff --exit-code docs/migration/v1-api-diff.txt && xcodebuild … -configuration Release -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build
+    ** BUILD SUCCEEDED **
+    wypchnięcie gałęzi: czeka na zgodę właściciela
+    ```
+
 89. (właściciel: iPhone X) Punkt kontrolny: build Release z commitu po zadaniu 88, raport w `docs/benchmarks/v2-iphone-x-checkpoint-8.md` z commitem w nagłówku; agent na tym samym commicie uruchamia `--check-prediction`, dopisuje linię `PREDICTION_ERROR` pod raportem i wynik w sekcji benchmarku w README; błąd > 10% to wiersz w Implementation deviations, a etap 9 zaczyna od ponownej kalibracji, covering [P-B-83](#p-b-83) · verify: `{ swift run -c release BubblePhysicsPerfGuard --scene acceptance --check-prediction docs/benchmarks/v2-iphone-x-checkpoint-8.md || true; } > .build/guard-check.txt && grep -q '^PREDICTION_ERROR' .build/guard-check.txt && grep -q '^PREDICTION_ERROR' docs/benchmarks/v2-iphone-x-checkpoint-8.md && grep -q 'v2-iphone-x-checkpoint-8.md' README.md`
 
 ## Deviations from Design
