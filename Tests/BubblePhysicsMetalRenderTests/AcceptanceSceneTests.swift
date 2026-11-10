@@ -265,4 +265,81 @@ final class AcceptanceSceneTests: XCTestCase {
                 "publikacja: koniec oczekiwania → powrót z advance, klatka \(sample.index)")
         }
     }
+
+    // MARK: - Podział renderu (P-B-90)
+
+    private func clamped(_ value: Double) -> Double { max(0, value) }
+
+    func testReportHasTheRenderSplitLinesWithTheValuesOfItsFields() async throws {
+        let run = try await observedRun()
+        let report = run.report
+        let lines = report.text.split(separator: "\n").map(String.init)
+        func fixed(_ value: Double) -> String { String(format: "%.4f", value) }
+        XCTAssertTrue(lines.contains("gpu_render_clear_estimate_ms=\(fixed(report.gpuRenderClearEstimateMilliseconds)); gpu_render_decals_estimate_ms=\(fixed(report.gpuRenderDecalsEstimateMilliseconds))"),
+                      report.text)
+        // Weryfikacje wycinają liczby `sed`-em ze wzorcem `[0-9.]*`, więc wartość nie może być ujemna ani NaN.
+        for value in [report.gpuRenderClearEstimateMilliseconds, report.gpuRenderDecalsEstimateMilliseconds] {
+            XCTAssertTrue(value.isFinite && value >= 0, "\(value)")
+        }
+        // Dotychczasowa linia szacunku renderu zostaje i nie zlewa się z nowymi kluczami.
+        XCTAssertTrue(lines.contains { $0.hasPrefix("gpu_physics_p95_ms=") && $0.contains("; gpu_render_estimate_ms=") })
+    }
+
+    func testRenderSplitEstimatesAreDifferencesOfTheP95OfTheirSeries() async throws {
+        let run = try await observedRun()
+        func gpu(_ kind: PublicWorldStressFrameSample.Series) -> [Double] {
+            run.series(kind).filter { $0.index >= run.warmup }.map(\.gpuMilliseconds)
+        }
+        for kind in [PublicWorldStressFrameSample.Series.full, .physicsOnly, .clearOnly, .withoutDecals] {
+            XCTAssertEqual(gpu(kind).count, run.measured, "seria \(kind) ma zmierzone klatki")
+        }
+        XCTAssertEqual(run.report.gpuRenderClearEstimateMilliseconds,
+            clamped(p95(gpu(.clearOnly)) - p95(gpu(.physicsOnly))), accuracy: 1e-9,
+            "czyszczenie: pass z samym czyszczeniem minus fizyka")
+        XCTAssertEqual(run.report.gpuRenderDecalsEstimateMilliseconds,
+            clamped(p95(gpu(.full)) - p95(gpu(.withoutDecals))), accuracy: 1e-9,
+            "naklejki: pełny render minus render bez naklejek")
+    }
+
+    func testRenderSplitSeriesRunOnFreshWorldsWithTheSameStepsAndIdenticalPhysics() async throws {
+        let run = try await observedRun()
+        let total = run.warmup + run.measured
+        let full = run.series(.full), clear = run.series(.clearOnly), noDecals = run.series(.withoutDecals)
+        let physics = run.series(.physicsOnly)
+        XCTAssertEqual(clear.map(\.index), Array(0..<total), "ta sama rozgrzewka i te same indeksy kroków")
+        XCTAssertEqual(noDecals.map(\.index), Array(0..<total), "ta sama rozgrzewka i te same indeksy kroków")
+        XCTAssertTrue(clear.allSatisfy(\.renderEncoded), "pass z samym czyszczeniem jest kodowany w każdej klatce")
+        XCTAssertTrue(noDecals.allSatisfy(\.renderEncoded), "render bez naklejek jest kodowany w każdej klatce")
+        XCTAssertEqual(run.renderTargets, 1, "dodatkowe serie nie tworzą własnych celów renderu")
+        guard [clear.count, noDecals.count, physics.count, full.count].allSatisfy({ $0 == total }) else {
+            return XCTFail("każda seria ma \(total) klatek: \(clear.count), \(noDecals.count), \(physics.count), \(full.count)")
+        }
+        for index in 0..<total {
+            XCTAssertEqual(clear[index].frame.stepIndex, UInt64(index + 1), "świeży świat dochodzi do tego samego kroku")
+            XCTAssertEqual(noDecals[index].frame.stepIndex, UInt64(index + 1))
+            XCTAssertEqual(clear[index].frame.objects, full[index].frame.objects,
+                "fizyka serii czyszczenia jest identyczna w klatce \(index)")
+            XCTAssertEqual(noDecals[index].frame.objects, full[index].frame.objects,
+                "fizyka serii bez naklejek jest identyczna w klatce \(index)")
+            XCTAssertEqual(physics[index].frame.objects, full[index].frame.objects)
+        }
+    }
+
+    /// Podział renderu dotyczy sceny akceptacyjnej; pozostałe sceny nie płacą za dodatkowe serie.
+    func testOtherScenesDoNotRunTheRenderSplitSeriesAndDoNotPrintItsLines() async throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        var kinds: Set<Int> = []
+        let report = try await PublicWorldStressBenchmark.run(device: device, scene: .stress300,
+            frameObserver: { sample in
+                switch sample.series {
+                case .full: kinds.insert(0)
+                case .physicsOnly: kinds.insert(1)
+                case .clearOnly: kinds.insert(2)
+                case .withoutDecals: kinds.insert(3)
+                }
+            }, warmupFrames: 1, measuredFrames: 2, progress: { _, _ in })
+        XCTAssertEqual(kinds, [0, 1])
+        XCTAssertFalse(report.text.contains("gpu_render_clear_estimate_ms"), report.text)
+        XCTAssertFalse(report.text.contains("gpu_render_decals_estimate_ms"), report.text)
+    }
 }

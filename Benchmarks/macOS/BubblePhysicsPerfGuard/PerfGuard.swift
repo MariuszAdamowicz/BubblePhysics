@@ -349,6 +349,8 @@ enum PerfGuard {
         }
         lines.append(DevicePrediction.predictLine(scene: predictionScene,
             DevicePrediction.predict(calibration: calibration, mac: mac)))
+        lines.append(DevicePrediction.predictCPULine(scene: predictionScene,
+            DevicePrediction.predict(calibration: calibration, mac: mac)))
         guard let path = options.checkPredictionReportPath else { return (lines, nil) }
         let check = try DevicePrediction.checkPrediction(report: String(contentsOfFile: path, encoding: .utf8),
             calibration: calibration, mac: mac)

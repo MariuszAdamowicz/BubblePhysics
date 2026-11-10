@@ -31,6 +31,10 @@ public final class BubblePhysicsMetalRender {
     private static let ringGeometryCacheLimit = 256
     /// Liczba wywołań rysowania w ostatnio zakodowanej klatce (jedno na ciąg); szew testów grupowania.
     package private(set) var lastDrawCallCount = 0
+    /// Liczba przydzielonych dotąd buforów areny (szew testów puli: kolejne klatki nie przydzielają nowych).
+    package private(set) var arenaAllocationCount = 0
+    /// Liczba wolnych buforów areny w puli.
+    package var arenaPoolCount: Int { 0 }
     /// Zakres bufora pomocniczego klatki jest wyrównany, bo `setVertexBuffer` wymaga wyrównanego przesunięcia.
     private static let arenaAlignment = 256
 
@@ -321,6 +325,7 @@ public final class BubblePhysicsMetalRender {
         guard let buffer = device.makeBuffer(length: length, options: .storageModeShared) else {
             throw BubblePhysicsMetalRenderError.bufferAllocationFailed
         }
+        arenaAllocationCount += 1
         func copy<T>(_ values: [T], to offset: Int) {
             values.withUnsafeBytes { bytes in
                 guard let base = bytes.baseAddress else { return }

@@ -62,10 +62,20 @@ struct DeviceCalibration: Codable, Equatable {
     }
 }
 
+/// Składowe CPU prognozy w milisekundach (przygotowanie, kodowanie, publikacja i oczekiwanie ponad GPU).
+struct CPUComponents: Equatable {
+    var preparationMilliseconds: Double
+    var encodingMilliseconds: Double
+    var publicationMilliseconds: Double
+    var waitingMilliseconds: Double
+}
+
 /// Prognoza p95 klatki iPhone'a X ze składowych Maca.
 struct PredictedFrame: Equatable {
     var p95Milliseconds: Double
     var cpuMilliseconds: Double
+    var cpuComponents = CPUComponents(preparationMilliseconds: 0, encodingMilliseconds: 0, publicationMilliseconds: 0,
+                                      waitingMilliseconds: 0)
     var physicsMilliseconds: Double
     var renderMilliseconds: Double
 }
@@ -202,4 +212,7 @@ enum DevicePrediction {
     static func predictLine(scene: String, _ prediction: PredictedFrame) -> String {
         "PREDICT iphone-x \(scene): p95=\(format(prediction.p95Milliseconds)) cpu=\(format(prediction.cpuMilliseconds)) physics=\(format(prediction.physicsMilliseconds)) render=\(format(prediction.renderMilliseconds)) target=\(String(format: "%.2f", targetMilliseconds)) gate=\(String(format: "%.2f", gateMilliseconds))"
     }
+
+    /// Linia `PREDICT_CPU` strażnika.
+    static func predictCPULine(scene: String, _ prediction: PredictedFrame) -> String { "" }
 }
