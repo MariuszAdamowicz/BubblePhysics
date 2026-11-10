@@ -134,9 +134,9 @@ enum DevicePrediction {
                 gpuMilliseconds: parsed["gpu_p95_ms"]!, gpuPhysicsMilliseconds: parsed["gpu_physics_p95_ms"]!))
     }
 
-    /// Commit z nagłówka raportu: `Mierzony kod: `<sha>``.
+    /// Commit z nagłówka raportu: `Mierzony kod: `<sha>`` albo `Mierzony commit: `<sha>`` (tak pisze go właściciel).
     private static func commit(in report: String) -> String? {
-        guard let marker = report.range(of: "Mierzony kod: `") else { return nil }
+        guard let marker = report.range(of: "Mierzony kod: `") ?? report.range(of: "Mierzony commit: `") else { return nil }
         let sha = report[marker.upperBound...].prefix { $0.isHexDigit }
         return sha.isEmpty ? nil : String(sha)
     }

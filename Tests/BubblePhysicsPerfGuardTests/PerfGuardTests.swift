@@ -269,6 +269,13 @@ final class PerfGuardTests: XCTestCase {
         XCTAssertNil(try DevicePrediction.parse(report: report(commit: nil)).commit)
     }
 
+    func testParserReadsTheCommitFromTheHeaderTheOwnerWritesWithTheWordCommit() throws {
+        // Raport kalibracyjny właściciela ma nagłówek „Mierzony commit:", nie „Mierzony kod:".
+        let owner = report(commit: nil).replacingOccurrences(of: "```text",
+            with: "- Mierzony commit: `4adf6122cd83e37b9f506ea167eca64c993d39a6` (`feature/engine-foundations`).\n\n```text")
+        XCTAssertEqual(try DevicePrediction.parse(report: owner).commit, "4adf6122cd83e37b9f506ea167eca64c993d39a6")
+    }
+
     func testParserTellsApartGPUP95FromFramePercentileLines() throws {
         // `gpu_p95_ms=` kończy się tak samo jak `p95_ms=`; klucze muszą pasować w całości.
         let parsed = try DevicePrediction.parse(report: report())
