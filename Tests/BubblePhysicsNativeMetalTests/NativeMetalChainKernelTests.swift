@@ -281,4 +281,77 @@ final class NativeMetalChainKernelTests: XCTestCase {
             }
         }
     }
+
+    // MARK: skan prefiksowy (zadanie 94)
+
+    private struct ScanResult: Equatable {
+        var offsets: [UInt32]
+        var header: [UInt32]
+        var overflow: UInt32
+    }
+
+    private func scan(device: MTLDevice, singleGroup: Bool, mode: UInt32, length: Int, capacity: Int, limit: UInt32,
+                      seed: UInt64) throws -> (ScanResult, Int) {
+        let pipelines = try NativeMetalPipelineCache.pipelines(for: device).stages
+        var generator = Generator(state: seed)
+        let stride = MemoryLayout<SIMD4<UInt32>>.stride
+        var sums: [MTLBuffer] = [], offsets: [MTLBuffer] = []
+        var blockCount = capacity
+        repeat {
+            blockCount = (blockCount + 255) / 256
+            sums.append(try XCTUnwrap(device.makeBuffer(length: blockCount * stride, options: .storageModeShared)))
+            offsets.append(try XCTUnwrap(device.makeBuffer(length: blockCount * stride, options: .storageModeShared)))
+        } while blockCount > 1
+        let values = try makeBuffer((0..<capacity).map { _ in
+            SIMD4<UInt32>(generator.next() % 3, generator.next() % 2, generator.next() % 5, 1)
+        }, device: device)
+        let output = try makeBuffer([SIMD4<UInt32>](repeating: SIMD4(77, 77, 77, 77), count: capacity), device: device)
+        // Długość skanu: mode 0 liczy dwa liczniki na bańkę, mode 1 kandydatów, mode 2 stary cache plus aktywne.
+        let bubbleCount = UInt32(mode == 0 ? length / 2 : 4)
+        let control = try makeBuffer([NativeMetalControl(counts: SIMD4(bubbleCount, 4, 0, 0), physics: .zero, contactDamping: .zero)],
+                                     device: device)
+        let contacts = try makeBuffer([NativeMetalContactControl(
+            limits: SIMD4(0, 0, limit, UInt32(mode == 2 ? length / 2 : 0)),
+            counts: SIMD4(UInt32(mode == 1 ? length : 0), UInt32(mode == 2 ? length - length / 2 : 0), 0, 0),
+            cache: .zero, thresholds: .zero, cellWidth: .zero)], device: device)
+        let indirect = try XCTUnwrap(device.makeBuffer(length: (5 + sums.count * 2) * stride, options: .storageModeShared))
+        let overflow = try makeBuffer([UInt32](repeating: 0, count: 4), device: device)
+        let buffers = NativeMetalScanBuffers(values: values, offsets: output, blockSums: sums, blockOffsets: offsets,
+                                             control: control, contacts: contacts, indirectArguments: indirect, overflow: overflow)
+        let dispatches = try run(device: device) { encoder in
+            encoder.setComputePipelineState(pipelines["nativePrepareIndirectArguments"]!)
+            for (index, buffer) in [control, contacts, indirect].enumerated() { encoder.setBuffer(buffer, offset: 0, index: index) }
+            var levels = UInt32(sums.count)
+            encoder.setBytes(&levels, length: MemoryLayout<UInt32>.stride, index: 3)
+            encoder.dispatchThreads(.init(width: 1, height: 1, depth: 1), threadsPerThreadgroup: .init(width: 1, height: 1, depth: 1))
+            return NativeMetalScan.encode(encoder, pipelines: pipelines, buffers: buffers, mode: mode,
+                                          maximum: mode == 0 ? max(1, length) : capacity, singleGroup: singleGroup)
+        }
+        let words = UnsafeBufferPointer(start: output.contents().bindMemory(to: UInt32.self, capacity: capacity * 4), count: capacity * 4)
+        let header = UnsafeBufferPointer(start: contacts.contents().bindMemory(to: UInt32.self, capacity: 20), count: 20)
+        return (ScanResult(offsets: Array(words), header: Array(header), overflow: overflow.contents().load(as: UInt32.self)),
+                dispatches)
+    }
+
+    func testSingleGroupScanIsBitIdenticalToTheBlockScan() throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        for mode in [UInt32(0), 1, 2] {
+            for length in [2, 16, 255, 256, 257, 511, 512, 513, 1500, 5000] {
+                // Limit poniżej sumy wymusza przepełnienie licznika, limit powyżej go nie ma.
+                for limit in [UInt32(100_000), 40] {
+                    let seed = UInt64(length) &* 17 &+ UInt64(mode) &* 5 &+ UInt64(limit)
+                    let blocks = try scan(device: device, singleGroup: false, mode: mode, length: length,
+                                          capacity: 6000, limit: limit, seed: seed)
+                    let single = try scan(device: device, singleGroup: true, mode: mode, length: length,
+                                          capacity: 6000, limit: limit, seed: seed)
+                    XCTAssertEqual(single.1, 1)
+                    XCTAssertGreaterThan(blocks.1, 1)
+                    XCTAssertEqual(single.0, blocks.0, "mode \(mode) length \(length) limit \(limit)")
+                    if limit == 40, length >= 255, mode != 1 { XCTAssertGreaterThan(blocks.0.overflow, 0, "oczekiwano przepełnienia") }
+                    // Skan nie jest kopią wejścia, a wpisy poza długością zostają nietknięte.
+                    XCTAssertEqual(Array(blocks.0.offsets[(length * 4)..<(length * 4 + 4)]), [77, 77, 77, 77])
+                }
+            }
+        }
+    }
 }

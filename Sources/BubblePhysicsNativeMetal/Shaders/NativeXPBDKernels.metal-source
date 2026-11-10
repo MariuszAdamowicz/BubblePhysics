@@ -113,6 +113,48 @@ kernel void nativeFinishScan(device uint4 *offsets [[buffer(0)]], constant Nativ
     }
 }
 
+// Skan prefiksowy jednej grupy: porcje szerokości grupy, suma z poprzednich porcji dodawana do każdej. Wynik i nagłówek
+// (licznik kandydatów, aktywnych kontaktów albo cache'u) są takie same jak z nativeScanBlocks, nativeAddScanBlockOffsets
+// i nativeFinishScan, a odczyt z `input` i zapis do `output` dotyczą tylko zakresu o długości z nativeScanLength.
+kernel void nativeScanSingleGroup(device uint4 *input [[buffer(0)]], device uint4 *output [[buffer(1)]],
+    constant NativeControl &control [[buffer(2)]], device NativeContactControl &contacts [[buffer(3)]],
+    constant uint2 &parameters [[buffer(4)]], device atomic_uint *overflow [[buffer(5)]],
+    threadgroup uint4 *scratch [[threadgroup(0)]],
+    uint local [[thread_position_in_threadgroup]], uint width [[threads_per_threadgroup]]) {
+    uint length = nativeScanLength(control, contacts, uint2(parameters.x, 0));
+    uint4 carry = uint4(0);
+    for (uint base = 0; base < length; base += width) {
+        uint index = base + local;
+        threadgroup uint4 *source = scratch;
+        threadgroup uint4 *target = scratch + width;
+        source[local] = index < length ? input[index] : uint4(0);
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint distance = 1; distance < width; distance *= 2) {
+            uint4 value = source[local];
+            if (local >= distance) value += source[local - distance];
+            target[local] = value;
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+            threadgroup uint4 *swapped = source; source = target; target = swapped;
+        }
+        if (index < length) output[index] = source[local] + carry;
+        carry += source[min(width, length - base) - 1];
+        // Następna porcja nadpisuje pamięć grupy dopiero po odczycie sumy porcji przez wszystkie wątki.
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if (local != 0) return;
+    uint4 total = carry;
+    if (parameters.x == 0) {
+        contacts.counts.x = min(total.x, contacts.limits.z);
+        if (total.x > contacts.limits.z)
+            atomic_fetch_add_explicit(overflow, total.x - contacts.limits.z, memory_order_relaxed);
+    } else if (parameters.x == 1) contacts.counts.y = total.x;
+    else {
+        contacts.counts.z = min(total.x, contacts.limits.z); contacts.cache.xy = total.yz;
+        if (total.x > contacts.limits.z)
+            atomic_fetch_add_explicit(overflow, total.x - contacts.limits.z, memory_order_relaxed);
+    }
+}
+
 kernel void nativePrepareContactFlags(device NativeContactCache *contacts [[buffer(0)]],
     device NativeContactControl &control [[buffer(1)]], device uint4 *flags [[buffer(2)]],
     uint index [[thread_position_in_grid]]) {

@@ -647,57 +647,12 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
             encoder.dispatchThreadgroups(indirectBuffer: state.indirectArguments, indirectBufferOffset: argument * 16,
                 threadsPerThreadgroup: .init(width: 32, height: 1, depth: 1))
         }
-        // Trzystopniowy skan blokowy (dla obecnej pojemności): każdy blok ma 256 work-itemów.
-        // Rekurencja skanuje sumy bloków, a osobne dispatchy dodają offsety rodziców.
+        let scanBuffers = NativeMetalScanBuffers(values: state.scanValues, offsets: state.scanOffsets,
+            blockSums: state.scanBlockSums, blockOffsets: state.scanBlockOffsets, control: state.control,
+            contacts: state.contactControl, indirectArguments: state.indirectArguments, overflow: state.candidateOverflow)
         func scan(mode: UInt32, maximum: Int) {
-            var lengths = [maximum]
-            while lengths.last! > 256 { lengths.append((lengths.last! + 255) / 256) }
-            for level in lengths.indices {
-                encoder.memoryBarrier(scope: .buffers)
-                encoder.setComputePipelineState(pipelines["nativeScanBlocks"]!)
-                let input = level == 0 ? state.scanValues : state.scanBlockSums[level - 1]
-                let output = level == 0 ? state.scanOffsets : state.scanBlockOffsets[level - 1]
-                for (i, b) in [input, output, state.scanBlockSums[level], state.control, state.contactControl].enumerated() {
-                    encoder.setBuffer(b, offset: 0, index: i)
-                }
-                var parameters = SIMD2(mode, UInt32(level))
-                encoder.setBytes(&parameters, length: MemoryLayout<SIMD2<UInt32>>.stride, index: 5)
-                if mode == 0 {
-                    encoder.dispatchThreadgroups(.init(width: (lengths[level] + 255) / 256, height: 1, depth: 1),
-                        threadsPerThreadgroup: .init(width: 256, height: 1, depth: 1))
-                } else {
-                    encoder.dispatchThreadgroups(indirectBuffer: state.indirectArguments,
-                        indirectBufferOffset: (5 + (Int(mode) - 1) * state.scanBlockSums.count + level) * 16,
-                        threadsPerThreadgroup: .init(width: 256, height: 1, depth: 1))
-                }
-            }
-            if lengths.count > 1 {
-                for level in (0..<(lengths.count - 1)).reversed() {
-                    encoder.memoryBarrier(scope: .buffers)
-                    encoder.setComputePipelineState(pipelines["nativeAddScanBlockOffsets"]!)
-                    let output = level == 0 ? state.scanOffsets : state.scanBlockOffsets[level - 1]
-                    for (i, b) in [output, state.scanBlockOffsets[level], state.control, state.contactControl].enumerated() {
-                        encoder.setBuffer(b, offset: 0, index: i)
-                    }
-                    var parameters = SIMD2(mode, UInt32(level))
-                    encoder.setBytes(&parameters, length: MemoryLayout<SIMD2<UInt32>>.stride, index: 4)
-                    if mode == 0 {
-                        encoder.dispatchThreads(.init(width: lengths[level], height: 1, depth: 1),
-                            threadsPerThreadgroup: .init(width: 256, height: 1, depth: 1))
-                    } else {
-                        encoder.dispatchThreadgroups(indirectBuffer: state.indirectArguments,
-                            indirectBufferOffset: (5 + (Int(mode) - 1) * state.scanBlockSums.count + level) * 16,
-                            threadsPerThreadgroup: .init(width: 256, height: 1, depth: 1))
-                    }
-                }
-            }
-            encoder.memoryBarrier(scope: .buffers)
-            encoder.setComputePipelineState(pipelines["nativeFinishScan"]!)
-            for (i, b) in [state.scanOffsets, state.control, state.contactControl].enumerated() { encoder.setBuffer(b, offset: 0, index: i) }
-            var parameters = SIMD2(mode, UInt32(0))
-            encoder.setBytes(&parameters, length: MemoryLayout<SIMD2<UInt32>>.stride, index: 3)
-            encoder.setBuffer(state.candidateOverflow, offset: 0, index: 4)
-            encoder.dispatchThreads(.init(width: 1, height: 1, depth: 1), threadsPerThreadgroup: .init(width: 1, height: 1, depth: 1))
+            NativeMetalScan.encode(encoder, pipelines: pipelines, buffers: scanBuffers, mode: mode, maximum: maximum,
+                                   singleGroup: true)
         }
         if hasRigidBodies {
             dispatch("nativeRigidPredict", buffers: [rigidState.bodies, rigidState.vertices, rigidState.control,
@@ -1285,7 +1240,7 @@ enum NativeMetalPipelineCache {
         "nativePrepareCandidateCounts", "nativeCompactCandidates", "nativeBuildContacts",
         "nativePrepareContactFlags", "nativeCompactActiveContacts", "nativeMatchContactCache",
         "nativeRetainContactCache", "nativeCompactContactCache", "nativeScanBlocks", "nativePrepareIndirectArguments",
-        "nativeAddScanBlockOffsets", "nativeFinishScan", "nativeClearAdjacency", "nativeEmitAdjacency", "nativeBuildAdjacency",
+        "nativeAddScanBlockOffsets", "nativeFinishScan", "nativeScanSingleGroup", "nativeClearAdjacency", "nativeEmitAdjacency", "nativeBuildAdjacency",
         "nativePrepareSolverContacts", "nativeApplyWarmStart", "nativeUpdateContactMultipliers",
         "nativeSolveJacobi", "nativeMeasureResidual", "nativeReduceSolverResidual",
         "nativeCapturePositions",

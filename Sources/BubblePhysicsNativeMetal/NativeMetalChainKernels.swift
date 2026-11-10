@@ -156,3 +156,99 @@ enum NativeMetalRenderPreparation {
         return 1
     }
 }
+
+/// Skan prefiksowy wartości `uint4` (liczniki kandydatów, kontaktów i cache'u). Dawny skan blokowy to osobny dispatch na
+/// poziom, dispatchy dodające sumy bloków i dispatch kończący; skan jednej grupy robi to w jednym dispatchu, w porcjach
+/// szerokości grupy z przeniesioną sumą. Sumy całkowite nie zależą od kolejności, więc wynik jest ten sam bit w bit.
+struct NativeMetalScanBuffers {
+    let values: MTLBuffer
+    let offsets: MTLBuffer
+    let blockSums: [MTLBuffer]
+    let blockOffsets: [MTLBuffer]
+    let control: MTLBuffer
+    let contacts: MTLBuffer
+    let indirectArguments: MTLBuffer
+    let overflow: MTLBuffer
+}
+
+enum NativeMetalScan {
+    static let singleGroupWidth = 512
+
+    /// `mode` 0 skanuje liczniki kandydatów po bańkach (`maximum` to ich liczba), 1 aktywne kontakty, 2 scalony cache.
+    /// Zwraca liczbę zakodowanych dispatchy.
+    @discardableResult
+    static func encode(_ encoder: MTLComputeCommandEncoder, pipelines: [String: MTLComputePipelineState],
+                       buffers: NativeMetalScanBuffers, mode: UInt32, maximum: Int, singleGroup: Bool) -> Int {
+        if singleGroup {
+            let pipeline = pipelines["nativeScanSingleGroup"]!
+            let width = min(singleGroupWidth, pipeline.maxTotalThreadsPerThreadgroup)
+            encoder.memoryBarrier(scope: .buffers)
+            encoder.setComputePipelineState(pipeline)
+            for (index, buffer) in [buffers.values, buffers.offsets, buffers.control, buffers.contacts].enumerated() {
+                encoder.setBuffer(buffer, offset: 0, index: index)
+            }
+            var parameters = SIMD2(mode, UInt32(0))
+            encoder.setBytes(&parameters, length: MemoryLayout<SIMD2<UInt32>>.stride, index: 4)
+            encoder.setBuffer(buffers.overflow, offset: 0, index: 5)
+            encoder.setThreadgroupMemoryLength(2 * width * MemoryLayout<SIMD4<UInt32>>.stride, index: 0)
+            encoder.dispatchThreadgroups(.init(width: 1, height: 1, depth: 1),
+                                         threadsPerThreadgroup: .init(width: width, height: 1, depth: 1))
+            return 1
+        }
+        // Trzystopniowy skan blokowy (dla obecnej pojemności): każdy blok ma 256 work-itemów.
+        // Rekurencja skanuje sumy bloków, a osobne dispatchy dodają offsety rodziców.
+        var dispatches = 0
+        var lengths = [maximum]
+        while lengths.last! > 256 { lengths.append((lengths.last! + 255) / 256) }
+        let levelCount = buffers.blockSums.count
+        for level in lengths.indices {
+            encoder.memoryBarrier(scope: .buffers)
+            encoder.setComputePipelineState(pipelines["nativeScanBlocks"]!)
+            let input = level == 0 ? buffers.values : buffers.blockSums[level - 1]
+            let output = level == 0 ? buffers.offsets : buffers.blockOffsets[level - 1]
+            for (i, b) in [input, output, buffers.blockSums[level], buffers.control, buffers.contacts].enumerated() {
+                encoder.setBuffer(b, offset: 0, index: i)
+            }
+            var parameters = SIMD2(mode, UInt32(level))
+            encoder.setBytes(&parameters, length: MemoryLayout<SIMD2<UInt32>>.stride, index: 5)
+            if mode == 0 {
+                encoder.dispatchThreadgroups(.init(width: (lengths[level] + 255) / 256, height: 1, depth: 1),
+                    threadsPerThreadgroup: .init(width: 256, height: 1, depth: 1))
+            } else {
+                encoder.dispatchThreadgroups(indirectBuffer: buffers.indirectArguments,
+                    indirectBufferOffset: (5 + (Int(mode) - 1) * levelCount + level) * 16,
+                    threadsPerThreadgroup: .init(width: 256, height: 1, depth: 1))
+            }
+            dispatches += 1
+        }
+        if lengths.count > 1 {
+            for level in (0..<(lengths.count - 1)).reversed() {
+                encoder.memoryBarrier(scope: .buffers)
+                encoder.setComputePipelineState(pipelines["nativeAddScanBlockOffsets"]!)
+                let output = level == 0 ? buffers.offsets : buffers.blockOffsets[level - 1]
+                for (i, b) in [output, buffers.blockOffsets[level], buffers.control, buffers.contacts].enumerated() {
+                    encoder.setBuffer(b, offset: 0, index: i)
+                }
+                var parameters = SIMD2(mode, UInt32(level))
+                encoder.setBytes(&parameters, length: MemoryLayout<SIMD2<UInt32>>.stride, index: 4)
+                if mode == 0 {
+                    encoder.dispatchThreads(.init(width: lengths[level], height: 1, depth: 1),
+                        threadsPerThreadgroup: .init(width: 256, height: 1, depth: 1))
+                } else {
+                    encoder.dispatchThreadgroups(indirectBuffer: buffers.indirectArguments,
+                        indirectBufferOffset: (5 + (Int(mode) - 1) * levelCount + level) * 16,
+                        threadsPerThreadgroup: .init(width: 256, height: 1, depth: 1))
+                }
+                dispatches += 1
+            }
+        }
+        encoder.memoryBarrier(scope: .buffers)
+        encoder.setComputePipelineState(pipelines["nativeFinishScan"]!)
+        for (i, b) in [buffers.offsets, buffers.control, buffers.contacts].enumerated() { encoder.setBuffer(b, offset: 0, index: i) }
+        var parameters = SIMD2(mode, UInt32(0))
+        encoder.setBytes(&parameters, length: MemoryLayout<SIMD2<UInt32>>.stride, index: 3)
+        encoder.setBuffer(buffers.overflow, offset: 0, index: 4)
+        encoder.dispatchThreads(.init(width: 1, height: 1, depth: 1), threadsPerThreadgroup: .init(width: 1, height: 1, depth: 1))
+        return dispatches + 1
+    }
+}
