@@ -89,6 +89,22 @@ final class AcceptanceSceneTests: XCTestCase {
         XCTAssertEqual(standard.height, 700, "region sceny akceptacyjnej ma 700 jednostek wysokości")
     }
 
+    /// Bez ekranu startowego iPhone X uruchamia aplikację w trybie zgodności 320 × 480 pt, a `UIScreen.main.nativeBounds`
+    /// zwraca wtedy 960 × 1440 zamiast 1125 × 2436 (pomiar 2026-11-10). Aplikacja benchmarku musi więc generować ekran startowy.
+    func testBenchmarkAppGeneratesALaunchScreenSoThatNativeBoundsIsTheFullDeviceScreen() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let project = root.appendingPathComponent("Benchmarks/iOS/BubblePhysicsBench")
+        let spec = try String(contentsOf: project.appendingPathComponent("project.yml"), encoding: .utf8)
+        XCTAssertTrue(spec.contains("INFOPLIST_KEY_UILaunchScreen_Generation: YES"), "project.yml")
+        let pbxproj = try String(contentsOf: project.appendingPathComponent(
+            "BubblePhysicsBench.xcodeproj/project.pbxproj"), encoding: .utf8)
+        let configurations = pbxproj.components(separatedBy: "GENERATE_INFOPLIST_FILE = YES;").count - 1
+        let launchScreens = pbxproj.components(separatedBy: "INFOPLIST_KEY_UILaunchScreen_Generation = YES;").count - 1
+        XCTAssertEqual(configurations, 2, "Debug i Release")
+        XCTAssertEqual(launchScreens, configurations, "każda konfiguracja generuje ekran startowy")
+    }
+
     func testInvalidRenderSizeThrowsADedicatedErrorInsteadOfTrapping() async throws {
         let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
         let invalid: [CGSize] = [
