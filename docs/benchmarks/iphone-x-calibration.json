@@ -1,0 +1,26 @@
+{
+  "commit" : "4adf6122cd83e37b9f506ea167eca64c993d39a6",
+  "iphone" : {
+    "gpuMilliseconds" : 15.0523,
+    "gpuPhysicsMilliseconds" : 8.633,
+    "hostEncodingMilliseconds" : 1.9975,
+    "hostNonGPUMilliseconds" : 9.7247,
+    "hostPreparationMilliseconds" : 1.6347,
+    "hostPublicationMilliseconds" : 5.0364,
+    "hostWaitingMilliseconds" : 16.1812
+  },
+  "iphoneRenderMilliseconds" : 6.419300000000002,
+  "mac" : {
+    "gpuMilliseconds" : 1.8988750234711915,
+    "gpuPhysicsMilliseconds" : 1.6351666417904198,
+    "hostEncodingMilliseconds" : 0.549833,
+    "hostNonGPUMilliseconds" : 2.476250335885778,
+    "hostPreparationMilliseconds" : 0.426583,
+    "hostPublicationMilliseconds" : 0.997875,
+    "hostWaitingMilliseconds" : 2.240833
+  },
+  "ratios" : {
+    "cpu" : 3.9271877560478488,
+    "physics" : 5.279584220570527
+  }
+}
