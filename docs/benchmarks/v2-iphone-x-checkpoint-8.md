@@ -26,4 +26,11 @@ p95_gate_ms=16.6700; p95_gate=fail
 
 P95 pełnej klatki przekracza próg o 5,0725 ms; bramka wydajności nie jest spełniona. Nie odnotowano błędnych klatek, wartości non-finite, fallbacków, odczytów konturów na CPU ani przepełnień kandydatów; maksimum 32 kandydatów mieści się w połowie limitu 128. Harness nie ocenił `native_quality_envelope`.
 
-Weryfikacja prognozy na Macu (`--check-prediction`) pozostaje do wykonania zgodnie z zadaniem 89 planu.
+Weryfikacja prognozy na Macu (`swift run -c release BubblePhysicsPerfGuard --scene acceptance --check-prediction docs/benchmarks/v2-iphone-x-checkpoint-8.md`, ten sam kod co mierzony commit; zmiany po nim dotyczą tylko dokumentacji), wynik na bezczynnej maszynie:
+
+```text
+PREDICT iphone-x acceptance: p95=19.8663 cpu=4.8947 physics=8.5523 render=6.4193 target=15.00 gate=16.67
+PREDICTION_ERROR p95=21.7425 predicted=19.8663 error=-8.6% limit=10.0% PASS
+```
+
+Błąd prognozy -8,6% mieści się w limicie 10%, więc kalibracja nie wymaga powtórzenia. Prognoza (19,87 ms) jest niższa od pomiaru (21,74 ms) i nadal powyżej bramki 16,67 ms.
