@@ -1385,6 +1385,17 @@ Każde `verify` uruchamia się z katalogu głównego repozytorium. Pomiary stra�
 
 89. (właściciel: iPhone X) Punkt kontrolny: build Release z commitu po zadaniu 88, raport w `docs/benchmarks/v2-iphone-x-checkpoint-8.md` z commitem w nagłówku; agent na tym samym commicie uruchamia `--check-prediction`, dopisuje linię `PREDICTION_ERROR` pod raportem i wynik w sekcji benchmarku w README; błąd > 10% to wiersz w Implementation deviations, a etap 9 zaczyna od ponownej kalibracji, covering [P-B-83](#p-b-83) · verify: `{ swift run -c release BubblePhysicsPerfGuard --scene acceptance --check-prediction docs/benchmarks/v2-iphone-x-checkpoint-8.md || true; } > .build/guard-check.txt && grep -q '^PREDICTION_ERROR' .build/guard-check.txt && grep -q '^PREDICTION_ERROR' docs/benchmarks/v2-iphone-x-checkpoint-8.md && grep -q 'v2-iphone-x-checkpoint-8.md' README.md`
 
+    ```text
+    $ { swift run -c release BubblePhysicsPerfGuard --scene acceptance --check-prediction docs/benchmarks/v2-iphone-x-checkpoint-8.md || true; } > .build/guard-check.txt && grep -q '^PREDICTION_ERROR' … && grep -q 'v2-iphone-x-checkpoint-8.md' README.md   # HEAD e842f5c (kod jak na mierzonym 2c22f84), load { 1,19 2,01 2,33 }
+    PASS acceptance: p95 3.0833 ms, punkt odniesienia 3.0080 ms, limit 3.3088 ms (+2.5%)
+    PREDICT iphone-x acceptance: p95=20.9592 cpu=4.9267 physics=9.6132 render=6.4193 target=15.00 gate=16.67
+    PREDICTION_ERROR p95=21.7425 predicted=20.9592 error=-3.6% limit=10.0% PASS
+    VERIFY_OK (wcześniejsze przebiegi w raporcie: −8,6%, −7,5%, −8,9%)
+    $ swift test   # Test command, HEAD e842f5c
+    Executed 1240 tests, with 1 test skipped and 0 failures (0 unexpected) in 427.656 (427.771) seconds
+    exit=0
+    ```
+
 ## Deviations from Design
 
 | ID | Type | Status | Design updated? | Note |
@@ -1613,3 +1624,5 @@ Każde `verify` uruchamia się z katalogu głównego repozytorium. Pomiary stra�
 | 112 | 8 | 87 | change | Zadanie 87 bez zmian kodu i bez commitu: cel składowej CPU prognozy ≤ 5,0 ms osiągnęły zadania 84–86 (`PREDICT cpu` 4,35–4,61 ms) | approved | 2026-11-10 |
 | 113 | 8 | 88 | change | Nowe punkty odniesienia strażnika (mediany z 5 przebiegów, f25ce0a): stress-300 3,3516 → 2,3449 ms, mixed 4,9506 → 4,4348 ms, decals 4,3001 → 2,5761 ms, acceptance 4,1286 → 3,0080 ms; w `perf-guard.json` zmieniono też `note` i `recordedAt` wszystkich czterech scen. Jeden z 5 przebiegów dał `cpu` 5,33 ms (zostaje w `runs`, mediana go pomija). Średnia 15-minutowa obciążenia przy pomiarach 1,9–2,4, czyli momentami ponad próg ≤ 2 z planu (1-minutowa 0,6–1,4). Polecenie diffu API wymaga `2>&1` przed `cmp`, bo `swift-api-digester -diagnose-sdk` pisze na stderr; treść pliku bez zmian | approved | 2026-11-10 |
 | 114 | 8 | 83–88 | change | Poprawki wymuszone przeglądem końcowym (3a97c1f): `candidateKeys` zwraca `[]` poza oknem publikacji, asercja podzbioru przed pominięciem `RegionPolicy.remove`, `NativePublicObject.adopt` jako `fileprivate`, `NativeJointStateEmptyTests` przeniesiony do `BubblePhysicsNativeMetalTests`, test „błąd od najmniejszego ID” powtórzony na 48 zbiorach ID (sprawdzony mutacją „pierwszy błąd w kolejności słownika”, która go łamie) | approved | 2026-11-10 |
+| 115 | 8 | 89 | gap | Punkt kontrolny iPhone'a X (raport z 2c22f84): łączny błąd prognozy mieści się w limicie (−3,6…−8,9% w czterech przebiegach na Macu), ale składowa CPU rozjeżdża się o −30,6%: prognoza 4,89 ms, urządzenie `host_non_gpu_p95_ms` 7,05 ms; fizyka GPU +1,0%, render +1,4%. Rzeczywisty stosunek CPU iPhone/Mac to ok. 5,66 zamiast skalibrowanych 3,93, więc cel CPU ≤ 5,0 ms jest spełniony w prognozie, a na urządzeniu CPU spadło z 9,72 do 7,05 ms (−27%). Przy CPU 7,05 ms do bramki 16,67 ms brakuje ok. 5,07 ms, czyli GPU musiałoby spaść z 14,80 do ok. 9,6 ms — punkt „Etap 8” pod tabelą Slice Status zakłada 3,1 ms do bramki i 4,8 ms do celu. Plan nie wymaga ponownej kalibracji (błąd łączny ≤ 10%); czy etap 9 zaczyna od ponownej kalibracji samego współczynnika CPU, decyduje właściciel (7502742, e842f5c) | pending | 2026-11-10 |
+| 116 | 8 | 89 | change | Zadanie 89 bez nowych testów: `--check-prediction` i jego testy powstały w zadaniu 81. Poprawki wymuszone przeglądem końcowym (e842f5c): tabela porównania składowych w `v2-iphone-x-checkpoint-8.md` i zwięzłe porównanie w README, wniosek „kalibracja zostaje” zastąpiony neutralnym (decyzja właściciela), obciążenie maszyny przy powtórzonym przebiegu i dodatkowe przebiegi dopisane obok pierwotnego (pierwotnego obciążenia nie zapisano), README nazywa mierzony commit 2c22f84 | pending | 2026-11-10 |
