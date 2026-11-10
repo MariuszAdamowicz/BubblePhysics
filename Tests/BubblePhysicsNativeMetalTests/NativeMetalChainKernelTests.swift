@@ -2,7 +2,12 @@ import XCTest
 import Metal
 @testable import BubblePhysicsNativeMetal
 
-/// Kernele skrócone w etapie 9 (zadanie 93) dają ten sam wynik co dawna sieć dispatchy, bit w bit.
+/// Filtr obustronny z shaderów (`nativeFilterAccepts`) po stronie CPU, dla odniesień w testach.
+private enum NativeMetalFilterReference {
+    static func accepts(_ a: SIMD4<UInt32>, _ b: SIMD4<UInt32>) -> Bool { (a.x & b.y) != 0 && (b.x & a.y) != 0 }
+}
+
+/// Kernele skrócone w etapie 9 (zadania 93, 94) dają ten sam wynik co dawne dispatche, bit w bit.
 @MainActor
 final class NativeMetalChainKernelTests: XCTestCase {
     private struct Generator {
@@ -455,5 +460,111 @@ final class NativeMetalChainKernelTests: XCTestCase {
             }
         }
         XCTAssertGreaterThan(moved, 0, "żaden przebieg nie poprawił pozycji")
+    }
+
+    // MARK: kandydaci kontaktu baniek (zadanie 94)
+
+    private struct CandidateKey: Comparable, Equatable {
+        var kind: UInt32
+        var first: Int64
+        var second: Int64
+        var other: UInt32
+        static func < (a: CandidateKey, b: CandidateKey) -> Bool {
+            (a.kind, a.first, a.second) < (b.kind, b.first, b.second)
+        }
+    }
+
+    /// Wiersz kandydatów to `limit` najmniejszych kluczy (rodzaj, ID, ID) z pełnego zbioru, więc nie zależy od kolejności wyliczania.
+    func testBubbleCandidateRowsMatchTheCellNeighbourhoodReference() throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let pipelines = try NativeMetalPipelineCache.pipelines(for: device).stages
+        for (bubbleCount, limit, spread) in [(1, 8, Float(4)), (60, 8, 12), (200, 64, 30), (200, 6, 14), (301, 32, 20)] {
+            var generator = Generator(state: UInt64(bubbleCount * 131 + limit))
+            let cellWidth: Float = 2
+            let slack: Float = 0.05
+            var bubbles: [NativeMetalBubble] = (0..<bubbleCount).map { index in
+                var bubble = NativeMetalBubble(NativeSolverBubble(id: NativeSolverBubbleID(rawValue: 100 + (index * 7919) % 100_003),
+                    center: .zero, mass: 1, targetRadius: 0.2 + generator.unit() * 0.7))
+                bubble.position = SIMD4(generator.unit() * spread - spread / 2, generator.unit() * spread - spread / 2, 0, 0)
+                if index % 9 == 4 { bubble.filter = SIMD4(1, 0, 0, NativeMetalFilter.encodeLayer(0)) }
+                return bubble
+            }
+            // Identyfikatory rosną z indeksem, jak w solverze (świat wejściowy trzyma porządek ID).
+            bubbles.sort { $0.identity.x < $1.identity.x }
+            let segments: [NativeMetalSegment] = (0..<5).map { index in
+                var segment = NativeMetalSegment(NativeSolverSegment(id: index + 1,
+                    previousA: .zero, previousB: .zero,
+                    currentA: SIMD2(generator.unit() * spread - spread / 2, generator.unit() * spread - spread / 2),
+                    currentB: SIMD2(generator.unit() * spread - spread / 2, generator.unit() * spread - spread / 2)))
+                segment.flags = SIMD4(0, 0, 1, 0)
+                return segment
+            }
+            func cell(_ bubble: NativeMetalBubble) -> SIMD2<Int64> {
+                SIMD2(Int64((bubble.position.x / cellWidth).rounded(.down)), Int64((bubble.position.y / cellWidth).rounded(.down)))
+            }
+            let grid: [NativeMetalGridEntry] = bubbles.indices.map {
+                NativeMetalGridEntry(cell: cell(bubbles[$0]), metadata: SIMD4(UInt32($0), 1, 0, 0))
+            }.sorted { ($0.cell.x, $0.cell.y, $0.metadata.x) < ($1.cell.x, $1.cell.y, $1.metadata.x) }
+            let rowCapacity = bubbleCount * limit
+            let rows = try makeBuffer([UInt32](repeating: 0xDEAD_BEEF, count: rowCapacity * 8), device: device)
+            let rowCounts = try makeBuffer([UInt32](repeating: 0, count: bubbleCount * 2), device: device)
+            let overflow = try makeBuffer([UInt32](repeating: 0, count: 4), device: device)
+            let control = try makeBuffer([NativeMetalControl(counts: SIMD4(UInt32(bubbleCount), UInt32(segments.count), 0, 0),
+                physics: .zero, contactDamping: .zero)], device: device)
+            let contacts = try makeBuffer([NativeMetalContactControl(limits: .zero, counts: .zero,
+                cache: SIMD4(0, 0, 0, UInt32(limit)), thresholds: SIMD4(0, 0, 0, slack), cellWidth: SIMD4(cellWidth, 0, 0, 0))],
+                device: device)
+            let pipeline = pipelines["nativeEmitCandidates"]!
+            _ = try run(device: device) { encoder in
+                encoder.setComputePipelineState(pipeline)
+                let buffers: [MTLBuffer] = [try! makeBuffer(bubbles, device: device), control, contacts,
+                    try! makeBuffer(grid, device: device), try! makeBuffer(segments, device: device), rows, rowCounts, overflow,
+                    try! makeBuffer([SIMD4<UInt32>](repeating: .zero, count: bubbleCount), device: device),
+                    try! makeBuffer([UInt64(0)], device: device)]
+                for (index, buffer) in buffers.enumerated() { encoder.setBuffer(buffer, offset: 0, index: index) }
+                encoder.dispatchThreads(.init(width: bubbleCount, height: 1, depth: 1),
+                    threadsPerThreadgroup: .init(width: min(pipeline.threadExecutionWidth, bubbleCount), height: 1, depth: 1))
+                return 1
+            }
+            var expectedDropped = 0, expectedWidest = 0, nonEmptyRows = 0
+            let rowWords = rows.contents().bindMemory(to: UInt32.self, capacity: rowCapacity * 8)
+            let countWords = rowCounts.contents().bindMemory(to: UInt32.self, capacity: bubbleCount * 2)
+            for (index, a) in bubbles.enumerated() {
+                var keys: [CandidateKey] = []
+                for (j, b) in bubbles.enumerated() where j > index {
+                    let ca = cell(a), cb = cell(b)
+                    guard abs(ca.x - cb.x) <= 1, abs(ca.y - cb.y) <= 1 else { continue }
+                    guard NativeMetalFilterReference.accepts(a.filter, b.filter) else { continue }
+                    let reach = a.physical.z + b.physical.z + slack
+                    guard abs(a.position.x - b.position.x) <= reach, abs(a.position.y - b.position.y) <= reach else { continue }
+                    keys.append(CandidateKey(kind: 0, first: a.identity.x, second: b.identity.x, other: UInt32(j)))
+                }
+                for (j, segment) in segments.enumerated() {
+                    guard NativeMetalFilterReference.accepts(a.filter, segment.filter) else { continue }
+                    let reach = a.physical.z + slack
+                    let lower = SIMD2(min(segment.current.x, segment.current.z), min(segment.current.y, segment.current.w)) - reach
+                    let upper = SIMD2(max(segment.current.x, segment.current.z), max(segment.current.y, segment.current.w)) + reach
+                    guard a.position.x >= lower.x, a.position.y >= lower.y, a.position.x <= upper.x, a.position.y <= upper.y else { continue }
+                    keys.append(CandidateKey(kind: 1, first: a.identity.x, second: segment.identity.x, other: UInt32(j)))
+                }
+                keys.sort()
+                let kept = Array(keys.prefix(limit))
+                expectedDropped += max(0, keys.count - limit)
+                expectedWidest = max(expectedWidest, keys.count)
+                if !kept.isEmpty { nonEmptyRows += 1 }
+                XCTAssertEqual(Int(countWords[index * 2] + countWords[index * 2 + 1]), kept.count, "bubble \(index) of \(bubbleCount)")
+                XCTAssertEqual(Int(countWords[index * 2]), kept.filter { $0.kind == 0 }.count)
+                for (slot, key) in kept.enumerated() {
+                    // NativeCandidate: participants (2 × Int64), metadata (kind, bubble, other, valid).
+                    let base = (index * limit + slot) * 8
+                    XCTAssertEqual(rowWords[base + 4], key.kind, "bubble \(index) slot \(slot)")
+                    XCTAssertEqual(rowWords[base + 6], key.other, "bubble \(index) slot \(slot)")
+                }
+            }
+            XCTAssertEqual(Int(overflow.contents().load(as: UInt32.self)), expectedDropped, "bubbles \(bubbleCount) limit \(limit)")
+            XCTAssertEqual(Int(overflow.contents().load(fromByteOffset: 4, as: UInt32.self)), expectedWidest)
+            if bubbleCount >= 60 { XCTAssertGreaterThan(nonEmptyRows, 5, "scena nie jest pusta") }
+            if limit == 6 { XCTAssertGreaterThan(expectedDropped, 0, "oczekiwano przepełnienia wiersza") }
+        }
     }
 }

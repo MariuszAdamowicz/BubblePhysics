@@ -285,8 +285,10 @@ kernel void nativeEmitCandidates(device NativeBubble *bubbles [[buffer(0)]],
     uint limit = contacts.cache.w;
     device NativeCandidate *row = rows + index * limit;
     uint count = 0, dropped = 0;
-    for (int dx = -1; dx <= 1; ++dx) for (int dy = -1; dy <= 1; ++dy) {
-        long2 target = cell + long2(dx, dy);
+    // Komórki (x, y-1), (x, y), (x, y+1) leżą w posortowanej siatce jedna za drugą, więc jedno wyszukiwanie na kolumnę
+    // i przejście do komórki y+1 daje te same wpisy w tej samej kolejności co trzy osobne wyszukiwania.
+    for (int dx = -1; dx <= 1; ++dx) {
+        long2 target = cell + long2(dx, -1);
         uint low = 0, high = control.counts.x;
         while (low < high) {
             uint mid = low + (high - low) / 2;
@@ -294,7 +296,7 @@ kernel void nativeEmitCandidates(device NativeBubble *bubbles [[buffer(0)]],
             if (c.x < target.x || (c.x == target.x && c.y < target.y)) low = mid + 1;
             else high = mid;
         }
-        for (uint k = low; k < control.counts.x && all(grid[k].cell == target); ++k) {
+        for (uint k = low; k < control.counts.x && grid[k].cell.x == target.x && grid[k].cell.y <= target.y + 2; ++k) {
             uint j = grid[k].metadata.x;
             if (j <= index) continue;
             NativeBubble b = bubbles[j];
