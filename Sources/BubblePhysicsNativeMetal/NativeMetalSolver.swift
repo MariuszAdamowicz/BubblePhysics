@@ -870,9 +870,10 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
             output: state.workingDeformation, counts: state.workingContourCounts, control: state.control,
             contour: state.contourControl, safety: state.safetyControl, bubbleCount: count,
             stride: state.contourStride, fused: true)
-        dispatch("nativePrepareRenderData", buffers: [state.workingBubbles, state.workingDeformation,
-            state.workingContourCounts, state.workingContourPoints, state.renderPackets, state.control,
-            state.contourControl, state.safetyControl], threads: count)
+        NativeMetalRenderPreparation.encode(encoder, pipelines: pipelines, bubbles: state.workingBubbles,
+            deformation: state.workingDeformation, counts: state.workingContourCounts, points: state.workingContourPoints,
+            packets: state.renderPackets, control: state.control, contour: state.contourControl,
+            safety: state.safetyControl, bubbleCount: count, stride: state.contourStride, grouped: true)
         if snapshot.publicSettings != nil {
             dispatch("nativeApplyPublicRegion", buffers: [state.workingBubbles, state.workingContourPoints,
                 state.renderPackets, state.workingContourCounts, state.control, state.contourControl, state.safetyControl], threads: count)
@@ -1291,7 +1292,7 @@ enum NativeMetalPipelineCache {
         "nativeUpdateVelocities", "nativeDampContactNormalMotion", "nativeFinalizeSolverContacts", "nativeFindFastCandidates",
         "nativeResolveCCD", "nativeApplyCenterGuards", "nativeSeparateContainedBubbles",
         "nativeReapplyCenterGuards", "nativeValidateBubbleContainment", "nativeInvalidateSafetyCache", "nativeCheckFinite",
-        "nativeAccumulateContactPressure", "nativeSeedStructuralContours", "nativeGenerateContours", "nativeGenerateContoursFused", "nativePrepareRenderData",
+        "nativeAccumulateContactPressure", "nativeSeedStructuralContours", "nativeGenerateContours", "nativeGenerateContoursFused", "nativePrepareRenderData", "nativePrepareRenderDataGrouped",
         "nativeApplyPublicRegion", "nativeInvalidateRegionCache",
         "nativeCompactMergeEvents",
         "nativeCompactSensorEvents",

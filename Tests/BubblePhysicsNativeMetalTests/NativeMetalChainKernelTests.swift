@@ -192,4 +192,93 @@ final class NativeMetalChainKernelTests: XCTestCase {
             }
         }
     }
+
+    // MARK: dane renderu (zadanie 94)
+
+    private struct RenderPreparationResult: Equatable {
+        var bubbles: [UInt32]
+        var packets: [UInt32]
+        var points: [UInt32]
+        var deformation: [UInt32]
+        var safety: [UInt32]
+    }
+
+    private func prepareRenderData(device: MTLDevice, grouped: Bool, stride: Int, maxEdge: Float,
+                                   seed: UInt64) throws -> (RenderPreparationResult, Int) {
+        let pipelines = try NativeMetalPipelineCache.pipelines(for: device).stages
+        var generator = Generator(state: seed)
+        let bubbleCount = 12
+        let bubbles: [NativeMetalBubble] = (0..<bubbleCount).map { index in
+            var bubble = NativeMetalBubble(NativeSolverBubble(id: NativeSolverBubbleID(rawValue: 10 + index),
+                center: .zero, mass: 1, targetRadius: 0.3 + generator.unit()))
+            bubble.position = SIMD4(generator.unit() * 6 - 3, generator.unit() * 6 - 3, 0, 0)
+            bubble.deformation = SIMD4(0.9, 0.9, 5, 6)
+            bubble.bounds = SIMD4(-1, -1, 1, 1)
+            return bubble
+        }
+        let counts: [UInt32] = (0..<bubbleCount).map { index in
+            switch index % 5 {
+            case 0: return UInt32(stride)
+            case 1: return UInt32(3 + Int(generator.next()) % (stride - 3))
+            case 2: return 3
+            case 3: return 1
+            default: return 0
+            }
+        }
+        // Ostre piki nacisku wymuszają majorantę o ograniczonym nachyleniu w obie strony i szew koła.
+        let deformation: [SIMD4<Float>] = (0..<bubbleCount * stride).map { _ in
+            let spike: Float = generator.next() % 9 == 0 ? generator.unit() * 0.5 : 0
+            return SIMD4(spike + generator.unit() * 0.05, generator.unit(), 3, 4)
+        }
+        let points = try makeBuffer([SIMD2<Float>](repeating: SIMD2(9, 9), count: bubbleCount * stride), device: device)
+        let packets = try makeBuffer([NativeMetalRenderPacket](
+            repeating: NativeMetalRenderPacket(identity: .zero, geometry: SIMD4(5, 5, 5, 5), deformation: SIMD4(5, 5, 5, 5)),
+            count: bubbleCount), device: device)
+        let bubbleBuffer = try makeBuffer(bubbles, device: device)
+        let deformationBuffer = try makeBuffer(deformation, device: device)
+        let safety = try makeBuffer([UInt32](repeating: 0, count: 4), device: device)
+        let control = try makeBuffer([NativeMetalControl(counts: SIMD4(UInt32(bubbleCount), 0, 0, 0), physics: .zero,
+                                                         contactDamping: .zero)], device: device)
+        let contour = try makeBuffer([NativeMetalContourControl(counts: SIMD4(UInt32(stride), 0, 0, 0),
+                                                                shape: SIMD4(maxEdge, 0, 4, 0))], device: device)
+        let dispatches = try run(device: device) {
+            NativeMetalRenderPreparation.encode($0, pipelines: pipelines, bubbles: bubbleBuffer,
+                deformation: deformationBuffer, counts: try! makeBuffer(counts, device: device), points: points,
+                packets: packets, control: control, contour: contour, safety: safety, bubbleCount: bubbleCount,
+                stride: stride, grouped: grouped)
+        }
+        func bits<T>(_ buffer: MTLBuffer, _ type: T.Type, _ count: Int) -> [UInt32] {
+            let words = count * MemoryLayout<T>.stride / 4
+            return Array(UnsafeBufferPointer(start: buffer.contents().bindMemory(to: UInt32.self, capacity: words), count: words))
+        }
+        return (RenderPreparationResult(bubbles: bits(bubbleBuffer, NativeMetalBubble.self, bubbleCount),
+            packets: bits(packets, NativeMetalRenderPacket.self, bubbleCount),
+            points: bits(points, SIMD2<Float>.self, bubbleCount * stride),
+            deformation: bits(deformationBuffer, SIMD4<Float>.self, bubbleCount * stride),
+            safety: bits(safety, UInt32.self, 4)), dispatches)
+    }
+
+    func testGroupedRenderPreparationIsBitIdenticalToThePerBubbleThread() throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        // 8 i 64 to potęgi dwójki, 96 i 100 nie; duża dopuszczalna krawędź nie zgłasza błędu,
+        // mała ustawia bit 4 w bezpieczniku w obu wariantach.
+        for stride in [8, 64, 96, 100, 256] {
+            for maxEdge in [Float(10), Float(0.05)] {
+                let seed = UInt64(stride) &* 7919 &+ UInt64(maxEdge * 100)
+                let legacy = try prepareRenderData(device: device, grouped: false, stride: stride, maxEdge: maxEdge, seed: seed)
+                let grouped = try prepareRenderData(device: device, grouped: true, stride: stride, maxEdge: maxEdge, seed: seed)
+                XCTAssertEqual(legacy.1, 1)
+                XCTAssertEqual(grouped.1, 1)
+                XCTAssertEqual(grouped.0.safety, legacy.0.safety, "stride \(stride) edge \(maxEdge)")
+                XCTAssertEqual(grouped.0.bubbles, legacy.0.bubbles, "stride \(stride) edge \(maxEdge)")
+                XCTAssertEqual(grouped.0.packets, legacy.0.packets, "stride \(stride) edge \(maxEdge)")
+                XCTAssertEqual(grouped.0.points, legacy.0.points, "stride \(stride) edge \(maxEdge)")
+                XCTAssertEqual(grouped.0.deformation, legacy.0.deformation, "stride \(stride) edge \(maxEdge)")
+                // Test nie jest zgodnością zer: pakiet bańki z pełnym konturem został zapisany.
+                XCTAssertNotEqual(legacy.0.packets[2], 5)
+                if maxEdge < 1 { XCTAssertNotEqual(legacy.0.safety[3] & 4, 0, "bit przekroczonej krawędzi") }
+                else { XCTAssertEqual(legacy.0.safety[3], 0) }
+            }
+        }
+    }
 }

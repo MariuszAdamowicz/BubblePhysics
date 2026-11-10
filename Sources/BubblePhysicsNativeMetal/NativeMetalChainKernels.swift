@@ -117,3 +117,42 @@ enum NativeMetalRigidCandidates {
         return 1
     }
 }
+
+/// Kodowanie przygotowania danych renderu (punkty konturu, ramka, pakiet bańki). `grouped`: jedna grupa na bańkę,
+/// gdy stride mieści się w grupie i w pamięci grupy; inaczej, i dla `grouped: false`, dawny wątek na bańkę.
+enum NativeMetalRenderPreparation {
+    /// Bajty pamięci grupy na próbkę: poziom, punkt, ramka i skrajne wartości.
+    static let bytesPerSample = MemoryLayout<Float>.stride + MemoryLayout<SIMD2<Float>>.stride
+        + MemoryLayout<SIMD4<Float>>.stride + MemoryLayout<SIMD2<Float>>.stride
+
+    /// Zwraca liczbę zakodowanych dispatchy.
+    @discardableResult
+    static func encode(_ encoder: MTLComputeCommandEncoder, pipelines: [String: MTLComputePipelineState],
+                       bubbles: MTLBuffer, deformation: MTLBuffer, counts: MTLBuffer, points: MTLBuffer,
+                       packets: MTLBuffer, control: MTLBuffer, contour: MTLBuffer, safety: MTLBuffer,
+                       bubbleCount: Int, stride: Int, grouped: Bool) -> Int {
+        guard bubbleCount > 0 else { return 0 }
+        let groupedPipeline = pipelines["nativePrepareRenderDataGrouped"]!
+        let useGroups = grouped && stride <= groupedPipeline.maxTotalThreadsPerThreadgroup
+            && stride * bytesPerSample <= groupedPipeline.device.maxThreadgroupMemoryLength
+        let pipeline = useGroups ? groupedPipeline : pipelines["nativePrepareRenderData"]!
+        encoder.memoryBarrier(scope: .buffers)
+        encoder.setComputePipelineState(pipeline)
+        for (index, buffer) in [bubbles, deformation, counts, points, packets, control, contour, safety].enumerated() {
+            encoder.setBuffer(buffer, offset: 0, index: index)
+        }
+        guard useGroups else {
+            encoder.dispatchThreads(.init(width: bubbleCount, height: 1, depth: 1),
+                threadsPerThreadgroup: .init(width: min(pipeline.threadExecutionWidth, pipeline.maxTotalThreadsPerThreadgroup),
+                                             height: 1, depth: 1))
+            return 1
+        }
+        for (index, size) in [MemoryLayout<Float>.stride, MemoryLayout<SIMD2<Float>>.stride,
+                              MemoryLayout<SIMD4<Float>>.stride, MemoryLayout<SIMD2<Float>>.stride].enumerated() {
+            encoder.setThreadgroupMemoryLength(stride * size, index: index)
+        }
+        encoder.dispatchThreadgroups(.init(width: bubbleCount, height: 1, depth: 1),
+                                     threadsPerThreadgroup: .init(width: stride, height: 1, depth: 1))
+        return 1
+    }
+}

@@ -795,6 +795,102 @@ kernel void nativePrepareRenderData(device NativeBubble *bubbles [[buffer(0)]],
     packets[index] = packet;
 }
 
+// `nativePrepareRenderData` z jedną grupą na bańkę. Majoranta zostaje szeregowa (to łańcuch odejmowań w float,
+// którego nie da się przestawić bez zmiany bitów), ale działa na pamięci grupy przez jeden wątek; próbki punktów,
+// walidacja krawędzi i redukcje min/max (dokładne, nie zależą od kolejności) idą równolegle po wątku na próbkę.
+kernel void nativePrepareRenderDataGrouped(device NativeBubble *bubbles [[buffer(0)]],
+    device float4 *deformation [[buffer(1)]], device uint *counts [[buffer(2)]],
+    device float2 *points [[buffer(3)]], device NativeRenderPacket *packets [[buffer(4)]],
+    constant NativeControl &control [[buffer(5)]], constant NativeContourControl &contour [[buffer(6)]],
+    device atomic_uint *safety [[buffer(7)]],
+    threadgroup float *level [[threadgroup(0)]], threadgroup float2 *shape [[threadgroup(1)]],
+    threadgroup float4 *boxes [[threadgroup(2)]], threadgroup float2 *extremes [[threadgroup(3)]],
+    uint index [[threadgroup_position_in_grid]], uint sample [[thread_position_in_threadgroup]],
+    uint width [[threads_per_threadgroup]]) {
+    threadgroup uint halted;
+    threadgroup float seedMaximum;
+    // Bit awarii może się zapalić w innej grupie w trakcie dispatchu, więc decyzję podejmuje jeden wątek.
+    if (sample == 0) halted = (index >= control.counts.x || atomic_load_explicit(safety + 3, memory_order_relaxed)) ? 1 : 0;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (halted) return;
+    NativeBubble bubble = bubbles[index];
+    uint count = counts[index], base = index * contour.counts.x;
+    bool active = sample < count;
+    if (active) level[sample] = deformation[base + sample].x;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (sample == 0) {
+        float maximum = 0;
+        uint anchor = 0;
+        for (uint s = 0; s < count; ++s) {
+            float deficit = level[s];
+            if (deficit > maximum) { maximum = deficit; anchor = s; }
+        }
+        // Domknięcie radialnego pola jak w nativePrepareRenderData: dwa przejścia od globalnego maksimum.
+        float slope = contour.shape.x / (2 * bubble.physical.z);
+        float previous = maximum;
+        for (uint step = 1; step < count; ++step) {
+            uint s = (anchor + step) % count;
+            float value = max(level[s], previous - slope);
+            level[s] = value;
+            previous = value;
+        }
+        previous = maximum;
+        for (uint step = 1; step < count; ++step) {
+            uint s = (anchor + count - step) % count;
+            float value = max(level[s], previous - slope);
+            level[s] = value;
+            previous = value;
+        }
+        seedMaximum = maximum;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (active) {
+        uint address = base + sample;
+        float angle = 2 * M_PI_F * float(sample) / float(count);
+        float2 point = bubble.position.xy + float2(cos(angle), sin(angle))
+            * bubble.physical.z * (1 - level[sample]);
+        if (!all(isfinite(point))) nativeSafetyFailure(safety, 1);
+        deformation[address].x = level[sample];
+        points[address] = point;
+        shape[sample] = point;
+        boxes[sample] = float4(point, point);
+        extremes[sample] = float2(length(point - bubble.position.xy), level[sample]);
+    } else {
+        boxes[sample] = float4(INFINITY, INFINITY, -INFINITY, -INFINITY);
+        extremes[sample] = float2(INFINITY, -INFINITY);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    // Walidacja rzeczywistych współrzędnych, po zaokrągleniu float32 (jak w nativePrepareRenderData).
+    if (active) {
+        float edge = length(shape[(sample + 1) % count] - shape[sample]);
+        if (!isfinite(edge)) nativeSafetyFailure(safety, 1);
+        else if (edge > contour.shape.x) nativeSafetyFailure(safety, 4);
+    }
+    uint reach = 1;
+    while (reach < width) reach <<= 1;
+    for (reach >>= 1; reach > 0; reach >>= 1) {
+        if (sample < reach && sample + reach < width) {
+            float4 other = boxes[sample + reach];
+            boxes[sample] = float4(min(boxes[sample].xy, other.xy), max(boxes[sample].zw, other.zw));
+            float2 values = extremes[sample + reach];
+            extremes[sample] = float2(min(extremes[sample].x, values.x), max(extremes[sample].y, values.y));
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if (sample != 0) return;
+    float maximum = max(seedMaximum, extremes[0].y);
+    float effectiveRadius = min(bubble.physical.z, extremes[0].x);
+    float2 boundsMin = min(bubble.position.xy, boxes[0].xy), boundsMax = max(bubble.position.xy, boxes[0].zw);
+    float4 limits = bubble.deformation;
+    bubble.deformation = float4(maximum, effectiveRadius, limits.z, limits.w);
+    bubble.bounds = float4(boundsMin, boundsMax);
+    bubbles[index] = bubble;
+    NativeRenderPacket packet = {bubble.identity,
+        float4(bubble.position.xy, bubble.physical.z, bubble.motion.z), float4(maximum, effectiveRadius, 0, 0)};
+    if (!all(isfinite(packet.geometry))) nativeSafetyFailure(safety, 1);
+    packets[index] = packet;
+}
+
 // Region nie jest ścianą. Test koła dotyczy collidera używanego przez narrow phase,
 // nie wyłącznie środka ani wizualnego konturu. Styczność nadal oznacza obecność.
 kernel void nativeApplyPublicRegion(device NativeBubble *bubbles [[buffer(0)]],
