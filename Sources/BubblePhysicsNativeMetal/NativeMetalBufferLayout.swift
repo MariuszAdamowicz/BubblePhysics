@@ -275,6 +275,11 @@ public struct NativeMetalFrameProfile: Equatable, Sendable {
     public var rigidGeometryUploadCount = 0
     public var hostEncodingMilliseconds: Double = 0
     public var hostWaitingMilliseconds: Double = 0
+    /// Początek kodowania kroku w zegarze `DispatchTime.uptimeNanoseconds`, jak czas klatki w benchmarku;
+    /// różnica względem początku `advance` to przygotowanie wejścia po stronie CPU.
+    public var encodingStartNanoseconds: UInt64 = 0
+    /// Koniec oczekiwania na GPU w tym samym zegarze; różnica do powrotu z `advance` to odczyt i publikacja kroku.
+    public var waitingEndNanoseconds: UInt64 = 0
     /// Łączny czas ukończonego command buffera; bez pozornych czasów osobnych dispatchy.
     public var stageGPUMilliseconds: [String: Double] = [:]
     /// Opcjonalne liczniki rzeczywiście wykonanych work-itemów, używane w profilu przepustowości.

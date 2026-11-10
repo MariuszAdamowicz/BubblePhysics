@@ -980,6 +980,8 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         profile.rigidGeometryUploadCount = rigidState.geometryUploadCount
         profile.hostEncodingMilliseconds = milliseconds(encodingEnd - encodingStart)
         profile.hostWaitingMilliseconds = milliseconds(waitingEnd - encodingEnd)
+        profile.encodingStartNanoseconds = encodingStart
+        profile.waitingEndNanoseconds = waitingEnd
         profile.stageGPUMilliseconds = ["frame": timing.gpuMilliseconds]
         let diagnostics = NativeMetalFrameTelemetry(backend: .nativeMetal, commandBufferCount: 1, encoderCount: 2,
             cacheHitCount: Int(contactResult.cache.x), cacheResetCount: Int(contactResult.cache.y),

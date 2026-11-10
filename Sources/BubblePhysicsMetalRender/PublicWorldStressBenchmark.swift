@@ -65,7 +65,9 @@ public struct PublicWorldStressReport: Sendable {
         warmup=\(warmupFrames); measured=\(measuredFrames)
         p95_ms=\(String(format: "%.4f", p95Milliseconds)); max_ms=\(String(format: "%.4f", maximumMilliseconds))
         gpu_p95_ms=\(String(format: "%.4f", gpuP95Milliseconds)); host_non_gpu_p95_ms=\(String(format: "%.4f", hostNonGPUP95Milliseconds))
+        host_preparation_p95_ms=\(String(format: "%.4f", hostPreparationP95Milliseconds)); host_publication_p95_ms=\(String(format: "%.4f", hostPublicationP95Milliseconds))
         host_encoding_p95_ms=\(String(format: "%.4f", hostEncodingP95Milliseconds)); host_waiting_p95_ms=\(String(format: "%.4f", hostWaitingP95Milliseconds))
+        gpu_physics_p95_ms=\(String(format: "%.4f", gpuPhysicsP95Milliseconds)); gpu_render_estimate_ms=\(String(format: "%.4f", gpuRenderEstimateMilliseconds))
         guard_corrections=\(guardCorrections); non_finite_frames=\(nonFiniteFrames)
         fallback_frames=\(fallbackFrames); failed_frames=\(failedFrames)
         contour_cpu_readbacks=\(contourCPUReadbacks)
@@ -244,70 +246,124 @@ public enum PublicWorldStressBenchmark {
         pass.colorAttachments[0].loadAction = .clear
         pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1)
         pass.colorAttachments[0].storeAction = .store
-        var measured: [Double] = []
-        var gpuMeasured: [Double] = []
-        var hostNonGPUMeasured: [Double] = []
-        var hostEncodingMeasured: [Double] = []
-        var hostWaitingMeasured: [Double] = []
-        var guardCorrections = 0
-        var nonFiniteFrames = 0
-        var fallbackFrames = 0
-        var failedFrames = 0
-        var maximumCandidates = 0
         let total = warmupFrames + measuredFrames
-        for index in 0..<total {
-            try Task.checkCancellation()
-            if let transaction = try scene.stepTransaction(step: index) { world.submit(transaction) }
-            guard let command = queue.makeCommandBuffer() else { throw StressBenchmarkError.metalUnavailable }
-            let start = DispatchTime.now().uptimeNanoseconds
-            let frame = await world.advance(by: 1.0 / 60, commandBuffer: command) {
-                try renderer.encode(world: world, viewport: viewport,
-                    commandBuffer: command, renderPassDescriptor: pass)
+        let full = try await runSeries(.full, world: world, scene: scene, queue: queue, warmupFrames: warmupFrames,
+            totalFrames: total, observer: frameObserver, progress: progress) { command in
+                try renderer.encode(world: world, viewport: viewport, commandBuffer: command, renderPassDescriptor: pass)
             }
-            let elapsed = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
-            if frame.stepIndex != UInt64(index + 1) || command.status != .completed
-                || world.diagnostics.lastAdvanceIssue != nil { failedFrames += 1 }
-            if let telemetry = world.benchmarkTelemetry {
-                guardCorrections += telemetry.guardCorrectionCount
-                if telemetry.didEncounterNonFinite { nonFiniteFrames += 1 }
-                if telemetry.fallbackReason != nil { fallbackFrames += 1 }
-                if index >= warmupFrames {
-                    gpuMeasured.append(telemetry.gpuMilliseconds)
-                    hostNonGPUMeasured.append(max(0, elapsed - telemetry.gpuMilliseconds))
-                    if let profile = world.benchmarkFrameProfile {
-                        hostEncodingMeasured.append(profile.hostEncodingMilliseconds)
-                        hostWaitingMeasured.append(profile.hostWaitingMilliseconds)
-                    } else { failedFrames += 1 }
-                }
-            } else { failedFrames += 1 }
-            maximumCandidates = max(maximumCandidates, world.diagnostics.maximumContactCandidatesPerObject)
-            if index >= warmupFrames { measured.append(elapsed) }
-            progress(index + 1, total)
-            // BubbleWorld i renderer są celowo izolowane do MainActor. Bez tego
-            // kooperacyjnego punktu SwiftUI nie może odmalować postępu ani
-            // przyjąć żądania Stop między ukończonymi klatkami benchmarku.
-            await Task.yield()
-            if failedFrames > 0 { break }
-        }
+        // Druga seria: świeży świat tej samej sceny, ta sama rozgrzewka i te same indeksy kroków, `encodeRender` pusty.
+        // Fizyka obu serii jest identyczna, więc czas GPU drugiej to czas fizyki bez renderu.
+        let physicsWorld = try BubbleWorld.makeBenchmarkWorld(configuration: try scene.configuration(),
+            device: device, solverIterationLimit: 4)
+        guard let physicsAssets = physicsWorld.assets else { throw StressBenchmarkError.metalUnavailable }
+        physicsWorld.submit(try scene.initialTransaction(assets: physicsAssets))
+        let physics = try await runSeries(.physicsOnly, world: physicsWorld, scene: scene, queue: queue,
+            warmupFrames: warmupFrames, totalFrames: total, observer: frameObserver, progress: { _, _ in },
+            render: nil)
         func p95(_ values: [Double]) -> Double {
             let sorted = values.sorted()
             return sorted.isEmpty ? .infinity : sorted[min(sorted.count - 1,
                 Int(ceil(Double(sorted.count) * 0.95)) - 1)]
         }
-        measured.sort()
+        let measured = full.frameMilliseconds.sorted()
         let frameP95 = p95(measured)
         return PublicWorldStressReport(scene: scene.name, deviceName: device.name, warmupFrames: warmupFrames,
             measuredFrames: measured.count, solverIterationLimit: 4, p95Milliseconds: frameP95,
-            gpuP95Milliseconds: p95(gpuMeasured), hostNonGPUP95Milliseconds: p95(hostNonGPUMeasured),
-            hostEncodingP95Milliseconds: p95(hostEncodingMeasured),
-            hostWaitingP95Milliseconds: p95(hostWaitingMeasured),
-            hostPreparationP95Milliseconds: 0, hostPublicationP95Milliseconds: 0, gpuPhysicsP95Milliseconds: 0,
-            maximumMilliseconds: measured.last ?? .infinity, guardCorrections: guardCorrections,
-            nonFiniteFrames: nonFiniteFrames, fallbackFrames: fallbackFrames, failedFrames: failedFrames,
-            contourCPUReadbacks: world.benchmarkContourCPUReadbackCount, renderWidth: pixelWidth,
-            renderHeight: pixelHeight, contactCandidateOverflow: world.diagnostics.contactCandidateOverflow,
-            maximumCandidatesPerObject: maximumCandidates, candidateLimit: BubbleWorld.contactCandidateLimit,
+            gpuP95Milliseconds: p95(full.gpuMilliseconds), hostNonGPUP95Milliseconds: p95(full.hostNonGPUMilliseconds),
+            hostEncodingP95Milliseconds: p95(full.encodingMilliseconds),
+            hostWaitingP95Milliseconds: p95(full.waitingMilliseconds),
+            hostPreparationP95Milliseconds: p95(full.preparationMilliseconds),
+            hostPublicationP95Milliseconds: p95(full.publicationMilliseconds),
+            gpuPhysicsP95Milliseconds: p95(physics.gpuMilliseconds),
+            maximumMilliseconds: measured.last ?? .infinity, guardCorrections: full.guardCorrections,
+            nonFiniteFrames: full.nonFiniteFrames + physics.nonFiniteFrames,
+            fallbackFrames: full.fallbackFrames + physics.fallbackFrames,
+            failedFrames: full.failedFrames + physics.failedFrames,
+            contourCPUReadbacks: world.benchmarkContourCPUReadbackCount + physicsWorld.benchmarkContourCPUReadbackCount,
+            renderWidth: pixelWidth, renderHeight: pixelHeight,
+            contactCandidateOverflow: world.diagnostics.contactCandidateOverflow,
+            maximumCandidatesPerObject: full.maximumCandidates, candidateLimit: BubbleWorld.contactCandidateLimit,
             gateMilliseconds: scene.gateMilliseconds)
+    }
+
+    /// Zmierzone klatki jednej serii (bez rozgrzewki) i liczniki bezpieczeństwa całej serii.
+    private struct SeriesResult {
+        var frameMilliseconds: [Double] = []
+        var gpuMilliseconds: [Double] = []
+        var hostNonGPUMilliseconds: [Double] = []
+        var preparationMilliseconds: [Double] = []
+        var encodingMilliseconds: [Double] = []
+        var waitingMilliseconds: [Double] = []
+        var publicationMilliseconds: [Double] = []
+        var guardCorrections = 0
+        var nonFiniteFrames = 0
+        var fallbackFrames = 0
+        var failedFrames = 0
+        var maximumCandidates = 0
+    }
+
+    /// Jedna seria `totalFrames` klatek na `world`: transakcja kroku, `advance` z jednym buforem i pomiar składowych.
+    /// `render` nil to pusty `encodeRender` (seria fizyki bez renderu).
+    /// Składowe dzielą klatkę bez dziur: przygotowanie (początek `advance` → początek kodowania), kodowanie, oczekiwanie
+    /// na GPU i publikacja (koniec oczekiwania → powrót z `advance`), wszystkie w zegarze `DispatchTime.uptimeNanoseconds`.
+    private static func runSeries(_ kind: PublicWorldStressFrameSample.Series, world: BubbleWorld, scene: Scene,
+                                  queue: MTLCommandQueue, warmupFrames: Int, totalFrames: Int,
+                                  observer: ((PublicWorldStressFrameSample) -> Void)?,
+                                  progress: @escaping @MainActor (Int, Int) -> Void,
+                                  render: ((MTLCommandBuffer) throws -> Void)?) async throws -> SeriesResult {
+        var result = SeriesResult()
+        for index in 0..<totalFrames {
+            try Task.checkCancellation()
+            if let transaction = try scene.stepTransaction(step: index) { world.submit(transaction) }
+            guard let command = queue.makeCommandBuffer() else { throw StressBenchmarkError.metalUnavailable }
+            var renderEncoded = false
+            let start = DispatchTime.now().uptimeNanoseconds
+            let frame = await world.advance(by: 1.0 / 60, commandBuffer: command) {
+                if let render {
+                    renderEncoded = true
+                    try render(command)
+                }
+            }
+            let end = DispatchTime.now().uptimeNanoseconds
+            let elapsed = Double(end - start) / 1_000_000
+            if frame.stepIndex != UInt64(index + 1) || command.status != .completed
+                || world.diagnostics.lastAdvanceIssue != nil { result.failedFrames += 1 }
+            var gpuMilliseconds = 0.0, preparation = 0.0, encoding = 0.0, waiting = 0.0, publication = 0.0
+            if let telemetry = world.benchmarkTelemetry {
+                result.guardCorrections += telemetry.guardCorrectionCount
+                if telemetry.didEncounterNonFinite { result.nonFiniteFrames += 1 }
+                if telemetry.fallbackReason != nil { result.fallbackFrames += 1 }
+                gpuMilliseconds = telemetry.gpuMilliseconds
+                if let profile = world.benchmarkFrameProfile,
+                   profile.encodingStartNanoseconds >= start, profile.waitingEndNanoseconds >= profile.encodingStartNanoseconds,
+                   end >= profile.waitingEndNanoseconds {
+                    preparation = Double(profile.encodingStartNanoseconds - start) / 1_000_000
+                    encoding = profile.hostEncodingMilliseconds
+                    waiting = profile.hostWaitingMilliseconds
+                    publication = Double(end - profile.waitingEndNanoseconds) / 1_000_000
+                } else if index >= warmupFrames { result.failedFrames += 1 }
+            } else { result.failedFrames += 1 }
+            if index >= warmupFrames {
+                result.gpuMilliseconds.append(gpuMilliseconds)
+                result.hostNonGPUMilliseconds.append(max(0, elapsed - gpuMilliseconds))
+                result.preparationMilliseconds.append(preparation)
+                result.encodingMilliseconds.append(encoding)
+                result.waitingMilliseconds.append(waiting)
+                result.publicationMilliseconds.append(publication)
+                result.frameMilliseconds.append(elapsed)
+            }
+            result.maximumCandidates = max(result.maximumCandidates, world.diagnostics.maximumContactCandidatesPerObject)
+            observer?(PublicWorldStressFrameSample(series: kind, index: index, frame: frame, elapsedMilliseconds: elapsed,
+                preparationMilliseconds: preparation, encodingMilliseconds: encoding, waitingMilliseconds: waiting,
+                publicationMilliseconds: publication, gpuMilliseconds: gpuMilliseconds, renderEncoded: renderEncoded))
+            progress(index + 1, totalFrames)
+            // BubbleWorld i renderer są celowo izolowane do MainActor. Bez tego
+            // kooperacyjnego punktu SwiftUI nie może odmalować postępu ani
+            // przyjąć żądania Stop między ukończonymi klatkami benchmarku.
+            await Task.yield()
+            if result.failedFrames > 0 { break }
+        }
+        return result
     }
 }
 
