@@ -17,35 +17,6 @@ final class PublishedStateDeterminismTests: XCTestCase {
         let objectHash: UInt64
     }
 
-    private func fnv1a(_ values: some Sequence<UInt32>, into hash: inout UInt64) {
-        for value in values {
-            for shift in stride(from: 0, to: 32, by: 8) {
-                hash = (hash ^ UInt64((value >> UInt32(shift)) & 0xFF)) &* 0x100_0000_01B3
-            }
-        }
-    }
-
-    /// Hash bitów stanu wszystkich obiektów klatki, posortowanych po `ObjectID`.
-    private func hashObjects(_ frame: WorldFrame) -> UInt64 {
-        var objectHash: UInt64 = 0xCBF2_9CE4_8422_2325
-        for id in frame.objects.keys.sorted(by: { $0.rawValue < $1.rawValue }) {
-            guard let object = frame.objects[id] else { continue }
-            let kind: [UInt32]
-            switch object.kind {
-            case .bubble(let radius): kind = [1, radius.bitPattern]
-            case .polygon: kind = [2, 0]
-            case .circle(let radius): kind = [3, radius.bitPattern]
-            case .capsule(let halfLength, let radius): kind = [4, halfLength.bitPattern, radius.bitPattern]
-            }
-            fnv1a([UInt32(truncatingIfNeeded: id.rawValue), UInt32(truncatingIfNeeded: id.rawValue >> 32)] + kind
-                + [object.position.x, object.position.y, object.velocity.x, object.velocity.y,
-                   object.rotation, object.angularVelocity,
-                   object.bounds.min.x, object.bounds.min.y, object.bounds.max.x, object.bounds.max.y]
-                    .map(\.bitPattern), into: &objectHash)
-        }
-        return objectHash
-    }
-
     private func run(steps: Int, device: MTLDevice) async throws -> Run {
         let world = try BubbleWorld.makeBenchmarkWorld(configuration: try Stress300Scene.configuration(),
             device: device, solverIterationLimit: 4)
@@ -55,13 +26,9 @@ final class PublishedStateDeterminismTests: XCTestCase {
             if index > 0 { world.submit(try Stress300Scene.triangleReplacement(step: index)) }
             frame = await world.advance(by: 1.0 / 60)
         }
-        let objectHash = hashObjects(frame)
-        var hash: UInt64 = 0xCBF2_9CE4_8422_2325
+        let objectHash = PublishedStateHash.objects(frame)
         let contours = world.debugContourSnapshot()
-        for id in contours.keys.sorted(by: { $0.rawValue < $1.rawValue }) {
-            fnv1a([UInt32(truncatingIfNeeded: id.rawValue)], into: &hash)
-            for point in contours[id] ?? [] { fnv1a([point.x.bitPattern, point.y.bitPattern], into: &hash) }
-        }
+        let hash = PublishedStateHash.contours(contours)
         return Run(hash: hash, completedSteps: frame.stepIndex, bubbleCount: contours.count,
                    objectCount: frame.objects.count, objectHash: objectHash)
     }
@@ -132,10 +99,10 @@ final class PublishedStateDeterminismTests: XCTestCase {
             let frame = await world.advance(by: 1.0 / 60)
             run.published += frame.stepIndex == UInt64(index + 1) ? 1 : 0
             run.overflow.append(world.diagnostics.contactCandidateOverflow)
-            var hash: UInt64 = 0xCBF2_9CE4_8422_2325
+            var hash = PublishedStateHash.offsetBasis
             for id in frame.objects.keys.sorted(by: { $0.rawValue < $1.rawValue }) {
                 guard let object = frame.objects[id] else { continue }
-                fnv1a([UInt32(truncatingIfNeeded: id.rawValue), object.position.x.bitPattern, object.position.y.bitPattern,
+                PublishedStateHash.fnv1a([UInt32(truncatingIfNeeded: id.rawValue), object.position.x.bitPattern, object.position.y.bitPattern,
                        object.velocity.x.bitPattern, object.velocity.y.bitPattern], into: &hash)
             }
             run.hashes.append(hash)
@@ -185,7 +152,7 @@ final class PublishedStateDeterminismTests: XCTestCase {
         for index in 0..<steps {
             if let transaction = try MixedScene.stepTransaction(step: index) { world.submit(transaction) }
             run.frame = await world.advance(by: 1.0 / 60)
-            run.hashes.append(hashObjects(run.frame))
+            run.hashes.append(PublishedStateHash.objects(run.frame))
             run.overflow.append(world.diagnostics.contactCandidateOverflow)
         }
         return run
