@@ -20,6 +20,17 @@ package struct NativePublicObject: Equatable, Sendable {
     /// Warstwa rysowania i hit-testu; w rekordzie bańki i bryły jako `filter.w`.
     package var layer: Int32 = 0
 
+    /// Stan bańki po kroku solvera: poza, prędkości, promień efektywny i obwiednia konturu.
+    mutating func adopt(_ bubble: NativeSolverBubble, effectiveRadius: Float, bounds: SIMD4<Float>?) {
+        position = bubble.center
+        previousPosition = bubble.previousCenter
+        velocity = bubble.velocity
+        rotation = bubble.rotation
+        angularVelocity = bubble.angularVelocity
+        self.effectiveRadius = effectiveRadius
+        self.bounds = bounds.map { WorldRectangle(uncheckedMin: SIMD2($0.x, $0.y), max: SIMD2($0.z, $0.w)) }
+    }
+
     package init(descriptor: WorldObject) {
         self.descriptor = descriptor
         switch descriptor {
@@ -203,18 +214,13 @@ package final class NativePublicWorld {
             commandBuffer: commandBuffer, beforeCommit: beforeCommit)
         for (id, object) in solver.publishedPolygons { result[id] = object }
         for id in solver.removedPolygons { result.removeValue(forKey: id) }
+        let hasRemovals = !frame.regionRemovals.isEmpty
         for bubble in frame.bubbles {
             let id = ObjectID(rawValue: UInt64(bitPattern: Int64(bubble.id.rawValue)))
-            if frame.regionRemovals.contains(bubble.id) { result.removeValue(forKey: id); continue }
-            result[id]?.position = bubble.center
-            result[id]?.previousPosition = bubble.previousCenter
-            result[id]?.velocity = bubble.velocity
-            result[id]?.rotation = bubble.rotation
-            result[id]?.angularVelocity = bubble.angularVelocity
-            result[id]?.effectiveRadius = frame.effectiveRadii[bubble.id] ?? bubble.targetRadius
-            result[id]?.bounds = frame.bubbleBounds[bubble.id].map {
-                WorldRectangle(uncheckedMin: SIMD2($0.x, $0.y), max: SIMD2($0.z, $0.w))
-            }
+            if hasRemovals, frame.regionRemovals.contains(bubble.id) { result.removeValue(forKey: id); continue }
+            // Jeden dostęp do rekordu na bańkę zamiast ośmiu przeszukań słownika.
+            result[id]?.adopt(bubble, effectiveRadius: frame.effectiveRadii[bubble.id] ?? bubble.targetRadius,
+                              bounds: frame.bubbleBounds[bubble.id])
         }
         var contacts = solver.publishedDriveContacts
         func objectID(_ value: Int) -> ObjectID { ObjectID(rawValue: UInt64(bitPattern: Int64(value))) }
@@ -233,27 +239,32 @@ package final class NativePublicWorld {
             if discreteEvents.count < eventBufferCapacity { discreteEvents.append(event) }
             else { dropped += 1 }
         }
-        let descriptors = Dictionary(uniqueKeysWithValues: objects.map { ($0.descriptor.id, $0.descriptor) })
         var wrappedIDs = Set<ObjectID>()
-        for bubble in frame.bubbles {
-            let id = ObjectID(rawValue: UInt64(bitPattern: Int64(bubble.id.rawValue)))
-            guard let original = descriptors[id], case .bubble(let descriptor) = original else { continue }
-            if frame.regionWraps.contains(bubble.id) { wrappedIDs.insert(id) }
-            if frame.regionRemovals.contains(bubble.id), descriptor.eventInterest.contains(.didExitSimulationRegion) {
-                append(.didExitSimulationRegion(id))
-            }
-            if frame.regionWraps.contains(bubble.id), descriptor.eventInterest.contains(.didWrap) {
-                append(.didWrap(id))
+        // Bez wrapów i usunięć z regionu nie ma czego sprawdzać, więc obiekty nie trafiają do słownika deskryptorów.
+        if !frame.regionWraps.isEmpty || !frame.regionRemovals.isEmpty {
+            let descriptors = Dictionary(uniqueKeysWithValues: objects.map { ($0.descriptor.id, $0.descriptor) })
+            for bubble in frame.bubbles {
+                let id = ObjectID(rawValue: UInt64(bitPattern: Int64(bubble.id.rawValue)))
+                guard let original = descriptors[id], case .bubble(let descriptor) = original else { continue }
+                if frame.regionWraps.contains(bubble.id) { wrappedIDs.insert(id) }
+                if frame.regionRemovals.contains(bubble.id), descriptor.eventInterest.contains(.didExitSimulationRegion) {
+                    append(.didExitSimulationRegion(id))
+                }
+                if frame.regionWraps.contains(bubble.id), descriptor.eventInterest.contains(.didWrap) {
+                    append(.didWrap(id))
+                }
             }
         }
-        for object in objects {
-            guard case .rigidBody(let descriptor) = object.descriptor else { continue }
-            if solver.wrappedPolygons.contains(descriptor.id) { wrappedIDs.insert(descriptor.id) }
-            if solver.removedPolygons.contains(descriptor.id), descriptor.eventInterest.contains(.didExitSimulationRegion) {
-                append(.didExitSimulationRegion(descriptor.id))
-            }
-            if solver.wrappedPolygons.contains(descriptor.id), descriptor.eventInterest.contains(.didWrap) {
-                append(.didWrap(descriptor.id))
+        if !solver.wrappedPolygons.isEmpty || !solver.removedPolygons.isEmpty {
+            for object in objects {
+                guard case .rigidBody(let descriptor) = object.descriptor else { continue }
+                if solver.wrappedPolygons.contains(descriptor.id) { wrappedIDs.insert(descriptor.id) }
+                if solver.removedPolygons.contains(descriptor.id), descriptor.eventInterest.contains(.didExitSimulationRegion) {
+                    append(.didExitSimulationRegion(descriptor.id))
+                }
+                if solver.wrappedPolygons.contains(descriptor.id), descriptor.eventInterest.contains(.didWrap) {
+                    append(.didWrap(descriptor.id))
+                }
             }
         }
         let interested = Set(objects.compactMap { object -> ObjectID? in

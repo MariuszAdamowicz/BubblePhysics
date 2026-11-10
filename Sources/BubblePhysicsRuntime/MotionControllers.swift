@@ -132,7 +132,17 @@ package enum MotionControllers {
 
     package static func feedback(_ state: inout RuntimeState, contacts: [ObjectID: [DriveBlockingContact]]) -> [DriveFeedback] {
         var result: [DriveFeedback] = []
-        for id in state.objects.keys.sorted(by: { $0.rawValue < $1.rawValue }) {
+        // Tylko sterowane obiekty wchodzą do sortowania i kopii rekordu; reszta stanu zostaje nietknięta.
+        var driven: [ObjectID] = []
+        for (id, object) in state.objects {
+            switch object.motionRole {
+            case .playerDriven where object.playerDriveTarget != nil: driven.append(id)
+            case .pathDriven where object.pathDrive != nil: driven.append(id)
+            default: break
+            }
+        }
+        driven.sort { $0.rawValue < $1.rawValue }
+        for id in driven {
             guard var object = state.objects[id] else { continue }
             let target: WorldPoint
             if object.motionRole == .playerDriven, let point = object.playerDriveTarget { target = point }

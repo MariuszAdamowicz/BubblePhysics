@@ -246,7 +246,13 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
     private(set) var removedPolygons: Set<ObjectID> = []
     private(set) var wrappedPolygons: Set<ObjectID> = []
     private(set) var cachedContacts: [NativeContactCacheRecord] = []
-    private(set) var candidateKeys: [NativeContactKey] = []
+    private var publishedCandidateCount = 0
+    /// Klucze kandydatów ostatniej publikacji, czytane z bufora dopiero na żądanie (szew testów; klatka ich nie kopiuje).
+    var candidateKeys: [NativeContactKey] {
+        guard publishedCandidateCount > 0, let buffer = persistentState?.candidates else { return [] }
+        let records = buffer.contents().bindMemory(to: NativeMetalCandidate.self, capacity: publishedCandidateCount)
+        return (0..<publishedCandidateCount).map { records[$0].key }
+    }
     private(set) var persistentState: NativeMetalPersistentState?
     package private(set) var publishedSolverFrame: NativeSolverFrame?
     private(set) var publishedRenderHandoff: NativeMetalRenderHandoff?
@@ -1014,14 +1020,12 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         else { throw rejectSafety(.nonFinite) }
         // Skończony ujemny mnożnik to wartość poza zakresem, nie NaN ani ∞: odrzuca tylko krok.
         guard completedCache.allSatisfy({ $0.lambda >= 0 }) else { throw rejectSafety(.invalidFrame) }
-        let candidateRecords = state.candidates.contents().bindMemory(to: NativeMetalCandidate.self, capacity: state.contactCapacity)
-        let completedCandidates = Array(UnsafeBufferPointer(start: candidateRecords, count: Int(contactResult.counts.x))).map(\.key)
         let contacts = completedCache.filter { $0.lastSeenFrame == nextFrame }.map { record in
             // ID API referencyjnego jest skrótem; cache GPU zawsze używa pełnego klucza.
             var hash: UInt64 = 14695981039346656037
-            for value in [UInt64(record.key.kind), UInt64(bitPattern: record.key.first), UInt64(bitPattern: record.key.second)] {
-                hash = (hash ^ value) &* 1099511628211
-            }
+            hash = (hash ^ UInt64(record.key.kind)) &* 1099511628211
+            hash = (hash ^ UInt64(bitPattern: record.key.first)) &* 1099511628211
+            hash = (hash ^ UInt64(bitPattern: record.key.second)) &* 1099511628211
             return NativeSolverContact(id: hash, kind: record.key.kind == 0 ? .bubbleBubble : .bubbleSegment,
                 bubbleA: .init(rawValue: Int(record.key.first)),
                 bubbleB: record.key.kind == 0 ? .init(rawValue: Int(record.key.second)) : nil,
@@ -1159,7 +1163,7 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         previousPolygonSensorPairCount = polygonPairCount
         state.publishedCacheCount = completedCache.count
         cachedContacts = completedCache
-        candidateKeys = completedCandidates
+        publishedCandidateCount = Int(contactResult.counts.x)
         frameNumber = nextFrame
         persistentState = state
         lastSnapshot = snapshot

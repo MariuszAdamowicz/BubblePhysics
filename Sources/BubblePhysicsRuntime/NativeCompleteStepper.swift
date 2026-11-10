@@ -133,17 +133,11 @@ package final class NativeCompleteStepper: CompleteStepper {
             beforeCommit: beforeCommit.map { callback in
                 { handoff in try callback(handoff, renderPreparedState) }
             })
-        RegionPolicy.remove(Set(state.objects.keys).subtracting(frame.objects.keys), from: &state)
-        for (id, object) in frame.objects {
-            state.objects[id]?.position = object.position
-            state.objects[id]?.previousPosition = object.previousPosition
-            state.objects[id]?.velocity = object.velocity
-            state.objects[id]?.rotation = object.rotation
-            state.objects[id]?.angularVelocity = object.angularVelocity
-            state.objects[id]?.effectiveRadius = object.effectiveRadius
-            state.objects[id]?.bounds = object.bounds
-            state.objects[id]?.structuralShape = nil
+        // Solver zwraca podzbiór obiektów wejścia, więc przy równej liczbie nikt nie wypadł z regionu.
+        if frame.objects.count != state.objects.count {
+            RegionPolicy.remove(Set(state.objects.keys).subtracting(frame.objects.keys), from: &state)
         }
+        for (id, object) in frame.objects { state.objects[id]?.adopt(object) }
         let feedback = MotionControllers.feedback(&state, contacts: frame.contacts)
         let discrete = EventCompactor.finish(frame.events, overflow: frame.eventOverflow,
             feedback: feedback, state: state, previousBlockers: previousBlockers,
@@ -154,6 +148,20 @@ package final class NativeCompleteStepper: CompleteStepper {
             maximumContactCandidatesPerObject: frame.maximumContactCandidatesPerObject,
             hitTestResults: frame.hitTestResults,
             snappedObjectIDs: batch.appearedObjectIDs.union(frame.wrappedObjectIDs))
+    }
+}
+
+extension RuntimeObject {
+    /// Wynik kroku solvera zapisany jednym dostępem do rekordu; kształt strukturalny zostaje zużyty.
+    fileprivate mutating func adopt(_ object: NativePublicObject) {
+        position = object.position
+        previousPosition = object.previousPosition
+        velocity = object.velocity
+        rotation = object.rotation
+        angularVelocity = object.angularVelocity
+        effectiveRadius = object.effectiveRadius
+        bounds = object.bounds
+        structuralShape = nil
     }
 }
 
