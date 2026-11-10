@@ -94,6 +94,12 @@ package struct PublicWorldStressFrameSample {
     package let gpuMilliseconds: Double
     /// Czy klatka wywołała `BubblePhysicsMetalRender.encode`.
     package let renderEncoded: Bool
+    /// Znaczniki klatki w zegarze `DispatchTime.uptimeNanoseconds`: początek `advance`, początek kodowania,
+    /// koniec oczekiwania na GPU i powrót z `advance`. Zera, gdy profil klatki był niedostępny.
+    package let startNanoseconds: UInt64
+    package let encodingStartNanoseconds: UInt64
+    package let waitingEndNanoseconds: UInt64
+    package let endNanoseconds: UInt64
 }
 
 @MainActor
@@ -248,7 +254,7 @@ public enum PublicWorldStressBenchmark {
         pass.colorAttachments[0].storeAction = .store
         let total = warmupFrames + measuredFrames
         let full = try await runSeries(.full, world: world, scene: scene, queue: queue, warmupFrames: warmupFrames,
-            totalFrames: total, observer: frameObserver, progress: progress) { command in
+            totalFrames: total, observer: frameObserver, progress: { done, _ in progress(done, 2 * total) }) { command in
                 try renderer.encode(world: world, viewport: viewport, commandBuffer: command, renderPassDescriptor: pass)
             }
         // Druga seria: świeży świat tej samej sceny, ta sama rozgrzewka i te same indeksy kroków, `encodeRender` pusty.
@@ -258,7 +264,7 @@ public enum PublicWorldStressBenchmark {
         guard let physicsAssets = physicsWorld.assets else { throw StressBenchmarkError.metalUnavailable }
         physicsWorld.submit(try scene.initialTransaction(assets: physicsAssets))
         let physics = try await runSeries(.physicsOnly, world: physicsWorld, scene: scene, queue: queue,
-            warmupFrames: warmupFrames, totalFrames: total, observer: frameObserver, progress: { _, _ in },
+            warmupFrames: warmupFrames, totalFrames: total, observer: frameObserver, progress: { done, _ in progress(total + done, 2 * total) },
             render: nil)
         func p95(_ values: [Double]) -> Double {
             let sorted = values.sorted()
@@ -329,6 +335,7 @@ public enum PublicWorldStressBenchmark {
             if frame.stepIndex != UInt64(index + 1) || command.status != .completed
                 || world.diagnostics.lastAdvanceIssue != nil { result.failedFrames += 1 }
             var gpuMilliseconds = 0.0, preparation = 0.0, encoding = 0.0, waiting = 0.0, publication = 0.0
+            var encodingStartMark: UInt64 = 0, waitingEndMark: UInt64 = 0
             if let telemetry = world.benchmarkTelemetry {
                 result.guardCorrections += telemetry.guardCorrectionCount
                 if telemetry.didEncounterNonFinite { result.nonFiniteFrames += 1 }
@@ -341,6 +348,8 @@ public enum PublicWorldStressBenchmark {
                     encoding = profile.hostEncodingMilliseconds
                     waiting = profile.hostWaitingMilliseconds
                     publication = Double(end - profile.waitingEndNanoseconds) / 1_000_000
+                    encodingStartMark = profile.encodingStartNanoseconds
+                    waitingEndMark = profile.waitingEndNanoseconds
                 } else if index >= warmupFrames { result.failedFrames += 1 }
             } else { result.failedFrames += 1 }
             if index >= warmupFrames {
@@ -355,7 +364,9 @@ public enum PublicWorldStressBenchmark {
             result.maximumCandidates = max(result.maximumCandidates, world.diagnostics.maximumContactCandidatesPerObject)
             observer?(PublicWorldStressFrameSample(series: kind, index: index, frame: frame, elapsedMilliseconds: elapsed,
                 preparationMilliseconds: preparation, encodingMilliseconds: encoding, waitingMilliseconds: waiting,
-                publicationMilliseconds: publication, gpuMilliseconds: gpuMilliseconds, renderEncoded: renderEncoded))
+                publicationMilliseconds: publication, gpuMilliseconds: gpuMilliseconds, renderEncoded: renderEncoded,
+                startNanoseconds: start, encodingStartNanoseconds: encodingStartMark,
+                waitingEndNanoseconds: waitingEndMark, endNanoseconds: end))
             progress(index + 1, totalFrames)
             // BubbleWorld i renderer są celowo izolowane do MainActor. Bez tego
             // kooperacyjnego punktu SwiftUI nie może odmalować postępu ani

@@ -114,7 +114,7 @@ swift run -c release BubblePhysicsPerfGuard --scene acceptance --check-predictio
 
 Scena `acceptance` ma w `docs/benchmarks/perf-guard.json` punkt odniesienia i limit +10% jak pozostałe. Linia `STAGES` rozkłada klatkę na składowe (mediany p95 z przebiegów, w ms): `host_preparation`, `host_encoding`, `host_waiting`, `host_publication`, `host_non_gpu` (CPU poza GPU), `gpu` i `gpu_physics` (druga seria bez renderu). Raport z iPhone'a ma te same składowe w liniach `*_p95_ms`.
 
-`--calibrate` czyta raport z iPhone'a (jego commit z nagłówka `Mierzony kod: ...` musi być bieżącym commitem) i zapisuje `docs/benchmarks/iphone-x-calibration.json`: składowe iPhone'a i Maca z jednego commitu, mnożniki `cpu` i `physics` oraz koszt renderu GPU iPhone'a. Gdy plik istnieje, strażnik wypisuje linię `PREDICT`:
+`--calibrate` czyta raport z iPhone'a (jego commit z nagłówka `Mierzony kod: ...` jest wymagany i musi być bieżącym commitem; raport bez commitu jest odrzucany) i zapisuje `docs/benchmarks/iphone-x-calibration.json`: składowe iPhone'a i Maca z jednego commitu, mnożniki `cpu` i `physics` oraz koszt renderu GPU iPhone'a. Gdy plik istnieje, strażnik wypisuje linię `PREDICT`:
 
 ```text
 prognoza = r_cpu · host_non_gpu(Mac) + r_fiz · gpu_physics(Mac) + render_GPU(iPhone)

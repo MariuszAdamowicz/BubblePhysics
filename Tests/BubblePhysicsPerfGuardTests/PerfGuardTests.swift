@@ -324,9 +324,11 @@ final class PerfGuardTests: XCTestCase {
         }
         // Skrócony SHA tego samego commitu to ten sam commit.
         XCTAssertNoThrow(try DevicePrediction.calibrate(iPhone: parsed, mac: mac, commit: "a367bd0"))
-        // Raport bez commitu w nagłówku nie blokuje kalibracji.
+        // Raport bez commitu w nagłówku nie wiąże się z żadnym kodem, więc nie może być kalibracją.
         let anonymous = try DevicePrediction.parse(report: report(commit: nil))
-        XCTAssertNoThrow(try DevicePrediction.calibrate(iPhone: anonymous, mac: mac, commit: "abc1234"))
+        XCTAssertThrowsError(try DevicePrediction.calibrate(iPhone: anonymous, mac: mac, commit: "abc1234")) { error in
+            XCTAssertEqual(error as? DevicePredictionError, .missingCommit)
+        }
         var noCPU = mac
         noCPU.hostNonGPUMilliseconds = 0
         XCTAssertThrowsError(try DevicePrediction.calibrate(iPhone: parsed, mac: noCPU, commit: "a367bd0")) { error in
@@ -358,7 +360,7 @@ final class PerfGuardTests: XCTestCase {
 
     // P-B-81: na commicie kalibracji prognoza równa `host_non_gpu_p95_ms + gpu_p95_ms` raportu.
     func testPredictionAtTheCalibrationCommitEqualsNonGPUPlusGPUOfTheReport() throws {
-        let prediction = try DevicePrediction.predict(calibration: calibration(), mac: mac)
+        let prediction = DevicePrediction.predict(calibration: try calibration(), mac: mac)
         XCTAssertEqual(prediction.p95Milliseconds, 9.6007 + 14.7964, accuracy: 1e-9)
         XCTAssertEqual(prediction.cpuMilliseconds, 9.6007, accuracy: 1e-9)
         XCTAssertEqual(prediction.physicsMilliseconds, 12.0, accuracy: 1e-9)
@@ -371,20 +373,20 @@ final class PerfGuardTests: XCTestCase {
         let value = try calibration()
         var faster = mac
         faster.hostNonGPUMilliseconds = 1.25
-        let cpuOnly = try DevicePrediction.predict(calibration: value, mac: faster)
+        let cpuOnly = DevicePrediction.predict(calibration: value, mac: faster)
         XCTAssertEqual(cpuOnly.cpuMilliseconds, 9.6007 / 2, accuracy: 1e-9)
         XCTAssertEqual(cpuOnly.physicsMilliseconds, 12.0, accuracy: 1e-9)
         XCTAssertEqual(cpuOnly.renderMilliseconds, 14.7964 - 12.0, accuracy: 1e-9)
         faster.gpuPhysicsMilliseconds = 0.8
-        let both = try DevicePrediction.predict(calibration: value, mac: faster)
+        let both = DevicePrediction.predict(calibration: value, mac: faster)
         XCTAssertEqual(both.physicsMilliseconds, 6.0, accuracy: 1e-9)
         XCTAssertEqual(both.p95Milliseconds, 9.6007 / 2 + 6.0 + (14.7964 - 12.0), accuracy: 1e-9)
         // Składowe Maca, które nie wchodzą do prognozy (kodowanie, GPU z renderem), jej nie zmieniają.
         var other = mac
         other.gpuMilliseconds = 9.0
         other.hostEncodingMilliseconds = 9.0
-        XCTAssertEqual(try DevicePrediction.predict(calibration: value, mac: other).p95Milliseconds,
-                       try DevicePrediction.predict(calibration: value, mac: mac).p95Milliseconds, accuracy: 1e-12)
+        XCTAssertEqual(DevicePrediction.predict(calibration: value, mac: other).p95Milliseconds,
+                       DevicePrediction.predict(calibration: value, mac: mac).p95Milliseconds, accuracy: 1e-12)
     }
 
     // P-B-81: `--check-prediction` kończy się kodem 1 przy błędzie > 10%, 0 przy ≤ 10%.
@@ -455,7 +457,7 @@ final class PerfGuardTests: XCTestCase {
     func testStagesAndPredictLinesCarryTheKeysTheVerifyStepsCut() throws {
         let stages = DevicePrediction.stagesLine(scene: "acceptance", mac: mac)
         XCTAssertEqual(stages, "STAGES acceptance: host_preparation=1.0000 host_encoding=0.5700 host_waiting=1.0000 host_publication=0.9000 host_non_gpu=2.5000 gpu=1.9000 gpu_physics=1.6000")
-        let prediction = try DevicePrediction.predict(calibration: calibration(), mac: mac)
+        let prediction = DevicePrediction.predict(calibration: try calibration(), mac: mac)
         let line = DevicePrediction.predictLine(scene: "acceptance", prediction)
         XCTAssertEqual(line, "PREDICT iphone-x acceptance: p95=24.3971 cpu=9.6007 physics=12.0000 render=2.7964 target=15.00 gate=16.67")
         XCTAssertEqual(DevicePrediction.targetMilliseconds, 15.0)
@@ -553,5 +555,14 @@ final class PerfGuardTests: XCTestCase {
         // Bez pliku kalibracji nie ma z czym porównać.
         XCTAssertThrowsError(try PerfGuard.predictionLines(options: options, mac: mac,
             calibrationURL: temporaryURL("missing.json"), commit: { "a" }))
+    }
+
+    func testExitCodeFailsWhenEitherTheRegressionOrThePredictionFails() {
+        XCTAssertEqual(PerfGuard.combinedExitCode(regression: 1, prediction: 0), 1, "poprawna prognoza nie kasuje regresji")
+        XCTAssertEqual(PerfGuard.combinedExitCode(regression: 0, prediction: 1), 1)
+        XCTAssertEqual(PerfGuard.combinedExitCode(regression: 0, prediction: 0), 0)
+        XCTAssertEqual(PerfGuard.combinedExitCode(regression: 1, prediction: 1), 1)
+        XCTAssertEqual(PerfGuard.combinedExitCode(regression: 0, prediction: nil), 0)
+        XCTAssertEqual(PerfGuard.combinedExitCode(regression: 1, prediction: nil), 1)
     }
 }

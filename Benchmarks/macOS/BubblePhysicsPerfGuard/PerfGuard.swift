@@ -348,12 +348,17 @@ enum PerfGuard {
             return (lines, nil)
         }
         lines.append(DevicePrediction.predictLine(scene: predictionScene,
-            try DevicePrediction.predict(calibration: calibration, mac: mac)))
+            DevicePrediction.predict(calibration: calibration, mac: mac)))
         guard let path = options.checkPredictionReportPath else { return (lines, nil) }
         let check = try DevicePrediction.checkPrediction(report: String(contentsOfFile: path, encoding: .utf8),
             calibration: calibration, mac: mac)
         lines.append(check.text)
         return (lines, check.exitCode)
+    }
+
+    /// Kod wyjścia strażnika: porażka regresji albo prognozy daje porażkę całości.
+    static func combinedExitCode(regression: Int32, prediction: Int32?) -> Int32 {
+        prediction.map { max(regression, $0) } ?? regression
     }
 
     /// Punkt wejścia z `main.swift`; zwraca kod wyjścia procesu.
@@ -402,7 +407,7 @@ enum PerfGuard {
                 let prediction = try predictionLines(options: options, mac: StageComponents.median(of: stages.values),
                     calibrationURL: URL(fileURLWithPath: calibrationPath), commit: { try git(["rev-parse", "HEAD"]) })
                 prediction.lines.forEach { print($0) }
-                if let code = prediction.exitCode { exitCode = code }
+                exitCode = combinedExitCode(regression: exitCode, prediction: prediction.exitCode)
             }
             return exitCode
         } catch {

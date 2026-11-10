@@ -248,4 +248,21 @@ final class AcceptanceSceneTests: XCTestCase {
                 "składowe pokrywają czas klatki, bez dziur, klatka \(sample.index)")
         }
     }
+
+    /// Przygotowanie to start `advance` → początek kodowania, a publikacja to koniec oczekiwania → powrót z `advance`;
+    /// zamiana tych dwóch składowych miejscami zachowałaby sumę, więc pilnuje tego porównanie ze znacznikami profilu.
+    func testPreparationAndPublicationAreTheirOwnIntervalsOfTheFrameProfile() async throws {
+        let run = try await observedRun()
+        for sample in run.series(.full) {
+            XCTAssertLessThan(sample.startNanoseconds, sample.encodingStartNanoseconds, "klatka \(sample.index)")
+            XCTAssertLessThan(sample.encodingStartNanoseconds, sample.waitingEndNanoseconds, "klatka \(sample.index)")
+            XCTAssertLessThanOrEqual(sample.waitingEndNanoseconds, sample.endNanoseconds, "klatka \(sample.index)")
+            XCTAssertEqual(sample.preparationMilliseconds,
+                Double(sample.encodingStartNanoseconds - sample.startNanoseconds) / 1_000_000, accuracy: 1e-9,
+                "przygotowanie: początek advance → początek kodowania, klatka \(sample.index)")
+            XCTAssertEqual(sample.publicationMilliseconds,
+                Double(sample.endNanoseconds - sample.waitingEndNanoseconds) / 1_000_000, accuracy: 1e-9,
+                "publikacja: koniec oczekiwania → powrót z advance, klatka \(sample.index)")
+        }
+    }
 }

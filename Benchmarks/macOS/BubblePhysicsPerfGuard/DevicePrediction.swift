@@ -1,3 +1,4 @@
+import BubblePhysicsMetalRender
 import Foundation
 
 /// Składowe czasu klatki w milisekundach: mediany p95 z przebiegów na Macu albo wartości z raportu iPhone'a.
@@ -88,12 +89,14 @@ enum DevicePredictionError: Error, Equatable {
     case invalidValue(line: String, value: String)
     case nonPositiveComponent(String)
     case commitMismatch(report: String, current: String)
+    /// Raport z urządzenia bez nagłówka `Mierzony kod:`; kalibracja wymaga jednego, znanego commitu.
+    case missingCommit
 }
 
 enum DevicePrediction {
     /// Cel prognozy: zapas na błąd modelu pod bramką urządzenia.
     static let targetMilliseconds = 15.0
-    static let gateMilliseconds = 16.67
+    static let gateMilliseconds = PublicWorldStressBenchmark.acceptanceGateMilliseconds
     /// Największy dopuszczalny błąd prognozy względem raportu z urządzenia.
     static let errorTolerance = 0.10
 
@@ -145,7 +148,8 @@ enum DevicePrediction {
     }
 
     static func calibrate(iPhone: DeviceReport, mac: StageComponents, commit: String) throws -> DeviceCalibration {
-        if let reported = iPhone.commit, !sameCommit(reported, commit) {
+        guard let reported = iPhone.commit else { throw DevicePredictionError.missingCommit }
+        guard sameCommit(reported, commit) else {
             throw DevicePredictionError.commitMismatch(report: reported, current: commit)
         }
         guard mac.hostNonGPUMilliseconds.isFinite, mac.hostNonGPUMilliseconds > 0 else {
@@ -162,7 +166,7 @@ enum DevicePrediction {
     }
 
     /// `r_cpu · cpu_Mac + r_fiz · fizyka_GPU_Mac + render_GPU_iPhone`; koszt renderu pochodzi z kalibracji.
-    static func predict(calibration: DeviceCalibration, mac: StageComponents) throws -> PredictedFrame {
+    static func predict(calibration: DeviceCalibration, mac: StageComponents) -> PredictedFrame {
         let cpu = calibration.ratios.cpu * mac.hostNonGPUMilliseconds
         let physics = calibration.ratios.physics * mac.gpuPhysicsMilliseconds
         let render = calibration.iphoneRenderMilliseconds

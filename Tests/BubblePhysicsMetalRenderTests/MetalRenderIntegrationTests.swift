@@ -359,9 +359,11 @@ final class MetalRenderIntegrationTests: XCTestCase {
     func testPublicStressHarnessExercisesSameBufferWithoutContourReadback() async throws {
         let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
         var progress: [Int] = []
+        var totals = Set<Int>()
         let report = try await PublicWorldStressBenchmark.run(device: device,
-            warmupFrames: 1, measuredFrames: 2) { completed, _ in
+            warmupFrames: 1, measuredFrames: 2) { completed, total in
                 progress.append(completed)
+                totals.insert(total)
             }
         XCTAssertEqual(report.solverIterationLimit, 4)
         XCTAssertEqual(report.warmupFrames, 1)
@@ -373,7 +375,9 @@ final class MetalRenderIntegrationTests: XCTestCase {
         XCTAssertTrue(report.text.contains("gpu_p95_ms="))
         XCTAssertTrue(report.text.contains("host_encoding_p95_ms="))
         XCTAssertTrue(report.text.contains("host_waiting_p95_ms="))
-        XCTAssertEqual(progress, [1, 2, 3])
+        // Dwie serie po 3 klatki (z renderem i bez): postęp liczy obie, więc pasek nie stoi na 100% w drugiej serii.
+        XCTAssertEqual(progress, [1, 2, 3, 4, 5, 6])
+        XCTAssertEqual(totals, [6])
     }
 
     private func makeWorld(device: MTLDevice) throws -> BubbleWorld {
