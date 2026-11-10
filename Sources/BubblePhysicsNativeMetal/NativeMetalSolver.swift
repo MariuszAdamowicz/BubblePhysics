@@ -754,9 +754,10 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         // Pomiar przed korekcją pozwala warm-startowi zakończyć się bez dodatkowej iteracji.
         measureResidual()
         if hasRigidBodies {
-            dispatch("nativeRigidEmitCandidates", buffers: [rigidState.bodies, state.workingBubbles, inputPositions,
-                rigidState.control, rigidState.candidates, rigidState.rowCounts, state.candidateOverflow,
-                jointState.ranges, jointState.exclusions], threads: rigidState.count)
+            NativeMetalRigidCandidates.encode(encoder, pipelines: pipelines, bodies: rigidState.bodies,
+                bubbles: state.workingBubbles, positions: inputPositions, control: rigidState.control,
+                rows: rigidState.candidates, rowCounts: rigidState.rowCounts, overflow: state.candidateOverflow,
+                jointRanges: jointState.ranges, jointPartners: jointState.exclusions, bodyCount: rigidState.count)
             // CCD bryła–bryła po wierszach kandydatów, przed pętlą: faza 1 liczy czas uderzenia, faza 2 cofa bryły.
             dispatch("nativeRigidResolveCCD", buffers: [rigidState.bodies, rigidState.vertices, rigidState.triangles,
                 rigidState.control, rigidState.candidates, rigidState.rowCounts], threads: rigidState.count)

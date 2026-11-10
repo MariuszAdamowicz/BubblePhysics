@@ -122,4 +122,74 @@ final class NativeMetalChainKernelTests: XCTestCase {
             XCTAssertEqual(outputs[1][3 * stride], SIMD4(7, 7, 7, 7))
         }
     }
+
+    // MARK: kandydaci brył (zadanie 94)
+
+    private struct RigidCandidatesResult: Equatable {
+        var rows: [UInt32]
+        var rowCounts: [UInt32]
+        var overflow: [UInt32]
+    }
+
+    private func encodeRigidCandidates(device: MTLDevice, groupWidth: Int, bubbleCount: Int, bodyCount: Int,
+                                       limit: Int, seed: UInt64) throws -> (RigidCandidatesResult, Int) {
+        let pipelines = try NativeMetalPipelineCache.pipelines(for: device).stages
+        var generator = Generator(state: seed)
+        let bubbles: [NativeMetalBubble] = (0..<bubbleCount).map { index in
+            var bubble = NativeMetalBubble(NativeSolverBubble(id: NativeSolverBubbleID(rawValue: 1000 + index),
+                center: .zero, mass: 1, targetRadius: 0.4 + generator.unit() * 0.4))
+            bubble.position = SIMD4(generator.unit() * 8, generator.unit() * 8, generator.unit() * 8, generator.unit() * 8)
+            // Co siódma bańka nie przepuszcza filtra bryły.
+            if index % 7 == 3 { bubble.filter = SIMD4(1, 0, 0, NativeMetalFilter.encodeLayer(0)) }
+            return bubble
+        }
+        let positions: [SIMD4<Float>] = bubbles.map { SIMD4($0.position.x, $0.position.y, 0, 0) }
+        let bodies: [NativeRigidBody] = (0..<bodyCount).map { index in
+            var body = NativeRigidBody(identity: SIMD2(UInt64(5000 + index), 0),
+                pose: SIMD4(3 + Float(index), 4, 0, 0), previous: SIMD4(2.5 + Float(index), 4.2, 0, 0),
+                motion: .zero, physical: SIMD4(1, 1, 2.5, 0), ranges: .zero, flags: .zero,
+                filter: NativeMetalFilter.default, shape: SIMD4(index == 1 ? 1 : 0, 1, 0, 0), limits: .zero)
+            body.flags = SIMD4(index == 2 ? 1 : 0, 0, 0, 0)
+            return body
+        }
+        let entityCount = bubbleCount + bodyCount
+        var ranges = [SIMD4<UInt32>](repeating: .zero, count: entityCount)
+        // Pierwsza bryła nie koliduje z dwiema bańkami (więz bez collideConnected).
+        ranges[bubbleCount] = SIMD4(0, 0, 0, 2)
+        let partners: [UInt64] = [1005, 1010]
+        let rowCapacity = bodyCount * limit
+        let rows = try makeBuffer([UInt32](repeating: 0xDEAD_BEEF, count: rowCapacity * 8), device: device)
+        let rowCounts = try makeBuffer([UInt32](repeating: 0, count: bodyCount * 2), device: device)
+        let overflow = try makeBuffer([UInt32](repeating: 0, count: 2), device: device)
+        let control = try makeBuffer([SIMD4(UInt32(bodyCount), UInt32(bubbleCount), UInt32(limit), 0)], device: device)
+        let dispatches = try run(device: device) {
+            NativeMetalRigidCandidates.encode($0, pipelines: pipelines, bodies: try! makeBuffer(bodies, device: device),
+                bubbles: try! makeBuffer(bubbles, device: device), positions: try! makeBuffer(positions, device: device),
+                control: control, rows: rows, rowCounts: rowCounts, overflow: overflow,
+                jointRanges: try! makeBuffer(ranges, device: device), jointPartners: try! makeBuffer(partners, device: device),
+                bodyCount: bodyCount, groupWidth: groupWidth)
+        }
+        func read(_ buffer: MTLBuffer, _ count: Int) -> [UInt32] {
+            Array(UnsafeBufferPointer(start: buffer.contents().bindMemory(to: UInt32.self, capacity: count), count: count))
+        }
+        return (RigidCandidatesResult(rows: read(rows, rowCapacity * 8), rowCounts: read(rowCounts, bodyCount * 2),
+                                      overflow: read(overflow, 2)), dispatches)
+    }
+
+    func testCooperativeRigidCandidatesAreBitIdenticalToTheSerialScan() throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        // Rzadka scena (poniżej limitu) i gęsta (wiersz przepełniony, kandydaci odpadają).
+        for (bubbleCount, limit) in [(40, 32), (300, 32), (300, 128), (513, 64)] {
+            let serial = try encodeRigidCandidates(device: device, groupWidth: 1, bubbleCount: bubbleCount, bodyCount: 3,
+                                                    limit: limit, seed: UInt64(bubbleCount * 31 + limit))
+            XCTAssertGreaterThan(serial.0.rowCounts[0], 0, "bubbles \(bubbleCount)")
+            if bubbleCount >= 300, limit <= 64 { XCTAssertGreaterThan(serial.0.overflow[0], 0, "oczekiwano przepełnienia") }
+            for width in [32, 64, 128, 256] {
+                let cooperative = try encodeRigidCandidates(device: device, groupWidth: width, bubbleCount: bubbleCount,
+                                                             bodyCount: 3, limit: limit, seed: UInt64(bubbleCount * 31 + limit))
+                XCTAssertEqual(cooperative.0, serial.0, "bubbles \(bubbleCount) limit \(limit) width \(width)")
+                XCTAssertEqual(cooperative.1, 1)
+            }
+        }
+    }
 }

@@ -338,7 +338,9 @@ kernel void nativeRigidEmitCandidates(device NativeRigidBody *bodies [[buffer(0)
     constant uint4 &counts [[buffer(3)]], device NativeCandidate *rows [[buffer(4)]],
     device uint2 *rowCounts [[buffer(5)]], device atomic_uint *overflow [[buffer(6)]],
     device uint4 *jointRanges [[buffer(7)]], device ulong *jointPartners [[buffer(8)]],
-    uint index [[thread_position_in_grid]]) {
+    threadgroup uchar *hits [[threadgroup(0)]],
+    uint index [[threadgroup_position_in_grid]], uint lane [[thread_position_in_threadgroup]],
+    uint width [[threads_per_threadgroup]]) {
     if (index >= counts.x) return;
     uint limit = counts.z;
     NativeRigidBody b = bodies[index];
@@ -349,18 +351,35 @@ kernel void nativeRigidEmitCandidates(device NativeRigidBody *bodies [[buffer(0)
     if (!b.flags.x || nativeRigidIsRound(b)) {
         float2 bodyLow = min(b.pose.xy, b.previous.xy) - b.physical.z;
         float2 bodyHigh = max(b.pose.xy, b.previous.xy) + b.physical.z;
-        for (uint ai = 0; ai < counts.y; ++ai) {
-            NativeBubble a = bubbles[ai];
-            if (!nativeFilterAccepts(a.filter, b.filter)) continue;
-            if (nativeJointExcluded(jointRanges, jointPartners, entity, ulong(a.identity.x))) continue;
-            float2 center = positions[ai].xy;
-            float reach = 1.5f * a.physical.z;
-            float2 bubbleLow = min(center, a.position.zw) - reach, bubbleHigh = max(center, a.position.zw) + reach;
-            if (any(bubbleHigh < bodyLow) || any(bodyHigh < bubbleLow)) continue;
-            NativeCandidate candidate = { long2(a.identity.x, long(b.identity.x)), uint4(2, ai, index, 0) };
-            nativeInsertCandidate(row, count, dropped, limit, candidate);
+        // Grupa sprawdza bańki w porcjach po `width`: każdy wątek jedną, a wątek 0 wpisuje trafienia do wiersza
+        // w rosnącej kolejności `ai`, jak pojedynczy wątek. Wynik nie zależy od szerokości grupy.
+        for (uint base = 0; base < counts.y; base += width) {
+            uint ai = base + lane;
+            bool hit = false;
+            if (ai < counts.y) {
+                NativeBubble a = bubbles[ai];
+                hit = nativeFilterAccepts(a.filter, b.filter)
+                    && !nativeJointExcluded(jointRanges, jointPartners, entity, ulong(a.identity.x));
+                if (hit) {
+                    float2 center = positions[ai].xy;
+                    float reach = 1.5f * a.physical.z;
+                    float2 bubbleLow = min(center, a.position.zw) - reach, bubbleHigh = max(center, a.position.zw) + reach;
+                    hit = !(any(bubbleHigh < bodyLow) || any(bodyHigh < bubbleLow));
+                }
+            }
+            hits[lane] = hit ? 1 : 0;
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+            if (lane == 0) {
+                for (uint k = 0; k < width && base + k < counts.y; ++k) {
+                    if (!hits[k]) continue;
+                    NativeCandidate candidate = { long2(bubbles[base + k].identity.x, long(b.identity.x)), uint4(2, base + k, index, 0) };
+                    nativeInsertCandidate(row, count, dropped, limit, candidate);
+                }
+            }
+            threadgroup_barrier(mem_flags::mem_threadgroup);
         }
     }
+    if (lane != 0) return;
     for (uint other = 0; other < counts.x; ++other) {
         if (other == index) continue;
         uint low = min(index, other), high = max(index, other);

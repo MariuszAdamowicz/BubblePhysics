@@ -90,3 +90,30 @@ enum NativeMetalContourSmoothing {
         return passCount
     }
 }
+
+/// Kodowanie kandydatów kontaktu brył. Jedna grupa na bryłę przegląda bańki w porcjach, a wiersz zapełnia w tej samej
+/// kolejności co pojedynczy wątek, więc wynik nie zależy od szerokości grupy (szerokość 1 to dawny przebieg szeregowy).
+enum NativeMetalRigidCandidates {
+    static let defaultGroupWidth = 256
+
+    @discardableResult
+    static func encode(_ encoder: MTLComputeCommandEncoder, pipelines: [String: MTLComputePipelineState],
+                       bodies: MTLBuffer, bubbles: MTLBuffer, positions: MTLBuffer, control: MTLBuffer,
+                       rows: MTLBuffer, rowCounts: MTLBuffer, overflow: MTLBuffer,
+                       jointRanges: MTLBuffer, jointPartners: MTLBuffer, bodyCount: Int,
+                       groupWidth: Int = defaultGroupWidth) -> Int {
+        guard bodyCount > 0 else { return 0 }
+        let pipeline = pipelines["nativeRigidEmitCandidates"]!
+        let width = max(1, min(groupWidth, pipeline.maxTotalThreadsPerThreadgroup))
+        encoder.memoryBarrier(scope: .buffers)
+        encoder.setComputePipelineState(pipeline)
+        for (index, buffer) in [bodies, bubbles, positions, control, rows, rowCounts, overflow,
+                                jointRanges, jointPartners].enumerated() {
+            encoder.setBuffer(buffer, offset: 0, index: index)
+        }
+        encoder.setThreadgroupMemoryLength(width, index: 0)
+        encoder.dispatchThreadgroups(.init(width: bodyCount, height: 1, depth: 1),
+                                     threadsPerThreadgroup: .init(width: width, height: 1, depth: 1))
+        return 1
+    }
+}
