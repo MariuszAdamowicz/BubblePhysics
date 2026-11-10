@@ -120,7 +120,7 @@ Scena `acceptance` ma w `docs/benchmarks/perf-guard.json` punkt odniesienia i li
 prognoza = r_cpu · host_non_gpu(Mac) + r_fiz · gpu_physics(Mac) + render_GPU(iPhone)
 ```
 
-Prognoza celuje w 15,0 ms przy bramce 16,67 ms. Na commicie kalibracji równa się `host_non_gpu_p95_ms + gpu_p95_ms` raportu. `--check-prediction` porównuje prognozę z p95 nowego raportu z urządzenia, wypisuje `PREDICTION_ERROR` i kończy się kodem 1 przy błędzie większym niż 10%. Kalibrację powtarza się tylko wtedy, gdy punkt kontrolny rozjedzie się z prognozą o ponad 10%.
+Prognoza celuje w 15,0 ms przy bramce 16,67 ms. Na commicie kalibracji równa się `host_non_gpu_p95_ms + gpu_p95_ms` raportu. `--check-prediction` porównuje prognozę z p95 nowego raportu z urządzenia, wypisuje `PREDICTION_ERROR` i kończy się kodem 1 przy błędzie większym niż 10%. Kalibrację powtarza się tylko wtedy, gdy punkt kontrolny rozjedzie się z prognozą o ponad 10%. Od etapu 9 składowa CPU prognozy to suma przygotowania, kodowania, publikacji i oczekiwania ponad GPU (reszta `host_non_gpu` po odjęciu pozostałych), każda z własnym mnożnikiem `iphone_i / mac_i` z pól `iphone` i `mac` pliku kalibracji; gdy reszta Maca w kalibracji nie przekracza 0,1 ms, reszta dostaje mnożnik łączny `ratios.cpu`. Linia `PREDICT_CPU` podaje te składowe (`preparation`, `encoding`, `publication`, `waiting`).
 
 ## Układ repozytorium
 

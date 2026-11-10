@@ -74,8 +74,7 @@ struct CPUComponents: Equatable {
 struct PredictedFrame: Equatable {
     var p95Milliseconds: Double
     var cpuMilliseconds: Double
-    var cpuComponents = CPUComponents(preparationMilliseconds: 0, encodingMilliseconds: 0, publicationMilliseconds: 0,
-                                      waitingMilliseconds: 0)
+    var cpuComponents: CPUComponents
     var physicsMilliseconds: Double
     var renderMilliseconds: Double
 }
@@ -175,13 +174,44 @@ enum DevicePrediction {
             iphoneRenderMilliseconds: phone.gpuMilliseconds - phone.gpuPhysicsMilliseconds)
     }
 
-    /// `r_cpu · cpu_Mac + r_fiz · fizyka_GPU_Mac + render_GPU_iPhone`; koszt renderu pochodzi z kalibracji.
+    /// Reszta Maca w kalibracji nie większa niż to nie nadaje się na mianownik własnego mnożnika (szum pomiaru), więc
+    /// dostaje mnożnik łączny `ratios.cpu`.
+    static let smallestRestForOwnRatioMilliseconds = 0.1
+
+    /// Oczekiwanie ponad GPU: część `host_non_gpu`, której nie tłumaczą przygotowanie, kodowanie i publikacja. Pomiar może
+    /// dać sumę składowych większą od `host_non_gpu`, a czas nie bywa ujemny.
+    private static func rest(of components: StageComponents) -> Double {
+        max(0, components.hostNonGPUMilliseconds - components.hostPreparationMilliseconds
+            - components.hostEncodingMilliseconds - components.hostPublicationMilliseconds)
+    }
+
+    /// `iphone_i / mac_i` składowej z kalibracji; mnożnik łączny, gdy Mac nie ma jej do podzielenia.
+    private static func ratio(iphone: Double, mac: Double, fallback: Double) -> Double {
+        mac.isFinite && mac > 0 ? iphone / mac : fallback
+    }
+
+    /// `CPU = Σ (iphone_i / mac_i) · mac_teraz_i` po przygotowaniu, kodowaniu, publikacji i oczekiwaniu ponad GPU (reszta),
+    /// każde z własnym mnożnikiem z pól `iphone` i `mac` kalibracji. Fizyka to `r_fiz · fizyka_GPU_Mac`, a koszt renderu
+    /// pochodzi z kalibracji. Na commicie kalibracji suma CPU równa `host_non_gpu_p95_ms` raportu.
     static func predict(calibration: DeviceCalibration, mac: StageComponents) -> PredictedFrame {
-        let cpu = calibration.ratios.cpu * mac.hostNonGPUMilliseconds
+        let phone = calibration.iphone, reference = calibration.mac, combined = calibration.ratios.cpu
+        let referenceRest = rest(of: reference)
+        let restRatio = referenceRest <= smallestRestForOwnRatioMilliseconds
+            ? combined : ratio(iphone: rest(of: phone), mac: referenceRest, fallback: combined)
+        let parts = CPUComponents(
+            preparationMilliseconds: mac.hostPreparationMilliseconds * ratio(iphone: phone.hostPreparationMilliseconds,
+                mac: reference.hostPreparationMilliseconds, fallback: combined),
+            encodingMilliseconds: mac.hostEncodingMilliseconds * ratio(iphone: phone.hostEncodingMilliseconds,
+                mac: reference.hostEncodingMilliseconds, fallback: combined),
+            publicationMilliseconds: mac.hostPublicationMilliseconds * ratio(iphone: phone.hostPublicationMilliseconds,
+                mac: reference.hostPublicationMilliseconds, fallback: combined),
+            waitingMilliseconds: rest(of: mac) * restRatio)
+        let cpu = parts.preparationMilliseconds + parts.encodingMilliseconds + parts.publicationMilliseconds
+            + parts.waitingMilliseconds
         let physics = calibration.ratios.physics * mac.gpuPhysicsMilliseconds
         let render = calibration.iphoneRenderMilliseconds
         return PredictedFrame(p95Milliseconds: cpu + physics + render, cpuMilliseconds: cpu,
-            physicsMilliseconds: physics, renderMilliseconds: render)
+            cpuComponents: parts, physicsMilliseconds: physics, renderMilliseconds: render)
     }
 
     static func check(predictedP95: Double, reportedP95: Double) throws -> PredictionCheck {
@@ -214,5 +244,8 @@ enum DevicePrediction {
     }
 
     /// Linia `PREDICT_CPU` strażnika.
-    static func predictCPULine(scene: String, _ prediction: PredictedFrame) -> String { "" }
+    static func predictCPULine(scene: String, _ prediction: PredictedFrame) -> String {
+        let parts = prediction.cpuComponents
+        return "PREDICT_CPU iphone-x \(scene): preparation=\(format(parts.preparationMilliseconds)) encoding=\(format(parts.encodingMilliseconds)) publication=\(format(parts.publicationMilliseconds)) waiting=\(format(parts.waitingMilliseconds))"
+    }
 }

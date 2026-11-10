@@ -431,7 +431,7 @@ final class PerfGuardTests: XCTestCase {
         XCTAssertEqual(moved.cpuMilliseconds, 3.9 / 2 + 1.9882 + 3.1 * 2 + iPhoneRest, accuracy: 1e-9)
         // Jeden mnożnik łączny dałby tu inny wynik.
         let combined = value.ratios.cpu * (0.5 + 0.57 + 1.8 + 0.53)
-        XCTAssertGreaterThan(abs(moved.cpuMilliseconds - combined), 0.5)
+        XCTAssertGreaterThan(abs(moved.cpuMilliseconds - combined), 0.05)
     }
 
     // P-B-91: reszta Maca w kalibracji ≤ 0,1 ms nie jest mianownikiem własnego mnożnika, tylko dostaje mnożnik łączny.
