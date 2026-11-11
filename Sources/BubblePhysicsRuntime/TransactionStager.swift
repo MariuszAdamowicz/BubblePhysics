@@ -429,6 +429,12 @@ private struct StagingContext {
             try requireDriveMagnitude(length, "joint.length"); try requireDriveMagnitude(softness, "joint.softness")
             try requireDriveMagnitude(damping, "joint.damping")
         }
+        if case .hinge(let limits, let motor) = joint.kind {
+            if let limits {
+                try requireDriveMagnitude(limits.lower, "hinge.lower"); try requireDriveMagnitude(limits.upper, "hinge.upper")
+            }
+            if let motor { try requireDriveMagnitude(motor.targetAngularVelocity, "hinge.motor.targetAngularVelocity") }
+        }
         for bodyID in [joint.bodyA] + (joint.bodyB.map { [$0] } ?? []) {
             let body = try object(bodyID)
             switch body.descriptor {
