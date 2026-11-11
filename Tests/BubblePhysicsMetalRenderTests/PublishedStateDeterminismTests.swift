@@ -25,6 +25,13 @@ final class PublishedStateDeterminismTests: XCTestCase {
         for index in 0..<steps {
             if index > 0 { world.submit(try Stress300Scene.triangleReplacement(step: index)) }
             frame = await world.advance(by: 1.0 / 60)
+            // Dowody przy ewentualnej różnicy hashy: odrzucony krok zostawia transakcję w kolejce, a następny `advance`
+            // łączy dwie zamiany w jedną partię i wykonuje dwa kroki (stepIndex i potwierdzenia pokazują taki przypadek).
+            let diagnostics = world.diagnostics
+            XCTAssertNil(diagnostics.lastAdvanceIssue, "krok \(index + 1): problem advance")
+            XCTAssertNil(diagnostics.lastRejectionReason, "krok \(index + 1): odrzucenie klatki")
+            XCTAssertEqual(frame.stepIndex, UInt64(index + 1), "krok \(index + 1): numer kroku w klatce")
+            XCTAssertEqual(frame.transactionReceipts.count, 1, "krok \(index + 1): dokładnie jedno potwierdzenie transakcji")
         }
         let objectHash = PublishedStateHash.objects(frame)
         let contours = world.debugContourSnapshot()
