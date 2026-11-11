@@ -91,4 +91,20 @@ final class KinematicStagingTests: XCTestCase {
                            reason: .invalidValue(.nonFiniteValue(name)))
         }
     }
+
+    /// Skończony, ale ogromny napęd silnikowy (np. 3e38) przepełniał `Float` dopiero w kroku; odrzucony przy wejściu.
+    func testHugeFiniteMotorDriveIsRejectedAtStaging() throws {
+        let seeded = try TransactionStager.stage(resources().add(.rigidBody(box(2, role: .dynamic))), against: state()).state
+        let cases: [(MotorDrive, String)] = [
+            (try MotorDrive(force: [3e38, 0]), "motor.force"),
+            (try MotorDrive(force: [0, -3e38]), "motor.force"),
+            (try MotorDrive(torque: 3e38), "motor.torque"),
+        ]
+        for (drive, name) in cases {
+            assertRejected(WorldTransaction().setMotorDrive(id(2), drive: drive), against: seeded, index: 0,
+                           reason: .invalidValue(.valueOutOfRange(name)))
+        }
+        XCTAssertNoThrow(try TransactionStager.stage(WorldTransaction().setMotorDrive(id(2),
+            drive: try MotorDrive(force: [1e6, -1e6], torque: 1e6)), against: seeded))
+    }
 }

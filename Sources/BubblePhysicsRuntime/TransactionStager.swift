@@ -282,6 +282,8 @@ private struct StagingContext {
             state.objects[id]?.pathDrive = drive; state.objects[id]?.pathIndex = 0
             state.objects[id]?.pathStopped = false; state.objects[id]?.pathBlocker = nil
         case .setMotorDrive(let id, let drive):
+            try requireDriveMagnitude(drive.force.x, "motor.force"); try requireDriveMagnitude(drive.force.y, "motor.force")
+            try requireDriveMagnitude(drive.torque, "motor.torque")
             try apply(.setMotion(id, .motorDriven))
             state.objects[id]?.motorDrive = drive
         case .setKinematicDrive(let id, let drive):
@@ -420,6 +422,13 @@ private struct StagingContext {
     }
     mutating func add(_ joint: Joint) throws {
         guard state.joints[joint.id] == nil else { throw TransactionRejectionReason.duplicateJointID(joint.id) }
+        try requireDriveMagnitude(joint.anchorA.x, "joint.anchorA"); try requireDriveMagnitude(joint.anchorA.y, "joint.anchorA")
+        try requireDriveMagnitude(joint.anchorB.x, "joint.anchorB"); try requireDriveMagnitude(joint.anchorB.y, "joint.anchorB")
+        try requireDriveMagnitude(joint.referenceAngle, "joint.referenceAngle")
+        if case .distance(let length, let softness, let damping) = joint.kind {
+            try requireDriveMagnitude(length, "joint.length"); try requireDriveMagnitude(softness, "joint.softness")
+            try requireDriveMagnitude(damping, "joint.damping")
+        }
         for bodyID in [joint.bodyA] + (joint.bodyB.map { [$0] } ?? []) {
             let body = try object(bodyID)
             switch body.descriptor {
@@ -500,6 +509,8 @@ private struct StagingContext {
     /// (`.target`) i mnoży prędkość przez czas (`.velocity`); skończona, ale ogromna wartość (np. 3e38) przepełniała `Float`
     /// dopiero w kroku i zatrzymywała świat. 1e6 jest o rzędy wielkości ponad każdym realnym światem (dokładność `Float`
     /// przy 1e6 to ok. 0,06), a `2·1e6 / dt` mieści się w `Float` dla każdego `fixedTimeStep` ≥ 1e-30.
+    /// Ta sama granica obejmuje napęd silnikowy oraz kotwice, kąt odniesienia i parametry dystansu więzu
+    /// (solver liczy z nich różnice pozycji, przesunięcia dzielone przez `dt` i mnożniki XPBD).
     private static let maximumDriveMagnitude: Float = 1_000_000
 
     private func requireDriveMagnitude(_ value: Float, _ name: String) throws {
