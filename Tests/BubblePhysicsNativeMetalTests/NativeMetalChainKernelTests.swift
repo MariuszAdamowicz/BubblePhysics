@@ -615,4 +615,41 @@ final class NativeMetalChainKernelTests: XCTestCase {
             if limit == 6 { XCTAssertGreaterThan(expectedDropped, 0, "oczekiwano przepełnienia wiersza") }
         }
     }
+
+    // MARK: hit-test
+
+    /// `nativeHitTest` odrzuca bańkę po AABB konturu (`bounds`) przed parzystością przecięć: punkt poza obwiednią nie
+    /// trafia, nawet gdy leży w konturze. Obwiednię celowo rozjechano z konturem, aby odrzucenie było widoczne.
+    func testHitTestRejectsBubbleOutsideItsContourBoundsBeforeScanningTheContour() throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let pipelines = try NativeMetalPipelineCache.pipelines(for: device).stages
+        let square: [SIMD2<Float>] = [[-1, -1], [1, -1], [1, 1], [-1, 1]]
+        func bubble(_ id: Int, bounds: SIMD4<Float>) -> NativeMetalBubble {
+            var bubble = NativeMetalBubble(NativeSolverBubble(id: NativeSolverBubbleID(rawValue: id), center: .zero,
+                mass: 1, targetRadius: 1))
+            bubble.bounds = bounds
+            return bubble
+        }
+        let bubbles = [bubble(7, bounds: SIMD4(-1, -1, 1, 1)), bubble(9, bounds: SIMD4(10, 10, 12, 12))]
+        let queries: [SIMD2<Float>] = [[0, 0], [11, 11], [3, 0]]
+        let results = try makeBuffer([NativeHitTestResult](repeating: .init(identity: 0, layer: 0, found: 0), count: queries.count),
+                                     device: device)
+        let dummy = try makeBuffer([SIMD4<Float>](repeating: .zero, count: 4), device: device)
+        let buffers: [MTLBuffer] = [try makeBuffer(queries, device: device), try makeBuffer(square + square, device: device),
+            try makeBuffer([UInt32(4), UInt32(4)], device: device), try makeBuffer(bubbles, device: device), dummy, dummy, dummy,
+            try makeBuffer([NativeMetalControl(counts: SIMD4(2, 0, 0, 0), physics: .zero, contactDamping: .zero)], device: device),
+            try makeBuffer([SIMD4<UInt32>(UInt32(queries.count), 0, 4, 0)], device: device), results]
+        let pipeline = try XCTUnwrap(pipelines["nativeHitTest"])
+        _ = try run(device: device) { encoder in
+            encoder.setComputePipelineState(pipeline)
+            for (index, buffer) in buffers.enumerated() { encoder.setBuffer(buffer, offset: 0, index: index) }
+            encoder.dispatchThreads(.init(width: queries.count, height: 1, depth: 1),
+                threadsPerThreadgroup: .init(width: queries.count, height: 1, depth: 1))
+            return 1
+        }
+        let records = Array(UnsafeBufferPointer(start: results.contents().bindMemory(to: NativeHitTestResult.self,
+            capacity: queries.count), count: queries.count))
+        XCTAssertEqual(records.map(\.found), [1, 0, 0])
+        XCTAssertEqual(records[0].identity, 7, "bańka 9 ma kontur w punkcie, ale obwiednię poza nim, więc odpada")
+    }
 }
