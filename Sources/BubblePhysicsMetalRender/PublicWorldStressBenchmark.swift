@@ -35,7 +35,7 @@ public struct PublicWorldStressReport: Sendable {
     /// Udział naklejek w renderze: czas GPU pełnego renderu minus czas GPU renderu bez naklejek (nie mniej niż 0).
     public internal(set) var gpuRenderDecalsEstimateMilliseconds: Double = 0
     /// Czy raport ma podział renderu (serie z samym czyszczeniem celu i bez naklejek); tylko scena akceptacyjna.
-    public internal(set) var hasRenderSplit = false
+    package internal(set) var hasRenderSplit = false
     /// Liczba klatek obu serii, w których świat nie miał oczekiwanej liczby baniek (tylko poziomy trybu pojemności).
     public internal(set) var bubbleCountMismatchFrames = 0
     /// Czy każda seria przebiegu zebrała dokładnie `measuredFrames` klatek mierzonych (nieudana klatka ucina serię).
