@@ -87,4 +87,26 @@ final class PackageGraphTests: XCTestCase {
                 "\(target) zależy od \(reached.intersection(Self.forbidden).sorted())")
         }
     }
+
+    /// Harness benchmarku publicznego świata (sceny, pojemność, bramki, raport) to narzędzie pomiarowe, a nie API gry:
+    /// żyje w osobnym module `BubblePhysicsMetalRenderBenchmark`, poza produktami, które linkuje gra.
+    func testStressBenchmarkHarnessLivesOutsideProductionModules() throws {
+        let graph = try loadGraph()
+        XCTAssertNotNil(graph["BubblePhysicsMetalRenderBenchmark"], "brak modułu benchmarku")
+        for target in Self.productionTargets {
+            XCTAssertFalse(closure(of: [target], in: graph).contains("BubblePhysicsMetalRenderBenchmark"),
+                "\(target) nie może zależeć od modułu benchmarku")
+        }
+        let sources = packageRoot.appendingPathComponent("Sources")
+        for directory in ["BubblePhysicsMetalRender", "BubblePhysicsPublic", "BubblePhysicsAssets"] {
+            let root = sources.appendingPathComponent(directory)
+            let files = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)?
+                .compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" } ?? []
+            for file in files {
+                let text = try String(contentsOf: file, encoding: .utf8)
+                XCTAssertFalse(text.contains("enum PublicWorldStressBenchmark"),
+                    "harness benchmarku w module produkcyjnym: \(file.lastPathComponent)")
+            }
+        }
+    }
 }

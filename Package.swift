@@ -11,6 +11,8 @@ let package = Package(
         .library(name: "BubblePhysics", targets: ["BubblePhysics"]),
         .library(name: "BubblePhysicsMetalRender", targets: ["BubblePhysicsMetalRender"]),
         .library(name: "BubblePhysicsAssets", targets: ["BubblePhysicsAssets"]),
+        // Harness benchmarku publicznego świata i renderera (aplikacja iOS, strażnik wydajności); nie jest API gry.
+        .library(name: "BubblePhysicsMetalRenderBenchmark", targets: ["BubblePhysicsMetalRenderBenchmark"]),
         // Wyłącznie narzędzia diagnostyczne; te moduły nie są API gry.
         .library(name: "BubblePhysicsBenchmarkSupport", targets: [
             "BubblePhysicsLegacy", "BubblePhysicsCore", "BubblePhysicsMetal",
@@ -27,11 +29,13 @@ let package = Package(
                           path: "Benchmarks/macOS/BubblePhysicsReferenceBench"),
         // Strażnik wydajności na Macu; uruchamiany `swift run -c release BubblePhysicsPerfGuard`, nie przez `swift test`.
         .executableTarget(name: "BubblePhysicsPerfGuard",
-                          dependencies: ["BubblePhysics", "BubblePhysicsMetalRender"],
+                          dependencies: ["BubblePhysics", "BubblePhysicsMetalRender", "BubblePhysicsMetalRenderBenchmark"],
                           path: "Benchmarks/macOS/BubblePhysicsPerfGuard"),
         .target(name: "BubblePhysics", dependencies: ["BubblePhysicsRuntime", "BubblePhysicsModel", "BubblePhysicsNativeMetal", "BubblePhysicsAssets"],
                 path: "Sources/BubblePhysicsPublic", exclude: ["Model"]),
         .target(name: "BubblePhysicsMetalRender", dependencies: ["BubblePhysics", "BubblePhysicsNativeMetal", "BubblePhysicsModel", "BubblePhysicsAssets"]),
+        .target(name: "BubblePhysicsMetalRenderBenchmark",
+                dependencies: ["BubblePhysics", "BubblePhysicsMetalRender", "BubblePhysicsAssets"]),
         .target(name: "BubblePhysicsModel", path: "Sources/BubblePhysicsPublic/Model"),
         // Rejestr tekstur gry per urządzenie Metal; nie zależy od świata ani od Runtime.
         .target(name: "BubblePhysicsAssets", dependencies: ["BubblePhysicsModel"]),
@@ -54,8 +58,9 @@ let package = Package(
         ),
         .testTarget(name: "BubblePhysicsPublicTests", dependencies: ["BubblePhysics", "BubblePhysicsAssets"]),
         .testTarget(name: "BubblePhysicsAssetsTests", dependencies: ["BubblePhysicsAssets"]),
-        .testTarget(name: "BubblePhysicsPerfGuardTests", dependencies: ["BubblePhysicsPerfGuard"]),
-        .testTarget(name: "BubblePhysicsMetalRenderTests", dependencies: ["BubblePhysics", "BubblePhysicsMetalRender", "BubblePhysicsAssets"]),
+        .testTarget(name: "BubblePhysicsPerfGuardTests", dependencies: ["BubblePhysicsPerfGuard", "BubblePhysicsMetalRenderBenchmark"]),
+        .testTarget(name: "BubblePhysicsMetalRenderTests", dependencies: ["BubblePhysics", "BubblePhysicsMetalRender", "BubblePhysicsAssets",
+                                                                           "BubblePhysicsMetalRenderBenchmark"]),
         .testTarget(name: "BubblePhysicsRuntimeTests", dependencies: ["BubblePhysics", "BubblePhysicsRuntime"]),
         .testTarget(name: "BubblePhysicsTests", dependencies: ["BubblePhysicsLegacy"]),
         .testTarget(name: "BubblePhysicsCoreTests", dependencies: ["BubblePhysicsCore"]),

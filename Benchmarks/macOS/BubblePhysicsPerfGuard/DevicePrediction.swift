@@ -1,4 +1,5 @@
 import BubblePhysicsMetalRender
+import BubblePhysicsMetalRenderBenchmark
 import Foundation
 
 /// Składowe czasu klatki w milisekundach: mediany p95 z przebiegów na Macu albo wartości z raportu iPhone'a.
