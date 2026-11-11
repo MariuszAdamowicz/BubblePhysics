@@ -36,8 +36,10 @@ public struct PublicWorldStressReport: Sendable {
     public internal(set) var gpuRenderDecalsEstimateMilliseconds: Double = 0
     /// Czy raport ma podział renderu (serie z samym czyszczeniem celu i bez naklejek); tylko scena akceptacyjna.
     public internal(set) var hasRenderSplit = false
-    /// Zaślepka: liczba klatek, w których świat nie miał oczekiwanej liczby baniek.
+    /// Liczba klatek obu serii, w których świat nie miał oczekiwanej liczby baniek (tylko poziomy trybu pojemności).
     public internal(set) var bubbleCountMismatchFrames = 0
+    /// Najgorszy stan termiczny urządzenia z klatek mierzonych wszystkich serii.
+    public internal(set) var worstThermalState: ProcessInfo.ThermalState = .nominal
     public let maximumMilliseconds: Double
     public let guardCorrections: Int
     public let nonFiniteFrames: Int
@@ -184,11 +186,18 @@ public enum PublicWorldStressBenchmark {
             case .stress(let count): return try Stress300Scene.initialTransaction(bubbleCount: count)
             case .mixed: return try MixedScene.initialTransaction()
             case .decals, .acceptance:
-                let texture = try assets.register(Self.decalTextureImage())
-                let font = try assets.register(font: "Helvetica-Bold", characters: "0123456789")
-                return try Stress300Scene.initialTransaction(bubbleCount: Stress300Scene.defaultBubbleCount,
-                    decorations: .init(texture: texture, font: font, acceptance: self == .acceptance))
+                return try Self.decoratedTransaction(assets: assets, bubbleCount: Stress300Scene.defaultBubbleCount,
+                                                     acceptance: self == .acceptance)
             }
+        }
+
+        /// Scena `decals` albo akceptacyjna z `bubbleCount` bańkami: rejestruje teksturę i czcionkę i buduje transakcję początkową.
+        @MainActor static func decoratedTransaction(assets: AssetRegistry, bubbleCount: Int,
+                                                    acceptance: Bool) throws -> WorldTransaction {
+            let texture = try assets.register(Self.decalTextureImage())
+            let font = try assets.register(font: "Helvetica-Bold", characters: "0123456789")
+            return try Stress300Scene.initialTransaction(bubbleCount: bubbleCount,
+                decorations: .init(texture: texture, font: font, acceptance: acceptance))
         }
 
         /// Gradient 64×64 z alfą 1: tekstura przyklejona do każdej bańki sceny `decals`.
@@ -236,8 +245,8 @@ public enum PublicWorldStressBenchmark {
                       measuredFrames: measuredFrames, progress: progress)
     }
 
-    /// `renderSize` w pikselach celu renderu; `nil` daje 375 × wysokość regionu sceny. Viewport pokrywa region sceny
-    /// w całości przy proporcjach celu, więc wynik w natywnej rozdzielczości nie jest rozciągnięty.
+    /// `run(device:spec:…)` dla jednej ze scen benchmarku, z podziałem renderu sceny akceptacyjnej.
+    /// `renderSize` w pikselach celu renderu; `nil` daje 375 × wysokość regionu sceny.
     /// `renderTargetObserver` dostaje cel renderu zaraz po utworzeniu (szew testowy: rozmiar zamiast pól raportu).
     package static func run(device: MTLDevice, scene: Scene = .stress300, renderSize: CGSize? = nil,
                             renderTargetObserver: ((MTLTexture) -> Void)? = nil,
@@ -245,13 +254,29 @@ public enum PublicWorldStressBenchmark {
                             warmupFrames: Int, measuredFrames: Int,
                             progress: @escaping @MainActor (Int, Int) -> Void) async throws
         -> PublicWorldStressReport {
-        let height = scene.regionHeight
-        let (pixelWidth, pixelHeight) = try pixelSize(renderSize, regionHeight: height)
-        let world = try BubbleWorld.makeBenchmarkWorld(configuration: try scene.configuration(),
+        try await run(device: device, spec: BenchmarkSceneSpec(scene), renderSize: renderSize,
+                      renderTargetObserver: renderTargetObserver, frameObserver: frameObserver,
+                      warmupFrames: warmupFrames, measuredFrames: measuredFrames, progress: progress)
+    }
+
+    /// Viewport pokrywa region sceny w całości przy proporcjach celu, więc wynik w natywnej rozdzielczości nie jest rozciągnięty.
+    /// Cel renderu: `renderSize`, a bez niego rozmiar własny specyfikacji (poziom pojemności), a bez niego 375 × wysokość regionu.
+    /// `renderSplit: false` pomija serie podziału renderu sceny akceptacyjnej (tryb pojemności).
+    /// `thermalState` jest czytany raz po każdej klatce mierzonej każdej serii (nie w rozgrzewce); najgorszy stan trafia do raportu.
+    package static func run(device: MTLDevice, spec: BenchmarkSceneSpec, renderSize: CGSize? = nil, renderSplit: Bool = true,
+                            thermalState: () -> ProcessInfo.ThermalState = { ProcessInfo.processInfo.thermalState },
+                            renderTargetObserver: ((MTLTexture) -> Void)? = nil,
+                            frameObserver: ((PublicWorldStressFrameSample) -> Void)? = nil,
+                            warmupFrames: Int, measuredFrames: Int,
+                            progress: @escaping @MainActor (Int, Int) -> Void) async throws
+        -> PublicWorldStressReport {
+        let height = spec.regionHeight
+        let (pixelWidth, pixelHeight) = try pixelSize(renderSize ?? spec.renderSize, regionHeight: height)
+        let world = try BubbleWorld.makeBenchmarkWorld(configuration: try spec.configuration(),
             device: device, solverIterationLimit: 4)
         guard let assets = world.assets else { throw StressBenchmarkError.metalUnavailable }
         let renderer = try BubblePhysicsMetalRender(device: device, assets: assets)
-        world.submit(try scene.initialTransaction(assets: assets))
+        world.submit(try spec.initialTransaction(assets: assets))
         let aspect = Float(pixelWidth) / Float(pixelHeight)
         let viewWidth = max(375, height * aspect)
         let viewport = try Viewport(center: [187.5, height / 2], size: [viewWidth, viewWidth / aspect])
@@ -267,43 +292,45 @@ public enum PublicWorldStressBenchmark {
         pass.colorAttachments[0].loadAction = .clear
         pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1)
         pass.colorAttachments[0].storeAction = .store
-        let splitsRender = scene == .acceptance
+        let splitsRender = renderSplit && spec.splitsRender
         let seriesCount = splitsRender ? 4 : 2
         let total = warmupFrames + measuredFrames
         func seriesProgress(_ number: Int) -> @MainActor (Int, Int) -> Void {
             { done, _ in progress(number * total + done, seriesCount * total) }
         }
-        let full = try await runSeries(.full, world: world, scene: scene, queue: queue, warmupFrames: warmupFrames,
-            totalFrames: total, observer: frameObserver, progress: seriesProgress(0)) { command in
+        let full = try await runSeries(.full, world: world, spec: spec, queue: queue, warmupFrames: warmupFrames,
+            totalFrames: total, thermalState: thermalState, observer: frameObserver, progress: seriesProgress(0)) { command in
                 try renderer.encode(world: world, viewport: viewport, commandBuffer: command, renderPassDescriptor: pass)
             }
         // Druga seria: świeży świat tej samej sceny, ta sama rozgrzewka i te same indeksy kroków, `encodeRender` pusty.
         // Fizyka obu serii jest identyczna, więc czas GPU drugiej to czas fizyki bez renderu.
-        let physicsWorld = try freshWorld(scene, device: device)
-        let physics = try await runSeries(.physicsOnly, world: physicsWorld, scene: scene, queue: queue,
-            warmupFrames: warmupFrames, totalFrames: total, observer: frameObserver, progress: seriesProgress(1),
-            render: nil)
+        let physicsWorld = try freshWorld(spec, device: device)
+        let physics = try await runSeries(.physicsOnly, world: physicsWorld, spec: spec, queue: queue,
+            warmupFrames: warmupFrames, totalFrames: total, thermalState: thermalState, observer: frameObserver,
+            progress: seriesProgress(1), render: nil)
         // Podział renderu (tylko scena akceptacyjna): każda seria na świeżym świecie tej samej sceny, z tą samą rozgrzewką
         // i tymi samymi indeksami kroków, więc fizyka jest identyczna. Pass z samym czyszczeniem celu mierzy koszt, którego
         // nie da się zbić (prawdziwy drawable też musi być zapisany), a render bez naklejek odsłania udział naklejek.
         var clear: SeriesResult?, withoutDecals: SeriesResult?
         var splitWorlds: [BubbleWorld] = []
         if splitsRender {
-            let clearWorld = try freshWorld(scene, device: device)
-            clear = try await runSeries(.clearOnly, world: clearWorld, scene: scene, queue: queue,
-                warmupFrames: warmupFrames, totalFrames: total, observer: frameObserver, progress: seriesProgress(2)) { command in
+            let clearWorld = try freshWorld(spec, device: device)
+            clear = try await runSeries(.clearOnly, world: clearWorld, spec: spec, queue: queue,
+                warmupFrames: warmupFrames, totalFrames: total, thermalState: thermalState, observer: frameObserver,
+                progress: seriesProgress(2)) { command in
                     guard let encoder = command.makeRenderCommandEncoder(descriptor: pass) else {
                         throw BubblePhysicsMetalRenderError.renderEncoderUnavailable
                     }
                     encoder.label = "bubble-physics.benchmark-clear-only"
                     encoder.endEncoding()
                 }
-            let decalsWorld = try freshWorld(scene, device: device)
+            let decalsWorld = try freshWorld(spec, device: device)
             guard let decalsAssets = decalsWorld.assets else { throw StressBenchmarkError.metalUnavailable }
             let decalsRenderer = try BubblePhysicsMetalRender(device: device, assets: decalsAssets)
             decalsRenderer.drawsDecals = false
-            withoutDecals = try await runSeries(.withoutDecals, world: decalsWorld, scene: scene, queue: queue,
-                warmupFrames: warmupFrames, totalFrames: total, observer: frameObserver, progress: seriesProgress(3)) { command in
+            withoutDecals = try await runSeries(.withoutDecals, world: decalsWorld, spec: spec, queue: queue,
+                warmupFrames: warmupFrames, totalFrames: total, thermalState: thermalState, observer: frameObserver,
+                progress: seriesProgress(3)) { command in
                     try decalsRenderer.encode(world: decalsWorld, viewport: viewport, commandBuffer: command,
                                               renderPassDescriptor: pass)
                 }
@@ -317,7 +344,8 @@ public enum PublicWorldStressBenchmark {
         let measured = full.frameMilliseconds.sorted()
         let frameP95 = p95(measured)
         let extra = [clear, withoutDecals].compactMap { $0 }
-        var report = PublicWorldStressReport(scene: scene.name, deviceName: device.name, warmupFrames: warmupFrames,
+        let allSeries = [full, physics] + extra
+        var report = PublicWorldStressReport(scene: spec.name, deviceName: device.name, warmupFrames: warmupFrames,
             measuredFrames: measured.count, solverIterationLimit: 4, p95Milliseconds: frameP95,
             gpuP95Milliseconds: p95(full.gpuMilliseconds), hostNonGPUP95Milliseconds: p95(full.hostNonGPUMilliseconds),
             hostEncodingP95Milliseconds: p95(full.encodingMilliseconds),
@@ -326,14 +354,16 @@ public enum PublicWorldStressBenchmark {
             hostPublicationP95Milliseconds: p95(full.publicationMilliseconds),
             gpuPhysicsP95Milliseconds: p95(physics.gpuMilliseconds),
             maximumMilliseconds: measured.last ?? .infinity, guardCorrections: full.guardCorrections,
-            nonFiniteFrames: ([full, physics] + extra).reduce(0) { $0 + $1.nonFiniteFrames },
-            fallbackFrames: ([full, physics] + extra).reduce(0) { $0 + $1.fallbackFrames },
-            failedFrames: ([full, physics] + extra).reduce(0) { $0 + $1.failedFrames },
+            nonFiniteFrames: allSeries.reduce(0) { $0 + $1.nonFiniteFrames },
+            fallbackFrames: allSeries.reduce(0) { $0 + $1.fallbackFrames },
+            failedFrames: allSeries.reduce(0) { $0 + $1.failedFrames },
             contourCPUReadbacks: ([world, physicsWorld] + splitWorlds).reduce(0) { $0 + $1.benchmarkContourCPUReadbackCount },
             renderWidth: pixelWidth, renderHeight: pixelHeight,
-            contactCandidateOverflow: world.diagnostics.contactCandidateOverflow,
-            maximumCandidatesPerObject: full.maximumCandidates, candidateLimit: BubbleWorld.contactCandidateLimit,
-            gateMilliseconds: scene.gateMilliseconds)
+            contactCandidateOverflow: ([world, physicsWorld] + splitWorlds).reduce(0) { $0 + $1.diagnostics.contactCandidateOverflow },
+            maximumCandidatesPerObject: allSeries.map(\.maximumCandidates).max() ?? 0,
+            candidateLimit: BubbleWorld.contactCandidateLimit, gateMilliseconds: spec.gateMilliseconds)
+        report.bubbleCountMismatchFrames = allSeries.reduce(0) { $0 + $1.bubbleCountMismatchFrames }
+        report.worstThermalState = allSeries.map(\.worstThermalState).max { $0.rawValue < $1.rawValue } ?? .nominal
         if let clear, let withoutDecals {
             report.hasRenderSplit = true
             report.gpuRenderClearEstimateMilliseconds = max(0, p95(clear.gpuMilliseconds) - p95(physics.gpuMilliseconds))
@@ -342,41 +372,58 @@ public enum PublicWorldStressBenchmark {
         return report
     }
 
-    /// Zaślepka: `run` ze specyfikacją sceny; ignoruje `spec` (zadanie 102).
-    package static func run(device: MTLDevice, spec: BenchmarkSceneSpec, renderSize: CGSize? = nil, renderSplit: Bool = true,
-                            thermalState: () -> ProcessInfo.ThermalState = { ProcessInfo.processInfo.thermalState },
-                            renderTargetObserver: ((MTLTexture) -> Void)? = nil,
-                            frameObserver: ((PublicWorldStressFrameSample) -> Void)? = nil,
-                            warmupFrames: Int, measuredFrames: Int,
-                            progress: @escaping @MainActor (Int, Int) -> Void) async throws -> PublicWorldStressReport {
-        try await run(device: device, scene: .stress300, renderSize: renderSize, renderTargetObserver: renderTargetObserver,
-                      frameObserver: frameObserver, warmupFrames: warmupFrames, measuredFrames: measuredFrames, progress: progress)
-    }
-
-    /// Zaślepka: pomiar pojemności z wartościami domyślnymi.
+    /// Pomiar pojemności: poziomy 100–400 baniek co 50 sceny akceptacyjnej w stałej skali, każdy po 30 klatkach rozgrzewki
+    /// i 300 mierzonych (seria z renderem i seria bez renderu), z czekaniem na `nominal` przed każdym poziomem
+    /// (najdłużej 10 minut) i stanem termicznym z klatek mierzonych w raporcie. Wymaga fizycznego urządzenia dla wyniku akceptacyjnego.
     public static func measureCapacity(device: MTLDevice,
                                        progress: @escaping @MainActor (PublicWorldCapacityProgress) -> Void = { _ in }) async throws
         -> PublicWorldCapacityReport {
-        try await measureCapacity(device: device, levels: [100, 150, 200, 250, 300, 350, 400], warmupFrames: 30,
-                                  measuredFrames: 300, thermalState: { ProcessInfo.processInfo.thermalState },
+        try await measureCapacity(device: device, levels: Array(stride(from: 100, through: 400, by: 50)),
+                                  warmupFrames: 30, measuredFrames: 300,
+                                  thermalState: { ProcessInfo.processInfo.thermalState },
                                   clock: .system, cooldownLimit: 600, progress: progress)
     }
 
-    /// Zaślepka: wariant `package` ze wstrzykniętymi poziomami, liczbą klatek, stanem termicznym, zegarem i limitem czekania.
-    package static func measureCapacity(device: MTLDevice, levels: [Int], warmupFrames: Int, measuredFrames: Int,
-                                        thermalState: () -> ProcessInfo.ThermalState, clock: CooldownClock, cooldownLimit: Double,
+    /// Wariant ze wstrzykniętymi poziomami, liczbą klatek, stanem termicznym, zegarem i limitem czekania (szew testów).
+    /// Stan termiczny jest czytany przy czekaniu przed poziomem, a potem raz po każdej klatce mierzonej obu serii.
+    package static func measureCapacity(device: MTLDevice, levels counts: [Int], warmupFrames: Int, measuredFrames: Int,
+                                        thermalState: () -> ProcessInfo.ThermalState, clock: CooldownClock,
+                                        cooldownLimit: Double,
                                         progress: @escaping @MainActor (PublicWorldCapacityProgress) -> Void = { _ in }) async throws
         -> PublicWorldCapacityReport {
-        PublicWorldCapacityReport(deviceName: device.name, warmupFrames: warmupFrames, measuredFrames: measuredFrames, levels: [])
+        var levels: [PublicWorldCapacityReport.Level] = []
+        for (index, count) in counts.enumerated() {
+            try Task.checkCancellation()
+            func event(_ phase: PublicWorldCapacityProgress.Phase) -> PublicWorldCapacityProgress {
+                PublicWorldCapacityProgress(bubbleCount: count, levelIndex: index, levelCount: counts.count, phase: phase)
+            }
+            let cooldown = try await ThermalCooldown.wait(thermalState: thermalState, clock: clock, limit: cooldownLimit) {
+                progress(event(.cooldown(seconds: $0, thermalState: $1)))
+            }
+            let report = try await run(device: device, spec: .capacity(bubbleCount: count), renderSplit: false,
+                thermalState: thermalState, warmupFrames: warmupFrames, measuredFrames: measuredFrames) { done, total in
+                    progress(event(.measuring(done: done, total: total)))
+                }
+            levels.append(PublicWorldCapacityReport.Level(report, bubbleCount: count, cooldownSeconds: cooldown.seconds,
+                                                          cooldownTimedOut: cooldown.timedOut))
+        }
+        return PublicWorldCapacityReport(deviceName: device.name, warmupFrames: warmupFrames,
+                                         measuredFrames: measuredFrames, levels: levels)
     }
-
     /// Świeży świat tej samej sceny z transakcją początkową, dla serii na identycznej fizyce.
-    private static func freshWorld(_ scene: Scene, device: MTLDevice) throws -> BubbleWorld {
-        let world = try BubbleWorld.makeBenchmarkWorld(configuration: try scene.configuration(),
+    private static func freshWorld(_ spec: BenchmarkSceneSpec, device: MTLDevice) throws -> BubbleWorld {
+        let world = try BubbleWorld.makeBenchmarkWorld(configuration: try spec.configuration(),
             device: device, solverIterationLimit: 4)
         guard let assets = world.assets else { throw StressBenchmarkError.metalUnavailable }
-        world.submit(try scene.initialTransaction(assets: assets))
+        world.submit(try spec.initialTransaction(assets: assets))
         return world
+    }
+
+    private static func bubbleCount(of frame: WorldFrame) -> Int {
+        frame.objects.values.reduce(0) { count, state in
+            if case .bubble = state.kind { return count + 1 }
+            return count
+        }
     }
 
     /// Zmierzone klatki jednej serii (bez rozgrzewki) i liczniki bezpieczeństwa całej serii.
@@ -393,21 +440,26 @@ public enum PublicWorldStressBenchmark {
         var fallbackFrames = 0
         var failedFrames = 0
         var maximumCandidates = 0
+        /// Klatki (także rozgrzewki), w których liczba baniek świata różniła się od oczekiwanej przez specyfikację.
+        var bubbleCountMismatchFrames = 0
+        /// Najgorszy stan termiczny z klatek mierzonych serii.
+        var worstThermalState = ProcessInfo.ThermalState.nominal
     }
 
     /// Jedna seria `totalFrames` klatek na `world`: transakcja kroku, `advance` z jednym buforem i pomiar składowych.
     /// `render` nil to pusty `encodeRender` (seria fizyki bez renderu).
     /// Składowe dzielą klatkę bez dziur: przygotowanie (początek `advance` → początek kodowania), kodowanie, oczekiwanie
     /// na GPU i publikacja (koniec oczekiwania → powrót z `advance`), wszystkie w zegarze `DispatchTime.uptimeNanoseconds`.
-    private static func runSeries(_ kind: PublicWorldStressFrameSample.Series, world: BubbleWorld, scene: Scene,
+    private static func runSeries(_ kind: PublicWorldStressFrameSample.Series, world: BubbleWorld, spec: BenchmarkSceneSpec,
                                   queue: MTLCommandQueue, warmupFrames: Int, totalFrames: Int,
+                                  thermalState: () -> ProcessInfo.ThermalState,
                                   observer: ((PublicWorldStressFrameSample) -> Void)?,
                                   progress: @escaping @MainActor (Int, Int) -> Void,
                                   render: ((MTLCommandBuffer) throws -> Void)?) async throws -> SeriesResult {
         var result = SeriesResult()
         for index in 0..<totalFrames {
             try Task.checkCancellation()
-            if let transaction = try scene.stepTransaction(step: index) { world.submit(transaction) }
+            if let transaction = try spec.stepTransaction(step: index) { world.submit(transaction) }
             guard let command = queue.makeCommandBuffer() else { throw StressBenchmarkError.metalUnavailable }
             var renderEncoded = false
             let start = DispatchTime.now().uptimeNanoseconds
@@ -439,7 +491,12 @@ public enum PublicWorldStressBenchmark {
                     waitingEndMark = profile.waitingEndNanoseconds
                 } else if index >= warmupFrames { result.failedFrames += 1 }
             } else { result.failedFrames += 1 }
+            if let expected = spec.expectedBubbleCount, bubbleCount(of: frame) != expected {
+                result.bubbleCountMismatchFrames += 1
+            }
             if index >= warmupFrames {
+                let state = thermalState()
+                if state.rawValue > result.worstThermalState.rawValue { result.worstThermalState = state }
                 result.gpuMilliseconds.append(gpuMilliseconds)
                 result.hostNonGPUMilliseconds.append(max(0, elapsed - gpuMilliseconds))
                 result.preparationMilliseconds.append(preparation)
@@ -545,8 +602,12 @@ package enum Stress300Scene {
                 id: ObjectID(rawValue: UInt64(10_001 + index)), vertices: vertices,
                 physicsMaterialID: polygonMaterialID, renderMaterialID: styleID)))
         }
-        transaction = transaction.add(.rigidBody(try triangle(step: 0, kinematic: acceptance)))
-        if acceptance { transaction = transaction.setKinematicDrive(triangleID, drive: .path(try trianglePath())) }
+        // Tor sceny akceptacyjnej jest odwzorowany w osi y na wysokość regionu (poziomy pojemności); inne sceny zostają przy 700.
+        let triangleRegionHeight = acceptance ? height : referenceRegionHeight
+        transaction = transaction.add(.rigidBody(try triangle(step: 0, kinematic: acceptance, regionHeight: triangleRegionHeight)))
+        if acceptance {
+            transaction = transaction.setKinematicDrive(triangleID, drive: .path(try trianglePath(regionHeight: triangleRegionHeight)))
+        }
         return transaction
     }
 
@@ -557,18 +618,31 @@ package enum Stress300Scene {
 
     private static let triangleID = ObjectID(rawValue: 10_000)
     private static let triangleWaypoints: [WorldPoint] = [[187.5,350], [65,105], [310,595], [310,105], [65,595]]
+    /// Wysokość regionu sceny 300 baniek, dla której podano `triangleWaypoints`.
+    private static let referenceRegionHeight: Float = 700
+
+    /// Punkty toru odwzorowane afinicznie w osi y na region o wysokości `regionHeight`:
+    /// y′ = 105 + (y − 105)·(H − 210)/490, więc obwiednia trójkąta ma na całym torze te same odstępy od dolnej (53)
+    /// i górnej (71) krawędzi co przy H = 700, gdzie punkty zostają bez zmian.
+    private static func waypoints(regionHeight: Float) -> [WorldPoint] {
+        guard regionHeight != referenceRegionHeight else { return triangleWaypoints }
+        let scale = (regionHeight - 210) / 490
+        return triangleWaypoints.map { WorldPoint($0.x, 105 + ($0.y - 105) * scale) }
+    }
 
     /// Tor kinematycznego trójkąta sceny akceptacyjnej: te same punkty co w stress-300, dwa okrążenia, 200 jednostek na sekundę.
-    private static func trianglePath() throws -> PathDrive {
-        let lap = Array(triangleWaypoints.dropFirst()) + [triangleWaypoints[0]]
+    private static func trianglePath(regionHeight: Float = referenceRegionHeight) throws -> PathDrive {
+        let points = waypoints(regionHeight: regionHeight)
+        let lap = Array(points.dropFirst()) + [points[0]]
         return try PathDrive(points: lap + lap, speed: 200)
     }
 
-    private static func triangle(step: Int, kinematic: Bool = false) throws -> RigidBodyDescriptor {
+    private static func triangle(step: Int, kinematic: Bool = false,
+                                 regionHeight: Float = referenceRegionHeight) throws -> RigidBodyDescriptor {
         let polygonMaterialID = PhysicsMaterialID(rawValue: 2)
         let styleID = RenderMaterialID(rawValue: 1)
         let triangleVertices: [WorldPoint] = [[-46,34], [46,34], [0,-52]]
-        let waypoints = triangleWaypoints
+        let waypoints = waypoints(regionHeight: regionHeight)
         let leg = (step / 40) % waypoints.count
         let next = (leg + 1) % waypoints.count
         let t = Float(step % 40) / 40
@@ -723,52 +797,172 @@ package enum MixedScene {
     }
 }
 
-/// Zaślepka (zadanie 101): specyfikacja sceny z poziomu pojemności; treść właściwa powstaje w zadaniu 102.
+/// Specyfikacja sceny benchmarku: jedna ze scen `Scene` albo poziom trybu pojemności (scena akceptacyjna z n bańkami).
+/// `run(device:scene:…)` buduje ją z `Scene`, a tryb pojemności z liczby baniek.
 package struct BenchmarkSceneSpec {
-    package let bubbleCount: Int
-    package static func capacity(bubbleCount: Int) -> BenchmarkSceneSpec { BenchmarkSceneSpec(bubbleCount: bubbleCount) }
-    private var scene: PublicWorldStressBenchmark.Scene { .stress(bubbleCount: bubbleCount) }
-    package var regionHeight: Float { scene.regionHeight }
-    package var renderSize: CGSize? { nil }
-    package func configuration() throws -> WorldConfiguration { try scene.configuration() }
+    private enum Kind {
+        case scene(PublicWorldStressBenchmark.Scene)
+        case capacity(bubbleCount: Int)
+    }
+    private let kind: Kind
+
+    package init(_ scene: PublicWorldStressBenchmark.Scene) { kind = .scene(scene) }
+
+    /// Poziom pojemności: obszar 375 × H, H = ⌈n/15⌉·33,5 + 30, ten sam generator baniek (pierwsze n baniek jak na każdym
+    /// poziomie), teksturą i naklejką tekstową na każdej bańce, dwiema warstwami z materiałem alfa i kinematycznym trójkątem
+    /// z torem odwzorowanym w osi y. Poziom 300 daje te same operacje co `Scene.acceptance`.
+    package static func capacity(bubbleCount: Int) -> BenchmarkSceneSpec {
+        BenchmarkSceneSpec(kind: .capacity(bubbleCount: bubbleCount))
+    }
+
+    private init(kind: Kind) { self.kind = kind }
+
+    package var name: String {
+        switch kind {
+        case .scene(let scene): return scene.name
+        case .capacity(let count): return "capacity-\(count)"
+        }
+    }
+
+    /// Próg p95 pełnej klatki.
+    package var gateMilliseconds: Double {
+        switch kind {
+        case .scene(let scene): return scene.gateMilliseconds
+        case .capacity: return PublicWorldStressBenchmark.acceptanceGateMilliseconds
+        }
+    }
+
+    package var regionHeight: Float {
+        switch kind {
+        case .scene(let scene): return scene.regionHeight
+        case .capacity(let count): return Stress300Scene.regionHeight(bubbleCount: count)
+        }
+    }
+
+    /// Własny cel renderu specyfikacji w pikselach: 1125 × ⌊2436·H/700⌋ (stała skala sceny 300) albo `nil`.
+    package var renderSize: CGSize? {
+        switch kind {
+        case .scene: return nil
+        case .capacity: return CGSize(width: 1125, height: (2436.0 * Double(regionHeight) / 700).rounded(.down))
+        }
+    }
+
+    /// Czy scena ma serie podziału renderu (tylko scena akceptacyjna).
+    package var splitsRender: Bool {
+        if case .scene(.acceptance) = kind { return true }
+        return false
+    }
+
+    /// Liczba baniek, którą świat ma mieć w każdej klatce, albo `nil`, gdy scena jej nie pilnuje.
+    package var expectedBubbleCount: Int? {
+        if case .capacity(let count) = kind { return count }
+        return nil
+    }
+
+    package func configuration() throws -> WorldConfiguration {
+        switch kind {
+        case .scene(let scene): return try scene.configuration()
+        case .capacity(let count): return try Stress300Scene.configuration(bubbleCount: count)
+        }
+    }
+
     @MainActor package func initialTransaction(assets: AssetRegistry) throws -> WorldTransaction {
-        try scene.initialTransaction(assets: assets)
+        switch kind {
+        case .scene(let scene): return try scene.initialTransaction(assets: assets)
+        case .capacity(let count):
+            return try PublicWorldStressBenchmark.Scene.decoratedTransaction(assets: assets, bubbleCount: count, acceptance: true)
+        }
+    }
+
+    package func stepTransaction(step: Int) throws -> WorldTransaction? {
+        switch kind {
+        case .scene(let scene): return try scene.stepTransaction(step: step)
+        // Trójkąt jedzie sam według `KinematicDrive` z transakcji początkowej.
+        case .capacity: return nil
+        }
     }
 }
 
-/// Zaślepka: zegar schładzania z wstrzykniętym czasem i uśpieniem.
+/// Zegar czekania na schłodzenie: czas w sekundach i uśpienie; wstrzykiwany w testach.
 package struct CooldownClock {
     package var now: () -> Double
     package var sleep: (Double) async throws -> Void
-    package static let system = CooldownClock(now: { ProcessInfo.processInfo.systemUptime }, sleep: { _ in })
-    package init(now: @escaping () -> Double, sleep: @escaping (Double) async throws -> Void) { self.now = now; self.sleep = sleep }
+
+    package init(now: @escaping () -> Double, sleep: @escaping (Double) async throws -> Void) {
+        self.now = now
+        self.sleep = sleep
+    }
+
+    /// Zegar systemu: monotoniczny czas pracy i `Task.sleep`.
+    package static let system = CooldownClock(
+        now: { ProcessInfo.processInfo.systemUptime },
+        sleep: { seconds in try await Task.sleep(nanoseconds: UInt64(max(0, seconds) * 1_000_000_000)) })
 }
 
-/// Zaślepka: czekanie na `nominal` przed poziomem pojemności.
+/// Czekanie na stan termiczny `nominal` przed poziomem pojemności.
 @MainActor package enum ThermalCooldown {
+    /// Co ile sekund sprawdzany jest stan termiczny podczas czekania.
     package static let pollIntervalSeconds = 5.0
+
+    /// Czeka, aż `thermalState` zwróci `nominal`, najdłużej `limit` sekund. Zwraca czas czekania i to, czy limit minął
+    /// (wtedy poziom jest mierzony mimo to). Stan jest czytany przed każdym uśpieniem, więc `nominal` od początku nie czeka wcale.
+    /// `onPoll` dostaje czas dotychczasowego czekania i stan z każdego czytania.
     package static func wait(thermalState: () -> ProcessInfo.ThermalState, clock: CooldownClock, limit: Double,
                              onPoll: (Double, ProcessInfo.ThermalState) -> Void = { _, _ in }) async throws
-        -> (seconds: Double, timedOut: Bool) { (0, false) }
+        -> (seconds: Double, timedOut: Bool) {
+        let start = clock.now()
+        while true {
+            let state = thermalState()
+            let elapsed = clock.now() - start
+            onPoll(elapsed, state)
+            if state == .nominal { return (elapsed, false) }
+            if elapsed >= limit { return (elapsed, true) }
+            try await clock.sleep(min(pollIntervalSeconds, limit - elapsed))
+        }
+    }
 }
 
-/// Zaślepka: postęp trybu pojemności.
+extension ProcessInfo.ThermalState {
+    /// Nazwa stanu w raporcie pojemności.
+    fileprivate var capacityReportName: String {
+        switch self {
+        case .nominal: return "nominal"
+        case .fair: return "fair"
+        case .serious: return "serious"
+        case .critical: return "critical"
+        @unknown default: return "critical"
+        }
+    }
+}
+
+/// Postęp trybu pojemności: poziom, czekanie na schłodzenie albo pomiar.
 public struct PublicWorldCapacityProgress: Sendable {
-    public enum Phase: Sendable { case cooldown(seconds: Double, thermalState: ProcessInfo.ThermalState), measuring(done: Int, total: Int) }
+    public enum Phase: Sendable {
+        /// Czekanie na `nominal`: dotychczasowy czas czekania w sekundach i ostatnio odczytany stan.
+        case cooldown(seconds: Double, thermalState: ProcessInfo.ThermalState)
+        /// Pomiar poziomu: ukończone klatki ze wszystkich serii poziomu (z rozgrzewką).
+        case measuring(done: Int, total: Int)
+    }
+
+    /// Liczba baniek mierzonego poziomu.
     public let bubbleCount: Int
+    /// Numer poziomu od 0 i liczba poziomów.
     public let levelIndex: Int
     public let levelCount: Int
     public let phase: Phase
 }
 
-/// Zaślepka: raport trybu pojemności.
+/// Wynik trybu pojemności: jedna linia na poziom i pojemność wg reguły z G12-AC4.
 public struct PublicWorldCapacityReport: Sendable {
+    /// Wynik jednego poziomu: liczniki sumują obie serie (z renderem i bez renderu).
     public struct Level: Sendable {
         public let bubbleCount: Int
+        /// Czas czekania na `nominal` przed poziomem w sekundach.
         public let cooldownSeconds: Double
+        /// Czy czekanie przekroczyło limit i poziom zmierzono mimo to.
         public let cooldownTimedOut: Bool
+        /// Najgorszy stan termiczny z klatek mierzonych obu serii.
         public let thermalWorst: ProcessInfo.ThermalState
-        public var isValid: Bool { false }
         public let p95Milliseconds: Double
         public let hostNonGPUP95Milliseconds: Double
         public let gpuPhysicsP95Milliseconds: Double
@@ -779,44 +973,119 @@ public struct PublicWorldCapacityReport: Sendable {
         public let nonFiniteFrames: Int
         public let contourCPUReadbacks: Int
         public let contactCandidateOverflow: Int
+        /// Czy w każdej klatce obu serii świat miał dokładnie `bubbleCount` baniek.
         public let bubblesMatchedInEveryFrame: Bool
-        public var passesGate: Bool { false }
-        public var text: String { "" }
+
+        /// Poziom jest ważny, gdy najgorszy stan termiczny to `nominal` albo `fair`.
+        public var isValid: Bool { thermalWorst == .nominal || thermalWorst == .fair }
+        /// Czy p95 pełnej klatki mieści się w bramce 60 FPS.
+        public var passesGate: Bool { p95Milliseconds <= PublicWorldStressBenchmark.acceptanceGateMilliseconds }
+
+        public var text: String {
+            "level=\(bubbleCount); cooldown_s=\(String(format: "%.1f", cooldownSeconds)); "
+                + "cooldown_timeout=\(cooldownTimedOut ? 1 : 0); thermal_worst=\(thermalWorst.capacityReportName); "
+                + "valid=\(isValid ? 1 : 0); p95_ms=\(String(format: "%.4f", p95Milliseconds)); "
+                + "host_non_gpu_p95_ms=\(String(format: "%.4f", hostNonGPUP95Milliseconds)); "
+                + "gpu_physics_p95_ms=\(String(format: "%.4f", gpuPhysicsP95Milliseconds)); "
+                + "gpu_render_estimate_ms=\(String(format: "%.4f", gpuRenderEstimateMilliseconds)); "
+                + "max_candidates_per_object=\(maximumCandidatesPerObject); candidate_limit=\(candidateLimit); "
+                + "failed_frames=\(failedFrames); non_finite_frames=\(nonFiniteFrames); "
+                + "contour_cpu_readbacks=\(contourCPUReadbacks); contact_candidate_overflow=\(contactCandidateOverflow); "
+                + "bubbles=\(bubblesMatchedInEveryFrame ? String(bubbleCount) : "mismatch")"
+        }
+
         package init(bubbleCount: Int, cooldownSeconds: Double = 0, cooldownTimedOut: Bool = false,
                      thermalWorst: ProcessInfo.ThermalState = .nominal, p95Milliseconds: Double = 0,
                      hostNonGPUP95Milliseconds: Double = 0, gpuPhysicsP95Milliseconds: Double = 0,
-                     gpuRenderEstimateMilliseconds: Double = 0, maximumCandidatesPerObject: Int = 0, candidateLimit: Int = 128,
-                     failedFrames: Int = 0, nonFiniteFrames: Int = 0, contourCPUReadbacks: Int = 0,
-                     contactCandidateOverflow: Int = 0, bubblesMatchedInEveryFrame: Bool = true) {
+                     gpuRenderEstimateMilliseconds: Double = 0, maximumCandidatesPerObject: Int = 0,
+                     candidateLimit: Int = 128, failedFrames: Int = 0, nonFiniteFrames: Int = 0,
+                     contourCPUReadbacks: Int = 0, contactCandidateOverflow: Int = 0,
+                     bubblesMatchedInEveryFrame: Bool = true) {
             self.bubbleCount = bubbleCount; self.cooldownSeconds = cooldownSeconds; self.cooldownTimedOut = cooldownTimedOut
             self.thermalWorst = thermalWorst; self.p95Milliseconds = p95Milliseconds
-            self.hostNonGPUP95Milliseconds = hostNonGPUP95Milliseconds; self.gpuPhysicsP95Milliseconds = gpuPhysicsP95Milliseconds
+            self.hostNonGPUP95Milliseconds = hostNonGPUP95Milliseconds
+            self.gpuPhysicsP95Milliseconds = gpuPhysicsP95Milliseconds
             self.gpuRenderEstimateMilliseconds = gpuRenderEstimateMilliseconds
             self.maximumCandidatesPerObject = maximumCandidatesPerObject; self.candidateLimit = candidateLimit
             self.failedFrames = failedFrames; self.nonFiniteFrames = nonFiniteFrames
             self.contourCPUReadbacks = contourCPUReadbacks; self.contactCandidateOverflow = contactCandidateOverflow
             self.bubblesMatchedInEveryFrame = bubblesMatchedInEveryFrame
         }
+
+        /// Poziom z raportu przebiegu `run` (obie serie zsumowane) i czasu czekania przed nim.
+        package init(_ report: PublicWorldStressReport, bubbleCount: Int, cooldownSeconds: Double, cooldownTimedOut: Bool) {
+            self.init(bubbleCount: bubbleCount, cooldownSeconds: cooldownSeconds, cooldownTimedOut: cooldownTimedOut,
+                      thermalWorst: report.worstThermalState, p95Milliseconds: report.p95Milliseconds,
+                      hostNonGPUP95Milliseconds: report.hostNonGPUP95Milliseconds,
+                      gpuPhysicsP95Milliseconds: report.gpuPhysicsP95Milliseconds,
+                      gpuRenderEstimateMilliseconds: report.gpuRenderEstimateMilliseconds,
+                      maximumCandidatesPerObject: report.maximumCandidatesPerObject, candidateLimit: report.candidateLimit,
+                      failedFrames: report.failedFrames, nonFiniteFrames: report.nonFiniteFrames,
+                      contourCPUReadbacks: report.contourCPUReadbacks,
+                      contactCandidateOverflow: report.contactCandidateOverflow,
+                      bubblesMatchedInEveryFrame: report.bubbleCountMismatchFrames == 0)
+        }
     }
+
+    /// Pojemność wg reguły G12-AC4.
     public enum Capacity: Equatable, Sendable {
-        case bubbles(Int), atLeastLargest(Int), belowSmallest(Int), undecidedThermal
-        public var reportText: String { "" }
+        /// Największy poziom zdający razem ze wszystkimi niższymi.
+        case bubbles(Int)
+        /// Zdają wszystkie poziomy; wartość to największy z nich.
+        case atLeastLargest(Int)
+        /// Nie zdaje najmniejszy poziom; wartość to on.
+        case belowSmallest(Int)
+        /// Poziom z warunku reguły jest nieważny (termika), pomiar trzeba powtórzyć.
+        case undecidedThermal
+
+        /// Wartość linii `capacity=`: liczba, `>=<największy>`, `<<najmniejszy>` albo `undecided_thermal`.
+        public var reportText: String {
+            switch self {
+            case .bubbles(let count): return String(count)
+            case .atLeastLargest(let count): return ">=\(count)"
+            case .belowSmallest(let count): return "<\(count)"
+            case .undecidedThermal: return "undecided_thermal"
+            }
+        }
     }
+
     public let deviceName: String
     public let warmupFrames: Int
     public let measuredFrames: Int
     public let levels: [Level]
     public let capacity: Capacity
-    public var text: String { "" }
+
+    public var text: String {
+        let header = """
+        path=public BubbleWorld + BubblePhysicsMetalRender, same command buffer
+        device=\(deviceName)
+        scene=capacity
+        warmup=\(warmupFrames); measured=\(measuredFrames)
+        p95_gate_ms=\(String(format: "%.4f", PublicWorldStressBenchmark.acceptanceGateMilliseconds))
+        """
+        return ([header] + levels.map(\.text) + ["capacity=\(capacity.reportText)"]).joined(separator: "\n")
+    }
+
     package init(deviceName: String, warmupFrames: Int, measuredFrames: Int, levels: [Level]) {
         self.deviceName = deviceName; self.warmupFrames = warmupFrames; self.measuredFrames = measuredFrames
-        self.levels = levels; self.capacity = .undecidedThermal
+        self.levels = levels; self.capacity = CapacityRule.evaluate(levels)
     }
 }
 
-/// Zaślepka: reguła pojemności na poziomach.
+/// Reguła pojemności: największy poziom, przy którym p95 pełnej klatki mieści się w bramce na nim i na wszystkich niższych.
+/// Wszystkie te poziomy i pierwszy niezdający muszą być ważne, inaczej wynik jest nierozstrzygnięty (termika). Gdy zdają
+/// wszystkie, pojemność to „≥ największy” (pod warunkiem ważności wszystkich), a gdy nie zdaje najmniejszy, „< najmniejszy”.
+/// Poziomy powyżej pierwszego niezdającego nie wpływają na wynik, także nieważne.
 package enum CapacityRule {
-    package static func evaluate(_ levels: [PublicWorldCapacityReport.Level]) -> PublicWorldCapacityReport.Capacity { .undecidedThermal }
+    package static func evaluate(_ levels: [PublicWorldCapacityReport.Level]) -> PublicWorldCapacityReport.Capacity {
+        let ordered = levels.sorted { $0.bubbleCount < $1.bubbleCount }
+        guard let smallest = ordered.first, let largest = ordered.last else { return .undecidedThermal }
+        guard let firstFailing = ordered.firstIndex(where: { !$0.passesGate }) else {
+            return ordered.allSatisfy(\.isValid) ? .atLeastLargest(largest.bubbleCount) : .undecidedThermal
+        }
+        guard ordered[...firstFailing].allSatisfy(\.isValid) else { return .undecidedThermal }
+        return firstFailing == 0 ? .belowSmallest(smallest.bubbleCount) : .bubbles(ordered[firstFailing - 1].bubbleCount)
+    }
 }
 
 package enum StressBenchmarkError: Error {

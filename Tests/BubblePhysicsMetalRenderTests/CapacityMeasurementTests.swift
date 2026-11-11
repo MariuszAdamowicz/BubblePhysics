@@ -67,7 +67,7 @@ final class CapacityMeasurementTests: XCTestCase {
     // MARK: - P-B-92: wymiary poziomów
 
     func testLevelRegionAndRenderTargetFollowTheFormulaForEveryLevel() throws {
-        let expectedPixels = [100: 920, 150: 1270, 200: 1620, 250: 1970, 300: 2436, 350: 2902, 400: 3252]
+        let expectedPixels = [100: 920, 150: 1270, 200: 1736, 250: 2086, 300: 2436, 350: 2902, 400: 3252]
         for count in levelCounts {
             let spec = BenchmarkSceneSpec.capacity(bubbleCount: count)
             let height = Float((count + 14) / 15) * 33.5 + 30
