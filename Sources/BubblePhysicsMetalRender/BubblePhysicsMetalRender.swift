@@ -23,13 +23,26 @@ public final class BubblePhysicsMetalRender {
     /// Biała tekstura 1×1 dla materiałów bez tekstury, bo fragment zawsze próbkuje.
     private let whiteTexture: MTLTexture
     /// Dane zależne tylko od lokalnego pierścienia bryły: indeksy trójkątów i prostokąt otaczający, więc są liczone raz.
-    private struct RingGeometry {
+    /// Klasa, bo wpis jest oznaczany numerem klatki przy każdym użyciu bez drugiego haszowania pierścienia.
+    private final class RingGeometry {
         let indices: [Int]
         let minimum: SIMD2<Float>
         let size: SIMD2<Float>
+        var lastUsedFrame: UInt64
+        init(indices: [Int], minimum: SIMD2<Float>, size: SIMD2<Float>, lastUsedFrame: UInt64) {
+            self.indices = indices; self.minimum = minimum; self.size = size; self.lastUsedFrame = lastUsedFrame
+        }
     }
     private var ringGeometryCache: [[WorldPoint]: RingGeometry] = [:]
+    /// Powyżej tej liczby kształtów cache pozbywa się na początku klatki wpisów nieużytych w poprzedniej klatce. Nigdy nie
+    /// czyści się w trakcie klatki ani w całości: przy większej liczbie różnych kształtów w klatce cache rośnie do tej liczby,
+    /// bo inaczej każda klatka triangulowałaby wszystkie bryły od nowa.
     private static let ringGeometryCacheLimit = 256
+    private var ringGeometryFrame: UInt64 = 0
+    /// Liczba triangulacji pierścieni od utworzenia renderera (szew testów cache: klatka z tymi samymi kształtami nie trianguluje).
+    package private(set) var ringTriangulationCount = 0
+    /// Liczba kształtów w cache geometrii pierścieni (szew testów cache).
+    package var ringGeometryCacheCount: Int { ringGeometryCache.count }
     /// Liczba wywołań rysowania w ostatnio zakodowanej klatce (jedno na ciąg); szew testów grupowania.
     package private(set) var lastDrawCallCount = 0
     /// Liczba przydzielonych dotąd buforów areny (szew testów puli: kolejne klatki nie przydzielają nowych).
@@ -209,6 +222,7 @@ public final class BubblePhysicsMetalRender {
     /// lokalnymi współrzędnymi i pierścieniami konturu oraz ciągi o wspólnym trybie mieszania i teksturze.
     private func buildFrame(_ state: BubbleWorldRenderState) -> FrameData {
         var frame = FrameData()
+        beginRingGeometryFrame()
         let decals = DecalRenderer(assets: assets)
         if let background = state.background { appendBackground(background, region: state.region, to: &frame) }
         frame.backgroundRuns = 0..<frame.runs.count
@@ -359,15 +373,24 @@ public final class BubblePhysicsMetalRender {
                      decalInstances: decalInstances, decalVertices: decalVertices)
     }
 
+    /// Nowa klatka: przy przekroczeniu limitu zostają tylko wpisy użyte w poprzedniej klatce (kształty, które nadal żyją).
+    private func beginRingGeometryFrame() {
+        ringGeometryFrame &+= 1
+        guard ringGeometryCache.count > Self.ringGeometryCacheLimit else { return }
+        let previous = ringGeometryFrame &- 1
+        ringGeometryCache = ringGeometryCache.filter { $0.value.lastUsedFrame == previous }
+    }
+
     /// Indeksy trójkątów i prostokąt otaczający zależą tylko od lokalnego pierścienia, więc są używane ponownie między klatkami.
     private func ringGeometry(for ring: [WorldPoint]) -> RingGeometry {
-        if let cached = ringGeometryCache[ring] { return cached }
-        if ringGeometryCache.count >= Self.ringGeometryCacheLimit { ringGeometryCache.removeAll(keepingCapacity: true) }
+        if let cached = ringGeometryCache[ring] { cached.lastUsedFrame = ringGeometryFrame; return cached }
         var minimum = SIMD2<Float>(repeating: .infinity), maximum = SIMD2<Float>(repeating: -.infinity)
         for point in ring { minimum = pointwiseMin(minimum, point); maximum = pointwiseMax(maximum, point) }
         if ring.isEmpty { minimum = .zero; maximum = .zero }
         let size = SIMD2(max(maximum.x - minimum.x, 1e-6), max(maximum.y - minimum.y, 1e-6))
-        let geometry = RingGeometry(indices: Self.triangulate(ring), minimum: minimum, size: size)
+        ringTriangulationCount += 1
+        let geometry = RingGeometry(indices: Self.triangulate(ring), minimum: minimum, size: size,
+                                    lastUsedFrame: ringGeometryFrame)
         ringGeometryCache[ring] = geometry
         return geometry
     }
