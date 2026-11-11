@@ -10,7 +10,7 @@ Zmiana, która dotyka każdej gry: **świat renderuje materiały, a nie style**.
 
 | Symbol z v1 | Zamiennik w 2.0.0 |
 |-------------|-------------------|
-| `RenderStyle` | `RenderMaterial(texture:color:blend:outline:bubbleMapping:uvOffset:uvScale:)`. Kolor stały to `color`, tekstura to `TextureID` z `world.assets!.register(_:)`. |
+| `RenderStyle` | `RenderMaterial(texture:color:blend:outline:bubbleMapping:uvOffset:uvScale:)`. Kolor stały to `color`, tekstura to `TextureID` z `register(_:)` rejestru świata: `guard let assets = world.assets else { return }`, a potem `try assets.register(_:)` (`world.assets` jest opcjonalny; wzorzec z [przewodnika integracji](integration-guide.md)). |
 | `RenderStyleID` | `RenderMaterialID` (ta sama rola: liczba, którą gra wybiera sama). |
 | `RenderShader` | Brak. Własne shadery usunięto razem z `customPipelines`; do własnego rysowania służy `RenderHooks` (`afterBackground`, `afterLayer`, `overlay`) w tym samym passie. |
 | `WorldTransaction.updateRenderStyle`, `WorldOperation.updateRenderStyle` | `WorldTransaction.updateRenderMaterial(_:material:)` i `WorldOperation.updateRenderMaterial`. |
@@ -86,7 +86,7 @@ Usunięcie obiektu po wyjściu z regionu symulacji nie jest transakcją, więc n
 
 | Symbol z v1 | Zamiennik w 2.0.0 |
 |-------------|-------------------|
-| `BubblePhysicsMetalRender.init`, `BubblePhysicsMetalRender.customPipelines` | `BubblePhysicsMetalRender(device:assets:)` z rejestrem świata (`world.assets`). Własnych potoków nie ma. |
+| `BubblePhysicsMetalRender.init`, `BubblePhysicsMetalRender.customPipelines` | `BubblePhysicsMetalRender(device:assets:)` z rejestrem świata (`world.assets`). Własnych potoków nie ma. Inicjalizator jest `throws`: rzuca `AssetError.deviceMismatch`, gdy rejestr należy do innego urządzenia niż renderer, `AssetError.textureCreationFailed`, gdy nie powstanie biała tekstura pomocnicza, oraz błąd budowy potoków, więc wywołanie wymaga `try`. |
 | `BubblePhysicsMetalRender.makeContourVertexFunction`, `RenderStylePipeline` | Brak (własne shadery usunięto). Własne rysowanie przez `RenderHooks`. |
 | `BubblePhysicsMetalRender.encode` | `encode(world:viewport:commandBuffer:renderPassDescriptor:hooks:)`; `hooks` ma wartość domyślną `.none`, więc dotychczasowe wywołania działają. Pass wymaga tylko koloru, bez bufora szablonu. |
 | `BubblePhysicsMetalRenderError.bufferAllocationFailed` | Nowy przypadek: nie udało się przydzielić bufora pomocniczego klatki. Błąd odrzuca klatkę (`.frameRejected`). |

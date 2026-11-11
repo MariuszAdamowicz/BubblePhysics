@@ -84,7 +84,9 @@ func setPaused(_ paused: Bool) {
 
 ## Limit kontaktów i determinizm
 
-Solver trzyma na jedną bańkę najwyżej 128 kontaktów w kroku (`diagnostics.contactCandidateOverflow` liczy odrzucone). Poniżej limitu wynik kroku jest deterministyczny na tym samym urządzeniu, a po jego przekroczeniu to, które kontakty zostaną zachowane, zależy od kolejności wątków GPU, więc dwa przebiegi tej samej sceny mogą się różnić. Gra, która widzi niezerowy `contactCandidateOverflow`, jest poza zakresem gwarancji determinizmu.
+Solver trzyma na jedną bańkę najwyżej 128 kontaktów w kroku (`diagnostics.contactCandidateOverflow` liczy odrzucone). Poniżej limitu wynik kroku jest zasadniczo deterministyczny na tym samym urządzeniu (zastrzeżenie niżej), a po jego przekroczeniu to, które kontakty zostaną zachowane, zależy od kolejności wątków GPU, więc dwa przebiegi tej samej sceny mogą się różnić. Gra, która widzi niezerowy `contactCandidateOverflow`, jest poza zakresem gwarancji determinizmu.
+
+Zastrzeżenie: także poniżej limitu determinizm nie jest dowiedziony. Test determinizmu sceny z 300 bańkami raz dał różne hashe dwóch przebiegów, a przyczyny nie ustalono (znane ryzyko wydania 2.0.0, odstępstwo nr 130 planu zmiany). Gra, która opiera się na bitowo identycznych przebiegach (powtórki, synchronizacja sieciowa), powinna to sprawdzić na własnej scenie i nie zakładać gwarancji.
 
 ## Rejestracja tekstur, czcionek i naklejek
 
