@@ -62,6 +62,7 @@ Czujniki i pola sił są niewidocznymi obszarami logiki: nie są rysowane i nie 
 - Błąd wykonania bufora na GPU albo wartości nieskończone (NaN, ±∞) kończą świat: `diagnostics.failureReason`, `lastAdvanceIssue == .worldFailed`. Kolejka transakcji jest porzucana, `advance` i `submit` nic nie robią. Gra tworzy nowy `BubbleWorld`.
 - Błąd rzucony przez domknięcie `encodeRender` gry albo kodowanie renderu odrzuca tylko klatkę: `lastAdvanceIssue == .frameRejected`, kolejka czeka na kolejne `advance`.
 - Pozostałe błędy solvera odrzucają krok (`.stepFailed`, powód w `diagnostics.lastRejectionReason`), jak w `v1`.
+- Napęd kinematyczny ma limit wartości: składowe `.target` (pozycja, obrót) i `.velocity` (liniowa, kątowa) większe co do modułu niż 1 000 000 odrzucają całą transakcję z `ModelValidationError.valueOutOfRange`, a NaN i ±∞ z `ModelValidationError.nonFiniteValue`; świat się wtedy nie zatrzymuje.
 
 | Symbol z v1 | Zamiennik w 2.0.0 |
 |-------------|-------------------|
