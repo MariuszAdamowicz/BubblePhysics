@@ -1581,11 +1581,70 @@ Każde `verify` uruchamia się z katalogu głównego repozytorium w `zsh` albo `
     ```
 
 99. Render, najlepsze starania: materiał z wierzchołka (`[[flat]]` w wyjściu `nativeBubbleVertex` i `nativeBodyVertex`) zamiast odczytu `materials[in.material]` na fragment w `nativeBubbleFragment` i `nativeBodyFragment`, bez zmiany pikseli, covering [P-B-86](#p-b-86) · verify: `swift test --filter 'BubblePhysicsMetalRenderTests' > .build/t99.txt 2>&1 && ! grep -q skipped .build/t99.txt && ! grep -q 'materials\[in.material\]' Sources/BubblePhysicsNativeMetal/Shaders/NativeRenderKernels.metal-source` (reguły „kandydat bez zysku wraca” nie da się tu zastosować, bo Mac nie widzi kosztu renderu: koszt pokaże dopiero pomiar pojemności, a gdy poziom 300 wyjdzie w nim gorzej niż 20,57 ms z punktu kontrolnego 9, ta zmiana jest pierwszym podejrzanym)
+
+    ```text
+    $ swift test --filter 'BubblePhysicsMetalRenderTests' > .build/t99.txt; ! grep -q skipped; ! grep -q 'materials\[in.material\]' …metal-source
+    Executed 270 tests, with 0 failures (0 unexpected) in 104.686 (104.716) seconds
+    exit=0, bez 'skipped', brak materials[in.material] (HEAD c68afd0)
+    ```
+
 100. CPU klatki, najlepsze starania z kalibracją z punktu kontrolnego 9: oczekiwanie ponad GPU (`NativeMetalCommandExecutor.complete`, `NativeMetalSolver.swift:922`), publikacja (`publishedObjectStates`, `NativeCompleteStepper.swift:171-203`), kodowanie i kandydaci z odstępstw 107 i 110, w kolejności udziału według linii `PREDICT_CPU`, linie `STAGES` i `PREDICT_CPU` przed i po w dowodzie, covering [P-B-80](#p-b-80), [P-B-88](#p-b-88) · verify: `swift test --filter 'AcceptanceEquivalenceTests|AcceptanceRenderEquivalenceTests|PublishedStateDeterminismTests' > .build/t100.txt 2>&1 && ! grep -q skipped .build/t100.txt && swift run -c release BubblePhysicsPerfGuard > .build/guard-all.txt && grep -q '^scaling 600/300: .* PASS' .build/guard-all.txt && b=$(git log -1 --format=%H --grep='zadanie 99)' -- Sources) && test -n "$b" && ! git diff --quiet "$b" HEAD -- Sources/BubblePhysicsPublic Sources/BubblePhysicsRuntime Sources/BubblePhysicsNativeMetal/NativeMetalSolver.swift Sources/BubblePhysicsNativeMetal/NativePublicWorld.swift Sources/BubblePhysicsMetalRender/DecalRenderer.swift` (gdy żaden kandydat nie daje zysku, verify nie przechodzi i decyduje właściciel)
+
+    ```text
+    $ swift test --filter 'AcceptanceEquivalenceTests|AcceptanceRenderEquivalenceTests|PublishedStateDeterminismTests'
+    Executed 9 tests, with 0 failures (0 unexpected) in 20.825 (20.827) seconds
+    # przed (a990183, obciążenie 2,31): swift run -c release BubblePhysicsPerfGuard --scene acceptance
+    STAGES acceptance: host_preparation=0.1734 host_encoding=0.3723 host_waiting=1.8429 host_publication=0.3134 host_non_gpu=1.1593 gpu=1.5695 gpu_physics=1.1309
+    PREDICT_CPU iphone-x acceptance: preparation=1.4106 encoding=2.1296 publication=2.3765 waiting=0.9077
+    # po (7a832bc, obciążenie 3,45)
+    STAGES acceptance: host_preparation=0.1467 host_encoding=0.3649 host_waiting=1.8348 host_publication=0.2622 host_non_gpu=1.0442 gpu=1.5630 gpu_physics=1.1266
+    PREDICT_CPU iphone-x acceptance: preparation=1.1937 encoding=2.0869 publication=1.9879 waiting=0.8177
+    PREDICT iphone-x acceptance: p95=20.4593 cpu=6.0862 physics=7.9996 render=6.3735
+    $ swift run -c release BubblePhysicsPerfGuard (HEAD c68afd0, 15:05, obciążenie 2,07)
+    FAIL stress-300 +23.5%, FAIL mixed +22.9%, FAIL decals +11.6%, FAIL acceptance +13.9% → guard exit=1, verify FAIL
+    scaling 600/300: 1.36 (limit 2.50) PASS
+    # kontrola: ten sam strażnik na 7a832bc o 15:07 (na nim zadanie 104 o ok. 14:30 dało PASS +0,1…+3,4%): FAIL +14,4…+68,5%
+    # → spowolnienie maszyny po softwareupdated (ok. 150% CPU o 14:53), nie kodu; strażnik do powtórzenia na bezczynnej maszynie
+    base=a9901838 (zadanie 99), git diff base..HEAD na wymienionych plikach niepusty
+    ```
+
 101. Testy (czerwone, na zaślepce publicznego `measureCapacity(device:progress:)`, wariantu `package` z R2 ze wstrzykniętymi poziomami, liczbą klatek, stanem termicznym, zegarem i limitem czekania, `BenchmarkSceneSpec.capacity(bubbleCount:)` i `PublicWorldCapacityReport`): `CapacityMeasurementTests` — wymiary obszaru i celu poziomów, pierwsze n baniek i poziom 300 równy `Scene.acceptance`, odstępy obwiedni trójkąta 53 i 71, krótki przebieg każdego poziomu (dwie serie, bez serii podziału renderu, n baniek w każdej klatce, linia `level=`), termika na wstrzykniętym stanie i zegarze, reguła pojemności na wstrzykniętych poziomach, covering [P-B-92](#p-b-92)–[P-B-96](#p-b-96) · verify: `swift build --build-tests && ! swift test --filter CapacityMeasurementTests`
+
+    ```text
+    $ swift build --build-tests && ! swift test --filter CapacityMeasurementTests
+    # sprawdzone przez workera na 23d39c1 (testy czerwone na zaślepkach); po zadaniu 102 ten filtr jest zielony
+    ```
+
 102. Tryb pojemności w `PublicWorldStressBenchmark.swift`: `BenchmarkSceneSpec` i `run(device:spec:…)` pod dzisiejszym `run(device:scene:…)`, poziom z n bańkami, odwzorowaną pozycją startową trójkąta i `trianglePath(regionHeight:)`, cel renderu 1125 × ⌊2436·H/700⌋, `run` z `renderSplit: false`, liczba baniek i najgorszy stan termiczny w `runSeries`, `ThermalCooldown`, `CapacityRule`, publiczne `measureCapacity` i `PublicWorldCapacityReport.text` w formacie z R2; diff API wygenerowany ponownie jak w zadaniu 71, a gdy się zmienił, nowy plik i wpis w `docs/MIGRATION-v2.md` w tym samym commicie, covering [P-B-92](#p-b-92)–[P-B-96](#p-b-96) · verify: `swift test --filter 'CapacityMeasurementTests|AcceptanceSceneTests|AcceptanceEquivalenceTests|AcceptanceRenderEquivalenceTests|MigrationGuideTests' > .build/t102.txt 2>&1 && ! grep -q skipped .build/t102.txt && grep -q 'CapacityMeasurementTests' .build/t102.txt && swift run -c release BubblePhysicsPerfGuard --scene acceptance > .build/guard-acceptance.txt`
+
+    ```text
+    $ swift test --filter 'CapacityMeasurementTests|AcceptanceSceneTests|AcceptanceEquivalenceTests|AcceptanceRenderEquivalenceTests|MigrationGuideTests'
+    Executed 50 tests, with 0 failures (0 unexpected) in 50.302 (50.308) seconds
+    bez 'skipped', CapacityMeasurementTests w wyjściu (HEAD c68afd0)
+    # strażnik --scene acceptance: zob. zadanie 100 (FAIL przez spowolnienie maszyny o 15:05)
+    ```
+
 103. Aplikacja benchmarku: wybór „capacity” w `PublicWorldStressView` z `measureCapacity`, poziom, czekanie na schłodzenie i postęp z wywołania zwrotnego zamiast stałej 660, raport przez „Kopiuj raport”; sekcja benchmarku w README opisuje tryb pojemności, czekanie na `nominal`, regułę pojemności i plik `docs/benchmarks/v2-iphone-x-capacity.md`, covering [P-B-97](#p-b-97) · verify: `grep -q 'measureCapacity' Benchmarks/iOS/BubblePhysicsBench/App/PublicWorldStressView.swift && ! grep -Eq 'totalFrames *= *660' Benchmarks/iOS/BubblePhysicsBench/App/PublicWorldStressView.swift && grep -q 'v2-iphone-x-capacity.md' README.md && xcodebuild -project Benchmarks/iOS/BubblePhysicsBench/BubblePhysicsBench.xcodeproj -scheme BubblePhysicsBench -configuration Release -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build`
+
+    ```text
+    $ grep measureCapacity …PublicWorldStressView.swift; ! grep 'totalFrames = 660'; grep v2-iphone-x-capacity.md README.md; xcodebuild … BubblePhysicsBench … build
+    greps OK
+    ** BUILD SUCCEEDED **
+    ```
+
 104. Sprawdzenie etapu (pełne `swift test`, strażnik wszystkich scen z nowymi punktami odniesienia w osobnym commicie, gdy wynik się poprawił, skalowanie 600/300, diff API, build aplikacji benchmarku), a potem, za zgodą właściciela, wypchnięcie gałęzi tym samym poleceniem co w zadaniu 97 i koniec sesji ze statusem `wip`, covering [P-B-88](#p-b-88) · verify: `swift test && swift run -c release BubblePhysicsPerfGuard > .build/guard-all.txt && grep -q '^scaling 600/300: .* PASS' .build/guard-all.txt` i `(sed -n 's/^# \$ //p' docs/migration/v1-api-diff.txt | sed '$d' | sh) > .build/api-build.txt 2>&1 && sed -n 's/^# \$ //p' docs/migration/v1-api-diff.txt | tail -1 | sh 2>&1 | cmp - <(sed '1,/^# Wiersze poniżej/d' docs/migration/v1-api-diff.txt) && git diff --exit-code docs/migration/v1-api-diff.txt && xcodebuild -project Benchmarks/iOS/BubblePhysicsBench/BubblePhysicsBench.xcodeproj -scheme BubblePhysicsBench -configuration Release -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build`
+
+    ```text
+    $ swift test (HEAD c68afd0)
+    Executed 1295 tests, with 1 test skipped and 0 failures (0 unexpected) in 464.192 (464.315) seconds
+    $ swift run -c release BubblePhysicsPerfGuard (HEAD c68afd0) → guard exit=1 (zob. zadanie 100), scaling 600/300: 1.36 PASS
+    # na 7a832bc o ok. 14:30 (worker): PASS stress-300 +3.4%, mixed +1.7%, decals +0.1%, acceptance +3.0%, scaling 1.51 PASS; punkty odniesienia bez zmian
+    $ (diff API z docs/migration/v1-api-diff.txt) && xcodebuild … BubblePhysicsBench … build
+    API_OK
+    ** BUILD SUCCEEDED **
+    # push czeka na zgodę właściciela
+    ```
+
 105. (właściciel: iPhone X) Pomiar pojemności z commitu po zadaniu 104, raport `docs/benchmarks/v2-iphone-x-capacity.md` z linią `Mierzony commit` w nagłówku, do którego agent dopisuje w README wynik w postaci `pojemność <wartość linii capacity=>` przy odnośniku do raportu; `capacity=undecided_thermal` to powtórzenie pomiaru przez właściciela, a niezerowy licznik poprawności albo `bubbles=mismatch` na którymkolwiek poziomie to stop i decyzja właściciela, covering [P-B-61](#p-b-61) · verify: `f=docs/benchmarks/v2-iphone-x-capacity.md && grep -q 'Mierzony commit' $f && grep -q 'warmup=30; measured=300' $f && (for n in 100 150 200 250 300 350 400; do l=$(grep "^level=$n;" $f) && test -n "$l" && echo "$l" | grep -q 'failed_frames=0;' && echo "$l" | grep -q 'non_finite_frames=0;' && echo "$l" | grep -q 'contour_cpu_readbacks=0;' && echo "$l" | grep -q 'contact_candidate_overflow=0;' && echo "$l" | grep -q "bubbles=$n\$" && echo "$l" | grep -q 'cooldown_s=' && echo "$l" | grep -q 'thermal_worst=' && k=$(echo "$l" | sed -n 's/.*max_candidates_per_object=\([0-9]*\).*/\1/p') && test -n "$k" && test "$k" -le 64 || exit 1; done) && c=$(sed -n 's/^capacity=//p' $f) && echo "$c" | grep -Eq '^([0-9]+|>=400|<100)$' && grep 'v2-iphone-x-capacity.md' README.md | grep -qF "pojemność $c"`
 
 ## Deviations from Design
