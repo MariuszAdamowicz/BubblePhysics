@@ -192,6 +192,61 @@ final class CapacityMeasurementTests: XCTestCase {
         }
     }
 
+    /// Poziom 100 z usuniętą bańką w kroku 1: od tej klatki świat ma 99 baniek, w obu seriach.
+    private func specLosingABubble() -> BenchmarkSceneSpec {
+        BenchmarkSceneSpec.capacity(bubbleCount: 100).addingStepTransaction { step in
+            step == 1 ? WorldTransaction().remove(ObjectID(rawValue: 1)) : nil
+        }
+    }
+
+    func testRunDetectsAWorldWithAnotherBubbleCountThanTheLevelAndTheLevelLineSaysMismatch() async throws {
+        let device = try device()
+        let report = try await PublicWorldStressBenchmark.run(device: device, spec: specLosingABubble(), renderSplit: false,
+            warmupFrames: 1, measuredFrames: 2, progress: { _, _ in })
+        XCTAssertGreaterThan(report.bubbleCountMismatchFrames, 0)
+        let level = Level(report, bubbleCount: 100, cooldownSeconds: 0, cooldownTimedOut: false)
+        XCTAssertFalse(level.bubblesMatchedInEveryFrame)
+        XCTAssertTrue(level.text.hasSuffix("; bubbles=mismatch"), level.text)
+    }
+
+    func testLevelCountersSumTheSeriesWithRenderAndTheSeriesWithoutRender() async throws {
+        let device = try device()
+        var samples: [PublicWorldStressFrameSample] = []
+        let report = try await PublicWorldStressBenchmark.run(device: device, spec: specLosingABubble(), renderSplit: false,
+            frameObserver: { samples.append($0) }, warmupFrames: 1, measuredFrames: 2, progress: { _, _ in })
+        func mismatches(_ series: PublicWorldStressFrameSample.Series) -> Int {
+            samples.filter { $0.series == series && countBubbles($0.frame) != 100 }.count
+        }
+        XCTAssertGreaterThan(mismatches(.full), 0)
+        XCTAssertEqual(mismatches(.physicsOnly), mismatches(.full), "obie serie tracą bańkę w tych samych klatkach")
+        XCTAssertEqual(report.bubbleCountMismatchFrames, mismatches(.full) + mismatches(.physicsOnly),
+                       "licznik poziomu sumuje obie serie")
+    }
+
+    func testLevelTakesEveryFieldFromTheMatchingFieldOfTheReportOfTheSameRun() async throws {
+        let device = try device()
+        let report = try await PublicWorldStressBenchmark.run(device: device, spec: .capacity(bubbleCount: 100),
+            renderSplit: false, warmupFrames: 1, measuredFrames: 3, progress: { _, _ in })
+        let level = Level(report, bubbleCount: 100, cooldownSeconds: 7.5, cooldownTimedOut: true)
+        XCTAssertEqual(Set([report.p95Milliseconds, report.hostNonGPUP95Milliseconds, report.gpuPhysicsP95Milliseconds,
+                            report.gpuRenderEstimateMilliseconds]).count, 4, "różne wartości wykrywają zamianę pól")
+        XCTAssertEqual(level.bubbleCount, 100)
+        XCTAssertEqual(level.cooldownSeconds, 7.5)
+        XCTAssertTrue(level.cooldownTimedOut)
+        XCTAssertEqual(level.thermalWorst, report.worstThermalState)
+        XCTAssertEqual(level.p95Milliseconds, report.p95Milliseconds)
+        XCTAssertEqual(level.hostNonGPUP95Milliseconds, report.hostNonGPUP95Milliseconds)
+        XCTAssertEqual(level.gpuPhysicsP95Milliseconds, report.gpuPhysicsP95Milliseconds)
+        XCTAssertEqual(level.gpuRenderEstimateMilliseconds, report.gpuRenderEstimateMilliseconds)
+        XCTAssertEqual(level.maximumCandidatesPerObject, report.maximumCandidatesPerObject)
+        XCTAssertEqual(level.candidateLimit, report.candidateLimit)
+        XCTAssertEqual(level.failedFrames, report.failedFrames)
+        XCTAssertEqual(level.nonFiniteFrames, report.nonFiniteFrames)
+        XCTAssertEqual(level.contourCPUReadbacks, report.contourCPUReadbacks)
+        XCTAssertEqual(level.contactCandidateOverflow, report.contactCandidateOverflow)
+        XCTAssertEqual(level.bubblesMatchedInEveryFrame, report.bubbleCountMismatchFrames == 0)
+    }
+
     func testCapacityReportHasOneLevelLinePerLevelInTheDocumentedFormat() async throws {
         let device = try device()
         let report = try await PublicWorldStressBenchmark.measureCapacity(device: device, levels: levelCounts,
@@ -222,7 +277,7 @@ final class CapacityMeasurementTests: XCTestCase {
         XCTAssertEqual(report.text.components(separatedBy: "\ncapacity=").count, 2, "jedna linia capacity=")
     }
 
-    func testLevelLineSumsTheCountersOfBothSeriesAndReportsABubbleMismatch() {
+    func testLevelLineFormatsEveryFieldOfAHandBuiltLevelAndMismatchedBubbles() {
         let broken = Level(bubbleCount: 250, cooldownSeconds: 12.34, cooldownTimedOut: true, thermalWorst: .serious,
                            p95Milliseconds: 18.5, hostNonGPUP95Milliseconds: 6.25, gpuPhysicsP95Milliseconds: 8,
                            gpuRenderEstimateMilliseconds: 6.5, maximumCandidatesPerObject: 17, candidateLimit: 128,

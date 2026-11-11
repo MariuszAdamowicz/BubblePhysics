@@ -75,7 +75,7 @@ public struct PublicWorldStressReport: Sendable {
 
     public var text: String {
         """
-        path=public BubbleWorld + BubblePhysicsMetalRender, same command buffer
+        \(PublicWorldStressBenchmark.reportPathHeader)
         device=\(deviceName)
         scene=\(scene); solver_iteration_limit=\(solverIterationLimit)
         render_px=\(renderWidth)x\(renderHeight)
@@ -128,6 +128,9 @@ public enum PublicWorldStressBenchmark {
 
     /// Próg p95 pełnej klatki sceny akceptacyjnej w natywnej rozdzielczości urządzenia: budżet 60 FPS.
     public nonisolated static let acceptanceGateMilliseconds = 16.67
+
+    /// Pierwsza linia raportu `run` i raportu pojemności: ścieżka, którą mierzy benchmark.
+    fileprivate nonisolated static let reportPathHeader = "path=public BubbleWorld + BubblePhysicsMetalRender, same command buffer"
 
     /// Wymaga fizycznego urządzenia dla wyniku akceptacyjnego. Koduje oba etapy do jednego bufora i renderuje poza ekranem
     /// w `renderSize` pikseli (`nil`: 375 × wysokość regionu sceny).
@@ -805,6 +808,8 @@ package struct BenchmarkSceneSpec {
         case capacity(bubbleCount: Int)
     }
     private let kind: Kind
+    /// Transakcje kroków podstawiane przez test za transakcję sceny, gdy zwrócą wartość (szew testowy, np. usunięcie bańki).
+    private var extraStepTransaction: ((Int) -> WorldTransaction?)?
 
     package init(_ scene: PublicWorldStressBenchmark.Scene) { kind = .scene(scene) }
 
@@ -816,6 +821,13 @@ package struct BenchmarkSceneSpec {
     }
 
     private init(kind: Kind) { self.kind = kind }
+
+    /// Specyfikacja, w której krok `step` dostaje transakcję zwróconą przez `hook` zamiast transakcji sceny, o ile jest (szew testowy).
+    package func addingStepTransaction(_ hook: @escaping (Int) -> WorldTransaction?) -> BenchmarkSceneSpec {
+        var copy = self
+        copy.extraStepTransaction = hook
+        return copy
+    }
 
     package var name: String {
         switch kind {
@@ -875,11 +887,13 @@ package struct BenchmarkSceneSpec {
     }
 
     package func stepTransaction(step: Int) throws -> WorldTransaction? {
+        let base: WorldTransaction?
         switch kind {
-        case .scene(let scene): return try scene.stepTransaction(step: step)
+        case .scene(let scene): base = try scene.stepTransaction(step: step)
         // Trójkąt jedzie sam według `KinematicDrive` z transakcji początkowej.
-        case .capacity: return nil
+        case .capacity: base = nil
         }
+        return extraStepTransaction?(step) ?? base
     }
 }
 
@@ -1057,7 +1071,7 @@ public struct PublicWorldCapacityReport: Sendable {
 
     public var text: String {
         let header = """
-        path=public BubbleWorld + BubblePhysicsMetalRender, same command buffer
+        \(PublicWorldStressBenchmark.reportPathHeader)
         device=\(deviceName)
         scene=capacity
         warmup=\(warmupFrames); measured=\(measuredFrames)

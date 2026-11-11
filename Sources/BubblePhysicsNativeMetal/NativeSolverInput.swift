@@ -210,9 +210,6 @@ package struct NativeSolverFrame {
     package var effectiveRadii: [NativeSolverBubbleID: Float] {
         Dictionary(uniqueKeysWithValues: zip(bubbles.map(\.id), bubbleEffectiveRadii))
     }
-    package var bubbleBounds: [NativeSolverBubbleID: SIMD4<Float>] {
-        Dictionary(uniqueKeysWithValues: zip(bubbles.map(\.id), bubbleBoundsRecords))
-    }
     package var isComplete = false
     package var regionRemovals: Set<NativeSolverBubbleID> = []
     package var regionWraps: Set<NativeSolverBubbleID> = []

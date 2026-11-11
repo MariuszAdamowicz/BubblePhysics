@@ -21,14 +21,14 @@ package struct NativePublicObject: Equatable, Sendable {
     package var layer: Int32 = 0
 
     /// Stan bańki po kroku solvera: poza, prędkości, promień efektywny i obwiednia konturu.
-    fileprivate mutating func adopt(_ bubble: NativeSolverBubble, effectiveRadius: Float, bounds: SIMD4<Float>?) {
+    fileprivate mutating func adopt(_ bubble: NativeSolverBubble, effectiveRadius: Float, bounds: SIMD4<Float>) {
         position = bubble.center
         previousPosition = bubble.previousCenter
         velocity = bubble.velocity
         rotation = bubble.rotation
         angularVelocity = bubble.angularVelocity
         self.effectiveRadius = effectiveRadius
-        self.bounds = bounds.map { WorldRectangle(uncheckedMin: SIMD2($0.x, $0.y), max: SIMD2($0.z, $0.w)) }
+        self.bounds = WorldRectangle(uncheckedMin: SIMD2(bounds.x, bounds.y), max: SIMD2(bounds.z, bounds.w))
     }
 
     package init(descriptor: WorldObject) {
