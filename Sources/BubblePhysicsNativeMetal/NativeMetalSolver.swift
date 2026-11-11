@@ -996,8 +996,10 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         let packets = state.renderPackets.contents().bindMemory(to: NativeMetalRenderPacket.self, capacity: state.bubbleCapacity)
         var contours: [NativeSolverBubbleID: [SIMD2<Float>]] = [:]
         var renderData: [SIMD4<Float>] = []
-        var effectiveRadii: [NativeSolverBubbleID: Float] = [:]
-        var bubbleBounds: [NativeSolverBubbleID: SIMD4<Float>] = [:]
+        var effectiveRadii: [Float] = []
+        var bubbleBounds: [SIMD4<Float>] = []
+        effectiveRadii.reserveCapacity(bubbles.count)
+        bubbleBounds.reserveCapacity(bubbles.count)
         var deformationCount = 0
         var maximumRelativeDeformation: Float = 0
         for index in bubbles.indices {
@@ -1025,11 +1027,11 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
             if deformation * bubbles[index].targetRadius > contourConfiguration.positionTolerance { deformationCount += 1 }
             maximumRelativeDeformation = max(maximumRelativeDeformation, deformation)
             if readsContours { contours[bubbles[index].id] = points }
-            effectiveRadii[bubbles[index].id] = effectiveRadius
+            effectiveRadii.append(effectiveRadius)
             let bounds = records[index].bounds
             guard (0..<4).allSatisfy({ bounds[$0].isFinite }) else { throw rejectSafety(.nonFinite) }
             guard bounds.x <= bounds.z, bounds.y <= bounds.w else { throw rejectSafety(.invalidFrame) }
-            bubbleBounds[bubbles[index].id] = bounds
+            bubbleBounds.append(bounds)
             renderData.append(packets[index].geometry)
         }
         if collectDispatchStatistics {
@@ -1064,7 +1066,7 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
                 ccdCandidateCount: Int(safetyResult.counts.x), guardCorrectionCount: Int(safetyResult.counts.y),
                 cacheInvalidationCount: Int(safetyResult.counts.z)),
             profile: profile, contours: contours, renderData: renderData,
-            effectiveRadii: effectiveRadii, bubbleBounds: bubbleBounds, isComplete: true)
+            bubbleEffectiveRadii: effectiveRadii, bubbleBoundsRecords: bubbleBounds, isComplete: true)
         if !snapshot.hitTests.isEmpty {
             let records = hitTestResultBuffer.contents().bindMemory(to: NativeHitTestResult.self, capacity: snapshot.hitTests.count)
             frame.hitTestResults = (0..<snapshot.hitTests.count).map { index in

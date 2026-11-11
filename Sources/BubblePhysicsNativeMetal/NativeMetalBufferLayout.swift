@@ -216,12 +216,16 @@ package struct NativeMetalSnapshot: Sendable {
         previousSegments = previous?.sourceSegments
         // Jedno wyszukiwanie poprzedniego rekordu na bańkę służy zmianom i przesunięciom; słownik trzyma tylko indeks.
         let previousBubbleList = previous?.sourceBubbles ?? []
-        let previousByID = Dictionary(uniqueKeysWithValues: previousBubbleList.indices.lazy.map { (previousBubbleList[$0].id, $0) })
+        // Gdy zestaw i kolejność baniek się nie zmieniły (zwykła klatka), poprzedni rekord leży pod tym samym indeksem i
+        // słownik nie powstaje.
+        let sameOrder = previousBubbleList.count == input.bubbles.count
+            && zip(previousBubbleList, input.bubbles).allSatisfy { $0.id == $1.id }
+        let previousByID = sameOrder ? [:] : Dictionary(uniqueKeysWithValues: previousBubbleList.indices.lazy.map { (previousBubbleList[$0].id, $0) })
         let previousProperties = previous?.publicSettings?.properties
         var changes: [NativeMetalBubbleChange] = []
         var remaps: [NativeMetalBubbleRemap] = []
         for (index, bubble) in input.bubbles.enumerated() {
-            let existing = previousByID[bubble.id]
+            let existing = sameOrder ? index : previousByID[bubble.id]
             let unchanged = existing.map { previousBubbleList[$0] == bubble } ?? false
             let properties = publicSettings?.properties[bubble.id]
             if !unchanged || properties != previousProperties?[bubble.id] {

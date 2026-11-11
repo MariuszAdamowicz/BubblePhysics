@@ -201,9 +201,18 @@ package struct NativeSolverFrame {
     package var profile = NativeMetalFrameProfile()
     package var contours: [NativeSolverBubbleID: [SIMD2<Float>]] = [:]
     package var renderData: [SIMD4<Float>] = []
-    package var effectiveRadii: [NativeSolverBubbleID: Float] = [:]
-    /// AABB zdeformowanego konturu po kroku (min.xy, max.xy), liczony w kernelu; bez odczytu konturu na CPU.
-    package var bubbleBounds: [NativeSolverBubbleID: SIMD4<Float>] = [:]
+    /// Promień efektywny każdej bańki, w kolejności `bubbles` (bez słownika budowanego co klatkę).
+    package var bubbleEffectiveRadii: [Float] = []
+    /// AABB zdeformowanego konturu po kroku (min.xy, max.xy), liczony w kernelu, w kolejności `bubbles`; bez odczytu
+    /// konturu na CPU.
+    package var bubbleBoundsRecords: [SIMD4<Float>] = []
+    /// Widok słownikowy dla diagnostyki i testów; produkcyjna ścieżka czyta tablice po indeksie bańki.
+    package var effectiveRadii: [NativeSolverBubbleID: Float] {
+        Dictionary(uniqueKeysWithValues: zip(bubbles.map(\.id), bubbleEffectiveRadii))
+    }
+    package var bubbleBounds: [NativeSolverBubbleID: SIMD4<Float>] {
+        Dictionary(uniqueKeysWithValues: zip(bubbles.map(\.id), bubbleBoundsRecords))
+    }
     package var isComplete = false
     package var regionRemovals: Set<NativeSolverBubbleID> = []
     package var regionWraps: Set<NativeSolverBubbleID> = []

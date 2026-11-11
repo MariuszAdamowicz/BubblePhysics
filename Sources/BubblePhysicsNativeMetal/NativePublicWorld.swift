@@ -93,6 +93,8 @@ package final class NativePublicWorld {
     private let solver: NativeMetalSolver
     private var polygons: [ObjectID: (geometry: PolygonGeometry, position: WorldPoint, rotation: Float, segments: [NativeSolverSegment])] = [:]
     private var nextSegmentID = 1
+    /// Obiekty wejścia posortowane po ID (ID i miejsce na wejściu) z poprzedniej klatki.
+    private var cachedOrder: [(id: UInt64, index: Int)]?
     private var publishedProfile: NativeMetalFrameProfile?
     /// Pary z zainteresowaniem kontaktem, które stykały się po ostatnim opublikowanym kroku.
     /// Podział odpowiedzialności za `contactEnded` przy znikającym obiekcie: tu koniec powstaje z samego braku pary w
@@ -136,8 +138,16 @@ package final class NativePublicWorld {
         var rigidPolygons: [NativeRigidPolygonInput] = []
         var structuralShapes: [ObjectID: NativeStructuralShape] = [:]
         // Kolejność po ID liczy się z kluczy, bez przenoszenia dużych rekordów obiektów przy sortowaniu.
-        let order = objects.indices.map { (id: objects[$0].descriptor.id.rawValue, index: $0) }
-            .sorted { $0.id < $1.id }
+        // Zestaw i kolejność obiektów zwykle nie zmieniają się między klatkami, więc permutacja z poprzedniej klatki
+        // obowiązuje, gdy ID leżą w tych samych miejscach.
+        let order: [(id: UInt64, index: Int)]
+        if let cached = cachedOrder, cached.count == objects.count,
+           cached.allSatisfy({ objects[$0.index].descriptor.id.rawValue == $0.id }) {
+            order = cached
+        } else {
+            order = objects.indices.map { (id: objects[$0].descriptor.id.rawValue, index: $0) }.sorted { $0.id < $1.id }
+            cachedOrder = order
+        }
         for position in order {
             let object = objects[position.index]
             switch object.descriptor {
@@ -215,12 +225,12 @@ package final class NativePublicWorld {
         for (id, object) in solver.publishedPolygons { result[id] = object }
         for id in solver.removedPolygons { result.removeValue(forKey: id) }
         let hasRemovals = !frame.regionRemovals.isEmpty
-        for bubble in frame.bubbles {
+        for (index, bubble) in frame.bubbles.enumerated() {
             let id = ObjectID(rawValue: UInt64(bitPattern: Int64(bubble.id.rawValue)))
             if hasRemovals, frame.regionRemovals.contains(bubble.id) { result.removeValue(forKey: id); continue }
-            // Jeden dostęp do rekordu na bańkę zamiast ośmiu przeszukań słownika.
-            result[id]?.adopt(bubble, effectiveRadius: frame.effectiveRadii[bubble.id] ?? bubble.targetRadius,
-                              bounds: frame.bubbleBounds[bubble.id])
+            // Jeden dostęp do rekordu na bańkę zamiast ośmiu przeszukań słownika; promień i obwiednia po indeksie bańki.
+            result[id]?.adopt(bubble, effectiveRadius: frame.bubbleEffectiveRadii[index],
+                              bounds: frame.bubbleBoundsRecords[index])
         }
         var contacts = solver.publishedDriveContacts
         func objectID(_ value: Int) -> ObjectID { ObjectID(rawValue: UInt64(bitPattern: Int64(value))) }
