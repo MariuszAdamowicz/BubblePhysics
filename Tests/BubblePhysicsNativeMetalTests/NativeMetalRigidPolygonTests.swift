@@ -10,20 +10,20 @@ final class NativeMetalRigidPolygonTests: XCTestCase {
     private func polygon(role: MotionRole = .dynamic, position: WorldPoint = .zero,
                          velocity: WorldPoint = .zero, angular: Float = 0,
                          vertices: [WorldPoint] = [[-1,-1],[1,-1],[1,1],[-1,1]]) throws -> NativePublicObject {
-        NativePublicObject(descriptor: .polygon(try PolygonDescriptor(id: polygonID,
+        NativePublicObject(descriptor: .rigidBody(try RigidBodyDescriptor(id: polygonID,
             vertices: vertices, position: position, velocity: velocity, angularVelocity: angular,
             mass: 2, momentOfInertia: 2, motionRole: role,
-            physicsMaterialID: .init(rawValue: 2), renderStyleID: .init(rawValue: 1))))
+            physicsMaterialID: .init(rawValue: 2), renderMaterialID: .init(rawValue: 1))))
     }
     private func bubble(position: WorldPoint = [-1.6,0.6], velocity: WorldPoint = [6,0], radius: Float = 0.5) throws -> NativePublicObject {
         NativePublicObject(descriptor: .bubble(try BubbleDescriptor(id: bubbleID,
             position: position, velocity: velocity, targetRadius: radius,
-            physicsMaterialID: .init(rawValue: 1), renderStyleID: .init(rawValue: 1))))
+            physicsMaterialID: .init(rawValue: 1), renderMaterialID: .init(rawValue: 1))))
     }
     private func step(_ world: NativePublicWorld, _ objects: [NativePublicObject], dt: Double = 1.0/60) async throws -> NativePublicFrame {
         try await world.step(objects: objects,
-            materials: [.init(rawValue: 1): PhysicsMaterial(kind: .bubble), .init(rawValue: 2): PhysicsMaterial(kind: .polygon)],
-            styles: [.init(rawValue: 1): RenderStyle()], region: WorldRectangle(min: [-100,-100], max: [100,100]), duration: dt)
+            materials: [.init(rawValue: 1): PhysicsMaterial(kind: .bubble), .init(rawValue: 2): PhysicsMaterial(kind: .rigid)],
+            region: WorldRectangle(min: [-100,-100], max: [100,100]), duration: dt)
     }
 
     // Brak reakcji drugiego ciała lub momentu kontaktowego musi złamać ten test.
@@ -64,9 +64,9 @@ final class NativeMetalRigidPolygonTests: XCTestCase {
 
     func testPolygonContactPreservesFiniteStateAndDoesNotMoveThroughStaticWall() async throws {
         let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
-        let wall = NativePublicObject(descriptor: .polygon(try PolygonDescriptor(id: .init(rawValue: 3),
+        let wall = NativePublicObject(descriptor: .rigidBody(try RigidBodyDescriptor(id: .init(rawValue: 3),
             vertices: [[2,-10],[2.25,-10],[2.25,10],[2,10]],
-            physicsMaterialID: .init(rawValue: 2), renderStyleID: .init(rawValue: 1))))
+            physicsMaterialID: .init(rawValue: 2), renderMaterialID: .init(rawValue: 1))))
         var frame = try await step(world, [polygon(velocity: [8,0], angular: 0.5), wall])
         for _ in 0..<60 {
             frame = try await step(world, Array(frame.objects.values))
@@ -107,9 +107,9 @@ final class NativeMetalRigidPolygonTests: XCTestCase {
 
     func testBubbleCannotPushPolygonThroughStaticWall() async throws {
         let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
-        let wall = NativePublicObject(descriptor: .polygon(try PolygonDescriptor(id: .init(rawValue: 3),
+        let wall = NativePublicObject(descriptor: .rigidBody(try RigidBodyDescriptor(id: .init(rawValue: 3),
             vertices: [[1,-10],[1.1,-10],[1.1,10],[1,10]],
-            physicsMaterialID: .init(rawValue: 2), renderStyleID: .init(rawValue: 1))))
+            physicsMaterialID: .init(rawValue: 2), renderMaterialID: .init(rawValue: 1))))
         var frame = try await step(world, [polygon(), bubble(position: [-1.6,0], velocity: [60,0]), wall])
         for _ in 0..<30 {
             frame = try await step(world, Array(frame.objects.values))
@@ -121,9 +121,9 @@ final class NativeMetalRigidPolygonTests: XCTestCase {
 
     func testRemovingEarlierPolygonPreservesRemainingGPUVelocity() async throws {
         let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
-        let earlier = NativePublicObject(descriptor: .polygon(try PolygonDescriptor(id: .init(rawValue: 3),
+        let earlier = NativePublicObject(descriptor: .rigidBody(try RigidBodyDescriptor(id: .init(rawValue: 3),
             vertices: [[-1,-1],[1,-1],[1,1],[-1,1]], position: [-10,0],
-            physicsMaterialID: .init(rawValue: 2), renderStyleID: .init(rawValue: 1))))
+            physicsMaterialID: .init(rawValue: 2), renderMaterialID: .init(rawValue: 1))))
         var frame = try await step(world, [polygon(velocity: [2,0]), earlier], dt: 0.25)
         frame = try await step(world, [XCTUnwrap(frame.objects[polygonID])], dt: 0.25)
         XCTAssertEqual(try XCTUnwrap(frame.objects[polygonID]).position.x, 1, accuracy: 0.0001)
@@ -156,20 +156,74 @@ final class NativeMetalRigidPolygonTests: XCTestCase {
         }
     }
 
-    // Dwie bryły mogą minąć się między końcami kroku bez overlapu końcowych AABB.
+    // P-B-27: dwie bryły mogą minąć się między końcami kroku bez overlapu końcowych AABB. CCD bryła–bryła ma je zatrzymać
+    // bez błędu klatki: dawniej `guardFailure` uchodził za sukces, teraz krok musi się udać i bryły muszą zostać po swoich stronach.
     func testFastDynamicPolygonsCannotSwapPositionsWithoutContact() async throws {
         let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         let left = try polygon(position: [-3,0], velocity: [360,0])
-        let right = NativePublicObject(descriptor: .polygon(try PolygonDescriptor(id: .init(rawValue: 3),
+        let right = NativePublicObject(descriptor: .rigidBody(try RigidBodyDescriptor(id: .init(rawValue: 3),
             vertices: [[-1,-1],[1,-1],[1,1],[-1,1]], position: [3,0], velocity: [-360,0],
             mass: 2, momentOfInertia: 2, motionRole: .dynamic,
-            physicsMaterialID: .init(rawValue: 2), renderStyleID: .init(rawValue: 1))))
-        do {
-            let frame = try await step(world, [left, right])
-            XCTAssertLessThan(try XCTUnwrap(frame.objects[polygonID]).position.x,
-                              try XCTUnwrap(frame.objects[.init(rawValue: 3)]).position.x)
-        } catch let failure as NativeMetalSafetyFailure {
-            XCTAssertEqual(failure.reason, .guardFailure)
+            physicsMaterialID: .init(rawValue: 2), renderMaterialID: .init(rawValue: 1))))
+        let frame = try await step(world, [left, right])
+        let a = try XCTUnwrap(frame.objects[polygonID]), b = try XCTUnwrap(frame.objects[.init(rawValue: 3)])
+        XCTAssertLessThan(a.position.x, b.position.x)
+        XCTAssertGreaterThanOrEqual(b.position.x - a.position.x, 2 - 0.05, "bryły (po 2 szerokości) nie mogą się przenikać")
+    }
+
+    // P-B-7: prepare nie może porównywać prefiksów list przy każdym ciele (O(k²)).
+    private func input(_ index: Int, x: Float = 0) throws -> NativeRigidPolygonInput {
+        let id = ObjectID(rawValue: UInt64(1000 + index))
+        let object = NativePublicObject(descriptor: .rigidBody(try RigidBodyDescriptor(id: id,
+            vertices: [[0,0],[1,0],[1,1],[0,1]], position: [Float(index) * 3 + x, 0],
+            mass: 2, momentOfInertia: 2, motionRole: .static,
+            physicsMaterialID: .init(rawValue: 2), renderMaterialID: .init(rawValue: 1))))
+        return NativeRigidPolygonInput(object: object, damping: 0, friction: 0.5, restitution: 0.1)
+    }
+
+    private func settled(_ state: NativeRigidPolygonState, _ inputs: [NativeRigidPolygonInput]) throws {
+        try state.prepare(inputs, bubbleCount: 0, timeStep: 1 / 60)
+        var objects: [ObjectID: NativePublicObject] = [:]
+        for value in inputs { objects[value.object.descriptor.id] = value.object }
+        state.publish(objects)
+    }
+
+    func testPrepareUploadsOnlyChangedBodiesAndReusesUnchangedOnes() throws {
+        let state = NativeRigidPolygonState(device: try XCTUnwrap(MTLCreateSystemDefaultDevice()))
+        var inputs = try (0..<6).map { try input($0) }
+        try settled(state, inputs)
+        try state.prepare(inputs, bubbleCount: 0, timeStep: 1 / 60)
+        XCTAssertEqual(state.bodyUploadCount, 0)
+        XCTAssertEqual(state.geometryUploadCount, 0)
+        try settled(state, inputs)
+        inputs[4] = try input(4, x: 0.5)
+        try state.prepare(inputs, bubbleCount: 0, timeStep: 1 / 60)
+        XCTAssertEqual(state.bodyUploadCount, 1)
+        XCTAssertEqual(state.geometryUploadCount, 0)
+        try settled(state, inputs)
+        // Zmiana kolejności zmienia offsety geometrii, więc wszystkie rekordy są ponownie wysyłane.
+        try state.prepare(Array(inputs.reversed()), bubbleCount: 0, timeStep: 1 / 60)
+        XCTAssertEqual(state.bodyUploadCount, 6)
+        XCTAssertEqual(state.geometryUploadCount, 6)
+    }
+
+    func testPrepareCostGrowsLinearlyWithBodyCount() throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        func steadyStateSeconds(_ count: Int) throws -> Double {
+            let state = NativeRigidPolygonState(device: device)
+            let inputs = try (0..<count).map { try input($0) }
+            try settled(state, inputs)
+            var best = Double.infinity
+            for _ in 0..<5 {
+                let start = DispatchTime.now().uptimeNanoseconds
+                try state.prepare(inputs, bubbleCount: 0, timeStep: 1 / 60)
+                best = min(best, Double(DispatchTime.now().uptimeNanoseconds - start) / 1e9)
+                try settled(state, inputs)
+            }
+            return best
         }
+        let small = try steadyStateSeconds(500), large = try steadyStateSeconds(2000)
+        // Czterokrotnie więcej ciał: liniowo około 4×, kwadratowo około 16×.
+        XCTAssertLessThan(large / small, 8, "small=\(small)s large=\(large)s")
     }
 }

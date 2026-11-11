@@ -3,27 +3,30 @@ import BubblePhysics
 import XCTest
 
 final class TransitionTests: XCTestCase {
-    let style = RenderStyleID(rawValue: 1), material = PhysicsMaterialID(rawValue: 1)
-    let object = ObjectID(rawValue: 1), channel = ParameterID(rawValue: "brightness")
+    let style = RenderMaterialID(rawValue: 1), material = PhysicsMaterialID(rawValue: 1)
+    let object = ObjectID(rawValue: 1)
     func initial() throws -> RuntimeState {
         try TransactionStager.stage(WorldTransaction()
             .updatePhysicsMaterial(material, material: PhysicsMaterial(kind: .bubble))
-            .updateRenderStyle(style, style: RenderStyle(channels: [channel: 2]))
+            .updateRenderMaterial(style, material: RenderMaterial())
             .add(.bubble(BubbleDescriptor(id: object, position: .zero, targetRadius: 1,
-                physicsMaterialID: material, renderStyleID: style))), against: RuntimeState(configuration:
+                physicsMaterialID: material, renderMaterialID: style))), against: RuntimeState(configuration:
                     WorldConfiguration(simulationRegion: WorldRectangle(min: [-20,-20], max: [20,20])))).state
     }
     func testNewTransitionForSameParameterReplacesPriorTransitionDeterministically() throws {
-        var state = try TransactionStager.stage(WorldTransaction().startTransition(.init(target: .renderStyle(style, channel),
-            value: .scalar(10), duration: 2)), against: initial()).state
+        let friction = TransitionTarget.physicsMaterial(material, .friction)
+        var state = try initial()
+        state.physicsMaterials[material] = try PhysicsMaterial(kind: .bubble, friction: 2)
+        state = try TransactionStager.stage(WorldTransaction().startTransition(.init(target: friction,
+            value: .scalar(10), duration: 2)), against: state).state
         try MotionControllers.prepare(&state, duration: 0.5)
-        XCTAssertEqual(state.renderStyles[style]?.presentation.channels[channel], 4)
-        state = try TransactionStager.stage(WorldTransaction().startTransition(.init(target: .renderStyle(style, channel),
+        XCTAssertEqual(state.physicsMaterials[material]?.friction, 4)
+        state = try TransactionStager.stage(WorldTransaction().startTransition(.init(target: friction,
             value: .scalar(0), duration: 1)), against: state).state
         try MotionControllers.prepare(&state, duration: 0.5)
-        XCTAssertEqual(state.renderStyles[style]?.presentation.channels[channel], 2)
+        XCTAssertEqual(state.physicsMaterials[material]?.friction, 2)
         try MotionControllers.prepare(&state, duration: 0.5)
-        XCTAssertEqual(state.renderStyles[style]?.presentation.channels[channel], 0)
+        XCTAssertEqual(state.physicsMaterials[material]?.friction, 0)
         XCTAssertTrue(state.transitions.isEmpty)
     }
     func testSerializableCurvesReachEndpointsAndSimulationTimeIsPartitionIndependent() throws {
@@ -37,6 +40,19 @@ final class TransitionTests: XCTestCase {
             try MotionControllers.prepare(&a, duration: 0.5)
             XCTAssertEqual(a.globalForce, [8,4])
         }
+    }
+
+    // P-B-28: przejście parametru materiału nie może zgubić limitów prędkości (materiał jest budowany od nowa).
+    func testMaterialTransitionKeepsSpeedLimits() throws {
+        var state = try initial()
+        state.physicsMaterials[material] = try PhysicsMaterial(kind: .bubble, maximumLinearSpeed: 30, maximumAngularSpeed: 4)
+        state = try TransactionStager.stage(WorldTransaction()
+            .startTransition(.init(target: .physicsMaterial(material, .friction), value: .scalar(0.8), duration: 1)),
+            against: state).state
+        try MotionControllers.prepare(&state, duration: 0.5)
+        XCTAssertEqual(state.physicsMaterials[material]?.friction, 0.4)
+        XCTAssertEqual(state.physicsMaterials[material]?.maximumLinearSpeed, 30)
+        XCTAssertEqual(state.physicsMaterials[material]?.maximumAngularSpeed, 4)
     }
 
     func testMaterialContactTransitionsUpdateFrictionAndRestitutionTogether() throws {
@@ -56,17 +72,17 @@ final class TransitionTests: XCTestCase {
 @MainActor
 final class MaterialContactTransitionTests: XCTestCase {
     private let material = PhysicsMaterialID(rawValue: 1)
-    private let style = RenderStyleID(rawValue: 1)
+    private let style = RenderMaterialID(rawValue: 1)
 
     func testMaterialFrictionRestitutionAndTransitionAreAcceptedByNativeWorld() async throws {
         let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
         let world = try BubbleWorld(configuration: WorldConfiguration(simulationRegion:
             WorldRectangle(min: [-10, -10], max: [10, 10]), fixedTimeStep: 1.0 / 60.0), device: device)
         let bubble = try BubbleDescriptor(id: .init(rawValue: 1), position: .zero, velocity: [2, 0],
-            targetRadius: 1, physicsMaterialID: material, renderStyleID: style)
+            targetRadius: 1, physicsMaterialID: material, renderMaterialID: style)
         let token = world.submit(WorldTransaction()
             .updatePhysicsMaterial(material, material: try PhysicsMaterial(kind: .bubble, friction: 0.6, restitution: 0.4))
-            .updateRenderStyle(style, style: try RenderStyle())
+            .updateRenderMaterial(style, material: try RenderMaterial())
             .add(.bubble(bubble))
             .startTransition(ParameterTransition(target: .physicsMaterial(material, .restitution), value: .scalar(0.8), duration: 1)))
 

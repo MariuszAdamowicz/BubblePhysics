@@ -25,6 +25,12 @@ public struct WorldRectangle: Equatable, Sendable {
         self.max = max
     }
 
+    /// Dla wartości, które pochodzą z solvera i są już sprawdzone (skończone, min ≤ max); bez walidacji i bez rzucania.
+    package init(uncheckedMin min: WorldPoint, max: WorldPoint) {
+        self.min = min
+        self.max = max
+    }
+
     public func contains(_ point: WorldPoint) -> Bool {
         point.x >= min.x && point.x <= max.x && point.y >= min.y && point.y <= max.y
     }
@@ -36,17 +42,27 @@ public struct WorldConfiguration: Equatable, Sendable {
     public let fixedTimeStep: TimeInterval
     public let eventBufferCapacity: Int
     public let globalForce: WorldPoint
+    /// Górny limit zaległego czasu (backlogu) w sekundach; nadmiar jest odrzucany i raportowany w diagnostyce.
+    /// Limit krótszy niż krok symulacji działa jak jeden krok, więc nie blokuje symulacji.
+    public let maximumBacklog: TimeInterval
+    /// Gdy włączone (domyślnie), świat pauzuje po przejściu aplikacji w tło i po powrocie odrzuca pierwszy przyrost czasu.
+    public let automaticPause: Bool
 
     public init(simulationRegion: WorldRectangle, fixedTimeStep: TimeInterval = 1.0 / 60.0,
-                eventBufferCapacity: Int = 1024, globalForce: WorldPoint = .zero) throws {
+                eventBufferCapacity: Int = 1024, globalForce: WorldPoint = .zero,
+                maximumBacklog: TimeInterval = 0.25, automaticPause: Bool = true) throws {
         guard fixedTimeStep.isFinite else { throw ModelValidationError.nonFiniteValue("fixedTimeStep") }
         guard fixedTimeStep > 0 else { throw ModelValidationError.nonPositiveValue("fixedTimeStep") }
+        guard maximumBacklog.isFinite else { throw ModelValidationError.nonFiniteValue("maximumBacklog") }
+        guard maximumBacklog > 0 else { throw ModelValidationError.nonPositiveValue("maximumBacklog") }
         guard eventBufferCapacity > 0 else { throw ModelValidationError.nonPositiveValue("eventBufferCapacity") }
         try requireFinite(globalForce, "globalForce")
         self.simulationRegion = simulationRegion
         self.fixedTimeStep = fixedTimeStep
         self.eventBufferCapacity = eventBufferCapacity
         self.globalForce = globalForce
+        self.maximumBacklog = maximumBacklog
+        self.automaticPause = automaticPause
     }
 
     /// Walidacja zależna od świata; stager transakcji musi ją ponowić dla swojego regionu.
@@ -55,9 +71,17 @@ public struct WorldConfiguration: Equatable, Sendable {
         try validateCircle(center: bubble.position, radius: bubble.targetRadius)
     }
 
-    public func validate(_ polygon: PolygonDescriptor) throws {
-        guard polygon.motionRole == .static else { return }
-        try validatePolygon(polygon.geometry, position: polygon.position, rotation: polygon.rotation)
+    public func validate(_ body: RigidBodyDescriptor) throws {
+        guard body.motionRole == .static else { return }
+        switch body.shape {
+        case .polygon(let geometry): try validatePolygon(geometry, position: body.position, rotation: body.rotation)
+        case .circle(let radius): try validateCircle(center: body.position, radius: radius)
+        case .capsule(let halfLength, let radius):
+            // Kapsuła to odcinek osi powiększony o promień: oba końce z kołem o tym promieniu.
+            let axis = WorldPoint(cos(body.rotation), sin(body.rotation)) * halfLength
+            try validateCircle(center: body.position + axis, radius: radius)
+            try validateCircle(center: body.position - axis, radius: radius)
+        }
     }
 
     /// Pola i sensory w tym modelu mają nieruchomy zasięg.

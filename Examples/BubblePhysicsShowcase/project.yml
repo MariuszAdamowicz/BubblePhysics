@@ -1,0 +1,38 @@
+name: BubblePhysicsShowcase
+schemes:
+  BubblePhysicsShowcase:
+    build:
+      targets:
+        BubblePhysicsShowcase: all
+    run:
+      config: Debug
+    archive:
+      config: Release
+options:
+  bundleIdPrefix: com.example
+packages:
+  BubblePhysics:
+    path: ../..
+targets:
+  BubblePhysicsShowcase:
+    type: application
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      - path: App
+    dependencies:
+      - package: BubblePhysics
+        product: BubblePhysics
+      - package: BubblePhysics
+        product: BubblePhysicsMetalRender
+      - package: BubblePhysics
+        product: BubblePhysicsAssets
+    configFiles:
+      Debug: Signing.xcconfig
+      Release: Signing.xcconfig
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+        SWIFT_VERSION: 5.0

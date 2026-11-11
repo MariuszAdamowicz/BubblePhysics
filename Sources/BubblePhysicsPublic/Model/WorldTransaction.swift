@@ -2,14 +2,14 @@ import Foundation
 
 public enum WorldObject: Equatable, Sendable {
     case bubble(BubbleDescriptor)
-    case polygon(PolygonDescriptor)
+    case rigidBody(RigidBodyDescriptor)
     case forceField(ForceFieldDescriptor)
     case sensor(SensorDescriptor)
 
     public var id: ObjectID {
         switch self {
         case .bubble(let object): return object.id
-        case .polygon(let object): return object.id
+        case .rigidBody(let object): return object.id
         case .forceField(let object): return object.id
         case .sensor(let object): return object.id
         }
@@ -20,19 +20,23 @@ public enum WorldObject: Equatable, Sendable {
 public struct BubbleResult: Equatable, Sendable {
     public let id: ObjectID
     public let physicsMaterialID: PhysicsMaterialID
-    public let renderStyleID: RenderStyleID
+    public let renderMaterialID: RenderMaterialID
     public let motionRole: MotionRole
     public let regionExitPolicy: RegionExitPolicy
     public let mergeGroups: MergeGroupSet
     public let eventInterest: EventInterest
-    public let presentation: PresentationParameters
-    public init(id: ObjectID, physicsMaterialID: PhysicsMaterialID, renderStyleID: RenderStyleID,
+    public let filter: CollisionFilter
+    public let layer: Int32
+    /// Naklejka wyniku scalenia albo podziału; `nil` oznacza brak.
+    public let decal: Decal?
+    public init(id: ObjectID, physicsMaterialID: PhysicsMaterialID, renderMaterialID: RenderMaterialID,
                 motionRole: MotionRole = .dynamic, regionExitPolicy: RegionExitPolicy = .remove,
                 mergeGroups: MergeGroupSet = [], eventInterest: EventInterest = [],
-                presentation: PresentationParameters = .empty) {
-        self.id = id; self.physicsMaterialID = physicsMaterialID; self.renderStyleID = renderStyleID
+                filter: CollisionFilter = .default, layer: Int32 = 0, decal: Decal? = nil) {
+        self.filter = filter; self.layer = layer; self.decal = decal
+        self.id = id; self.physicsMaterialID = physicsMaterialID; self.renderMaterialID = renderMaterialID
         self.motionRole = motionRole; self.regionExitPolicy = regionExitPolicy
-        self.mergeGroups = mergeGroups; self.eventInterest = eventInterest; self.presentation = presentation
+        self.mergeGroups = mergeGroups; self.eventInterest = eventInterest
     }
 }
 
@@ -50,10 +54,17 @@ public enum WorldOperation: Equatable, Sendable {
     case replace(ObjectID, WorldObject)
     /// Tworzy zasób, jeśli identyfikator nie został wcześniej zarejestrowany.
     case updatePhysicsMaterial(PhysicsMaterialID, PhysicsMaterial)
-    case updateRenderStyle(RenderStyleID, RenderStyle)
+    case updateRenderMaterial(RenderMaterialID, RenderMaterial)
     case setMotion(ObjectID, MotionRole)
     case setPathDrive(ObjectID, PathDrive)
     case setMotorDrive(ObjectID, MotorDrive)
+    case setKinematicDrive(ObjectID, KinematicDrive)
+    /// Tylko bańka i bryła mają warstwę; wyższa rysuje się nad niższą.
+    case setLayer(ObjectID, Int32)
+    /// Tekstura rozciągnięta na region symulacji pod wszystkimi warstwami; `nil` usuwa tło.
+    case setBackground(TextureID?)
+    /// Tylko bańka i bryła mają naklejkę; `nil` ją usuwa.
+    case setDecal(ObjectID, Decal?)
     case setGlobalForce(WorldPoint)
     case applyImpulse(ObjectID, WorldPoint)
     case beginPlayerDrive(ObjectID, WorldPoint)
@@ -62,7 +73,9 @@ public enum WorldOperation: Equatable, Sendable {
     case startTransition(ParameterTransition)
     case mergeBubbles([ObjectID], BubbleResult)
     case splitBubble(ObjectID, BubbleSplitPart, BubbleSplitPart)
-    case replacePolygons([ObjectID], [PolygonDescriptor])
+    case replaceRigidBodies([ObjectID], [RigidBodyDescriptor])
+    case addJoint(Joint)
+    case removeJoint(JointID)
 }
 
 /// Wartościowy builder. Każda metoda zwraca kopię; operacje zachowują kolejność dodania.
@@ -77,10 +90,14 @@ public struct WorldTransaction: Equatable, Sendable {
     public func remove(_ id: ObjectID) -> Self { appending(.remove(id)) }
     public func replace(_ id: ObjectID, with object: WorldObject) -> Self { appending(.replace(id, object)) }
     public func updatePhysicsMaterial(_ id: PhysicsMaterialID, material: PhysicsMaterial) -> Self { appending(.updatePhysicsMaterial(id, material)) }
-    public func updateRenderStyle(_ id: RenderStyleID, style: RenderStyle) -> Self { appending(.updateRenderStyle(id, style)) }
+    public func updateRenderMaterial(_ id: RenderMaterialID, material: RenderMaterial) -> Self { appending(.updateRenderMaterial(id, material)) }
     public func setMotion(_ id: ObjectID, role: MotionRole) -> Self { appending(.setMotion(id, role)) }
     public func setPathDrive(_ id: ObjectID, drive: PathDrive) -> Self { appending(.setPathDrive(id, drive)) }
     public func setMotorDrive(_ id: ObjectID, drive: MotorDrive) -> Self { appending(.setMotorDrive(id, drive)) }
+    public func setKinematicDrive(_ id: ObjectID, drive: KinematicDrive) -> Self { appending(.setKinematicDrive(id, drive)) }
+    public func setLayer(_ id: ObjectID, layer: Int32) -> Self { appending(.setLayer(id, layer)) }
+    public func setBackground(_ texture: TextureID?) -> Self { appending(.setBackground(texture)) }
+    public func setDecal(_ id: ObjectID, decal: Decal?) -> Self { appending(.setDecal(id, decal)) }
     public func setGlobalForce(_ force: WorldPoint) -> Self { appending(.setGlobalForce(force)) }
     public func applyImpulse(to id: ObjectID, impulse: WorldPoint) -> Self { appending(.applyImpulse(id, impulse)) }
     public func beginPlayerDrive(_ id: ObjectID, target: WorldPoint) -> Self { appending(.beginPlayerDrive(id, target)) }
@@ -89,5 +106,8 @@ public struct WorldTransaction: Equatable, Sendable {
     public func startTransition(_ transition: ParameterTransition) -> Self { appending(.startTransition(transition)) }
     public func mergeBubbles(_ sources: [ObjectID], result: BubbleResult) -> Self { appending(.mergeBubbles(sources, result)) }
     public func splitBubble(_ source: ObjectID, first: BubbleSplitPart, second: BubbleSplitPart) -> Self { appending(.splitBubble(source, first, second)) }
-    public func replacePolygons(_ sources: [ObjectID], with results: [PolygonDescriptor]) -> Self { appending(.replacePolygons(sources, results)) }
+    public func replaceRigidBodies(_ sources: [ObjectID], with results: [RigidBodyDescriptor]) -> Self { appending(.replaceRigidBodies(sources, results)) }
+    /// Więz dodany do ciał, które istnieją w chwili tej operacji; usunięcie któregokolwiek ciała usuwa też więz.
+    public func addJoint(_ joint: Joint) -> Self { appending(.addJoint(joint)) }
+    public func removeJoint(_ id: JointID) -> Self { appending(.removeJoint(id)) }
 }

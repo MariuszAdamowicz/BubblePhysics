@@ -6,42 +6,133 @@ import XCTest
 @MainActor
 final class MetalRenderIntegrationTests: XCTestCase {
 #if os(macOS)
-    func testBubbleRenderPassesMetalValidation() throws {
-        // Walidacja Metal musi być włączona przed utworzeniem MTLDevice;
-        // dlatego uruchamiamy prawdziwy test renderera w nowym procesie.
+    /// Walidacja Metal musi być włączona przed utworzeniem MTLDevice; dlatego prawdziwy test uruchamiamy w nowym procesie.
+    /// Test musi istnieć i przejść: proces z nieistniejącą nazwą też kończy się kodem 0, więc sprawdzamy liczbę wykonanych testów.
+    private func assertPassesUnderMetalValidation(_ test: String, file: StaticString = #filePath, line: UInt = #line) throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: ProcessInfo.processInfo.arguments[0])
-        process.arguments = ["-XCTest",
-            "BubblePhysicsMetalRenderTests.MetalRenderIntegrationTests/testRendererAcceptsViewportAndCallerCommandBuffer",
+        process.arguments = ["-XCTest", "BubblePhysicsMetalRenderTests.\(test)",
             Bundle(for: MetalRenderIntegrationTests.self).bundlePath]
         var environment = ProcessInfo.processInfo.environment
         environment["MTL_DEBUG_LAYER"] = "1"
         process.environment = environment
-        process.standardOutput = FileHandle.nullDevice
-        let errors = Pipe()
+        let output = Pipe(), errors = Pipe()
+        process.standardOutput = output
         process.standardError = errors
         try process.run()
+        let report = output.fileHandleForReading.readDataToEndOfFile()
+        let diagnostic = errors.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
-        let diagnostic = String(data: errors.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        XCTAssertEqual(process.terminationStatus, 0, diagnostic)
+        let text = String(data: report, encoding: .utf8) ?? "", errorText = String(data: diagnostic, encoding: .utf8) ?? ""
+        XCTAssertEqual(process.terminationStatus, 0, text + errorText, file: file, line: line)
+        XCTAssertTrue((text + errorText).contains("Executed 1 test"), "test \(test) nie został wykonany: \(text + errorText)",
+                      file: file, line: line)
+    }
+
+    func testBubbleRenderPassesMetalValidation() throws {
+        try assertPassesUnderMetalValidation("MetalRenderIntegrationTests/testRendererAcceptsViewportAndCallerCommandBuffer")
     }
 
     func testPolygonRenderPassesMetalValidation() throws {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: ProcessInfo.processInfo.arguments[0])
-        process.arguments = ["-XCTest",
-            "BubblePhysicsMetalRenderTests.MetalRenderIntegrationTests/testStyledPolygonInvokesCustomPipelineAndDrawsItsGeometry",
-            Bundle(for: MetalRenderIntegrationTests.self).bundlePath]
-        var environment = ProcessInfo.processInfo.environment
-        environment["MTL_DEBUG_LAYER"] = "1"
-        process.environment = environment
-        process.standardOutput = FileHandle.nullDevice
-        let errors = Pipe()
-        process.standardError = errors
-        try process.run()
-        process.waitUntilExit()
-        let diagnostic = String(data: errors.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        XCTAssertEqual(process.terminationStatus, 0, diagnostic)
+        try assertPassesUnderMetalValidation("MetalRenderIntegrationTests/testRigidBodyIsDrawnByTechnicalPipeline")
+    }
+
+    /// Materiały, tryby mieszania, obrys i warstwy bez błędów walidacji Metal: bańki i bryły w jednym passie.
+    func testMaterialRenderPassesMetalValidation() throws {
+        try assertPassesUnderMetalValidation("LayerRenderTests/testBodiesAlternatingOpaqueAndAlphaFollowObjectID")
+        try assertPassesUnderMetalValidation("MaterialColorRenderTests/testRigidBodyOutlineLiesInsideTheShapeWithTheGivenWidth")
+        try assertPassesUnderMetalValidation("LayerRenderTests/testBubbleOnHigherLayerCoversRigidBody")
+        try assertPassesUnderMetalValidation("MaterialTextureRenderTests/testTextureFromCGImageCoversPolygonQuadrants")
+        try assertPassesUnderMetalValidation("MaterialTextureRenderTests/testTranslucentTexelInAlphaAndAdditiveModes")
+        try assertPassesUnderMetalValidation("MaterialTextureRenderTests/testMaskedModeDoesNotDeformTheTextureAndTheContourClipsIt")
+        try assertPassesUnderMetalValidation(
+            "MaterialTextureRenderTests/testBackgroundStretchesOverRegionBelowAllLayersAndDisappearsWhenRemoved")
+    }
+
+    /// Naklejki (tekst SDF, gotowy atlas, obraz; bańki i bryły; maska radialna) bez błędów walidacji Metal: każdy test obrazu naklejek.
+    func testDecalRenderPassesMetalValidation() throws {
+        try assertPassesUnderMetalValidation("DecalRenderTests/testGlyphAtOneTimesHasThirtyTwoPixelLineHeightAndSharpEdgesAtEveryScale")
+        try assertPassesUnderMetalValidation("DecalRenderTests/testTextFromAReadyAtlasDrawsItsGlyphsInTheTintColor")
+        try assertPassesUnderMetalValidation("DecalRenderTests/testImageDecalShowsTheChosenRegionOfTheTexture")
+        try assertPassesUnderMetalValidation("DecalRenderTests/testImageDecalKeepsTheAspectOfTheRegionAndCentersItOnTheAnchor")
+        try assertPassesUnderMetalValidation(
+            "DecalRenderTests/testDecalOnADeformedBubbleIsClippedToTheTargetRadiusCircleAndTheDentedContour")
+        try assertPassesUnderMetalValidation("DecalRenderTests/testDecalOnADeformedBubbleHasTheSameSizeAsOnTheSameBubbleUndeformed")
+        try assertPassesUnderMetalValidation("DecalRenderTests/testDecalOnABubbleKeepsConstantOrientationAfterDeformationAndMovement")
+        try assertPassesUnderMetalValidation("DecalRenderTests/testDecalOnARotatedBodyRotatesWithIt")
+        try assertPassesUnderMetalValidation("DecalRenderTests/testBodyDecalIsDrawnInAWorldWithoutBubbles")
+        try assertPassesUnderMetalValidation("DecalRenderTests/testDecalIsAnchoredAtTheObjectOriginOnACapsuleToo")
+        try assertPassesUnderMetalValidation("DecalRenderTests/testDecalWithScaleAboveOneIsStillClippedToTheReferenceCircle")
+        try assertPassesUnderMetalValidation("DecalRenderTests/testRigidBodyInTheSameLayerCoversABubbleTogetherWithItsDecal")
+        try assertPassesUnderMetalValidation("DecalRenderTests/testBubbleDecalOnAHigherLayerCoversTheBodyBelow")
+        try assertPassesUnderMetalValidation(
+            "DecalRenderTests/testNewDecalIsDrawnInTheFirstFrameWithItsReceiptAndARejectedOneChangesNothing")
+        try assertPassesUnderMetalValidation("DecalRenderTests/testMergeAndSplitResultsCarryTheDecalFromTheOperation")
+    }
+
+    /// Interpolacja t−1 → t (bryły, bańki, naklejki baniek) i rysowanie bez interpolacji (utworzone, zawinięte, zastąpione, scalone,
+    /// podzielone) bez błędów walidacji Metal; bufory t−1 i liczniki są wiązane także dla naklejek.
+    func testInterpolationRenderPassesMetalValidation() throws {
+        try assertPassesUnderMetalValidation("BodyInterpolationTests/testIntermediateFrameDrawsTheBodyBetweenTheTwoSteps")
+        try assertPassesUnderMetalValidation("BodyInterpolationTests/testStepFrameDrawsTheRemainderFractionBetweenThePreviousAndTheNewStep")
+        try assertPassesUnderMetalValidation("BodyInterpolationTests/testBacklogOverAStepGivesFractionOneAndASingleStep")
+        try assertPassesUnderMetalValidation("BodyInterpolationTests/testFrameAfterARejectedStepDrawsThePublishedStateNotTheRejectedOne")
+        try assertPassesUnderMetalValidation("BodyInterpolationTests/testBodyDecalAnchorFollowsTheInterpolatedPose")
+        try assertPassesUnderMetalValidation(
+            "BodyInterpolationTests/testStepFrameWithAFractionBetweenZeroAndOneDrawsTheBodyBetweenTheStates")
+        try assertPassesUnderMetalValidation(
+            "BodyInterpolationTests/testDynamicBodyHittingAWallAtFractionOneIsDrawnWhereTheSolverLeftIt")
+        try assertPassesUnderMetalValidation(
+            "BodyInterpolationTests/testDynamicBodyHittingAWallInAStepFrameWithHalfFractionIsDrawnBetweenTheStates")
+        try assertPassesUnderMetalValidation("BodyInterpolationTests/testBodyDecalInAStepFrameSitsWithTheInterpolatedBody")
+        try assertPassesUnderMetalValidation("BubbleInterpolationTests/testIntermediateFrameDrawsTheBubbleContourBetweenTheTwoSteps")
+        try assertPassesUnderMetalValidation("BubbleInterpolationTests/testStepFrameDrawsThePreviousStepWhenNothingIsOwed")
+        try assertPassesUnderMetalValidation("BubbleInterpolationTests/testBacklogOverAStepDrawsTheNewStepWithFractionOne")
+        try assertPassesUnderMetalValidation("BubbleInterpolationTests/testFrameAfterARejectedStepDrawsThePublishedStateNotTheRejectedOne")
+        try assertPassesUnderMetalValidation(
+            "BubbleInterpolationTests/testIntermediateFrameAfterGrowingCapacityKeepsExistingBubblesInPlace")
+        try assertPassesUnderMetalValidation("BubbleInterpolationTests/testBubbleDecalSitsWithItsBubbleInAnIntermediateFrame")
+        try assertPassesUnderMetalValidation("BubbleInterpolationTests/testBubbleDecalSitsWithItsBubbleInAStepFrame")
+        try assertPassesUnderMetalValidation("SnapRenderTests/testCreatedObjectIsDrawnAtItsCurrentPose")
+        try assertPassesUnderMetalValidation("SnapRenderTests/testWrappedBodyIsDrawnAtTheTargetEdge")
+        try assertPassesUnderMetalValidation("SnapRenderTests/testReplacedObjectIsDrawnAtItsNewPose")
+        try assertPassesUnderMetalValidation("SnapRenderTests/testMergedBubbleWithAnExistingIDIsDrawnAtItsCurrentPose")
+        try assertPassesUnderMetalValidation("SnapRenderTests/testSplitBubbleKeepingItsIDIsDrawnAtItsCurrentPose")
+        try assertPassesUnderMetalValidation("SnapRenderTests/testWrappedBubbleIsDrawnAtTheTargetEdge")
+        try assertPassesUnderMetalValidation(
+            "SnapRenderTests/testBubbleWrappedInAStepFrameIsDrawnAtTheTargetEdgeEvenForFractionBetweenZeroAndOne")
+        try assertPassesUnderMetalValidation("SnapRenderTests/testDecalOfABubbleWrappedInAStepFrameIsDrawnWithTheBubble")
+        try assertPassesUnderMetalValidation("SnapRenderTests/testBodyWrappedInAStepFrameIsDrawnAtTheTargetEdgeWithoutInterpolation")
+        try assertPassesUnderMetalValidation("SnapRenderTests/testDecalOfABodyWrappedInAStepFrameIsDrawnWithTheBody")
+    }
+
+    /// Światy bez baniek, z samymi bryłami statycznymi albo kinematycznymi (rysowanie tylko z rekordu GPU), bez błędów walidacji Metal.
+    func testBodiesWithoutBubblesPassMetalValidation() throws {
+        try assertPassesUnderMetalValidation(
+            "BodiesWithoutBubblesRenderTests/testStaticBodyWithoutBubblesIsDrawnWithItsDecalAfterAStep")
+        try assertPassesUnderMetalValidation(
+            "BodiesWithoutBubblesRenderTests/testStaticBodyWithoutBubblesIsDrawnInAnIntermediateFrame")
+        try assertPassesUnderMetalValidation(
+            "BodiesWithoutBubblesRenderTests/testStaticBodyWithoutBubblesIsDrawnInAStepFrame")
+        try assertPassesUnderMetalValidation(
+            "BodiesWithoutBubblesRenderTests/testStaticBodyWithoutBubblesFirstFrameWithoutAStepDrawsNothingAndNextStepDrawsIt")
+        try assertPassesUnderMetalValidation(
+            "BodiesWithoutBubblesRenderTests/testKinematicBodyWithoutBubblesIsDrawnWithItsDecalAfterAStep")
+        try assertPassesUnderMetalValidation(
+            "BodiesWithoutBubblesRenderTests/testKinematicBodyWithoutBubblesIsDrawnInAnIntermediateFrame")
+        try assertPassesUnderMetalValidation(
+            "BodiesWithoutBubblesRenderTests/testKinematicBodyWithoutBubblesIsDrawnInAStepFrame")
+        try assertPassesUnderMetalValidation(
+            "BodiesWithoutBubblesRenderTests/testKinematicBodyWithoutBubblesFirstFrameWithoutAStepDrawsNothingAndNextStepDrawsIt")
+    }
+
+    /// Punkty zaczepienia gry (własny potok między warstwami, ponowne wiązanie buforów po haku) bez błędów walidacji Metal.
+    func testRenderHooksPassMetalValidation() throws {
+        try assertPassesUnderMetalValidation("RenderHookTests/testHooksDrawBetweenBackgroundLayersAndOverlay")
+        try assertPassesUnderMetalValidation("RenderHookTests/testMatrixMapsWorldPointsToTheRightPixels")
+        try assertPassesUnderMetalValidation("RenderHookTests/testHooksDrawInAnEmptyWorldBeforeAndAfterTheFirstStep")
+        try assertPassesUnderMetalValidation("RenderHookTests/testHookForALayerWithoutObjectsDrawsInLayerOrder")
+        try assertPassesUnderMetalValidation("RenderHookTests/testThrowingHookRejectsTheFrameAndTheNextFrameSucceeds")
     }
 #endif
 
@@ -64,7 +155,7 @@ final class MetalRenderIntegrationTests: XCTestCase {
         pass.colorAttachments[0].storeAction = .store
         let queue = try XCTUnwrap(device.makeCommandQueue())
         let command = try XCTUnwrap(queue.makeCommandBuffer())
-        let renderer = try BubblePhysicsMetalRender(device: device)
+        let renderer = try BubblePhysicsMetalRender(device: device, assets: XCTUnwrap(world.assets))
         try renderer.encode(world: world, viewport: Viewport(center: .zero, size: [4, 4]),
                             commandBuffer: command, renderPassDescriptor: pass)
         XCTAssertEqual(command.status, .notEnqueued)
@@ -76,58 +167,10 @@ final class MetalRenderIntegrationTests: XCTestCase {
         XCTAssertNotEqual(Array(pixel.prefix(3)), [0, 0, 0])
     }
 
-    func testCustomPipelineReceivesResolvedStyleChannels() async throws {
-        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
-        let channel = ParameterID(rawValue: "intensity")
-        let world = try makeWorld(device: device, style: RenderStyle(shader: .custom("game"),
-            channels: [channel: 0.4]), local: PresentationParameters(channels: [channel: 0.8]))
-        _ = await world.advance(by: 1.0 / 60)
-        let renderer = try BubblePhysicsMetalRender(device: device)
-        let source = """
-        #include <metal_stdlib>
-        using namespace metal;
-        struct V { float4 position [[position]]; float2 worldPosition; };
-        fragment float4 customColor(V in [[stage_in]], constant float &level [[buffer(0)]]) {
-            return float4(0, level, 0, 1);
-        }
-        """
-        let library = try await device.makeLibrary(source: source, options: nil)
-        let descriptor = MTLRenderPipelineDescriptor()
-        descriptor.vertexFunction = renderer.makeContourVertexFunction()
-        descriptor.fragmentFunction = try XCTUnwrap(library.makeFunction(name: "customColor"))
-        descriptor.colorAttachments[0].pixelFormat = .rgba8Unorm
-        let pipeline = try await device.makeRenderPipelineState(descriptor: descriptor)
-        var received: Float = -1
-        renderer.customPipelines["game"] = RenderStylePipeline(state: pipeline) { encoder, channels in
-            received = channels[channel] ?? -1
-            var value = received
-            encoder.setFragmentBytes(&value, length: MemoryLayout<Float>.stride, index: 0)
-        }
-        let textureDescriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm,
-            width: 64, height: 64, mipmapped: false)
-        textureDescriptor.usage = [.renderTarget, .shaderRead]
-        textureDescriptor.storageMode = .shared
-        let texture = try XCTUnwrap(device.makeTexture(descriptor: textureDescriptor))
-        let pass = MTLRenderPassDescriptor()
-        pass.colorAttachments[0].texture = texture
-        pass.colorAttachments[0].loadAction = .clear
-        pass.colorAttachments[0].storeAction = .store
-        let command = try XCTUnwrap(device.makeCommandQueue()?.makeCommandBuffer())
-        try renderer.encode(world: world, viewport: Viewport(center: .zero, size: [4, 4]),
-                            commandBuffer: command, renderPassDescriptor: pass)
-        command.commit()
-        await command.completed()
-        XCTAssertEqual(command.status, .completed)
-        XCTAssertEqual(received, 0.8, accuracy: 0.0001)
-        var pixel = [UInt8](repeating: 0, count: 4)
-        texture.getBytes(&pixel, bytesPerRow: 4, from: MTLRegionMake2D(32, 32, 1, 1), mipmapLevel: 0)
-        XCTAssertGreaterThan(pixel[1], 180)
-    }
-
     func testPhysicsAndRendererEncodeIntoCallerCommandBufferBeforePublication() async throws {
         let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
         let world = try makeWorld(device: device)
-        let renderer = try BubblePhysicsMetalRender(device: device)
+        let renderer = try BubblePhysicsMetalRender(device: device, assets: XCTUnwrap(world.assets))
         let textureDescriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm,
             width: 64, height: 64, mipmapped: false)
         textureDescriptor.usage = [.renderTarget, .shaderRead]
@@ -165,7 +208,79 @@ final class MetalRenderIntegrationTests: XCTestCase {
         XCTAssertEqual(result, first)
         XCTAssertEqual(command.status, .notEnqueued)
         XCTAssertEqual(world.debugContourSnapshot(), previousContour)
-        XCTAssertEqual(world.diagnostics.lastAdvanceIssue, .stepFailed)
+        XCTAssertEqual(world.diagnostics.lastAdvanceIssue, .frameRejected)
+        XCTAssertEqual(world.diagnostics.lastRejectionReason, .frameEncoding)
+        XCTAssertNil(world.diagnostics.failureReason, "błąd gry nie kończy świata")
+    }
+
+    private typealias B = SceneBuilders
+
+    /// Bańka z zainteresowaniem kontaktem na statycznej podłodze pod grawitacją; styk zaczyna się w ciągu kilkudziesięciu kroków.
+    private func settlingWorld(device: MTLDevice) throws -> BubbleWorld {
+        let world = try B.makeWorld(device: device, gravity: [0, -400])
+        world.submit(try B.baseTransaction().add(B.box(100, at: [300, 5], half: [300, 5]))
+            .add(B.bubble(1, at: [150, 18.3], interest: .contact)))
+        return world
+    }
+
+    /// Krok z buforem aplikacji; `closure` nie wypisuje nic do bufora, bo solver koduje do niego tylko obliczenia.
+    private func advance(_ world: BubbleWorld, _ queue: MTLCommandQueue,
+                         _ closure: @escaping () throws -> Void = {}) async throws -> (WorldFrame, MTLCommandBuffer) {
+        let command = try XCTUnwrap(queue.makeCommandBuffer())
+        return (await world.advance(by: B.step, commandBuffer: command, encodeRender: closure), command)
+    }
+
+    // P-B-58, G9-AC2: klatka odrzucona przez rzucające domknięcie nic nie zmienia w stanie świata ani steppera, więc
+    // ponowienie daje dokładnie te same klatki i zdarzenia co świat bliźniaczy bez odrzuceń. Ścieżka z krokiem GPU.
+    func testRejectedFrameRetryGivesSameEvents() async throws {
+        struct GameError: Error {}
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let queue = try XCTUnwrap(device.makeCommandQueue())
+        let clean = try settlingWorld(device: device), retried = try settlingWorld(device: device)
+        var cleanEvents: [WorldEvent] = [], retriedEvents: [WorldEvent] = []
+        for index in 0..<45 {
+            let (expected, _) = try await advance(clean, queue)
+            let previous = retried.diagnostics
+            let (rejected, command) = try await advance(retried, queue) { throw GameError() }
+            XCTAssertEqual(command.status, .notEnqueued, "krok \(index)")
+            XCTAssertEqual(rejected.stepIndex, UInt64(index), "odrzucona klatka zostawia poprzednią")
+            XCTAssertEqual(retried.diagnostics.lastAdvanceIssue, .frameRejected)
+            XCTAssertEqual(retried.diagnostics.pendingTransactionCount, previous.pendingTransactionCount)
+            let (actual, _) = try await advance(retried, queue)
+            XCTAssertEqual(actual.stepIndex, expected.stepIndex)
+            XCTAssertEqual(actual.events, expected.events, "krok \(index): ponowienie daje te same zdarzenia")
+            XCTAssertEqual(actual.objects, expected.objects, "krok \(index)")
+            cleanEvents += expected.events; retriedEvents += actual.events
+        }
+        XCTAssertEqual(retriedEvents, cleanEvents)
+        XCTAssertEqual(B.began(cleanEvents).count, 1, "scena ma dać contactBegan, inaczej test nic nie dowodzi")
+        XCTAssertNil(retried.diagnostics.failureReason)
+    }
+
+    // P-B-58: to samo w gałęzi bez kroku GPU: po usunięciu obu ciał kolejny krok nie ma masy, więc solver nie biegnie, a
+    // render kodowany jest w świecie. Odrzucona klatka nie zmienia historii kontaktów steppera.
+    func testRejectedFrameRetryWithoutGPUStepGivesSameEvents() async throws {
+        struct GameError: Error {}
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let queue = try XCTUnwrap(device.makeCommandQueue())
+        let clean = try settlingWorld(device: device), retried = try settlingWorld(device: device)
+        for world in [clean, retried] {
+            for _ in 0..<45 { _ = try await advance(world, queue) }
+            world.submit(WorldTransaction().remove(ObjectID(rawValue: 1)).remove(ObjectID(rawValue: 100)))
+        }
+        let (expected, _) = try await advance(clean, queue)
+        let (rejected, command) = try await advance(retried, queue) { throw GameError() }
+        XCTAssertEqual(command.status, .notEnqueued)
+        XCTAssertEqual(rejected.stepIndex, 45)
+        XCTAssertEqual(retried.diagnostics.lastAdvanceIssue, .frameRejected)
+        XCTAssertEqual(retried.diagnostics.pendingTransactionCount, 1)
+        let (actual, retry) = try await advance(retried, queue)
+        XCTAssertEqual(retry.status, .completed)
+        XCTAssertEqual(actual.stepIndex, 46)
+        XCTAssertEqual(actual.events, expected.events)
+        XCTAssertEqual(actual.objects, expected.objects)
+        XCTAssertTrue(actual.objects.isEmpty)
+        XCTAssertNil(retried.diagnostics.failureReason)
     }
 
     func testEmptyWorldAlsoCompletesCallerCommandBuffer() async throws {
@@ -173,7 +288,7 @@ final class MetalRenderIntegrationTests: XCTestCase {
         let world = try BubbleWorld(configuration: WorldConfiguration(
             simulationRegion: WorldRectangle(min: [-10, -10], max: [10, 10]),
             fixedTimeStep: 1.0 / 60), device: device)
-        let renderer = try BubblePhysicsMetalRender(device: device)
+        let renderer = try BubblePhysicsMetalRender(device: device, assets: XCTUnwrap(world.assets))
         let textureDescriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm,
             width: 16, height: 16, mipmapped: false)
         textureDescriptor.usage = .renderTarget
@@ -191,77 +306,22 @@ final class MetalRenderIntegrationTests: XCTestCase {
         XCTAssertEqual(command.status, .completed)
     }
 
-    func testStyledPolygonInvokesCustomPipelineAndDrawsItsGeometry() async throws {
+    func testRigidBodyIsDrawnByTechnicalPipeline() async throws {
         let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
         let world = try BubbleWorld(configuration: WorldConfiguration(
             simulationRegion: WorldRectangle(min: [-10, -10], max: [10, 10]), fixedTimeStep: 1.0 / 60), device: device)
-        let channel = ParameterID(rawValue: "level")
         world.submit(WorldTransaction()
-            .updatePhysicsMaterial(.init(rawValue: 2), material: try PhysicsMaterial(kind: .polygon))
-            .updateRenderStyle(.init(rawValue: 2), style: try RenderStyle(shader: .custom("polygon"), channels: [channel: 0.6]))
-            .add(.polygon(try PolygonDescriptor(id: .init(rawValue: 2),
+            .updatePhysicsMaterial(.init(rawValue: 2), material: try PhysicsMaterial(kind: .rigid))
+            .updateRenderMaterial(.init(rawValue: 2), material: try RenderMaterial())
+            .add(.rigidBody(try RigidBodyDescriptor(id: .init(rawValue: 2),
                 vertices: [[-1,-1], [1,-1], [1,1], [-1,1]],
-                physicsMaterialID: .init(rawValue: 2), renderStyleID: .init(rawValue: 2)))))
+                physicsMaterialID: .init(rawValue: 2), renderMaterialID: .init(rawValue: 2)))))
         _ = await world.advance(by: 1.0 / 60)
-        let renderer = try BubblePhysicsMetalRender(device: device)
-        let library = try await device.makeLibrary(source: """
-            #include <metal_stdlib>
-            using namespace metal;
-            struct V { float4 position [[position]]; float2 worldPosition; };
-            fragment float4 color(V in [[stage_in]]) { return float4(0, 1, 0, 1); }
-            """, options: nil)
-        let pipelineDescriptor = MTLRenderPipelineDescriptor()
-        pipelineDescriptor.vertexFunction = renderer.makeContourVertexFunction()
-        pipelineDescriptor.fragmentFunction = try XCTUnwrap(library.makeFunction(name: "color"))
-        pipelineDescriptor.colorAttachments[0].pixelFormat = .rgba8Unorm
-        let pipeline = try await device.makeRenderPipelineState(descriptor: pipelineDescriptor)
-        var received: Float = -1
-        renderer.customPipelines["polygon"] = RenderStylePipeline(state: pipeline) { _, channels in
-            received = channels[channel] ?? -1
-        }
-        let texture = try makeTexture(device: device)
-        let pass = makePass(texture: texture)
-        let command = try XCTUnwrap(device.makeCommandQueue()?.makeCommandBuffer())
-        try renderer.encode(world: world, viewport: Viewport(center: .zero, size: [4,4]),
-                            commandBuffer: command, renderPassDescriptor: pass)
-        command.commit()
-        await command.completed()
-        XCTAssertEqual(command.status, .completed)
-        XCTAssertEqual(received, 0.6, accuracy: 0.001)
-        XCTAssertGreaterThan(pixel(texture, x: 32, y: 32)[1], 200)
-    }
-
-    func testSameBufferRenderReceivesPreparedTransitionChannel() async throws {
-        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
-        let channel = ParameterID(rawValue: "level")
-        let world = try makeWorld(device: device, style: RenderStyle(shader: .custom("transition"),
-            channels: [channel: 0]))
-        world.submit(WorldTransaction().startTransition(.init(
-            target: .renderStyle(.init(rawValue: 1), channel), value: .scalar(1), duration: 1)))
-        let renderer = try BubblePhysicsMetalRender(device: device)
-        let library = try await device.makeLibrary(source: """
-            #include <metal_stdlib>
-            using namespace metal;
-            struct V { float4 position [[position]]; float2 worldPosition; };
-            fragment float4 color(V in [[stage_in]]) { return float4(1); }
-            """, options: nil)
-        let descriptor = MTLRenderPipelineDescriptor()
-        descriptor.vertexFunction = renderer.makeContourVertexFunction()
-        descriptor.fragmentFunction = try XCTUnwrap(library.makeFunction(name: "color"))
-        descriptor.colorAttachments[0].pixelFormat = .rgba8Unorm
-        let pipeline = try await device.makeRenderPipelineState(descriptor: descriptor)
-        var received: Float = -1
-        renderer.customPipelines["transition"] = RenderStylePipeline(state: pipeline) { _, channels in
-            received = channels[channel] ?? -1
-        }
-        let command = try XCTUnwrap(device.makeCommandQueue()?.makeCommandBuffer())
-        let pass = makePass(texture: try makeTexture(device: device))
-        let frame = await world.advance(by: 1.0 / 60, commandBuffer: command) {
-            try renderer.encode(world: world, viewport: Viewport(center: .zero, size: [4,4]),
-                                commandBuffer: command, renderPassDescriptor: pass)
-        }
-        XCTAssertEqual(frame.stepIndex, 1)
-        XCTAssertEqual(received, 1.0 / 60.0, accuracy: 0.002)
+        let renderer = try BubblePhysicsMetalRender(device: device, assets: XCTUnwrap(world.assets))
+        let harness = try OffscreenRenderHarness(device: device)
+        try await harness.render(world: world, renderer: renderer, viewport: Viewport(center: .zero, size: [4,4]))
+        XCTAssertNotEqual(Array(harness.pixel(x: 128, y: 128).prefix(3)), [0, 0, 0])
+        XCTAssertEqual(Array(harness.pixel(x: 8, y: 8).prefix(3)), [0, 0, 0])
     }
 
     func testLastBodyRemovalClearsDebugContourSnapshot() async throws {
@@ -281,52 +341,29 @@ final class MetalRenderIntegrationTests: XCTestCase {
             simulationRegion: WorldRectangle(min: [-2,-2], max: [2,2]), fixedTimeStep: 1.0 / 60), device: device)
         world.submit(WorldTransaction()
             .updatePhysicsMaterial(.init(rawValue: 1), material: try PhysicsMaterial(kind: .bubble))
-            .updateRenderStyle(.init(rawValue: 1), style: try RenderStyle())
+            .updateRenderMaterial(.init(rawValue: 1), material: try RenderMaterial())
             .add(.bubble(try BubbleDescriptor(id: .init(rawValue: 1), position: [3,0],
-                targetRadius: 0.5, physicsMaterialID: .init(rawValue: 1), renderStyleID: .init(rawValue: 1)))))
-        let renderer = try BubblePhysicsMetalRender(device: device)
-        let texture = try makeTexture(device: device)
-        let pass = makePass(texture: texture)
-        let command = try XCTUnwrap(device.makeCommandQueue()?.makeCommandBuffer())
+                targetRadius: 0.5, physicsMaterialID: .init(rawValue: 1), renderMaterialID: .init(rawValue: 1)))))
+        let renderer = try BubblePhysicsMetalRender(device: device, assets: XCTUnwrap(world.assets))
+        let harness = try OffscreenRenderHarness(device: device)
+        let command = try harness.makeCommandBuffer()
+        let pass = harness.makePass()
         let frame = await world.advance(by: 1.0 / 60, commandBuffer: command) {
             try renderer.encode(world: world, viewport: Viewport(center: [3,0], size: [4,4]),
                                 commandBuffer: command, renderPassDescriptor: pass)
         }
         XCTAssertEqual(frame.stepIndex, 1)
-        XCTAssertEqual(Array(pixel(texture, x: 32, y: 32).prefix(3)), [0,0,0])
-    }
-
-    func testSensorAndForceFieldStylesAreRenderedWithoutBodies() async throws {
-        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
-        let world = try BubbleWorld(configuration: WorldConfiguration(
-            simulationRegion: WorldRectangle(min: [-10,-10], max: [10,10]), fixedTimeStep: 1.0 / 60), device: device)
-        let styleID = RenderStyleID(rawValue: 1)
-        world.submit(WorldTransaction()
-            .updateRenderStyle(styleID, style: try RenderStyle())
-            .add(.sensor(try SensorDescriptor(id: .init(rawValue: 1), position: [-1,0],
-                geometry: RangeGeometry.circle(radius: 0.5), renderStyleID: styleID)))
-            .add(.forceField(try ForceFieldDescriptor(id: .init(rawValue: 2), position: [1,0],
-                geometry: RangeGeometry.circle(radius: 0.5), field: .directional(force: .zero),
-                renderStyleID: styleID))))
-        let renderer = try BubblePhysicsMetalRender(device: device)
-        let texture = try makeTexture(device: device)
-        let pass = makePass(texture: texture)
-        let command = try XCTUnwrap(device.makeCommandQueue()?.makeCommandBuffer())
-        let frame = await world.advance(by: 1.0 / 60, commandBuffer: command) {
-            try renderer.encode(world: world, viewport: Viewport(center: .zero, size: [4,4]),
-                commandBuffer: command, renderPassDescriptor: pass)
-        }
-        XCTAssertEqual(frame.stepIndex, 1)
-        XCTAssertGreaterThan(pixel(texture, x: 16, y: 32)[1], 100)
-        XCTAssertGreaterThan(pixel(texture, x: 48, y: 32)[1], 100)
+        XCTAssertEqual(Array(harness.pixel(x: 128, y: 128).prefix(3)), [0,0,0])
     }
 
     func testPublicStressHarnessExercisesSameBufferWithoutContourReadback() async throws {
         let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
         var progress: [Int] = []
+        var totals = Set<Int>()
         let report = try await PublicWorldStressBenchmark.run(device: device,
-            warmupFrames: 1, measuredFrames: 2) { completed, _ in
+            warmupFrames: 1, measuredFrames: 2) { completed, total in
                 progress.append(completed)
+                totals.insert(total)
             }
         XCTAssertEqual(report.solverIterationLimit, 4)
         XCTAssertEqual(report.warmupFrames, 1)
@@ -338,43 +375,20 @@ final class MetalRenderIntegrationTests: XCTestCase {
         XCTAssertTrue(report.text.contains("gpu_p95_ms="))
         XCTAssertTrue(report.text.contains("host_encoding_p95_ms="))
         XCTAssertTrue(report.text.contains("host_waiting_p95_ms="))
-        XCTAssertEqual(progress, [1, 2, 3])
+        // Dwie serie po 3 klatki (z renderem i bez): postęp liczy obie, więc pasek nie stoi na 100% w drugiej serii.
+        XCTAssertEqual(progress, [1, 2, 3, 4, 5, 6])
+        XCTAssertEqual(totals, [6])
     }
 
-    private func makeTexture(device: MTLDevice) throws -> MTLTexture {
-        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm,
-            width: 64, height: 64, mipmapped: false)
-        descriptor.usage = [.renderTarget, .shaderRead]
-        descriptor.storageMode = .shared
-        return try XCTUnwrap(device.makeTexture(descriptor: descriptor))
-    }
-
-    private func makePass(texture: MTLTexture) -> MTLRenderPassDescriptor {
-        let pass = MTLRenderPassDescriptor()
-        pass.colorAttachments[0].texture = texture
-        pass.colorAttachments[0].loadAction = .clear
-        pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1)
-        pass.colorAttachments[0].storeAction = .store
-        return pass
-    }
-
-    private func pixel(_ texture: MTLTexture, x: Int, y: Int) -> [UInt8] {
-        var result = [UInt8](repeating: 0, count: 4)
-        texture.getBytes(&result, bytesPerRow: 4, from: MTLRegionMake2D(x, y, 1, 1), mipmapLevel: 0)
-        return result
-    }
-
-    private func makeWorld(device: MTLDevice, style: RenderStyle = try! RenderStyle(),
-                           local: PresentationParameters = .empty) throws -> BubbleWorld {
+    private func makeWorld(device: MTLDevice) throws -> BubbleWorld {
         let world = try BubbleWorld(configuration: WorldConfiguration(
             simulationRegion: WorldRectangle(min: [-10, -10], max: [10, 10]),
             fixedTimeStep: 1.0 / 60), device: device)
         world.submit(WorldTransaction()
             .updatePhysicsMaterial(.init(rawValue: 1), material: try PhysicsMaterial(kind: .bubble))
-            .updateRenderStyle(.init(rawValue: 1), style: style)
+            .updateRenderMaterial(.init(rawValue: 1), material: try RenderMaterial())
             .add(.bubble(try BubbleDescriptor(id: .init(rawValue: 1), position: .zero,
-                targetRadius: 1, physicsMaterialID: .init(rawValue: 1), renderStyleID: .init(rawValue: 1),
-                presentation: local))))
+                targetRadius: 1, physicsMaterialID: .init(rawValue: 1), renderMaterialID: .init(rawValue: 1)))))
         return world
     }
 }

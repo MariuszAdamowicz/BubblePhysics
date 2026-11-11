@@ -4,6 +4,7 @@ import Metal
 import BubblePhysicsReference
 import BubblePhysicsReferenceMetal
 import BubblePhysicsNativeMetal
+import BubblePhysicsNativeMetalDiagnostics
 
 private let usage = "Użycie: BubblePhysicsReferenceBench [--scene interactive-24|stress-300] [--backend cpu|metal|native-metal] [--limits 4,8,12,16] [--warmup 30] [--measured 300] [--diagnostics]\n--diagnostics: szczegółowy profil GPU dodaje narzut hosta; nie mieszaj z pomiarem akceptacyjnym. Limit native-metal oznacza stałą liczbę iteracji XPBD/PBD."
 

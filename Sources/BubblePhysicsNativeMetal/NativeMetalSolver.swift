@@ -1,24 +1,24 @@
 import Foundation
 import Metal
-import BubblePhysicsReference
 import BubblePhysicsModel
 
-enum NativeMetalSolverError: Error {
+package enum NativeMetalSolverError: Error {
     case resourceUnavailable, allocationFailed, commandSetupFailed, commandFailed(String), invalidSnapshot, capacityOverflow
 }
 
-struct NativeMetalCommandTiming {
-    let gpuMilliseconds: Double
+package struct NativeMetalCommandTiming {
+    package let gpuMilliseconds: Double
+    package init(gpuMilliseconds: Double) { self.gpuMilliseconds = gpuMilliseconds }
 }
 
 /// Opcjonalny odczyt granic potoku używany wyłącznie przez probe diagnostyczny.
 struct NativeMetalStageDiagnostics: Equatable {
-    let postSolverPositions: [ReferenceVector2]
-    let postGuardPositions: [ReferenceVector2]
+    let postSolverPositions: [SIMD2<Float>]
+    let postGuardPositions: [SIMD2<Float>]
 }
 
 @MainActor
-protocol NativeMetalCommandExecuting {
+package protocol NativeMetalCommandExecuting {
     // Wywoływane tylko po zakończeniu wszystkich encoderów danej klatki.
     func complete(_ command: MTLCommandBuffer) async throws -> NativeMetalCommandTiming
 }
@@ -61,6 +61,7 @@ final class NativeMetalPersistentState {
     let mergedCache: MTLBuffer
     let scanValues: MTLBuffer
     let scanOffsets: MTLBuffer
+    /// Tylko dla dawnego skanu blokowego (wzorzec testowy); `scanBlockSums.count` wyznacza też rozmiar `indirectArguments`.
     let scanBlockSums: [MTLBuffer]
     let scanBlockOffsets: [MTLBuffer]
     let scanCapacity: Int
@@ -75,12 +76,12 @@ final class NativeMetalPersistentState {
     let diagnosticPostSolverPositions: MTLBuffer?
     let diagnosticPostGuardPositions: MTLBuffer?
     let adjacency: MTLBuffer
-    let adjacencySlots: MTLBuffer
+    /// uint4 na krok: x = pary odrzucone przez limit k lub pojemność, y = największe zapotrzebowanie na obiekt.
+    let candidateOverflow: MTLBuffer
     let adjacencyCounts: MTLBuffer
     let contactEndpoints: MTLBuffer
     let contactCorrections: MTLBuffer
     let solverControl: MTLBuffer
-    let fastCandidates: MTLBuffer
     let guardedBubbles: MTLBuffer
     let safetyControl: MTLBuffer
     let containmentRepairActive: MTLBuffer
@@ -146,7 +147,8 @@ final class NativeMetalPersistentState {
         segmentsPong = try buffer("segments.pong", segmentCapacity, MemoryLayout<NativeMetalSegment>.stride)
         segmentUpdates = try buffer("segmentUpdates", segmentCapacity, MemoryLayout<NativeMetalSegment>.stride)
         let (rowStride, strideOverflow) = bubbleCapacity.addingReportingOverflow(segmentCapacity)
-        let (rowCapacity, rowOverflow) = bubbleCapacity.multipliedReportingOverflow(by: rowStride)
+        // Wiersz kandydatów i wiersz sąsiedztwa ma stałą długość k na obiekt, więc pamięć kontaktów rośnie liniowo.
+        let (rowCapacity, rowOverflow) = bubbleCapacity.multipliedReportingOverflow(by: NativeMetalSolver.candidateLimitPerObject)
         guard !strideOverflow, !rowOverflow, rowCapacity <= Int(UInt32.max) else { throw NativeMetalSolverError.allocationFailed }
         contactCapacity = max(1, candidateCapacity ?? rowCapacity)
         guard contactCapacity <= Int(UInt32.max) else { throw NativeMetalSolverError.allocationFailed }
@@ -188,12 +190,11 @@ final class NativeMetalPersistentState {
             diagnosticPostGuardPositions = nil
         }
         adjacency = try buffer("solver.adjacency", rowCapacity, MemoryLayout<SIMD4<UInt32>>.stride)
-        adjacencySlots = try buffer("solver.adjacencySlots", rowCapacity, MemoryLayout<SIMD4<UInt32>>.stride)
+        candidateOverflow = try buffer("candidateOverflow", 1, MemoryLayout<SIMD4<UInt32>>.stride)
         adjacencyCounts = try buffer("solver.adjacencyCounts", bubbleCapacity, MemoryLayout<UInt32>.stride)
         contactEndpoints = try buffer("solver.endpoints", contactCapacity, MemoryLayout<SIMD4<UInt32>>.stride)
         contactCorrections = try buffer("solver.corrections", contactCapacity, MemoryLayout<SIMD4<Float>>.stride)
         solverControl = try buffer("solver.control", 1, MemoryLayout<NativeMetalSolverControl>.stride)
-        fastCandidates = try buffer("safety.fastCandidates", rowCapacity, MemoryLayout<UInt32>.stride)
         guardedBubbles = try buffer("safety.guardedBubbles", bubbleCapacity, MemoryLayout<UInt32>.stride)
         safetyControl = try buffer("safety.control", 1, MemoryLayout<NativeMetalSafetyControl>.stride)
         containmentRepairActive = try buffer("safety.containmentRepairActive", 9, MemoryLayout<UInt32>.stride)
@@ -218,7 +219,7 @@ final class NativeMetalPersistentState {
 
 /// Trwały stan GPU i solver Jacobi; publikacja świata czeka na guardy oraz CCD.
 @MainActor
-final class NativeMetalSolver: NativeMetalFrameExecuting {
+package final class NativeMetalSolver: NativeMetalFrameExecuting {
     private let device: MTLDevice
     private let queue: MTLCommandQueue
     private let predict: MTLComputePipelineState
@@ -238,23 +239,48 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
     private var previousPolygonSensorPairCount = 0
     var hasSensorPairHistory: Bool { previousSensorPairCount > 0 || previousPolygonSensorPairCount > 0 }
     private let rigidState: NativeRigidPolygonState
+    private let jointState: NativeJointState
     private(set) var publishedPolygons: [ObjectID: NativePublicObject] = [:]
     private(set) var publishedDriveContacts: [ObjectID: [DriveBlockingContact]] = [:]
+    /// Kontakty brył ostatniego kroku z sumą normalnych Δλ (zdarzenia kontaktu w `NativePublicWorld`).
+    private(set) var publishedRigidContacts: [NativeRigidPolygonState.ContactRecord] = []
     private(set) var removedPolygons: Set<ObjectID> = []
     private(set) var wrappedPolygons: Set<ObjectID> = []
     private(set) var cachedContacts: [NativeContactCacheRecord] = []
-    private(set) var candidateKeys: [NativeContactKey] = []
+    private var publishedCandidateCount = 0
+    /// Klucze kandydatów ostatniej publikacji, czytane z bufora dopiero na żądanie (szew testów; klatka ich nie kopiuje).
+    /// Bufor kandydatów jest współdzielony z następnym krokiem, więc `executeSnapshot` zeruje licznik przy kodowaniu:
+    /// po odrzuconym kroku lub z klatką w locie wartość to `[]`, nigdy klucze innego kroku niż ostatnia publikacja.
+    var candidateKeys: [NativeContactKey] {
+        guard publishedCandidateCount > 0, let buffer = persistentState?.candidates else { return [] }
+        let records = buffer.contents().bindMemory(to: NativeMetalCandidate.self, capacity: publishedCandidateCount)
+        return (0..<publishedCandidateCount).map { records[$0].key }
+    }
     private(set) var persistentState: NativeMetalPersistentState?
-    private(set) var publishedFrame: NativeMetalWorldFrame?
+    package private(set) var publishedSolverFrame: NativeSolverFrame?
     private(set) var publishedRenderHandoff: NativeMetalRenderHandoff?
     private(set) var publishedContourCPUReadbackCount = 0
     private(set) var stageDiagnostics: NativeMetalStageDiagnostics?
 
-    init(device: MTLDevice, commandExecutor: (any NativeMetalCommandExecuting)? = nil,
+    /// Limit k kandydatów kontaktu na obiekt, wspólny dla baniek, odcinków i brył (zadanie 14: k = 48; zadanie 32: k = 128, bo wiersz statycznej ściany scena mieszana wypełnia wszystkimi bryłami w zasięgu).
+    package static let candidateLimitPerObject = 128
+
+    /// Suma długości buforów związanych z kontaktami; 0 przed pierwszym krokiem.
+    var contactMemoryBytes: Int {
+        guard let s = persistentState else { return 0 }
+        let buffers: [MTLBuffer] = [s.cachePing, s.cachePong, s.contacts, s.candidates, s.candidateRows, s.activeContacts,
+            s.mergedCache, s.scanValues, s.scanOffsets, s.adjacency, s.contactEndpoints,
+            s.contactCorrections]
+        return buffers.reduce(0) { $0 + $1.length }
+    }
+    var rigidContactMemoryBytes: Int { rigidState.contactMemoryBytes }
+
+    package init(device: MTLDevice, commandExecutor: (any NativeMetalCommandExecuting)? = nil,
          configuration: NativeMetalConfiguration = .default, candidateCapacity: Int? = nil,
          collectDispatchStatistics: Bool = false, collectStageDiagnostics: Bool = false) throws {
         self.device = device
         self.rigidState = NativeRigidPolygonState(device: device)
+        self.jointState = NativeJointState(device: device)
         self.configuration = configuration.sanitized
         self.candidateCapacity = candidateCapacity
         self.collectDispatchStatistics = collectDispatchStatistics
@@ -267,26 +293,27 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
         pipelines = compiled.stages
     }
 
-    func executeFrame(world: ReferenceWorld, scenarioStep: Int) async throws -> NativeMetalWorldFrame {
-        try await executeFrame(snapshot: .init(world: world, previous: lastSnapshot), scenarioStep: scenarioStep)
+    /// Rdzeń kroku: neutralne wejście, neutralny wynik. Poprzednia klatka pochodzi z trwałego stanu solvera.
+    package func executeFrame(input: NativeSolverInput, scenarioStep: Int) async throws -> NativeSolverFrame {
+        try await executeFrame(input: input, scenarioStep: scenarioStep, commandBuffer: nil, beforeCommit: nil)
     }
 
-    func executePublicFrame(world: ReferenceWorld, settings: NativePublicSettings,
-                            commandBuffer: MTLCommandBuffer? = nil,
-                            beforeCommit: ((NativeMetalRenderHandoff) throws -> Void)? = nil) async throws -> NativeMetalWorldFrame {
-        try await executeFrame(snapshot: .init(world: world, previous: lastSnapshot, publicSettings: settings),
-                               scenarioStep: 0, commandBuffer: commandBuffer, beforeCommit: beforeCommit)
+    func executeFrame(input: NativeSolverInput, scenarioStep: Int,
+                      commandBuffer: MTLCommandBuffer?,
+                      beforeCommit: ((NativeMetalRenderHandoff) throws -> Void)?) async throws -> NativeSolverFrame {
+        try await executeSnapshot(.init(input: input, previous: lastSnapshot), scenarioStep: scenarioStep,
+                                  commandBuffer: commandBuffer, beforeCommit: beforeCommit)
     }
 
     // Runner potwierdza, że świat gry otrzymał wynik. Bez potwierdzenia zachowujemy
     // kontrakt bezpośredniego solvera: niezmienione wejście kontynuuje trwały stan GPU.
-    func acknowledgePublication() {
-        if let publishedFrame { lastSnapshot?.sourceBubbles = publishedFrame.bubbles }
+    package func acknowledgePublication() {
+        if let publishedSolverFrame { lastSnapshot?.sourceBubbles = publishedSolverFrame.bubbles }
     }
 
-    func executeFrame(snapshot: NativeMetalSnapshot, scenarioStep: Int,
-                      commandBuffer: MTLCommandBuffer? = nil,
-                      beforeCommit: ((NativeMetalRenderHandoff) throws -> Void)? = nil) async throws -> NativeMetalWorldFrame {
+    package func executeSnapshot(_ snapshot: NativeMetalSnapshot, scenarioStep: Int,
+                                 commandBuffer: MTLCommandBuffer? = nil,
+                                 beforeCommit: ((NativeMetalRenderHandoff) throws -> Void)? = nil) async throws -> NativeSolverFrame {
         guard !inFlight else { throw NativeMetalWorldError.frameInFlight }
         inFlight = true
         defer { inFlight = false }
@@ -294,8 +321,21 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
         let encodingStart = DispatchTime.now().uptimeNanoseconds
         let count = snapshot.sourceBubbles.count
         let segmentCount = snapshot.sourceSegments.count
-        try rigidState.prepare(snapshot.publicSettings?.rigidPolygons ?? [], bubbleCount: count)
-        let hasRigidBodies = snapshot.publicSettings?.rigidPolygons.contains { $0.object.motionRole != .static } == true
+        try rigidState.prepare(snapshot.publicSettings?.rigidPolygons ?? [], bubbleCount: count,
+            timeStep: snapshot.configuration.timeStep)
+        let joints = snapshot.publicSettings?.joints ?? []
+        if joints.isEmpty {
+            // Bez więzów lista identyfikatorów i słownik encji nie są potrzebne, wystarczą liczby.
+            try jointState.prepareWithoutJoints(bubbleCount: count,
+                bodyCount: snapshot.publicSettings?.rigidPolygons.count ?? 0, iterations: configuration.solverIterationCount)
+        } else {
+            try jointState.prepare(joints,
+                bubbleIDs: snapshot.sourceBubbles.map { ObjectID(rawValue: UInt64(bitPattern: Int64($0.id.rawValue))) },
+                bodyIDs: (snapshot.publicSettings?.rigidPolygons ?? []).map { $0.object.descriptor.id },
+                iterations: configuration.solverIterationCount)
+        }
+        let hasJoints = jointState.count > 0
+        let hasRigidBodies = snapshot.publicSettings?.rigidPolygons.contains { $0.object.motionRole != .static || $0.hasRoundCore } == true
         guard frameNumber < UInt32.max else { throw NativeMetalSolverError.invalidSnapshot }
         let nextFrame = frameNumber + 1
         let contourConfiguration = snapshot.configuration.sanitized
@@ -336,6 +376,12 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
                        min(state.segments.length, previous.segments.length))
                 memcpy(state.publishedContourCounts.contents(), previous.publishedContourCounts.contents(),
                        previous.publishedContourCounts.length)
+                // Opublikowane kontury (t−1 po następnej publikacji) bańka po bańce, bo krok konturu mógł się zmienić.
+                for index in 0..<previous.bubbleCapacity {
+                    memcpy(state.publishedContourPoints.contents().advanced(by: index * state.contourStride * 8),
+                           previous.publishedContourPoints.contents().advanced(by: index * previous.contourStride * 8),
+                           previous.contourStride * 8)
+                }
                 for index in 0..<previous.bubbleCapacity {
                     memcpy(state.publishedDeformation.contents().advanced(by: index * state.contourStride * 16),
                            previous.publishedDeformation.contents().advanced(by: index * previous.contourStride * 16),
@@ -343,6 +389,8 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
                 }
             }
         }
+        // Kodowanie nadpisze bufor kandydatów: klucze poprzedniej publikacji przestają być czytelne (jedno przypisanie liczby).
+        publishedCandidateCount = 0
         let bubbleStride = MemoryLayout<NativeMetalBubble>.stride
         let segmentStride = MemoryLayout<NativeMetalSegment>.stride
         for change in snapshot.bubbleChanges {
@@ -373,24 +421,34 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
         state.containmentRepairActive.contents().storeBytes(of: UInt32(1), as: UInt32.self)
         memset(state.scratch.contents(), 0, state.scratch.length)
         // Wyłącznie zmiany wejścia gry mogą oznaczać teleport; normalna predykcja nie resetuje cache.
-        let previousBubbles = Dictionary(uniqueKeysWithValues: (lastSnapshot?.sourceBubbles ?? []).map { ($0.id, $0) })
-        let previousSegments = Dictionary(uniqueKeysWithValues: (lastSnapshot?.sourceSegments ?? []).map { ($0.id, $0) })
+        // Poprzedni krok zwykle ma te same obiekty w tej samej kolejności, więc para po indeksie zastępuje słownik;
+        // słownik powstaje tylko wtedy, gdy zestaw albo kolejność się zmieniły.
+        let previousBubbleList = lastSnapshot?.sourceBubbles ?? []
+        let previousSegmentList = lastSnapshot?.sourceSegments ?? []
+        let bubblesAligned = previousBubbleList.count == snapshot.sourceBubbles.count
+            && zip(previousBubbleList, snapshot.sourceBubbles).allSatisfy { $0.id == $1.id }
+        let segmentsAligned = previousSegmentList.count == snapshot.sourceSegments.count
+            && zip(previousSegmentList, snapshot.sourceSegments).allSatisfy { $0.id == $1.id }
+        let previousBubbles = bubblesAligned ? [:] : Dictionary(uniqueKeysWithValues: previousBubbleList.map { ($0.id, $0) })
+        let previousSegments = segmentsAligned ? [:] : Dictionary(uniqueKeysWithValues: previousSegmentList.map { ($0.id, $0) })
         var invalidationRecords: [SIMD2<Int64>] = []
-        for bubble in snapshot.sourceBubbles {
-            if let previous = previousBubbles[bubble.id],
-               (bubble.center - previous.center).length > configuration.teleportDistanceMultiplier * bubble.targetRadius {
+        var teleportedBubbles: Set<Int64> = []
+        for (index, bubble) in snapshot.sourceBubbles.enumerated() {
+            if let previous = bubblesAligned ? previousBubbleList[index] : previousBubbles[bubble.id],
+               (bubble.center - previous.center).euclideanLength > configuration.teleportDistanceMultiplier * bubble.targetRadius {
                 invalidationRecords.append(SIMD2(Int64(bubble.id.rawValue), 0))
+                teleportedBubbles.insert(Int64(bubble.id.rawValue))
             }
         }
-        for segment in snapshot.sourceSegments {
-            if let previous = previousSegments[segment.id], previous != segment {
-                invalidationRecords.append(SIMD2(Int64(segment.id.rawValue), 1))
+        for (index, segment) in snapshot.sourceSegments.enumerated() {
+            if let previous = segmentsAligned ? previousSegmentList[index] : previousSegments[segment.id], previous != segment {
+                invalidationRecords.append(SIMD2(Int64(segment.id), 1))
             }
         }
         if let structuralShapes = snapshot.publicSettings?.structuralShapes {
             for id in structuralShapes.keys.sorted(by: { $0.rawValue < $1.rawValue }) {
                 let value = Int64(bitPattern: id.rawValue)
-                if !invalidationRecords.contains(where: { $0.x == value && $0.y == 0 }) {
+                if teleportedBubbles.insert(value).inserted {
                     invalidationRecords.append(SIMD2(value, 0))
                 }
             }
@@ -400,11 +458,12 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
         }
         let contactParameters = NativeMetalContactControl(
             limits: SIMD4(nextFrame, UInt32(clamping: configuration.cacheExpiryFrames), UInt32(state.contactCapacity), UInt32(state.publishedCacheCount)),
-            counts: .zero, cache: SIMD4(0, 0, UInt32(invalidationRecords.count), UInt32(count + segmentCount)),
+            counts: .zero, cache: SIMD4(0, 0, UInt32(invalidationRecords.count), UInt32(Self.candidateLimitPerObject)),
             thresholds: SIMD4(configuration.teleportDistanceMultiplier, configuration.ccdVelocityMultiplier,
                               snapshot.configuration.contactTolerance, snapshot.configuration.separationTolerance), cellWidth: .zero)
         state.contactControl.contents().storeBytes(of: contactParameters, as: NativeMetalContactControl.self)
         memset(state.dispatchStatistics.contents(), 0, state.dispatchStatistics.length)
+        memset(state.candidateOverflow.contents(), 0, state.candidateOverflow.length)
         state.eventCount.contents().storeBytes(of: UInt32(0), as: UInt32.self)
         state.dispatchStatistics.contents().advanced(by: 16).storeBytes(of: SIMD4<UInt32>(collectDispatchStatistics ? 1 : 0, 0, 0, 0), as: SIMD4<UInt32>.self)
 
@@ -499,6 +558,14 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
             avoiding: previousPolygonSensorPairs, zeroedCount: polygonPairCount, of: NativeMetalSensorPair.self, device: device))
         let previousPolygonSensorPairBuffer = previousPolygonSensorPairs ?? state.eventRecords
 
+        // Punkty i wyniki hit-testu: bufory na krok, alokowane przed utworzeniem bufora poleceń.
+        let hitTestPoints = try snapshot.hitTests.isEmpty ? state.eventRecords : eventBuffer(snapshot.hitTests)
+        let hitTestResultBuffer = try snapshot.hitTests.isEmpty ? state.eventRecords
+            : eventBuffer([NativeHitTestResult](repeating: .init(identity: 0, layer: 0, found: 0), count: snapshot.hitTests.count))
+        // Liczba punktów, liczba brył, stride konturu.
+        let hitTestCounts = try snapshot.hitTests.isEmpty ? state.eventRecords : eventBuffer([SIMD4(
+            UInt32(snapshot.hitTests.count), UInt32(rigidState.count), UInt32(state.contourStride), UInt32(0))])
+
         let descriptor = MTLCommandBufferDescriptor()
         descriptor.retainedReferences = true
         descriptor.errorOptions = .encoderExecutionStatus
@@ -581,86 +648,30 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
             encoder.dispatchThreadgroups(indirectBuffer: state.indirectArguments, indirectBufferOffset: argument * 16,
                 threadsPerThreadgroup: .init(width: 32, height: 1, depth: 1))
         }
-        // Trzystopniowy skan blokowy (dla obecnej pojemności): każdy blok ma 256 work-itemów.
-        // Rekurencja skanuje sumy bloków, a osobne dispatchy dodają offsety rodziców.
+        let scanBuffers = NativeMetalScanBuffers(values: state.scanValues, offsets: state.scanOffsets,
+            blockSums: state.scanBlockSums, blockOffsets: state.scanBlockOffsets, control: state.control,
+            contacts: state.contactControl, indirectArguments: state.indirectArguments, overflow: state.candidateOverflow)
         func scan(mode: UInt32, maximum: Int) {
-            var lengths = [maximum]
-            while lengths.last! > 256 { lengths.append((lengths.last! + 255) / 256) }
-            for level in lengths.indices {
-                encoder.memoryBarrier(scope: .buffers)
-                encoder.setComputePipelineState(pipelines["nativeScanBlocks"]!)
-                let input = level == 0 ? state.scanValues : state.scanBlockSums[level - 1]
-                let output = level == 0 ? state.scanOffsets : state.scanBlockOffsets[level - 1]
-                for (i, b) in [input, output, state.scanBlockSums[level], state.control, state.contactControl].enumerated() {
-                    encoder.setBuffer(b, offset: 0, index: i)
-                }
-                var parameters = SIMD2(mode, UInt32(level))
-                encoder.setBytes(&parameters, length: MemoryLayout<SIMD2<UInt32>>.stride, index: 5)
-                if mode == 0 {
-                    encoder.dispatchThreadgroups(.init(width: (lengths[level] + 255) / 256, height: 1, depth: 1),
-                        threadsPerThreadgroup: .init(width: 256, height: 1, depth: 1))
-                } else {
-                    encoder.dispatchThreadgroups(indirectBuffer: state.indirectArguments,
-                        indirectBufferOffset: (5 + (Int(mode) - 1) * state.scanBlockSums.count + level) * 16,
-                        threadsPerThreadgroup: .init(width: 256, height: 1, depth: 1))
-                }
-            }
-            if lengths.count > 1 {
-                for level in (0..<(lengths.count - 1)).reversed() {
-                    encoder.memoryBarrier(scope: .buffers)
-                    encoder.setComputePipelineState(pipelines["nativeAddScanBlockOffsets"]!)
-                    let output = level == 0 ? state.scanOffsets : state.scanBlockOffsets[level - 1]
-                    for (i, b) in [output, state.scanBlockOffsets[level], state.control, state.contactControl].enumerated() {
-                        encoder.setBuffer(b, offset: 0, index: i)
-                    }
-                    var parameters = SIMD2(mode, UInt32(level))
-                    encoder.setBytes(&parameters, length: MemoryLayout<SIMD2<UInt32>>.stride, index: 4)
-                    if mode == 0 {
-                        encoder.dispatchThreads(.init(width: lengths[level], height: 1, depth: 1),
-                            threadsPerThreadgroup: .init(width: 256, height: 1, depth: 1))
-                    } else {
-                        encoder.dispatchThreadgroups(indirectBuffer: state.indirectArguments,
-                            indirectBufferOffset: (5 + (Int(mode) - 1) * state.scanBlockSums.count + level) * 16,
-                            threadsPerThreadgroup: .init(width: 256, height: 1, depth: 1))
-                    }
-                }
-            }
-            encoder.memoryBarrier(scope: .buffers)
-            encoder.setComputePipelineState(pipelines["nativeFinishScan"]!)
-            for (i, b) in [state.scanOffsets, state.control, state.contactControl].enumerated() { encoder.setBuffer(b, offset: 0, index: i) }
-            var parameters = SIMD2(mode, UInt32(0))
-            encoder.setBytes(&parameters, length: MemoryLayout<SIMD2<UInt32>>.stride, index: 3)
-            encoder.dispatchThreads(.init(width: 1, height: 1, depth: 1), threadsPerThreadgroup: .init(width: 1, height: 1, depth: 1))
+            NativeMetalScan.encode(encoder, pipelines: pipelines, buffers: scanBuffers, mode: mode, maximum: maximum,
+                                   singleGroup: true)
         }
         if hasRigidBodies {
             dispatch("nativeRigidPredict", buffers: [rigidState.bodies, rigidState.vertices, rigidState.control,
-                state.control, state.workingSegments, state.safetyControl, rigidState.contacts], threads: rigidState.count)
+                state.control, state.workingSegments, state.safetyControl, rigidState.walls, jointState.ranges, jointState.exclusions],
+                threads: rigidState.count)
         }
         dispatchReduction("nativePrepareGrid", buffers: [state.workingBubbles, state.control, state.contactControl])
         dispatch("nativeBuildGrid", buffers: [state.workingBubbles, state.control, state.contactControl, state.grid], threads: state.bubbleCapacity)
-        var size = 2
-        while size <= state.bubbleCapacity {
-            var distance = size / 2
-            while distance > 0 {
-                encoder.memoryBarrier(scope: .buffers)
-                let pipeline = pipelines["nativeSortGrid"]!
-                encoder.setComputePipelineState(pipeline)
-                encoder.setBuffer(state.grid, offset: 0, index: 0)
-                var pass = SIMD2(UInt32(size), UInt32(distance))
-                encoder.setBytes(&pass, length: MemoryLayout<SIMD2<UInt32>>.stride, index: 1)
-                encoder.dispatchThreads(.init(width: state.bubbleCapacity, height: 1, depth: 1),
-                    threadsPerThreadgroup: .init(width: pipeline.threadExecutionWidth, height: 1, depth: 1))
-                distance /= 2
-            }
-            size *= 2
-        }
+        NativeMetalGridSort.encode(encoder, pipelines: pipelines, grid: state.grid, capacity: state.bubbleCapacity)
         dispatch("nativeEmitCandidates", buffers: [state.workingBubbles, state.control, state.contactControl,
-            state.grid, state.workingSegments, state.candidateRows, state.candidateRowCounts], threads: count)
+            state.grid, state.workingSegments, state.candidateRows, state.candidateRowCounts, state.candidateOverflow,
+            jointState.ranges, jointState.exclusions], threads: count)
         dispatch("nativePrepareCandidateCounts", buffers: [state.control, state.candidateRowCounts, state.scanValues], threads: count * 2)
         scan(mode: 0, maximum: max(1, count * 2))
         prepareIndirectArguments()
         dispatch("nativeCompactCandidates", buffers: [state.control, state.contactControl, state.candidateRows,
-            state.candidateRowCounts, state.candidates, state.scanOffsets, state.dispatchStatistics], threads: count * (count + segmentCount))
+            state.candidateRowCounts, state.candidates, state.scanOffsets, state.dispatchStatistics],
+            threads: count * Self.candidateLimitPerObject)
         dispatchContacts("nativeBuildContacts", buffers: [state.workingBubbles, state.workingSegments, state.contactControl,
             state.candidates, state.contacts], argument: 0)
         dispatchContacts("nativePrepareContactFlags", buffers: [state.contacts, state.contactControl, state.scanValues], argument: 0)
@@ -677,11 +688,12 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
         dispatchContacts("nativeCompactContactCache", buffers: [state.mergedCache, state.workingCache, state.contactControl,
             state.scanValues, state.scanOffsets, state.dispatchStatistics], argument: 2)
         prepareIndirectArguments()
-        dispatch("nativeClearAdjacency", buffers: [state.control, state.adjacencySlots], threads: count * (count + segmentCount))
+        dispatch("nativeClearAdjacency", buffers: [state.control, state.adjacencyCounts], threads: count)
         dispatchContacts("nativeEmitAdjacency", buffers: [state.workingBubbles, state.workingSegments, state.workingCache,
-            state.control, state.contactControl, state.adjacencySlots, state.contactEndpoints, state.dispatchStatistics], argument: 3)
+            state.control, state.contactControl, state.adjacency, state.contactEndpoints, state.dispatchStatistics,
+            state.adjacencyCounts, state.candidateOverflow], argument: 3)
         dispatch("nativeBuildAdjacency", buffers: [state.control, state.contactControl,
-            state.adjacencySlots, state.adjacency, state.adjacencyCounts], threads: count)
+            state.adjacency, state.adjacencyCounts, state.candidateOverflow], threads: count)
         dispatchContacts("nativePrepareSolverContacts", buffers: [state.workingBubbles, state.workingSegments, state.workingCache,
             state.control, state.contactControl, state.contactEndpoints, state.adjacencyCounts], argument: 3)
         dispatch("nativeApplyWarmStart", buffers: [state.workingBubbles, state.workingCache, state.control,
@@ -697,6 +709,16 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
         }
         // Pomiar przed korekcją pozwala warm-startowi zakończyć się bez dodatkowej iteracji.
         measureResidual()
+        if hasRigidBodies {
+            NativeMetalRigidCandidates.encode(encoder, pipelines: pipelines, bodies: rigidState.bodies,
+                bubbles: state.workingBubbles, positions: inputPositions, control: rigidState.control,
+                rows: rigidState.candidates, rowCounts: rigidState.rowCounts, overflow: state.candidateOverflow,
+                jointRanges: jointState.ranges, jointPartners: jointState.exclusions, bodyCount: rigidState.count)
+            // CCD bryła–bryła po wierszach kandydatów, przed pętlą: faza 1 liczy czas uderzenia, faza 2 cofa bryły.
+            dispatch("nativeRigidResolveCCD", buffers: [rigidState.bodies, rigidState.vertices, rigidState.triangles,
+                rigidState.control, rigidState.candidates, rigidState.rowCounts], threads: rigidState.count)
+            dispatch("nativeRigidApplyCCD", buffers: [rigidState.bodies, rigidState.control], threads: rigidState.count)
+        }
         for _ in 0..<configuration.solverIterationCount {
             dispatchContacts("nativeUpdateContactMultipliers", buffers: [state.workingBubbles, state.workingSegments,
                 state.workingCache, inputPositions, state.control, state.contactControl, state.solverControl,
@@ -709,43 +731,44 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
             if hasRigidBodies {
                 dispatch("nativeRigidContacts", buffers: [rigidState.bodies, rigidState.vertices, rigidState.triangles,
                     state.workingBubbles, inputPositions, rigidState.control, rigidState.contacts,
-                    state.safetyControl], threads: rigidState.contactCount)
-                dispatch("nativeRigidApplyBodies", buffers: [rigidState.bodies, rigidState.control, rigidState.contacts], threads: rigidState.count)
-                dispatch("nativeRigidGuardWalls", buffers: [rigidState.bodies, rigidState.vertices, rigidState.triangles, rigidState.control], threads: rigidState.count)
+                    state.safetyControl, rigidState.candidates, rigidState.rowCounts], threads: rigidState.rowCapacity)
+                dispatch("nativeRigidApplyBodies", buffers: [rigidState.bodies, rigidState.control, rigidState.contacts,
+                    rigidState.candidates, rigidState.rowCounts], threads: rigidState.count)
+            }
+            if hasJoints {
+                dispatch("nativeSolveJoints", buffers: [rigidState.bodies, state.workingBubbles, inputPositions,
+                    jointState.records, jointState.corrections, jointState.control, state.control], threads: jointState.count)
+                dispatch("nativeApplyJointBodies", buffers: [rigidState.bodies, jointState.corrections,
+                    jointState.references, jointState.ranges, jointState.control], threads: rigidState.count)
+                dispatch("nativeApplyJointBubbles", buffers: [state.workingBubbles, inputPositions, jointState.corrections,
+                    jointState.references, jointState.ranges, jointState.control, state.solverControl], threads: count)
+            }
+            if hasRigidBodies {
+                dispatch("nativeRigidGuardWalls", buffers: [rigidState.bodies, rigidState.vertices, rigidState.triangles, rigidState.control,
+                    jointState.ranges, jointState.exclusions], threads: rigidState.count)
                 dispatch("nativeRigidApplyBubbles", buffers: [state.workingBubbles, inputPositions, rigidState.control,
-                    rigidState.contacts, state.solverControl], threads: count)
+                    rigidState.contacts, state.solverControl, rigidState.candidates, rigidState.rowCounts], threads: count)
             }
         }
         if let diagnosticPostSolver = state.diagnosticPostSolverPositions {
             dispatch("nativeCapturePositions", buffers: [inputPositions, diagnosticPostSolver, state.control], threads: count)
         }
         dispatch("nativeFindFastCandidates", buffers: [state.workingBubbles, state.workingSegments,
-            state.control, state.contactControl, state.fastCandidates, state.guardedBubbles, state.safetyControl], threads: count)
+            state.control, state.contactControl, state.guardedBubbles, state.safetyControl], threads: count)
         dispatch("nativeResolveCCD", buffers: [state.workingBubbles, state.workingSegments, inputPositions,
-            state.control, state.fastCandidates, state.guardedBubbles, state.safetyControl, state.dispatchStatistics], threads: count)
+            state.control, state.contactControl, state.guardedBubbles, state.safetyControl, state.dispatchStatistics], threads: count)
         dispatch("nativeApplyCenterGuards", buffers: [state.workingBubbles, state.workingSegments, inputPositions,
-            state.control, state.contactControl, state.guardedBubbles, state.safetyControl, state.dispatchStatistics,
-            state.fastCandidates], threads: count)
+            state.control, state.contactControl, state.guardedBubbles, state.safetyControl, state.dispatchStatistics],
+            threads: count)
         // Bounded GPU repair of pairs introduced by CCD/obstacle projection.
         // Every repair rechecks obstacle invariants, in the same command buffer.
         for pass in 0..<8 {
-            encoder.memoryBarrier(scope: .buffers)
-            let pipeline = pipelines["nativeSeparateContainedBubbles"]!
-            encoder.setComputePipelineState(pipeline)
-            encoder.setThreadgroupMemoryLength(pipeline.threadExecutionWidth * MemoryLayout<SIMD2<Float>>.stride, index: 0)
-            for (index, buffer) in [state.workingBubbles, inputPositions, outputPositions,
-                state.control, state.solverControl, state.guardedBubbles, state.safetyControl,
-                state.containmentRepairActive].enumerated() { encoder.setBuffer(buffer, offset: 0, index: index) }
-            var repairPass = UInt32(pass)
-            encoder.setBytes(&repairPass, length: MemoryLayout<UInt32>.stride, index: 8)
-            if count > 0 {
-                encoder.dispatchThreadgroups(.init(width: count, height: 1, depth: 1),
-                    threadsPerThreadgroup: .init(width: pipeline.threadExecutionWidth, height: 1, depth: 1))
-            }
+            NativeMetalContainmentRepair.encodePass(encoder, pipelines: pipelines, bubbles: state.workingBubbles,
+                segments: state.workingSegments, input: inputPositions, output: outputPositions, control: state.control,
+                solver: state.solverControl, contacts: state.contactControl, changed: state.guardedBubbles,
+                safety: state.safetyControl, statistics: state.dispatchStatistics, repairActive: state.containmentRepairActive,
+                pass: pass, bubbleCount: count, fused: true)
             swap(&inputPositions, &outputPositions)
-            dispatch("nativeReapplyCenterGuards", buffers: [state.workingBubbles, state.workingSegments, inputPositions,
-                state.control, state.contactControl, state.guardedBubbles, state.safetyControl, state.dispatchStatistics,
-                state.fastCandidates], threads: count)
         }
         dispatch("nativeValidateBubbleContainment", buffers: [state.workingBubbles, inputPositions,
             state.control, state.solverControl, state.safetyControl], threads: count * count)
@@ -787,17 +810,15 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
                 state.control, state.contourControl, state.safetyControl, state.publishedBubbles,
                 state.publishedDeformation, state.publishedContourCounts], threads: count * state.contourStride)
         }
-        var contourInput = state.contourScratch
-        var contourOutput = state.workingDeformation
-        // Liczba nieparzysta: wynik pozostaje w roboczym buforze ping-pong.
-        for _ in 0..<13 {
-            dispatch("nativeGenerateContours", buffers: [contourInput, contourOutput, state.workingContourCounts,
-                state.control, state.contourControl, state.safetyControl], threads: count * state.contourStride)
-            swap(&contourInput, &contourOutput)
-        }
-        dispatch("nativePrepareRenderData", buffers: [state.workingBubbles, state.workingDeformation,
-            state.workingContourCounts, state.workingContourPoints, state.renderPackets, state.control,
-            state.contourControl, state.safetyControl], threads: count)
+        // Liczba przejść jest nieparzysta: wynik pozostaje w roboczym buforze deformacji.
+        NativeMetalContourSmoothing.encode(encoder, pipelines: pipelines, input: state.contourScratch,
+            output: state.workingDeformation, counts: state.workingContourCounts, control: state.control,
+            contour: state.contourControl, safety: state.safetyControl, bubbleCount: count,
+            stride: state.contourStride, fused: true)
+        NativeMetalRenderPreparation.encode(encoder, pipelines: pipelines, bubbles: state.workingBubbles,
+            deformation: state.workingDeformation, counts: state.workingContourCounts, points: state.workingContourPoints,
+            packets: state.renderPackets, control: state.control, contour: state.contourControl,
+            safety: state.safetyControl, bubbleCount: count, stride: state.contourStride, grouped: true)
         if snapshot.publicSettings != nil {
             dispatch("nativeApplyPublicRegion", buffers: [state.workingBubbles, state.workingContourPoints,
                 state.renderPackets, state.workingContourCounts, state.control, state.contourControl, state.safetyControl], threads: count)
@@ -870,15 +891,32 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
                 threadsPerThreadgroup: .init(width: min(pipeline.threadExecutionWidth, pipeline.maxTotalThreadsPerThreadgroup),
                                              height: 1, depth: 1))
         }
+        if !snapshot.hitTests.isEmpty {
+            // Na buforach roboczych tego kroku, po ostatnim kernelu, który zmienia kontury i pozy brył.
+            dispatch("nativeHitTest", buffers: [hitTestPoints, state.workingContourPoints, state.workingContourCounts,
+                state.workingBubbles, rigidState.count > 0 ? rigidState.bodies : state.eventRecords,
+                rigidState.count > 0 ? rigidState.vertices : state.eventRecords,
+                rigidState.count > 0 ? rigidState.triangles : state.eventRecords, state.control,
+                hitTestCounts, hitTestResultBuffer], threads: snapshot.hitTests.count)
+        }
         encoder.endEncoding()
         if let beforeCommit {
             let working = NativeMetalRenderHandoff(
                 points: state.workingContourPoints, counts: state.workingContourCounts,
                 bubbles: state.workingBubbles,
                 bubbleIDs: snapshot.sourceBubbles.map { ObjectID(rawValue: UInt64(bitPattern: Int64($0.id.rawValue))) },
-                contourStride: state.contourStride)
+                contourStride: state.contourStride,
+                // Strona t−1 kroku w toku to strona opublikowana: nietknięta, dopóki krok nie zostanie opublikowany.
+                previousPoints: lastSnapshot == nil ? nil : state.publishedContourPoints,
+                previousCounts: lastSnapshot == nil ? nil : state.publishedContourCounts,
+                previousBubbles: lastSnapshot == nil ? nil : state.publishedBubbles,
+                previousBubbleIDs: previousPublicationBubbleIDs,
+                // Rekordy brył kroku w toku niosą jego obie pozy: przed krokiem (t) i po nim (t+1).
+                bodies: rigidState.count > 0 ? rigidState.bodies : nil, bodyIDs: rigidState.workingIDs)
             try beforeCommit(working)
         }
+        // Od tej chwili krok pisze stronę roboczą, która w opublikowanym uchwycie jest stroną t−1.
+        publishedRenderHandoff?.invalidatePreviousContours()
         let encodingEnd = DispatchTime.now().uptimeNanoseconds
         // Jedyny await/commit: wszystkie etapy zostały już zakodowane.
         let timing = try await commandExecutor.complete(command)
@@ -896,6 +934,8 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
         profile.rigidGeometryUploadCount = rigidState.geometryUploadCount
         profile.hostEncodingMilliseconds = milliseconds(encodingEnd - encodingStart)
         profile.hostWaitingMilliseconds = milliseconds(waitingEnd - encodingEnd)
+        profile.encodingStartNanoseconds = encodingStart
+        profile.waitingEndNanoseconds = waitingEnd
         profile.stageGPUMilliseconds = ["frame": timing.gpuMilliseconds]
         let diagnostics = NativeMetalFrameTelemetry(backend: .nativeMetal, commandBufferCount: 1, encoderCount: 2,
             cacheHitCount: Int(contactResult.cache.x), cacheResetCount: Int(contactResult.cache.y),
@@ -906,7 +946,6 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
         func rejectSafety(_ reason: NativeMetalWorldError) -> NativeMetalSafetyFailure {
             .init(reason: reason, telemetry: diagnostics, profile: profile)
         }
-        guard contactResult.counts.w == 0 else { throw NativeMetalSolverError.capacityOverflow }
         guard safetyResult.counts.w & 1 == 0 else { throw rejectSafety(.nonFinite) }
         guard safetyResult.counts.w & 2 == 0 else { throw rejectSafety(.guardFailure) }
         guard safetyResult.counts.w & 4 == 0 else { throw rejectSafety(.invalidFrame) }
@@ -914,9 +953,9 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
            let postGuard = state.diagnosticPostGuardPositions {
             let solverValues = postSolver.contents().bindMemory(to: SIMD2<Float>.self, capacity: state.bubbleCapacity)
             let guardValues = postGuard.contents().bindMemory(to: SIMD2<Float>.self, capacity: state.bubbleCapacity)
-            let solverPositions = (0..<count).map { ReferenceVector2(x: solverValues[$0].x, y: solverValues[$0].y) }
-            let guardPositions = (0..<count).map { ReferenceVector2(x: guardValues[$0].x, y: guardValues[$0].y) }
-            guard solverPositions.allSatisfy(\.isFinite), guardPositions.allSatisfy(\.isFinite) else {
+            let solverPositions = (0..<count).map { SIMD2<Float>(solverValues[$0].x, solverValues[$0].y) }
+            let guardPositions = (0..<count).map { SIMD2<Float>(guardValues[$0].x, guardValues[$0].y) }
+            guard solverPositions.allSatisfy(\.isFiniteVector), guardPositions.allSatisfy(\.isFiniteVector) else {
                 throw rejectSafety(.nonFinite)
             }
             stageDiagnostics = .init(postSolverPositions: solverPositions, postGuardPositions: guardPositions)
@@ -925,21 +964,21 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
         let completedCache = Array(UnsafeBufferPointer(start: cacheRecords, count: Int(contactResult.counts.z)))
         guard completedCache.allSatisfy({ $0.geometry.x.isFinite && $0.geometry.y.isFinite
             && $0.geometry.z.isFinite && $0.geometry.w.isFinite && $0.lambda.isFinite
-            && $0.lambda >= 0 && $0.response.y.isFinite }), solverResult.physics.z.isFinite
+            && $0.response.y.isFinite }), solverResult.physics.z.isFinite
         else { throw rejectSafety(.nonFinite) }
-        let candidateRecords = state.candidates.contents().bindMemory(to: NativeMetalCandidate.self, capacity: state.contactCapacity)
-        let completedCandidates = Array(UnsafeBufferPointer(start: candidateRecords, count: Int(contactResult.counts.x))).map(\.key)
+        // Skończony ujemny mnożnik to wartość poza zakresem, nie NaN ani ∞: odrzuca tylko krok.
+        guard completedCache.allSatisfy({ $0.lambda >= 0 }) else { throw rejectSafety(.invalidFrame) }
         let contacts = completedCache.filter { $0.lastSeenFrame == nextFrame }.map { record in
             // ID API referencyjnego jest skrótem; cache GPU zawsze używa pełnego klucza.
             var hash: UInt64 = 14695981039346656037
-            for value in [UInt64(record.key.kind), UInt64(bitPattern: record.key.first), UInt64(bitPattern: record.key.second)] {
-                hash = (hash ^ value) &* 1099511628211
-            }
-            return ReferenceContact(id: .init(rawValue: hash), kind: record.key.kind == 0 ? .bubbleBubble : .bubbleSegment,
+            hash = (hash ^ UInt64(record.key.kind)) &* 1099511628211
+            hash = (hash ^ UInt64(bitPattern: record.key.first)) &* 1099511628211
+            hash = (hash ^ UInt64(bitPattern: record.key.second)) &* 1099511628211
+            return NativeSolverContact(id: hash, kind: record.key.kind == 0 ? .bubbleBubble : .bubbleSegment,
                 bubbleA: .init(rawValue: Int(record.key.first)),
                 bubbleB: record.key.kind == 0 ? .init(rawValue: Int(record.key.second)) : nil,
-                segment: record.key.kind == 1 ? .init(rawValue: Int(record.key.second)) : nil,
-                normal: .init(x: record.geometry.x, y: record.geometry.y), pointQ: .init(x: record.geometry.z, y: record.geometry.w),
+                segment: record.key.kind == 1 ? Int(record.key.second) : nil,
+                normal: SIMD2(record.geometry.x, record.geometry.y), pointQ: SIMD2(record.geometry.z, record.geometry.w),
                 penetration: record.response.y, allowedSide: record.response.z == 0 ? nil : record.response.z,
                 accumulatedCompression: record.lambda, age: Int(record.age))
         }
@@ -949,16 +988,18 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
             guard records[index].identity.x == Int64(bubbles[index].id.rawValue) else { throw NativeMetalSolverError.invalidSnapshot }
             records[index].unpack(into: &bubbles[index])
         }
-        guard !bubbles.contains(where: { !$0.center.isFinite || !$0.previousCenter.isFinite || !$0.velocity.isFinite
-            || !$0.rotation.isFinite || !$0.angularVelocity.isFinite }) else { throw rejectSafety(.nonFinite) }
+        guard !bubbles.contains(where: { !$0.isFiniteState }) else { throw rejectSafety(.nonFinite) }
         let readsContours = snapshot.publicSettings == nil
         let pointRecords = readsContours ? state.workingContourPoints.contents().bindMemory(
             to: SIMD2<Float>.self, capacity: count * state.contourStride) : nil
         let pointCounts = state.workingContourCounts.contents().bindMemory(to: UInt32.self, capacity: state.bubbleCapacity)
         let packets = state.renderPackets.contents().bindMemory(to: NativeMetalRenderPacket.self, capacity: state.bubbleCapacity)
-        var contours: [ReferenceBubbleID: [ReferenceVector2]] = [:]
+        var contours: [NativeSolverBubbleID: [SIMD2<Float>]] = [:]
         var renderData: [SIMD4<Float>] = []
-        var effectiveRadii: [ReferenceBubbleID: Float] = [:]
+        var effectiveRadii: [Float] = []
+        var bubbleBounds: [SIMD4<Float>] = []
+        effectiveRadii.reserveCapacity(bubbles.count)
+        bubbleBounds.reserveCapacity(bubbles.count)
         var deformationCount = 0
         var maximumRelativeDeformation: Float = 0
         for index in bubbles.indices {
@@ -967,23 +1008,30 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
                   packets[index].geometry == SIMD4(bubbles[index].center.x, bubbles[index].center.y,
                                                   bubbles[index].targetRadius, bubbles[index].rotation)
             else { throw NativeMetalSolverError.invalidSnapshot }
-            let points = (0..<(readsContours ? Int(pointCounts[index]) : 0)).map { point -> ReferenceVector2 in
-                let value = pointRecords![index * state.contourStride + point]
-                return .init(x: value.x, y: value.y)
+            let points = (0..<(readsContours ? Int(pointCounts[index]) : 0)).map { point -> SIMD2<Float> in
+                pointRecords![index * state.contourStride + point]
             }
-            guard points.allSatisfy(\.isFinite) else { throw rejectSafety(.nonFinite) }
+            guard points.allSatisfy(\.isFiniteVector) else { throw rejectSafety(.nonFinite) }
             guard points.indices.allSatisfy({ point in
-                (points[(point + 1) % points.count] - points[point]).length <= contourConfiguration.maxContourSegmentLength
+                (points[(point + 1) % points.count] - points[point]).euclideanLength <= contourConfiguration.maxContourSegmentLength
             }) else { throw rejectSafety(.invalidFrame) }
             let deformation = packets[index].deformation.x
-            guard deformation.isFinite, deformation >= 0, deformation <= 1 else { throw rejectSafety(.nonFinite) }
+            // NaN i ±∞ kończą świat (`.nonFinite`); skończona wartość poza zakresem odrzuca tylko krok (`.invalidFrame`).
+            guard deformation.isFinite else { throw rejectSafety(.nonFinite) }
+            guard deformation >= 0, deformation <= 1 else { throw rejectSafety(.invalidFrame) }
             let effectiveRadius = packets[index].deformation.y
-            guard effectiveRadius.isFinite, effectiveRadius >= 0,
-                  effectiveRadius <= bubbles[index].targetRadius else { throw rejectSafety(.nonFinite) }
+            guard effectiveRadius.isFinite else { throw rejectSafety(.nonFinite) }
+            guard effectiveRadius >= 0, effectiveRadius <= bubbles[index].targetRadius else {
+                throw rejectSafety(.invalidFrame)
+            }
             if deformation * bubbles[index].targetRadius > contourConfiguration.positionTolerance { deformationCount += 1 }
             maximumRelativeDeformation = max(maximumRelativeDeformation, deformation)
             if readsContours { contours[bubbles[index].id] = points }
-            effectiveRadii[bubbles[index].id] = effectiveRadius
+            effectiveRadii.append(effectiveRadius)
+            let bounds = records[index].bounds
+            guard (0..<4).allSatisfy({ bounds[$0].isFinite }) else { throw rejectSafety(.nonFinite) }
+            guard bounds.x <= bounds.z, bounds.y <= bounds.w else { throw rejectSafety(.invalidFrame) }
+            bubbleBounds.append(bounds)
             renderData.append(packets[index].geometry)
         }
         if collectDispatchStatistics {
@@ -1000,18 +1048,17 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
                 "candidateDispatchThreads": Int(dispatchArguments[0].x) * 32]
         }
         let converged = solverResult.physics.z <= solverResult.physics.y
-        let report = ReferenceWorldStepReport(solver: .init(iterations: Int(solverResult.counts.y),
+        let report = NativeSolverReport(iterations: Int(solverResult.counts.y),
             maximumPenetration: contacts.map(\.penetration).max() ?? 0, converged: converged,
             didReachIterationLimit: !converged && solverResult.counts.y == solverResult.counts.w,
             positionCorrectionCount: Int(solverResult.counts.z), deformationCount: deformationCount,
             initialResidualNorm: solverResult.physics.w, finalResidualNorm: solverResult.physics.z,
-            maximumRelativeDeformation: maximumRelativeDeformation),
+            maximumRelativeDeformation: maximumRelativeDeformation,
             candidatePairCount: Int(contactResult.counts.x), generatedContactCount: contacts.count,
             persistentContactCount: Int(contactResult.cache.x), toiTestCount: Int(safetyResult.counts.x),
-            sideCorrectionCount: Int(safetyResult.counts.y), ccdBudgetExhaustionCount: 0, predictionMilliseconds: 0,
-            broadPhaseMilliseconds: 0, contactMilliseconds: 0, solverMilliseconds: 0,
+            sideCorrectionCount: Int(safetyResult.counts.y),
             totalMilliseconds: milliseconds(waitingEnd - encodingStart), hasNonFiniteState: false)
-        var frame = NativeMetalWorldFrame(bubbles: bubbles, contacts: contacts, report: report,
+        var frame = NativeSolverFrame(bubbles: bubbles, contacts: contacts, report: report,
             telemetry: .init(backend: .nativeMetal, commandBufferCount: 1, encoderCount: 2,
                 cacheHitCount: Int(contactResult.cache.x), cacheResetCount: Int(contactResult.cache.y),
                 contactCount: contacts.count, gpuMilliseconds: timing.gpuMilliseconds,
@@ -1019,7 +1066,16 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
                 ccdCandidateCount: Int(safetyResult.counts.x), guardCorrectionCount: Int(safetyResult.counts.y),
                 cacheInvalidationCount: Int(safetyResult.counts.z)),
             profile: profile, contours: contours, renderData: renderData,
-            effectiveRadii: effectiveRadii, isComplete: true)
+            bubbleEffectiveRadii: effectiveRadii, bubbleBoundsRecords: bubbleBounds, isComplete: true)
+        if !snapshot.hitTests.isEmpty {
+            let records = hitTestResultBuffer.contents().bindMemory(to: NativeHitTestResult.self, capacity: snapshot.hitTests.count)
+            frame.hitTestResults = (0..<snapshot.hitTests.count).map { index in
+                records[index].found == 0 ? nil : ObjectID(rawValue: records[index].identity)
+            }
+        }
+        let overflowCounters = state.candidateOverflow.contents().load(as: SIMD4<UInt32>.self)
+        frame.contactCandidateOverflowCount = Int(overflowCounters.x)
+        frame.maximumContactCandidatesPerObject = Int(overflowCounters.y)
         if snapshot.publicSettings != nil {
             let total = Int(state.eventCount.contents().load(as: UInt32.self))
             let publishedCount = min(total, requestedEventCapacity)
@@ -1039,15 +1095,17 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
         frame.regionRemovals = Set(bubbles.indices.compactMap { records[$0].publicFlags.w == 1 ? bubbles[$0].id : nil })
         frame.regionWraps = Set(bubbles.indices.compactMap { records[$0].publicFlags.w == 2 ? bubbles[$0].id : nil })
         let rigidResult = try rigidState.completed()
-        let driveContacts = hasRigidBodies ? rigidState.driveContacts(bubbleIDs: bubbles.map {
-            ObjectID(rawValue: UInt64(bitPattern: Int64($0.id.rawValue)))
-        }) : [:]
+        let rigidContacts = hasRigidBodies ? rigidState.contactRecords() : []
+        let driveContacts = NativeRigidPolygonState.driveContacts(of: rigidContacts)
         // Synchroniczna publikacja dopiero po pomyślnym wykonaniu i readbacku.
         rigidState.publish(rigidResult.objects)
         publishedPolygons = rigidResult.objects
         publishedDriveContacts = driveContacts
+        publishedRigidContacts = rigidContacts
         removedPolygons = rigidResult.removed
         wrappedPolygons = rigidResult.wrapped
+        let previousIDs = previousPublicationBubbleIDs
+        let hadPreviousPublication = lastSnapshot != nil
         state.publish()
         previousSensorPairs = pairCount > 0 ? currentSensorPairs : nil
         previousSensorPairCount = pairCount
@@ -1055,20 +1113,32 @@ final class NativeMetalSolver: NativeMetalFrameExecuting {
         previousPolygonSensorPairCount = polygonPairCount
         state.publishedCacheCount = completedCache.count
         cachedContacts = completedCache
-        candidateKeys = completedCandidates
+        publishedCandidateCount = Int(contactResult.counts.x)
         frameNumber = nextFrame
         persistentState = state
         lastSnapshot = snapshot
-        publishedFrame = frame
+        publishedSolverFrame = frame
         if snapshot.publicSettings != nil {
             publishedRenderHandoff = NativeMetalRenderHandoff(
                 points: state.publishedContourPoints, counts: state.publishedContourCounts,
                 bubbles: state.publishedBubbles,
                 bubbleIDs: snapshot.sourceBubbles.map { ObjectID(rawValue: UInt64(bitPattern: Int64($0.id.rawValue))) },
-                contourStride: state.contourStride)
+                contourStride: state.contourStride,
+                // Po publikacji strona robocza trzyma kontury poprzedniej publikacji (t−1).
+                previousPoints: hadPreviousPublication ? state.workingContourPoints : nil,
+                previousCounts: hadPreviousPublication ? state.workingContourCounts : nil,
+                previousBubbles: hadPreviousPublication ? state.workingBubbles : nil,
+                previousBubbleIDs: previousIDs,
+                // Opublikowane rekordy brył niosą pozę t i t−1 (stan sprzed ostatniego kroku).
+                bodies: rigidState.publishedBodies, bodyIDs: rigidState.publishedIDs)
         }
         if readsContours { publishedContourCPUReadbackCount += 1 }
         return frame
+    }
+
+    /// Kolejność baniek ostatniej publikacji, czyli strony t−1 po publikacji następnego kroku.
+    private var previousPublicationBubbleIDs: [ObjectID] {
+        (lastSnapshot?.sourceBubbles ?? []).map { ObjectID(rawValue: UInt64(bitPattern: Int64($0.id.rawValue))) }
     }
 
     private func milliseconds(_ nanoseconds: UInt64) -> Double { Double(nanoseconds) / 1_000_000 }
@@ -1158,24 +1228,29 @@ enum NativeMetalPipelineCache {
 
     private static var compiled: [UInt64: Compiled] = [:]
 
-    static let stageNames: [String] = ["nativePrepareGrid", "nativeBuildGrid", "nativeSortGrid", "nativeEmitCandidates",
+    /// Kernele `nativeScanBlocks`, `nativeAddScanBlockOffsets`, `nativeFinishScan`, `nativeSeparateContainedBubbles`,
+    /// `nativeReapplyCenterGuards` (oraz `nativeGenerateContours`, `nativePrepareRenderData`) obsługują dawne ścieżki,
+    /// które produkcja pomija; zostają jako wzorzec bit w bit dla `NativeMetalChainKernelTests`.
+    static let stageNames: [String] = ["nativePrepareGrid", "nativeBuildGrid", "nativeSortGrid", "nativeSortGridChunk", "nativeEmitCandidates",
         "nativePrepareCandidateCounts", "nativeCompactCandidates", "nativeBuildContacts",
         "nativePrepareContactFlags", "nativeCompactActiveContacts", "nativeMatchContactCache",
         "nativeRetainContactCache", "nativeCompactContactCache", "nativeScanBlocks", "nativePrepareIndirectArguments",
-        "nativeAddScanBlockOffsets", "nativeFinishScan", "nativeClearAdjacency", "nativeEmitAdjacency", "nativeBuildAdjacency",
+        "nativeAddScanBlockOffsets", "nativeFinishScan", "nativeScanSingleGroup", "nativeClearAdjacency", "nativeEmitAdjacency", "nativeBuildAdjacency",
         "nativePrepareSolverContacts", "nativeApplyWarmStart", "nativeUpdateContactMultipliers",
         "nativeSolveJacobi", "nativeMeasureResidual", "nativeReduceSolverResidual",
         "nativeCapturePositions",
         "nativeUpdateVelocities", "nativeDampContactNormalMotion", "nativeFinalizeSolverContacts", "nativeFindFastCandidates",
-        "nativeResolveCCD", "nativeApplyCenterGuards", "nativeSeparateContainedBubbles",
+        "nativeResolveCCD", "nativeApplyCenterGuards", "nativeSeparateContainedBubbles", "nativeSeparateAndGuardContainedBubbles",
         "nativeReapplyCenterGuards", "nativeValidateBubbleContainment", "nativeInvalidateSafetyCache", "nativeCheckFinite",
-        "nativeAccumulateContactPressure", "nativeSeedStructuralContours", "nativeGenerateContours", "nativePrepareRenderData",
+        "nativeAccumulateContactPressure", "nativeSeedStructuralContours", "nativeGenerateContours", "nativeGenerateContoursFused", "nativePrepareRenderData", "nativePrepareRenderDataGrouped",
         "nativeApplyPublicRegion", "nativeInvalidateRegionCache",
         "nativeCompactMergeEvents",
         "nativeCompactSensorEvents",
         "nativeCompactPolygonSensorEvents",
         "nativeCompactMissingSensorEvents",
-        "nativeRigidPredict", "nativeRigidContacts", "nativeRigidApplyBubbles", "nativeRigidApplyBodies", "nativeRigidGuardWalls", "nativeRigidFinish"]
+        "nativeRigidPredict", "nativeRigidEmitCandidates", "nativeRigidContacts", "nativeRigidApplyBubbles", "nativeRigidApplyBodies", "nativeRigidGuardWalls", "nativeRigidFinish",
+        "nativeRigidResolveCCD", "nativeRigidApplyCCD", "nativeSolveJoints", "nativeApplyJointBodies", "nativeApplyJointBubbles",
+        "nativeHitTest"]
 
     static func pipelines(for device: MTLDevice) throws -> Compiled {
         if let cached = compiled[device.registryID] { return cached }

@@ -11,10 +11,13 @@ struct NativeBubble {
     float4 material;
     ulong2 resources;
     ulong2 eventData;
+    float4 bounds;
+    uint4 filter; // kategoria, maska, reserved, warstwa (Int32 z odwróconym bitem znaku)
 };
 struct NativeSegment {
     long2 identity; uint4 flags; float4 previous; float4 current;
     float4 velocity; float4 collision;
+    uint4 filter; // kategoria, maska, reserved, reserved
 };
 struct NativeContactCache {
     long2 participants; uint4 metadata; float4 geometry; float4 response;
@@ -27,8 +30,23 @@ struct NativeRenderPacket { long2 identity; float4 geometry; float4 deformation;
 struct NativeRigidBody {
     ulong2 identity; float4 pose; float4 previous; float4 motion; float4 physical;
     uint4 ranges; uint4 flags;
+    uint4 filter; // kategoria, maska, kinematyczna (1), warstwa (Int32 z odwróconym bitem znaku)
+    float4 shape; // rodzaj rdzenia (0 wielokąt, 1 koło, 2 kapsuła), promień, półdługość, reserved
+    float4 limits; // maksymalna prędkość liniowa i kątowa (0 = bez limitu), znacznik TOI CCD (1 + t, 0 = brak; nativeRigidResolveCCD ustawia, nativeRigidApplyCCD zeruje), reserved
+};
+// Więz: końce to indeksy obiektów (bańki, potem bryły; 0xFFFFFFFF = punkt świata), rodzaj 0 dystans, 1 zawias, 2 spaw.
+struct NativeJoint {
+    ulong2 identity;
+    uint4 ends;       // koniec 0, koniec 1, rodzaj, flagi (1 zakres, 2 silnik)
+    float4 anchors;   // kotwica końca 0 i 1 (układ lokalny bryły albo punkt świata)
+    float4 parameters; // długość, podatność, tłumienie, kąt odniesienia
+    float4 limits;    // dolna i górna granica kąta, docelowa prędkość silnika, maksymalny moment
+    float4 state;     // skumulowane λ w kroku: dystans, silnik
 };
 struct NativeRigidCorrection { float4 first; float4 second; float4 velocityFirst; float4 velocitySecond; };
+// Ostatni kontakt bryły ze ścianą, zatrzymany przez sweep w nativeRigidPredict; para (bryła, właściciel ściany).
+// `extra.x` to normalny pęd zatrzymany przez sweep (masa · prędkość zbliżania) razy krok, czyli w skali sumy Δλ.
+struct NativeRigidWall { long2 participants; float4 geometry; float4 extra; };
 struct NativeStructuralHeader { uint4 range; float4 origin; };
 struct NativeStructuralSource { ulong2 identity; float4 geometry; uint4 clips; };
 struct NativeStructuralContourControl { uint4 counts; float4 shape; };
@@ -105,16 +123,35 @@ kernel void nativeSeedStructuralContours(device NativeBubble *bubbles [[buffer(0
     pressure[index] = value;
 }
 
+// Filtr obustronny (P-B-11): para ma kontakt tylko wtedy, gdy każdy obiekt przyjmuje kategorię drugiego.
+bool nativeFilterAccepts(uint4 a, uint4 b) {
+    return (a.x & b.y) != 0 && (b.x & a.y) != 0;
+}
+// Bryła nieruchoma dla solvera: statyczna albo kinematyczna (odwrotna masa 0). Dwie takie nie tworzą pary.
+bool nativeRigidImmovable(NativeRigidBody b) { return b.flags.x != 0 || b.filter.z != 0; }
+
 float2 nativeRotate(float2 p, float angle) {
     float c = cos(angle), s = sin(angle); return float2(p.x*c-p.y*s, p.x*s+p.y*c);
 }
 float2 nativeRigidVertex(NativeRigidBody body, device float2 *vertices, uint i) {
     return body.pose.xy + nativeRotate(vertices[body.ranges.x + i], body.pose.z);
 }
+// Koło i kapsuła to rdzeń z promieniem (punkt albo odcinek); wielokąt ma promień 0 i trójkąty.
+bool nativeRigidIsRound(NativeRigidBody body) { return body.shape.x > 0.5f; }
 
 void nativeCountWork(device atomic_uint *statistics, uint slot) {
     if (atomic_load_explicit(statistics + 4, memory_order_relaxed))
         atomic_fetch_add_explicit(statistics + slot, 1, memory_order_relaxed);
+}
+
+// Limity prędkości z materiału (0 = bez limitu): długość wektora i wartość bezwzględna prędkości kątowej.
+float2 nativeClampLinearSpeed(float2 velocity, float limit) {
+    float speed = length(velocity);
+    return limit > 0 && speed > limit ? velocity * (limit / speed) : velocity;
+}
+
+float nativeClampAngularSpeed(float velocity, float limit) {
+    return limit > 0 ? clamp(velocity, -limit, limit) : velocity;
 }
 
 kernel void nativePredict(device NativeBubble *bubbles [[buffer(0)]],
@@ -127,6 +164,8 @@ kernel void nativePredict(device NativeBubble *bubbles [[buffer(0)]],
     b.position.zw = b.position.xy;
     if (b.publicFlags.x && b.publicFlags.y) { b.motion.xy = 0; b.motion.w = 0; bubbles[index] = b; return; }
     b.motion.xy *= exp(-(b.publicFlags.x ? b.material.x : control.physics.y) * dt);
+    b.motion.xy = nativeClampLinearSpeed(b.motion.xy, b.deformation.z);
+    b.motion.w = nativeClampAngularSpeed(b.motion.w, b.deformation.w);
     b.position.xy += b.motion.xy * dt;
     b.motion.z += b.motion.w * dt;
     b.motion.w *= exp(-(b.publicFlags.x ? b.material.x : control.physics.z) * dt);
@@ -178,36 +217,78 @@ kernel void nativeSortGrid(device NativeGridEntry *grid [[buffer(0)]],
     if (ascending ? nativeGridLess(b, a) : nativeGridLess(a, b)) { grid[index] = b; grid[other] = a; }
 }
 
+// Ta sama sieć bitoniczna co `nativeSortGrid`, ale kroki o odległości mniejszej niż szerokość grupy wykonuje jedna grupa
+// w pamięci grupy. `pass`: rozmiar początkowy i końcowy sieci, górna granica odległości, szerokość grupy.
+// Wpisy mają porządek całkowity (remis rozstrzyga indeks), więc wynik jest ten sam bit w bit.
+kernel void nativeSortGridChunk(device NativeGridEntry *grid [[buffer(0)]], constant uint4 &pass [[buffer(1)]],
+    threadgroup NativeGridEntry *tile [[threadgroup(0)]],
+    uint local [[thread_position_in_threadgroup]], uint group [[threadgroup_position_in_grid]]) {
+    uint index = group * pass.w + local;
+    tile[local] = grid[index];
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint size = pass.x; size <= pass.y; size *= 2) {
+        for (uint distance = min(size / 2, pass.z); distance > 0; distance /= 2) {
+            uint other = local ^ distance;
+            if (other > local) {
+                NativeGridEntry a = tile[local], b = tile[other];
+                bool ascending = (index & size) == 0;
+                if (ascending ? nativeGridLess(b, a) : nativeGridLess(a, b)) { tile[local] = b; tile[other] = a; }
+            }
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+        }
+    }
+    grid[index] = tile[local];
+}
+
 bool nativeKeyLess(NativeCandidate a, NativeCandidate b) {
     if (a.metadata.x != b.metadata.x) return a.metadata.x < b.metadata.x;
     if (a.participants.x != b.participants.x) return a.participants.x < b.participants.x;
     return a.participants.y < b.participants.y;
 }
 
-// Każdy wątek zapisuje własny wiersz; porządek nie zależy od kolejności wykonania.
-void nativeInsertCandidate(device NativeCandidate *row, thread uint &count, NativeCandidate value) {
-    uint location = count++;
+// Każdy wątek zapisuje własny wiersz o stałej długości `limit` (k); porządek nie zależy od kolejności wykonania.
+// Pełny wiersz zachowuje `limit` najmniejszych kluczy; reszta odpada i zwiększa licznik `dropped`.
+void nativeInsertCandidate(device NativeCandidate *row, thread uint &count, thread uint &dropped,
+                           uint limit, NativeCandidate value) {
+    uint location;
+    if (count < limit) location = count++;
+    else {
+        ++dropped;
+        if (!nativeKeyLess(value, row[limit - 1])) return;
+        location = limit - 1;
+    }
     while (location > 0 && nativeKeyLess(value, row[location - 1])) {
         row[location] = row[location - 1]; --location;
     }
     row[location] = value;
 }
 
+// Para połączona więzem bez `collideConnected` nie ma kontaktu: lista partnerów obiektu jest krótka i posortowana.
+bool nativeJointExcluded(device uint4 *jointRanges, device ulong *jointPartners, uint object, ulong partner) {
+    uint4 range = jointRanges[object];
+    for (uint i = 0; i < range.w; ++i) if (jointPartners[range.z + i] == partner) return true;
+    return false;
+}
+
 kernel void nativeEmitCandidates(device NativeBubble *bubbles [[buffer(0)]],
     constant NativeControl &control [[buffer(1)]], device NativeContactControl &contacts [[buffer(2)]],
     device NativeGridEntry *grid [[buffer(3)]], device NativeSegment *segments [[buffer(4)]],
     device NativeCandidate *rows [[buffer(5)]], device uint *rowCounts [[buffer(6)]],
-    uint index [[thread_position_in_grid]]) {
+    device atomic_uint *overflow [[buffer(7)]], device uint4 *jointRanges [[buffer(8)]],
+    device ulong *jointPartners [[buffer(9)]], uint index [[thread_position_in_grid]]) {
     if (index >= control.counts.x) return;
     NativeBubble a = bubbles[index];
     if (!all(isfinite(a.position))) {
         rowCounts[index * 2] = 0; rowCounts[index * 2 + 1] = 0; return;
     }
     long2 cell = long2(floor(a.position.xy / contacts.cellWidth.x));
-    device NativeCandidate *row = rows + index * contacts.cache.w;
-    uint count = 0;
-    for (int dx = -1; dx <= 1; ++dx) for (int dy = -1; dy <= 1; ++dy) {
-        long2 target = cell + long2(dx, dy);
+    uint limit = contacts.cache.w;
+    device NativeCandidate *row = rows + index * limit;
+    uint count = 0, dropped = 0;
+    // Komórki (x, y-1), (x, y), (x, y+1) leżą w posortowanej siatce jedna za drugą, więc jedno wyszukiwanie na kolumnę
+    // i przejście do komórki y+1 daje te same wpisy w tej samej kolejności co trzy osobne wyszukiwania.
+    for (int dx = -1; dx <= 1; ++dx) {
+        long2 target = cell + long2(dx, -1);
         uint low = 0, high = control.counts.x;
         while (low < high) {
             uint mid = low + (high - low) / 2;
@@ -215,30 +296,113 @@ kernel void nativeEmitCandidates(device NativeBubble *bubbles [[buffer(0)]],
             if (c.x < target.x || (c.x == target.x && c.y < target.y)) low = mid + 1;
             else high = mid;
         }
-        for (uint k = low; k < control.counts.x && all(grid[k].cell == target); ++k) {
+        for (uint k = low; k < control.counts.x && grid[k].cell.x == target.x && grid[k].cell.y <= target.y + 2; ++k) {
             uint j = grid[k].metadata.x;
             if (j <= index) continue;
             NativeBubble b = bubbles[j];
+            if (!nativeFilterAccepts(a.filter, b.filter)) continue;
+            if (nativeJointExcluded(jointRanges, jointPartners, index, ulong(b.identity.x))) continue;
             float reach = a.physical.z + b.physical.z + contacts.thresholds.w;
             if (all(abs(a.position.xy - b.position.xy) <= reach)) {
                 NativeCandidate candidate = { long2(a.identity.x, b.identity.x), uint4(0, index, j, 1) };
-                nativeInsertCandidate(row, count, candidate);
+                nativeInsertCandidate(row, count, dropped, limit, candidate);
             }
         }
     }
-    uint bubbleCount = count;
     for (uint j = 0; j < control.counts.y; ++j) {
         NativeSegment s = segments[j];
+        if (!nativeFilterAccepts(a.filter, s.filter)) continue;
+        if (s.flags.y && nativeJointExcluded(jointRanges, jointPartners, index, ulong(s.identity.y))) continue;
         float reach = a.physical.z + contacts.thresholds.w;
         float2 lower = min(s.current.xy, s.current.zw) - reach;
         float2 upper = max(s.current.xy, s.current.zw) + reach;
         if (all(a.position.xy >= lower) && all(a.position.xy <= upper)) {
             NativeCandidate candidate = { long2(a.identity.x, s.identity.x), uint4(1, index, j, 1) };
-            nativeInsertCandidate(row, count, candidate);
+            nativeInsertCandidate(row, count, dropped, limit, candidate);
         }
     }
+    // Klucz zaczyna się od rodzaju pary, więc wiersz po obcięciu nadal trzyma najpierw pary baniek.
+    uint bubbleCount = 0;
+    while (bubbleCount < count && row[bubbleCount].metadata.x == 0) ++bubbleCount;
     rowCounts[index * 2] = bubbleCount;
     rowCounts[index * 2 + 1] = count - bubbleCount;
+    if (dropped) atomic_fetch_add_explicit(overflow, dropped, memory_order_relaxed);
+    atomic_fetch_max_explicit(overflow + 1, count + dropped, memory_order_relaxed);
+}
+
+// Kandydaci kontaktów brył: jeden wiersz o stałej długości k (`counts.z`) na bryłę, posortowany po kluczu pary
+// (rodzaj 2 = bańka–bryła, rodzaj 3 = bryła–bryła; para brył trafia do wierszy obu brył z tą samą kolejnością a < b).
+// Testy zasięgu to dokładnie te z nativeRigidContacts, poszerzone o zapas, bo wiersze powstają raz na krok,
+// a poza listą nie ma już par, które kernel kontaktów sprawdzałby w każdej iteracji.
+// `metadata.w` to bity float: suma normalnych Δλ z iteracji (zeruje ją ten kernel, dopisuje nativeRigidContacts).
+kernel void nativeRigidEmitCandidates(device NativeRigidBody *bodies [[buffer(0)]],
+    device NativeBubble *bubbles [[buffer(1)]], device float4 *positions [[buffer(2)]],
+    constant uint4 &counts [[buffer(3)]], device NativeCandidate *rows [[buffer(4)]],
+    device uint2 *rowCounts [[buffer(5)]], device atomic_uint *overflow [[buffer(6)]],
+    device uint4 *jointRanges [[buffer(7)]], device ulong *jointPartners [[buffer(8)]],
+    threadgroup uchar *hits [[threadgroup(0)]],
+    uint index [[threadgroup_position_in_grid]], uint lane [[thread_position_in_threadgroup]],
+    uint width [[threads_per_threadgroup]]) {
+    if (index >= counts.x) return;
+    uint limit = counts.z;
+    NativeRigidBody b = bodies[index];
+    uint entity = counts.y + index; // bryły leżą w przestrzeni więzów za bańkami
+    device NativeCandidate *row = rows + index * limit;
+    uint count = 0, dropped = 0;
+    // Statyczny wielokąt dla baniek to odcinki; statyczne koło i kapsuła nie mają odcinków, więc bańki łapie solver brył.
+    if (!b.flags.x || nativeRigidIsRound(b)) {
+        float2 bodyLow = min(b.pose.xy, b.previous.xy) - b.physical.z;
+        float2 bodyHigh = max(b.pose.xy, b.previous.xy) + b.physical.z;
+        // Grupa sprawdza bańki w porcjach po `width`: każdy wątek jedną, a wątek 0 wpisuje trafienia do wiersza
+        // w rosnącej kolejności `ai`, jak pojedynczy wątek. Wynik nie zależy od szerokości grupy.
+        for (uint base = 0; base < counts.y; base += width) {
+            uint ai = base + lane;
+            bool hit = false;
+            if (ai < counts.y) {
+                NativeBubble a = bubbles[ai];
+                hit = nativeFilterAccepts(a.filter, b.filter)
+                    && !nativeJointExcluded(jointRanges, jointPartners, entity, ulong(a.identity.x));
+                if (hit) {
+                    float2 center = positions[ai].xy;
+                    float reach = 1.5f * a.physical.z;
+                    float2 bubbleLow = min(center, a.position.zw) - reach, bubbleHigh = max(center, a.position.zw) + reach;
+                    hit = !(any(bubbleHigh < bodyLow) || any(bodyHigh < bubbleLow));
+                }
+            }
+            hits[lane] = hit ? 1 : 0;
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+            if (lane == 0) {
+                for (uint k = 0; k < width && base + k < counts.y; ++k) {
+                    if (!hits[k]) continue;
+                    NativeCandidate candidate = { long2(bubbles[base + k].identity.x, long(b.identity.x)), uint4(2, base + k, index, 0) };
+                    nativeInsertCandidate(row, count, dropped, limit, candidate);
+                }
+            }
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+        }
+    }
+    if (lane != 0) return;
+    for (uint other = 0; other < counts.x; ++other) {
+        if (other == index) continue;
+        uint low = min(index, other), high = max(index, other);
+        NativeRigidBody a = bodies[low], c = bodies[high];
+        if (nativeRigidImmovable(a) && nativeRigidImmovable(c)) continue;
+        if (!nativeFilterAccepts(a.filter, c.filter)) continue;
+        if (nativeJointExcluded(jointRanges, jointPartners, entity, bodies[other].identity.x)) continue;
+        float2 start = a.previous.xy - c.previous.xy, end = a.pose.xy - c.pose.xy, travel = end - start;
+        float travelSquared = dot(travel, travel);
+        float t = travelSquared > FLT_MIN ? clamp(-dot(start, travel) / travelSquared, 0.0f, 1.0f) : 0.0f;
+        float radius = 1.25f * (a.physical.z + c.physical.z);
+        float2 closest = start + t * travel;
+        if (!(dot(closest, closest) <= radius * radius)) continue;
+        NativeCandidate candidate = { long2(long(a.identity.x), long(c.identity.x)), uint4(3, low, high, 0) };
+        nativeInsertCandidate(row, count, dropped, limit, candidate);
+    }
+    uint bubbleCount = 0;
+    while (bubbleCount < count && row[bubbleCount].metadata.x == 2) ++bubbleCount;
+    rowCounts[index] = uint2(count, bubbleCount);
+    if (dropped) atomic_fetch_add_explicit(overflow, dropped, memory_order_relaxed);
+    atomic_fetch_max_explicit(overflow + 1, count + dropped, memory_order_relaxed);
 }
 
 float nativeCross(float2 a, float2 b) { return a.x * b.y - a.y * b.x; }
@@ -253,6 +417,141 @@ float2 nativeClosestPoint(float2 p, float4 endpoints) {
     float2 edge = endpoints.zw - endpoints.xy;
     float square = dot(edge, edge);
     return endpoints.xy + edge * (square > FLT_MIN ? clamp(dot(p - endpoints.xy, edge) / square, 0.0f, 1.0f) : 0);
+}
+
+// Odległość między odcinkami [a,b] i [c,d] (punkt to odcinek zdegenerowany) wraz z najbliższymi punktami;
+// przecinające się odcinki mają odległość 0 i wspólny punkt przecięcia.
+float nativeSegmentDistance(float2 a, float2 b, float2 c, float2 d, thread float2 &pa, thread float2 &pb) {
+    float2 r = b - a, s = d - c;
+    float denominator = nativeCross(r, s);
+    if (abs(denominator) > 1e-12f) {
+        float2 qp = c - a;
+        float t = nativeCross(qp, s) / denominator, u = nativeCross(qp, r) / denominator;
+        if (t >= 0 && t <= 1 && u >= 0 && u <= 1) { pa = a + t * r; pb = pa; return 0; }
+    }
+    float best = INFINITY;
+    float2 cp = nativeClosestPoint(a, float4(c, d)); float distanceValue = distance(a, cp);
+    if (distanceValue < best) { best = distanceValue; pa = a; pb = cp; }
+    cp = nativeClosestPoint(b, float4(c, d)); distanceValue = distance(b, cp);
+    if (distanceValue < best) { best = distanceValue; pa = b; pb = cp; }
+    cp = nativeClosestPoint(c, float4(a, b)); distanceValue = distance(c, cp);
+    if (distanceValue < best) { best = distanceValue; pa = cp; pb = c; }
+    cp = nativeClosestPoint(d, float4(a, b)); distanceValue = distance(d, cp);
+    if (distanceValue < best) { best = distanceValue; pa = cp; pb = d; }
+    return best;
+}
+
+// Rdzeń koła (punkt) albo kapsuły (odcinek) w świecie, z promieniem kształtu; `a` = `b` dla punktu.
+struct NativeRoundCore { float2 a; float2 b; float radius; };
+
+NativeRoundCore nativeRoundCoreOf(NativeRigidBody body, device float2 *vertices) {
+    NativeRoundCore core;
+    core.a = nativeRigidVertex(body, vertices, 0);
+    core.b = body.ranges.y > 1 ? nativeRigidVertex(body, vertices, 1) : core.a;
+    core.radius = body.shape.y;
+    return core;
+}
+
+// Wnętrze unii kawałków wypukłych. Krawędzie triangulacji nigdy nie stają się
+// powierzchnią kontaktową: punkt kontaktu pochodzi z zewnętrznego pierścienia.
+bool nativeRigidInside(float2 p, NativeRigidBody body, device float2 *vertices, device uint4 *triangles) {
+    // Koło i kapsuła: wnętrze to odległość od rdzenia nie większa niż promień.
+    if (nativeRigidIsRound(body)) {
+        NativeRoundCore core = nativeRoundCoreOf(body, vertices);
+        return distance(p, nativeClosestPoint(p, float4(core.a, core.b))) <= core.radius;
+    }
+    float2 local = nativeRotate(p - body.pose.xy, -body.pose.z);
+    for (uint i = 0; i < body.ranges.w; ++i) {
+        uint4 t = triangles[body.ranges.z + i];
+        float2 a = vertices[body.ranges.x+t.x], b = vertices[body.ranges.x+t.y], c = vertices[body.ranges.x+t.z];
+        if (nativeCross(b-a,local-a)>=0 && nativeCross(c-b,local-b)>=0 && nativeCross(a-c,local-c)>=0) return true;
+    }
+    return false;
+}
+
+
+// Wynik hit-testu jednego punktu: zwycięzca to największa para (warstwa, ObjectID); `found` 0 oznacza puste miejsce.
+// Warstwa to `filter.w` rekordu: Int32 z odwróconym bitem znaku, więc porównanie `uint` zgadza się z porządkiem Int32;
+// wynik niesie ją w tym samym zapisie.
+struct NativeHitTestResult { ulong identity; uint layer; uint found; };
+
+// Wątek na punkt, na buforach roboczych tego kroku. Bańka: kontur po kroku, parzystość przecięć (kontur zdeformowany,
+// nie koło nominalne). Bryła: dokładny kształt (trójkąty, koło, kapsuła). Obiekty usunięte przez region nie biorą udziału.
+// counts: liczba punktów, liczba brył, stride konturu.
+kernel void nativeHitTest(device float2 *points [[buffer(0)]],
+    device float2 *contourPoints [[buffer(1)]], device uint *contourCounts [[buffer(2)]],
+    device NativeBubble *bubbles [[buffer(3)]], device NativeRigidBody *bodies [[buffer(4)]],
+    device float2 *vertices [[buffer(5)]], device uint4 *triangles [[buffer(6)]],
+    constant NativeControl &control [[buffer(7)]], constant uint4 &counts [[buffer(8)]],
+    device NativeHitTestResult *results [[buffer(9)]], uint index [[thread_position_in_grid]]) {
+    if (index >= counts.x) return;
+    float2 query = points[index];
+    bool found = false; uint bestLayer = 0; ulong bestID = 0;
+    for (uint i = 0; i < control.counts.x; ++i) {
+        if (bubbles[i].publicFlags.w == 1) continue;
+        uint count = min(contourCounts[i], counts.z);
+        if (count < 3) continue;
+        bool inside = false;
+        for (uint k = 0, j = count - 1; k < count; j = k++) {
+            float2 a = contourPoints[i * counts.z + k], b = contourPoints[i * counts.z + j];
+            bool crosses = ((a.y > query.y) != (b.y > query.y)) &&
+                (query.x <= (b.x - a.x) * (query.y - a.y) / (b.y - a.y) + a.x);
+            inside = crosses ? !inside : inside;
+        }
+        if (!inside) continue;
+        uint layer = bubbles[i].filter.w; ulong identity = ulong(bubbles[i].identity.x);
+        if (!found || layer > bestLayer || (layer == bestLayer && identity > bestID)) {
+            found = true; bestLayer = layer; bestID = identity;
+        }
+    }
+    for (uint i = 0; i < counts.y; ++i) {
+        NativeRigidBody body = bodies[i];
+        if (body.flags.z == 1 || !nativeRigidInside(query, body, vertices, triangles)) continue;
+        uint layer = body.filter.w; ulong identity = body.identity.x;
+        if (!found || layer > bestLayer || (layer == bestLayer && identity > bestID)) {
+            found = true; bestLayer = layer; bestID = identity;
+        }
+    }
+    NativeHitTestResult result = { bestID, bestLayer, found ? 1u : 0u };
+    results[index] = result;
+}
+
+// Kontakt dwóch rdzeni okrągłych: normalna od A do B, głębokość to nakładanie z promieniami (ujemna w szczelinie).
+// Gdy rdzenie się przecinają albo pokrywają, oś najmniejszego wnikania to normalna któregoś odcinka, a bez odcinków
+// (dwa punkty w tym samym miejscu) stała oś `fallback`, którą wołający kieruje od mniejszego ObjectID.
+bool nativeRoundContact(NativeRoundCore A, NativeRoundCore B, float2 fallback,
+                        thread float2 &normal, thread float &depth, thread float2 &point) {
+    float2 pa, pb;
+    float separation = nativeSegmentDistance(A.a, A.b, B.a, B.b, pa, pb);
+    if (separation > 1e-4f) {
+        normal = (pb - pa) / separation;
+        depth = A.radius + B.radius - separation;
+        point = 0.5f * ((pa + normal * A.radius) + (pb - normal * B.radius));
+        return true;
+    }
+    float2 axes[2]; uint axisCount = 0;
+    float2 ea = A.b - A.a, eb = B.b - B.a;
+    float la = length(ea), lb = length(eb);
+    if (la > 1e-6f) axes[axisCount++] = float2(-ea.y, ea.x) / la;
+    if (lb > 1e-6f) axes[axisCount++] = float2(-eb.y, eb.x) / lb;
+    float2 axis = fallback; float overlap = 0, orientation = 1;
+    float best = INFINITY;
+    for (uint i = 0; i < axisCount; ++i) {
+        float2 candidate = axes[i];
+        float amin = min(dot(A.a, candidate), dot(A.b, candidate)), amax = max(dot(A.a, candidate), dot(A.b, candidate));
+        float bmin = min(dot(B.a, candidate), dot(B.b, candidate)), bmax = max(dot(B.a, candidate), dot(B.b, candidate));
+        float plus = amax - bmin, minus = bmax - amin;
+        float value = min(plus, minus);
+        if (value < best) {
+            best = value; axis = candidate; overlap = value;
+            if (abs(plus - minus) < 1e-6f) orientation = dot(candidate, fallback) >= 0 ? 1.0f : -1.0f;
+            else orientation = plus < minus ? 1.0f : -1.0f;
+        }
+    }
+    normal = orientation * axis;
+    depth = overlap + A.radius + B.radius;
+    point = 0.5f * (pa + pb);
+    return true;
 }
 
 // Przejście środka przez liniowo poruszający się odcinek: signed area jest
@@ -312,13 +611,15 @@ kernel void nativeCompactCandidates(constant NativeControl &control [[buffer(0)]
     device uint *rowCounts [[buffer(3)]], device NativeCandidate *candidates [[buffer(4)]],
     device uint4 *offsets [[buffer(5)]], device atomic_uint *statistics [[buffer(6)]],
     uint index [[thread_position_in_grid]]) {
-    if (contacts.counts.w || contacts.cache.w == 0) return;
+    if (contacts.cache.w == 0) return;
     uint bubble = index / contacts.cache.w, slot = index % contacts.cache.w;
     if (bubble >= control.counts.x || slot >= rowCounts[bubble * 2] + rowCounts[bubble * 2 + 1]) return;
     uint kind = slot < rowCounts[bubble * 2] ? 0 : 1;
     uint row = kind * control.counts.x + bubble;
     uint offset = row == 0 ? 0 : offsets[row - 1].x;
     uint local = kind == 0 ? slot : slot - rowCounts[bubble * 2];
+    // Nadmiar ponad pojemność listy kandydatów odpada na końcu (licznik w nativeFinishScan).
+    if (offset + local >= contacts.limits.z) return;
     candidates[offset + local] = rows[index];
     nativeCountWork(statistics, 3);
 }
@@ -327,7 +628,7 @@ kernel void nativeBuildContacts(device NativeBubble *bubbles [[buffer(0)]],
     device NativeSegment *segments [[buffer(1)]], device NativeContactControl &control [[buffer(2)]],
     device NativeCandidate *candidates [[buffer(3)]], device NativeContactCache *contacts [[buffer(4)]],
     uint index [[thread_position_in_grid]]) {
-    if (control.counts.w || index >= control.counts.x) return;
+    if (index >= control.counts.x) return;
     NativeCandidate c = candidates[index]; NativeBubble a = bubbles[c.metadata.y];
     float2 normal, point; float penetration; float allowedSide = 0;
     if (c.metadata.x == 0) {

@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import simd
 import BubblePhysicsModel
 
 struct NativeRigidPolygonInput: Equatable, Sendable {
@@ -7,6 +8,16 @@ struct NativeRigidPolygonInput: Equatable, Sendable {
     var damping: Float
     var friction: Float
     var restitution: Float
+    /// Limity prędkości z materiału (0 = bez limitu).
+    var maximumLinearSpeed: Float = 0
+    var maximumAngularSpeed: Float = 0
+
+    /// Koło i kapsuła (rdzeń z promieniem): także statyczne uczestniczą w kontaktach z bańkami w solverze brył,
+    /// bo statyczny wielokąt dla baniek to odcinki, a one nie mają odcinków.
+    var hasRoundCore: Bool {
+        if case .rigidBody(let body) = object.descriptor, case .polygon = body.shape { return false }
+        return true
+    }
 }
 
 // Prywatny ABI Swift/MSL. Pozycja publiczna jest początkiem lokalnej geometrii;
@@ -18,14 +29,62 @@ struct NativeRigidBody: Equatable {
     var motion: SIMD4<Float> // velocity.xy, angular velocity, damping
     var physical: SIMD4<Float> // inverse mass, inverse moment, radius, reserved
     var ranges: SIMD4<UInt32> // vertex offset/count, convex triangle offset/count
-    var flags: SIMD4<UInt32> // static, wrap, region result, reserved
+    var flags: SIMD4<UInt32> // static, wrap, region result, restitution
+    var filter: SIMD4<UInt32> // kategoria, maska, kinematyczna, warstwa (`NativeMetalFilter.encodeLayer`)
+    /// Rdzeń z promieniem: rodzaj (0 wielokąt, 1 koło, 2 kapsuła), promień, półdługość osi, reserved.
+    /// Koło ma jeden wierzchołek rdzenia, kapsuła dwa (oś lokalnego X); wielokąt ma promień 0 i trójkąty.
+    var shape: SIMD4<Float>
+    /// Limity prędkości z materiału: liniowa, kątowa (0 = bez limitu); `z` to znacznik czasu uderzenia (TOI) CCD: `1 + t`,
+    /// 0 = brak; `nativeRigidResolveCCD` go ustawia, a `nativeRigidApplyCCD` zużywa i zeruje w tym samym kroku; `w` zarezerwowane.
+    var limits: SIMD4<Float>
+}
+
+/// Lustro `NativeRigidCorrection` z shadera (64 B): korekta pary na wierszu kontaktu. `first.w` i `second.w` niosą normalną,
+/// `velocityFirst.w` i `velocitySecond.w` punkt kontaktu. Układ pilnuje `NativeMetalShaderABITests`.
+struct NativeRigidCorrection: Equatable {
+    var first: SIMD4<Float>
+    var second: SIMD4<Float>
+    var velocityFirst: SIMD4<Float>
+    var velocitySecond: SIMD4<Float>
+}
+
+/// Lustro `NativeRigidWall` z shadera (48 B): ostatni kontakt bryły ze ścianą zatrzymany przez sweep. `participants` to
+/// (bryła, właściciel ściany), `geometry` to normalna i punkt, `extra.x` to zatrzymany pęd. Układ pilnuje `NativeMetalShaderABITests`.
+struct NativeRigidWall: Equatable {
+    var participants: SIMD2<Int64>
+    var geometry: SIMD4<Float>
+    var extra: SIMD4<Float>
 }
 
 struct NativeRigidGeometry {
     let vertices: [SIMD2<Float>]
     let triangles: [SIMD4<UInt32>]
     let centroid: SIMD2<Float>
+    /// Promień okręgu otaczającego całą bryłę (rdzeń razem z promieniem kształtu).
     let radius: Float
+    /// 0 wielokąt, 1 koło, 2 kapsuła.
+    let kind: UInt32
+    /// Promień kształtu wokół rdzenia (0 dla wielokąta) i półdługość osi kapsuły.
+    let coreRadius: Float
+    let halfLength: Float
+
+    private init(vertices: [SIMD2<Float>], radius: Float, kind: UInt32, coreRadius: Float, halfLength: Float) {
+        self.vertices = vertices; triangles = []; centroid = .zero
+        self.radius = radius; self.kind = kind; self.coreRadius = coreRadius; self.halfLength = halfLength
+    }
+
+    init(_ shape: RigidShape) throws {
+        switch shape {
+        case .polygon(let geometry): self = try NativeRigidGeometry(geometry)
+        case .circle(let radius):
+            guard radius.isFinite, radius > 0 else { throw NativeMetalSolverError.invalidSnapshot }
+            self = NativeRigidGeometry(vertices: [.zero], radius: radius, kind: 1, coreRadius: radius, halfLength: 0)
+        case .capsule(let halfLength, let radius):
+            guard radius.isFinite, radius > 0, halfLength.isFinite, halfLength > 0 else { throw NativeMetalSolverError.invalidSnapshot }
+            self = NativeRigidGeometry(vertices: [SIMD2(-halfLength, 0), SIMD2(halfLength, 0)], radius: halfLength + radius,
+                                       kind: 2, coreRadius: radius, halfLength: halfLength)
+        }
+    }
 
     init(_ geometry: PolygonGeometry) throws {
         var points = geometry.vertices.map { SIMD2<Double>(Double($0.x), Double($0.y)) }
@@ -69,6 +128,7 @@ struct NativeRigidGeometry {
         vertices = points.map { SIMD2(Float($0.x - center.x), Float($0.y - center.y)) }
         triangles = pieces
         radius = vertices.map { sqrt($0.x * $0.x + $0.y * $0.y) }.max() ?? 0
+        kind = 0; coreRadius = 0; halfLength = 0
         guard centroid.x.isFinite, centroid.y.isFinite, radius.isFinite, radius > 0 else { throw NativeMetalSolverError.invalidSnapshot }
     }
 }
@@ -80,8 +140,8 @@ final class NativeRigidPolygonState {
     private let device: MTLDevice
     private var buffers: [String: MTLBuffer] = [:]
     private var publishedInputs: [NativeRigidPolygonInput] = []
-    private var publishedGeometry: [(ObjectID, PolygonGeometry)] = []
-    private var geometryCache: [ObjectID: (PolygonGeometry, NativeRigidGeometry)] = [:]
+    private var publishedGeometry: [(ObjectID, RigidShape)] = []
+    private var geometryCache: [ObjectID: (RigidShape, NativeRigidGeometry)] = [:]
     private var current: [NativeRigidPolygonInput] = []
     private var records: [NativeRigidBody] = []
     private var changes: [Int] = []
@@ -92,12 +152,25 @@ final class NativeRigidPolygonState {
     private(set) var bodyUploadCount = 0
     private(set) var geometryUploadCount = 0
     private(set) var count = 0
-    private(set) var contactCount = 0
+    /// Pojemność wierszy kandydatów: bryły × k.
+    private(set) var rowCapacity = 0
     var bodies: MTLBuffer { buffers["working"]! }
+    /// Rekordy ostatniej publikacji: poza po kroku (`pose`) i przed nim (`previous`, `pose.w`); `nil`, gdy nie ma brył.
+    var publishedBodies: MTLBuffer? { publishedInputs.isEmpty ? nil : buffers["published"] }
+    /// Kolejność brył w buforze roboczym (krok w toku) i w opublikowanym.
+    var workingIDs: [ObjectID] { current.map { $0.object.descriptor.id } }
+    var publishedIDs: [ObjectID] { publishedInputs.map { $0.object.descriptor.id } }
     var vertices: MTLBuffer { buffers["vertices"]! }
     var triangles: MTLBuffer { buffers["triangles"]! }
     var contacts: MTLBuffer { buffers["contacts"]! }
+    var candidates: MTLBuffer { buffers["candidates"]! }
+    var rowCounts: MTLBuffer { buffers["rowCounts"]! }
+    var walls: MTLBuffer { buffers["walls"]! }
     var control: MTLBuffer { buffers["control"]! }
+    /// Bajty pamięci kontaktów brył: wiersze kandydatów z korektami i ściany (O(P·k), niezależnie od liczby baniek).
+    var contactMemoryBytes: Int {
+        ["contacts", "candidates", "rowCounts", "walls"].reduce(0) { $0 + (buffers[$1]?.length ?? 0) }
+    }
 
     init(device: MTLDevice) { self.device = device }
 
@@ -112,45 +185,68 @@ final class NativeRigidPolygonState {
         return value
     }
 
-    func prepare(_ inputs: [NativeRigidPolygonInput], bubbleCount: Int) throws {
+    func prepare(_ inputs: [NativeRigidPolygonInput], bubbleCount: Int, timeStep: Float) throws {
         current = inputs; count = inputs.count
-        let total = UInt64(count) * UInt64(bubbleCount) + UInt64(count) * UInt64(count)
+        let limit = NativeMetalSolver.candidateLimitPerObject
+        let total = UInt64(count) * UInt64(limit)
         guard total <= UInt64(UInt32.max) else { throw NativeMetalSolverError.capacityOverflow }
-        contactCount = Int(total)
+        rowCapacity = Int(total)
         _ = try buffer("published", count: count, stride: MemoryLayout<NativeRigidBody>.stride)
         _ = try buffer("working", count: count, stride: MemoryLayout<NativeRigidBody>.stride)
         let updates = try buffer("updates", count: count, stride: MemoryLayout<NativeRigidBody>.stride)
-        _ = try buffer("contacts", count: contactCount, stride: 64)
+        // Wiersz bryły: klucz pary (NativeCandidate, 32 B) i korekta (NativeRigidCorrection) na tym samym miejscu.
+        _ = try buffer("contacts", count: rowCapacity, stride: MemoryLayout<NativeRigidCorrection>.stride)
+        _ = try buffer("candidates", count: rowCapacity, stride: 32)
+        _ = try buffer("rowCounts", count: count, stride: MemoryLayout<SIMD2<UInt32>>.stride)
+        _ = try buffer("walls", count: count, stride: MemoryLayout<NativeRigidWall>.stride)
         let control = try buffer("control", count: 1, stride: 16)
-        control.contents().storeBytes(of: SIMD4(UInt32(count), UInt32(bubbleCount), UInt32(contactCount), 0), as: SIMD4<UInt32>.self)
+        control.contents().storeBytes(of: SIMD4(UInt32(count), UInt32(bubbleCount), UInt32(limit), 0), as: SIMD4<UInt32>.self)
         records = []; changes = []; remaps = []
         var vertices: [SIMD2<Float>] = [], triangles: [SIMD4<UInt32>] = []
         let old = Dictionary(uniqueKeysWithValues: publishedInputs.enumerated().map { ($0.element.object.descriptor.id, ($0.offset, $0.element)) })
-        var newGeometry: [(ObjectID, PolygonGeometry)] = []
+        var newGeometry: [(ObjectID, RigidShape)] = []
+        // Kolejność identyfikatorów zgodna z ostatnią publikacją od początku listy do bieżącego indeksu; liczona narastająco, O(k).
+        var orderMatchesPublished = true
         for (index, input) in inputs.enumerated() {
             let o = input.object
-            guard case .polygon(let p) = o.descriptor else { throw NativeMetalSolverError.invalidSnapshot }
+            guard case .rigidBody(let p) = o.descriptor else { throw NativeMetalSolverError.invalidSnapshot }
             let geometry: NativeRigidGeometry
-            if let cached = geometryCache[p.id], cached.0 == p.geometry { geometry = cached.1 }
-            else { geometry = try NativeRigidGeometry(p.geometry); geometryCache[p.id] = (p.geometry, geometry) }
-            newGeometry.append((p.id, p.geometry))
+            if let cached = geometryCache[p.id], cached.0 == p.shape { geometry = cached.1 }
+            else { geometry = try NativeRigidGeometry(p.shape); geometryCache[p.id] = (p.shape, geometry) }
+            newGeometry.append((p.id, p.shape))
+            orderMatchesPublished = orderMatchesPublished && index < publishedGeometry.count
+                && publishedGeometry[index].0 == p.id
             let c = cos(o.rotation), s = sin(o.rotation), center = geometry.centroid
             let offset = SIMD2(center.x * c - center.y * s, center.x * s + center.y * c)
             let isStatic = o.motionRole == .static
+            // Kinematyczna: odwrotna masa i bezwładność 0, narzucona prędkość bez tłumienia. Prędkość z `KinematicDrive`
+            // dotyczy początku geometrii, więc prędkość środka masy wynika z przesunięcia środka po obrocie o ω·dt.
+            let isKinematic = o.motionRole == .kinematic
+            var velocity = isStatic ? SIMD2<Float>.zero : o.velocity
+            if isKinematic {
+                let step = o.angularVelocity * timeStep, next = o.rotation + step
+                let c2 = cos(next), s2 = sin(next)
+                let rotated = SIMD2(center.x * c2 - center.y * s2, center.x * s2 + center.y * c2)
+                velocity += (rotated - offset) / timeStep
+            }
             let record = NativeRigidBody(identity: SIMD2(p.id.rawValue, 0),
                 pose: SIMD4(o.position.x + offset.x, o.position.y + offset.y, o.rotation, o.rotation),
                 previous: SIMD4(o.previousPosition.x + offset.x, o.previousPosition.y + offset.y, center.x, center.y),
-                motion: SIMD4(isStatic ? 0 : o.velocity.x, isStatic ? 0 : o.velocity.y, isStatic ? 0 : o.angularVelocity, input.damping),
+                motion: SIMD4(velocity.x, velocity.y, isStatic ? 0 : o.angularVelocity, isKinematic ? 0 : input.damping),
                 // Kontakt miesza tarcie przez średnią geometryczną i sprężystość przez max.
-                physical: SIMD4(isStatic ? 0 : 1 / p.mass, isStatic ? 0 : 1 / p.momentOfInertia, geometry.radius, input.friction),
+                physical: SIMD4(isStatic || isKinematic ? 0 : 1 / p.mass, isStatic || isKinematic ? 0 : 1 / p.resolvedMomentOfInertia,
+                                geometry.radius, input.friction),
                 ranges: SIMD4(UInt32(vertices.count), UInt32(geometry.vertices.count), UInt32(triangles.count), UInt32(geometry.triangles.count)),
-                flags: SIMD4(isStatic ? 1 : 0, p.regionExitPolicy == .wrap ? 1 : 0, 0, input.restitution.bitPattern))
+                flags: SIMD4(isStatic ? 1 : 0, p.regionExitPolicy == .wrap ? 1 : 0, 0, input.restitution.bitPattern),
+                filter: NativeMetalFilter.pack(p.filter, kinematic: isKinematic, layer: o.layer),
+                shape: SIMD4(Float(geometry.kind), geometry.coreRadius, geometry.halfLength, 0),
+                limits: SIMD4(input.maximumLinearSpeed, input.maximumAngularSpeed, 0, 0))
             guard record.physical.x.isFinite, record.physical.y.isFinite else { throw NativeMetalSolverError.invalidSnapshot }
             records.append(record)
             vertices += geometry.vertices
             triangles += geometry.triangles
-            if let (previousIndex, previousInput) = old[p.id], previousInput == input,
-               newGeometry.prefix(index + 1).map({ $0.0 }) == publishedGeometry.prefix(index + 1).map({ $0.0 }) {
+            // Rekord kinematycznej zależy od obrotu w tym kroku (prędkość środka masy), więc zawsze idzie z CPU.
+            if !isKinematic, let (previousIndex, previousInput) = old[p.id], previousInput == input, orderMatchesPublished {
                 remaps.append((previousIndex, index))
             } else { changes.append(index) }
         }
@@ -174,6 +270,7 @@ final class NativeRigidPolygonState {
     func encodeInputs(_ encoder: MTLBlitCommandEncoder) {
         // Feedback obejmuje kontakty napotkane w tym kroku, także po rozdzieleniu brył.
         encoder.fill(buffer: contacts, range: 0..<contacts.length, value: 0)
+        encoder.fill(buffer: walls, range: 0..<walls.length, value: 0)
         let stride = MemoryLayout<NativeRigidBody>.stride
         if copyPublishedGeometry {
             if vertexCount > 0 {
@@ -201,7 +298,19 @@ final class NativeRigidPolygonState {
             func offset(_ a: Float) -> SIMD2<Float> { SIMD2(center.x * cos(a) - center.y * sin(a), center.x * sin(a) + center.y * cos(a)) }
             object.position = SIMD2(body.pose.x, body.pose.y) - offset(body.pose.z)
             object.previousPosition = SIMD2(body.previous.x, body.previous.y) - offset(body.pose.w)
-            object.rotation = body.pose.z; object.velocity = SIMD2(body.motion.x, body.motion.y); object.angularVelocity = body.motion.z
+            object.rotation = body.pose.z
+            if object.motionRole != .kinematic {
+                object.velocity = SIMD2(body.motion.x, body.motion.y); object.angularVelocity = body.motion.z
+            } else {
+                // Kinematyczna zachowuje narzuconą prędkość (początku geometrii), ale solver przyciął ją do limitów materiału
+                // (G11-AC5), więc publikowana prędkość nie może ich przekraczać.
+                let limits = current[i]
+                let speed = simd_length(object.velocity)
+                if limits.maximumLinearSpeed > 0, speed > limits.maximumLinearSpeed { object.velocity *= limits.maximumLinearSpeed / speed }
+                if limits.maximumAngularSpeed > 0 {
+                    object.angularVelocity = max(-limits.maximumAngularSpeed, min(limits.maximumAngularSpeed, object.angularVelocity))
+                }
+            }
             result[object.descriptor.id] = object
             if body.flags.z == 1 { removed.insert(object.descriptor.id) }
             if body.flags.z == 2 { wrapped.insert(object.descriptor.id) }
@@ -211,30 +320,72 @@ final class NativeRigidPolygonState {
 
     func publish(_ objects: [ObjectID: NativePublicObject]) {
         publishedInputs = current.map { var input = $0; input.object = objects[input.object.descriptor.id]!; return input }
-        publishedGeometry = current.compactMap { if case .polygon(let p) = $0.object.descriptor { return (p.id, p.geometry) }; return nil }
+        publishedGeometry = current.compactMap { if case .rigidBody(let p) = $0.object.descriptor { return (p.id, p.shape) }; return nil }
         let old = buffers["published"]!; buffers["published"] = bodies; buffers["working"] = old
         let oldVertices = buffers["publishedVertices"]!; buffers["publishedVertices"] = vertices; buffers["vertices"] = oldVertices
         let oldTriangles = buffers["publishedTriangles"]!; buffers["publishedTriangles"] = triangles; buffers["triangles"] = oldTriangles
         geometryCache = geometryCache.filter { objects[$0.key] != nil }
     }
 
-    /// Geometria ostatniej iteracji GPU; nie przelicza kontaktów na CPU.
-    func driveContacts(bubbleIDs: [ObjectID]) -> [ObjectID: [DriveBlockingContact]] {
-        let values = contacts.contents().bindMemory(to: SIMD4<Float>.self, capacity: contactCount * 4)
-        var result: [ObjectID: [DriveBlockingContact]] = [:]
-        for index in 0..<contactCount {
-            let normal = WorldPoint(values[index*4].w, values[index*4+1].w)
-            guard normal.x != 0 || normal.y != 0 else { continue }
-            let point = WorldPoint(values[index*4+2].w, values[index*4+3].w)
-            let first: ObjectID, second: ObjectID
-            if index < count * bubbleIDs.count {
-                first = bubbleIDs[index / count]; second = current[index % count].object.descriptor.id
-            } else {
-                let slot = index - count * bubbleIDs.count
-                first = current[slot / count].object.descriptor.id; second = current[slot % count].object.descriptor.id
+    /// Kontakt pary z bryłą w ostatnim kroku: normalna od `first` do `second`, suma normalnych Δλ z iteracji.
+    struct ContactRecord {
+        var first: ObjectID
+        var second: ObjectID
+        var point: WorldPoint
+        var normal: WorldPoint
+        var impulseSum: Float
+    }
+
+    /// Geometria ostatniej iteracji GPU; nie przelicza kontaktów na CPU. Para trafia do wyniku raz: bańka–bryła z wiersza
+    /// bryły, bryła–bryła z wiersza bryły o mniejszym indeksie, a kontakt ze ścianą z sondy `nativeRigidPredict` tylko
+    /// wtedy, gdy wiersze nie mają dla tej pary kontaktu (jego odpowiednikiem sumy Δλ jest pęd zatrzymany przez sweep razy krok).
+    func contactRecords() -> [ContactRecord] {
+        let limit = NativeMetalSolver.candidateLimitPerObject
+        let counts = rowCounts.contents().bindMemory(to: SIMD2<UInt32>.self, capacity: max(1, count))
+        let keys = candidates.contents()
+        let wallRecords = walls.contents().bindMemory(to: NativeRigidWall.self, capacity: max(1, count))
+        let corrections = contacts.contents().bindMemory(to: NativeRigidCorrection.self, capacity: max(1, rowCapacity))
+        var result: [ContactRecord] = []
+        var emittedBodyPairs = Set<SIMD2<UInt64>>()
+        for body in 0..<count {
+            for slot in 0..<Int(counts[body].x) {
+                let index = body * limit + slot
+                let kind = keys.load(fromByteOffset: index * 32 + 16, as: UInt32.self)
+                if kind == 3, Int(keys.load(fromByteOffset: index * 32 + 20, as: UInt32.self)) != body { continue }
+                let normal = WorldPoint(corrections[index].first.w, corrections[index].second.w)
+                guard normal.x != 0 || normal.y != 0 else { continue }
+                let point = WorldPoint(corrections[index].velocityFirst.w, corrections[index].velocitySecond.w)
+                let first = ObjectID(rawValue: UInt64(bitPattern: keys.load(fromByteOffset: index * 32, as: Int64.self)))
+                let second = ObjectID(rawValue: UInt64(bitPattern: keys.load(fromByteOffset: index * 32 + 8, as: Int64.self)))
+                if kind == 3 { emittedBodyPairs.insert(SIMD2(first.rawValue, second.rawValue)) }
+                let impulse = Float(bitPattern: keys.load(fromByteOffset: index * 32 + 28, as: UInt32.self))
+                result.append(.init(first: first, second: second, point: point, normal: normal, impulseSum: impulse))
             }
-            result[first, default: []].append(.init(objectID: second, point: point, normal: -normal))
-            result[second, default: []].append(.init(objectID: first, point: point, normal: normal))
+        }
+        let position = Dictionary(uniqueKeysWithValues: current.enumerated().map { ($0.element.object.descriptor.id, $0.offset) })
+        for body in 0..<count {
+            let geometry = wallRecords[body].geometry
+            guard geometry.x != 0 || geometry.y != 0 else { continue }
+            let id = current[body].object.descriptor.id
+            let owner = ObjectID(rawValue: UInt64(bitPattern: wallRecords[body].participants.y))
+            guard let other = position[owner] else { continue }
+            // Normalna pary jest liczona od bryły o mniejszym indeksie.
+            let first = body < other ? id : owner, second = body < other ? owner : id
+            guard emittedBodyPairs.insert(SIMD2(first.rawValue, second.rawValue)).inserted else { continue }
+            let wallNormal = WorldPoint(geometry.x, geometry.y)
+            let stopped = wallRecords[body].extra.x
+            result.append(.init(first: first, second: second, point: WorldPoint(geometry.z, geometry.w),
+                                normal: body < other ? -wallNormal : wallNormal, impulseSum: stopped))
+        }
+        return result
+    }
+
+    /// Kontakty dla `MotionControllers`: normalna każdego obiektu wskazuje od partnera do niego.
+    static func driveContacts(of records: [ContactRecord]) -> [ObjectID: [DriveBlockingContact]] {
+        var result: [ObjectID: [DriveBlockingContact]] = [:]
+        for record in records {
+            result[record.first, default: []].append(.init(objectID: record.second, point: record.point, normal: -record.normal))
+            result[record.second, default: []].append(.init(objectID: record.first, point: record.point, normal: record.normal))
         }
         return result
     }

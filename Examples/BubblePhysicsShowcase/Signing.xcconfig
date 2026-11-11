@@ -1,0 +1,12 @@
+// Ustawienia podpisu przykładowej aplikacji.
+// Wartości osobiste (team ID, bundle identifier) nie mogą trafić do repozytorium.
+// Skopiuj Signing.local.xcconfig.example do Signing.local.xcconfig (ignorowany przez git)
+// i ustaw tam DEVELOPMENT_TEAM oraz SHOWCASE_BUNDLE_IDENTIFIER.
+
+DEVELOPMENT_TEAM =
+SHOWCASE_BUNDLE_IDENTIFIER = com.example.BubblePhysicsShowcase
+CODE_SIGN_STYLE = Automatic
+
+#include? "Signing.local.xcconfig"
+
+PRODUCT_BUNDLE_IDENTIFIER = $(SHOWCASE_BUNDLE_IDENTIFIER)

@@ -6,15 +6,15 @@ final class EventInterestTests: XCTestCase {
     func testNoContactEventIsPublishedWithoutInterest() async throws {
         let world = try BubbleWorld(configuration: WorldConfiguration(
             simulationRegion: WorldRectangle(min: [-20, -20], max: [20, 20])))
-        let material = PhysicsMaterialID(rawValue: 1), style = RenderStyleID(rawValue: 1)
+        let material = PhysicsMaterialID(rawValue: 1), style = RenderMaterialID(rawValue: 1)
         let a = try BubbleDescriptor(id: ObjectID(rawValue: 1), position: [-0.5, 0],
-            targetRadius: 1, physicsMaterialID: material, renderStyleID: style)
+            targetRadius: 1, physicsMaterialID: material, renderMaterialID: style)
         let b = try BubbleDescriptor(id: ObjectID(rawValue: 2), position: [0.5, 0],
-            targetRadius: 1, physicsMaterialID: material, renderStyleID: style)
+            targetRadius: 1, physicsMaterialID: material, renderMaterialID: style)
         let physics = try PhysicsMaterial(kind: .bubble)
-        let render = try RenderStyle()
+        let render = try RenderMaterial()
         _ = world.submit(WorldTransaction().updatePhysicsMaterial(material, material: physics)
-            .updateRenderStyle(style, style: render).add(.bubble(a)).add(.bubble(b)))
+            .updateRenderMaterial(style, material: render).add(.bubble(a)).add(.bubble(b)))
         let frame = await world.advance(by: 1.0 / 60.0)
         XCTAssertFalse(frame.events.contains { if case .mergeContact = $0 { return true }; return false })
         XCTAssertEqual(frame.eventOverflow.droppedCount, 0)
@@ -29,15 +29,15 @@ final class EventInterestTests: XCTestCase {
     func testRemovingLastBodyEmitsSensorExitAndReaddedIDEnters() async throws {
         let world = try BubbleWorld(configuration: WorldConfiguration(
             simulationRegion: WorldRectangle(min: [-20, -20], max: [20, 20])))
-        let material = PhysicsMaterialID(rawValue: 1), style = RenderStyleID(rawValue: 1)
+        let material = PhysicsMaterialID(rawValue: 1), style = RenderMaterialID(rawValue: 1)
         let bodyID = ObjectID(rawValue: 1), sensorID = ObjectID(rawValue: 9)
         let body = try BubbleDescriptor(id: bodyID, position: .zero, targetRadius: 1,
-            physicsMaterialID: material, renderStyleID: style)
+            physicsMaterialID: material, renderMaterialID: style)
         let sensor = try SensorDescriptor(id: sensorID, position: .zero,
-            geometry: RangeGeometry.circle(radius: 3), renderStyleID: style,
+            geometry: RangeGeometry.circle(radius: 3),
             eventInterest: [.enteredSensor, .exitedSensor])
         _ = world.submit(WorldTransaction().updatePhysicsMaterial(material, material: try PhysicsMaterial(kind: .bubble))
-            .updateRenderStyle(style, style: try RenderStyle()).add(.bubble(body)).add(.sensor(sensor)))
+            .updateRenderMaterial(style, material: try RenderMaterial()).add(.bubble(body)).add(.sensor(sensor)))
         let entered = await world.advance(by: 1.0 / 60.0)
         XCTAssertTrue(entered.events.contains(.enteredSensor(sensor: sensorID, object: bodyID)))
         _ = world.submit(WorldTransaction().remove(bodyID))

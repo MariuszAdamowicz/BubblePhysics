@@ -1,4 +1,5 @@
 import XCTest
+import BubblePhysicsModel
 import Metal
 @testable import BubblePhysicsNativeMetal
 
@@ -70,14 +71,17 @@ final class NativeMetalShaderABITests: XCTestCase {
                 ("publicFlags", MemoryLayout<NativeMetalBubble>.offset(of: \.publicFlags)),
                 ("material", MemoryLayout<NativeMetalBubble>.offset(of: \.material)),
                 ("resources", MemoryLayout<NativeMetalBubble>.offset(of: \.resources)),
-                ("eventData", MemoryLayout<NativeMetalBubble>.offset(of: \.eventData))]),
+                ("eventData", MemoryLayout<NativeMetalBubble>.offset(of: \.eventData)),
+                ("bounds", MemoryLayout<NativeMetalBubble>.offset(of: \.bounds)),
+                ("filter", MemoryLayout<NativeMetalBubble>.offset(of: \.filter))]),
             Probe(name: "segment", mslSize: "NativeSegment", swiftSize: MemoryLayout<NativeMetalSegment>.stride, fields: [
                 ("identity", MemoryLayout<NativeMetalSegment>.offset(of: \.identity)),
                 ("flags", MemoryLayout<NativeMetalSegment>.offset(of: \.flags)),
                 ("previous", MemoryLayout<NativeMetalSegment>.offset(of: \.previous)),
                 ("current", MemoryLayout<NativeMetalSegment>.offset(of: \.current)),
                 ("velocity", MemoryLayout<NativeMetalSegment>.offset(of: \.velocity)),
-                ("collision", MemoryLayout<NativeMetalSegment>.offset(of: \.collision))]),
+                ("collision", MemoryLayout<NativeMetalSegment>.offset(of: \.collision)),
+                ("filter", MemoryLayout<NativeMetalSegment>.offset(of: \.filter))]),
             Probe(name: "cache", mslSize: "NativeContactCache", swiftSize: MemoryLayout<NativeContactCacheRecord>.stride, fields: [
                 ("participants", MemoryLayout<NativeContactCacheRecord>.offset(of: \.participants)),
                 ("metadata", MemoryLayout<NativeContactCacheRecord>.offset(of: \.metadata)),
@@ -105,7 +109,25 @@ final class NativeMetalShaderABITests: XCTestCase {
                 ("motion", MemoryLayout<NativeRigidBody>.offset(of: \.motion)),
                 ("physical", MemoryLayout<NativeRigidBody>.offset(of: \.physical)),
                 ("ranges", MemoryLayout<NativeRigidBody>.offset(of: \.ranges)),
-                ("flags", MemoryLayout<NativeRigidBody>.offset(of: \.flags))]),
+                ("flags", MemoryLayout<NativeRigidBody>.offset(of: \.flags)),
+                ("filter", MemoryLayout<NativeRigidBody>.offset(of: \.filter)),
+                ("shape", MemoryLayout<NativeRigidBody>.offset(of: \.shape)),
+                ("limits", MemoryLayout<NativeRigidBody>.offset(of: \.limits))]),
+            Probe(name: "rigidCorrection", mslSize: "NativeRigidCorrection", swiftSize: MemoryLayout<NativeRigidCorrection>.stride, fields: [
+                ("first", MemoryLayout<NativeRigidCorrection>.offset(of: \.first)),
+                ("second", MemoryLayout<NativeRigidCorrection>.offset(of: \.second)),
+                ("velocityFirst", MemoryLayout<NativeRigidCorrection>.offset(of: \.velocityFirst)),
+                ("velocitySecond", MemoryLayout<NativeRigidCorrection>.offset(of: \.velocitySecond))]),
+            Probe(name: "rigidWall", mslSize: "NativeRigidWall", swiftSize: MemoryLayout<NativeRigidWall>.stride, fields: [
+                ("participants", MemoryLayout<NativeRigidWall>.offset(of: \.participants)),
+                ("geometry", MemoryLayout<NativeRigidWall>.offset(of: \.geometry)),
+                ("extra", MemoryLayout<NativeRigidWall>.offset(of: \.extra))]),
+            Probe(name: "joint", mslSize: "NativeJoint", swiftSize: MemoryLayout<NativeJointRecord>.stride, fields: [
+                ("ends", MemoryLayout<NativeJointRecord>.offset(of: \.ends)),
+                ("anchors", MemoryLayout<NativeJointRecord>.offset(of: \.anchors)),
+                ("parameters", MemoryLayout<NativeJointRecord>.offset(of: \.parameters)),
+                ("limits", MemoryLayout<NativeJointRecord>.offset(of: \.limits)),
+                ("state", MemoryLayout<NativeJointRecord>.offset(of: \.state))]),
             Probe(name: "structuralHeader", mslSize: "NativeStructuralHeader", swiftSize: MemoryLayout<NativeStructuralHeader>.stride, fields: [
                 ("origin", MemoryLayout<NativeStructuralHeader>.offset(of: \.origin))]),
             Probe(name: "structuralSource", mslSize: "NativeStructuralSource", swiftSize: MemoryLayout<NativeStructuralSourceRecord>.stride, fields: [
@@ -122,7 +144,11 @@ final class NativeMetalShaderABITests: XCTestCase {
                 ("geometry", MemoryLayout<NativeMetalSensorRecord>.offset(of: \.geometry)),
                 ("range", MemoryLayout<NativeMetalSensorRecord>.offset(of: \.range))]),
             Probe(name: "sensorPair", mslSize: "NativeSensorPair", swiftSize: MemoryLayout<NativeMetalSensorPair>.stride, fields: [
-                ("state", MemoryLayout<NativeMetalSensorPair>.offset(of: \.state))])
+                ("state", MemoryLayout<NativeMetalSensorPair>.offset(of: \.state))]),
+            Probe(name: "hitTestResult", mslSize: "NativeHitTestResult", swiftSize: MemoryLayout<NativeHitTestResult>.stride, fields: [
+                ("identity", MemoryLayout<NativeHitTestResult>.offset(of: \.identity)),
+                ("layer", MemoryLayout<NativeHitTestResult>.offset(of: \.layer)),
+                ("found", MemoryLayout<NativeHitTestResult>.offset(of: \.found))])
         ]
         assertMatches(probes, try measure(probes, sources: sources, device: device))
     }
@@ -134,7 +160,113 @@ final class NativeMetalShaderABITests: XCTestCase {
             ("physical", MemoryLayout<NativeMetalBubble>.offset(of: \.physical)),
             ("deformation", MemoryLayout<NativeMetalBubble>.offset(of: \.deformation)),
             ("material", MemoryLayout<NativeMetalBubble>.offset(of: \.material)),
-            ("eventData", MemoryLayout<NativeMetalBubble>.offset(of: \.eventData))])]
+            ("eventData", MemoryLayout<NativeMetalBubble>.offset(of: \.eventData)),
+            ("bounds", MemoryLayout<NativeMetalBubble>.offset(of: \.bounds)),
+            ("filter", MemoryLayout<NativeMetalBubble>.offset(of: \.filter))])]
         assertMatches(probes, try measure(probes, sources: [try source("NativeRenderKernels")], device: device))
+    }
+
+    /// Rekord bryły czytany przez shadery renderu (poza t−1 i t, flaga zawinięcia) ma układ rekordu solvera.
+    func testRenderBodyMatchesSolverRigidBodyLayout() throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let probes = [Probe(name: "renderBody", mslSize: "RenderBody", swiftSize: NativeMetalRenderHandoff.bodyRecordByteCount, fields: [
+            ("pose", MemoryLayout<NativeRigidBody>.offset(of: \.pose)),
+            ("previous", MemoryLayout<NativeRigidBody>.offset(of: \.previous)),
+            ("motion", MemoryLayout<NativeRigidBody>.offset(of: \.motion)),
+            ("physical", MemoryLayout<NativeRigidBody>.offset(of: \.physical)),
+            ("ranges", MemoryLayout<NativeRigidBody>.offset(of: \.ranges)),
+            ("flags", MemoryLayout<NativeRigidBody>.offset(of: \.flags)),
+            ("filter", MemoryLayout<NativeRigidBody>.offset(of: \.filter)),
+            ("shape", MemoryLayout<NativeRigidBody>.offset(of: \.shape)),
+            ("limits", MemoryLayout<NativeRigidBody>.offset(of: \.limits))])]
+        assertMatches(probes, try measure(probes, sources: [try source("NativeRenderKernels")], device: device))
+    }
+
+    /// Rekordy renderu materiałów: materiał na obiekt, instancja bańki i wierzchołek bryły mają ten sam układ w Swift i w shaderze.
+    func testRenderMaterialRecordsMatchShaderLayouts() throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let probes = [
+            Probe(name: "material", mslSize: "NativeRenderMaterial", swiftSize: MemoryLayout<NativeRenderMaterial>.stride, fields: [
+                ("color", MemoryLayout<NativeRenderMaterial>.offset(of: \.color)),
+                ("outlineColor", MemoryLayout<NativeRenderMaterial>.offset(of: \.outlineColor)),
+                ("parameters", MemoryLayout<NativeRenderMaterial>.offset(of: \.parameters)),
+                ("uv", MemoryLayout<NativeRenderMaterial>.offset(of: \.uv))]),
+            Probe(name: "instance", mslSize: "NativeRenderInstance", swiftSize: MemoryLayout<NativeRenderInstance>.stride, fields: [
+                ("bubble", MemoryLayout<NativeRenderInstance>.offset(of: \.bubble)),
+                ("material", MemoryLayout<NativeRenderInstance>.offset(of: \.material)),
+                ("previous", MemoryLayout<NativeRenderInstance>.offset(of: \.previous)),
+                ("alpha", MemoryLayout<NativeRenderInstance>.offset(of: \.alpha))]),
+            Probe(name: "bodyVertex", mslSize: "NativeRenderBodyVertex", swiftSize: MemoryLayout<NativeRenderBodyVertex>.stride, fields: [
+                ("local", MemoryLayout<NativeRenderBodyVertex>.offset(of: \.local)),
+                ("uv", MemoryLayout<NativeRenderBodyVertex>.offset(of: \.uv)),
+                ("info", MemoryLayout<NativeRenderBodyVertex>.offset(of: \.info)),
+                ("weight", MemoryLayout<NativeRenderBodyVertex>.offset(of: \.weight))])]
+        assertMatches(probes, try measure(probes, sources: [try source("NativeRenderKernels")], device: device))
+        XCTAssertEqual(MemoryLayout<NativeRenderMaterial>.stride, 64)
+        XCTAssertEqual(MemoryLayout<NativeRenderInstance>.stride, 16)
+        XCTAssertEqual(MemoryLayout<NativeRenderBodyVertex>.stride, 48)
+    }
+
+    func testDecalRecordsMatchShaderLayouts() throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let probes = [
+            Probe(name: "decalInstance", mslSize: "NativeDecalInstance", swiftSize: MemoryLayout<NativeDecalInstance>.stride, fields: [
+                ("color", MemoryLayout<NativeDecalInstance>.offset(of: \.color)),
+                ("placement", MemoryLayout<NativeDecalInstance>.offset(of: \.placement)),
+                ("info", MemoryLayout<NativeDecalInstance>.offset(of: \.info))]),
+            Probe(name: "decalVertex", mslSize: "NativeDecalVertex", swiftSize: MemoryLayout<NativeDecalVertex>.stride, fields: [
+                ("local", MemoryLayout<NativeDecalVertex>.offset(of: \.local)),
+                ("uv", MemoryLayout<NativeDecalVertex>.offset(of: \.uv)),
+                ("info", MemoryLayout<NativeDecalVertex>.offset(of: \.info))])]
+        assertMatches(probes, try measure(probes, sources: [try source("NativeRenderKernels")], device: device))
+        XCTAssertEqual(MemoryLayout<NativeDecalInstance>.stride, 48)
+        XCTAssertEqual(MemoryLayout<NativeDecalVertex>.stride, 32)
+        // Indeks t−1 bańki leży w `info.z`, a jej α w `placement.w`; bryła ma indeks rekordu w `info.w`, a α w `placement.x`.
+        let bubble = NativeDecalInstance(color: .zero, placement: SIMD4(1, 2, 3, 4), bubbleIndex: 5, mode: .image,
+                                         previousBubbleIndex: 6, alpha: 0.25)
+        XCTAssertEqual(bubble.info, SIMD4<UInt32>(5, 0, 6, 0))
+        XCTAssertEqual(bubble.placement.w, 0.25)
+        let body = NativeDecalInstance(color: .zero, placement: SIMD4(1, 2, 3, 4), bubbleIndex: NativeDecalInstance.noBubble,
+                                       mode: .glyphAlpha, previousBubbleIndex: 6, alpha: 0.25)
+        XCTAssertEqual(body.info.z, NativeDecalInstance.noPrevious, "bryła nie ma strony t−1 baniek")
+        XCTAssertEqual(body.info.w, 0)
+        XCTAssertEqual(body.placement, SIMD4<Float>(0.25, 2, 3, 4), "α bryły w placement.x, promień odniesienia w placement.z")
+        let posed = NativeDecalInstance(color: .zero, placement: SIMD4(0, 0, 3, 0), bubbleIndex: NativeDecalInstance.noBubble,
+                                        mode: .image, alpha: 0.75, bodyIndex: 7)
+        XCTAssertEqual(posed.info, SIMD4<UInt32>(NativeDecalInstance.noBubble, 0, NativeDecalInstance.noPrevious, 7))
+        XCTAssertEqual(posed.placement, SIMD4<Float>(0.75, 0, 3, 0))
+    }
+
+    /// P-B-71: warstwa w `filter.w` to Int32 z odwróconym bitem znaku, więc porządek uint zgadza się z porządkiem Int32.
+    func testLayerEncodingKeepsSignedOrderAndRoundTrips() {
+        let layers: [Int32] = [.min, -70_000, -2, -1, 0, 1, 2, 70_000, .max - 1, .max]
+        let encoded = layers.map(NativeMetalFilter.encodeLayer)
+        XCTAssertEqual(encoded, encoded.sorted(), "rosnące warstwy dają rosnące wartości uint")
+        XCTAssertEqual(Set(encoded).count, layers.count)
+        XCTAssertEqual(encoded.map(NativeMetalFilter.decodeLayer), layers)
+        XCTAssertEqual(NativeMetalFilter.encodeLayer(0), 0x8000_0000)
+    }
+
+    /// P-B-71: rekord bańki niesie warstwę w `filter.w` bez zmiany kategorii i maski ani rozmiaru rekordu.
+    func testBubbleRecordCarriesLayerInFilterW() throws {
+        let id = NativeSolverBubbleID(rawValue: 4)
+        let filter = CollisionFilter(category: 6, mask: 0x30)
+        var snapshots: [Int32: NativeMetalSnapshot] = [:]
+        for layer in [Int32(-5), 0, 9] {
+            let properties = NativePublicProperties(flags: SIMD4(1, 0, 0, 0), material: .zero, restitution: 0,
+                resources: .zero, eventData: .zero, filter: filter, layer: layer)
+            var input = NativeSolverInput(configuration: .init(), bubbles: [NativeSolverBubble(id: id, center: .zero, mass: 1, targetRadius: 1)],
+                segments: [], publicSettings: NativePublicSettings(properties: [id: properties],
+                    region: try WorldRectangle(min: [-10, -10], max: [10, 10])))
+            input.hitTests = []
+            snapshots[layer] = NativeMetalSnapshot(input: input)
+        }
+        for (layer, snapshot) in snapshots {
+            let record = try XCTUnwrap(snapshot.bubbleChanges.first).value
+            XCTAssertEqual(record.filter.w, NativeMetalFilter.encodeLayer(layer), "warstwa \(layer)")
+            XCTAssertEqual(record.filter.x, 6); XCTAssertEqual(record.filter.y, 0x30)
+        }
+        XCTAssertEqual(MemoryLayout<NativeMetalBubble>.stride, NativeMetalRenderHandoff.bubbleRecordByteCount)
+        XCTAssertEqual(MemoryLayout<NativeMetalBubble>.stride, 11 * 16, "rozmiar rekordu bańki bez zmian: 11 lane'ów po 16 B")
     }
 }

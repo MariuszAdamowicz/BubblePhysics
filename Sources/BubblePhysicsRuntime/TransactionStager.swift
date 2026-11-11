@@ -7,8 +7,11 @@ package struct RuntimeState: Equatable, Sendable {
     package let configuration: WorldConfiguration
     package var objects: [ObjectID: RuntimeObject] = [:]
     package var physicsMaterials: [PhysicsMaterialID: PhysicsMaterial] = [:]
-    package var renderStyles: [RenderStyleID: RenderStyle] = [:]
     package var transitions: [TransitionTarget: ParameterTransition] = [:]
+    package var joints: [JointID: Joint] = [:]
+    package var renderMaterials: [RenderMaterialID: RenderMaterial] = [:]
+    /// Tekstura tła rozciągnięta na region symulacji; `nil` oznacza brak tła.
+    package var background: TextureID?
     package var globalForce: WorldPoint
     package var nextDriveID: UInt64 = 1
     package var transitionProgress: [TransitionTarget: PhysicalTransitionProgress] = [:]
@@ -35,12 +38,20 @@ package struct RuntimeObject: Equatable, Sendable {
     package var pathStopped = false
     package var pathBlocker: DriveBlockingContact?
     package var motorDrive: MotorDrive?
+    package var kinematicDrive: KinematicDrive?
+    /// Poza kinematycznej (x, y, obrót) liczona w podwójnej precyzji, żeby błąd `Float` nie narastał z krokami toru.
+    package var kinematicExactPose: SIMD3<Double>?
+    /// Warstwa rysowania i hit-testu: startuje z deskryptora, a `setLayer` zmienia tylko to pole (deskryptory mają pola `let`).
+    package var layer: Int32 = 0
+    /// Naklejka: startuje z deskryptora, a `setDecal` zmienia tylko to pole (deskryptory mają pola `let`).
+    package var decal: Decal?
     package var targetRadius: Float = 0
     package var collisionRadius: Float = 0
     package var effectiveRadius: Float = 0
+    /// AABB bańki z ostatniego kroku solvera; `nil`, gdy krok jeszcze jej nie policzył.
+    package var bounds: WorldRectangle?
     package var capturedRadius: Float?
     package var rigidity: Float = 0
-    package var presentation: PresentationParameters = .empty
     package var structuralShape: NativeStructuralShape?
     package var radiusBlendStart: Float = 0
     package var rigidityBlendStart: Float = 0
@@ -50,21 +61,20 @@ package struct RuntimeObject: Equatable, Sendable {
         self.descriptor = descriptor
         switch descriptor {
         case .bubble(let value): motionRole = value.motionRole; velocity = value.velocity
-        case .polygon(let value): motionRole = value.motionRole; velocity = value.velocity
+        case .rigidBody(let value): motionRole = value.motionRole; velocity = value.velocity
         case .forceField, .sensor: motionRole = .static; velocity = .zero
         }
         switch descriptor {
         case .bubble(let value): position = value.position; rotation = 0; angularVelocity = 0
-        case .polygon(let value): position = value.position; rotation = value.rotation; angularVelocity = value.angularVelocity
+        case .rigidBody(let value): position = value.position; rotation = value.rotation; angularVelocity = value.angularVelocity
         case .forceField(let value): position = value.position; rotation = value.rotation; angularVelocity = 0
         case .sensor(let value): position = value.position; rotation = value.rotation; angularVelocity = 0
         }
         previousPosition = position
         switch descriptor {
-        case .bubble(let b): presentation = b.presentation
-        case .polygon(let p): presentation = p.presentation
-        case .sensor(let s): presentation = s.presentation
-        case .forceField(let f): presentation = f.presentation
+        case .bubble(let value): layer = value.layer; decal = value.decal
+        case .rigidBody(let value): layer = value.layer; decal = value.decal
+        case .forceField, .sensor: break
         }
         if case .bubble(let bubble) = descriptor {
             targetRadius = bubble.targetRadius; collisionRadius = bubble.targetRadius; effectiveRadius = bubble.targetRadius
@@ -73,22 +83,22 @@ package struct RuntimeObject: Equatable, Sendable {
     var material: (PhysicsMaterialID, PhysicsMaterialKind)? {
         switch descriptor {
         case .bubble(let value): return (value.physicsMaterialID, .bubble)
-        case .polygon(let value): return (value.physicsMaterialID, .polygon)
+        case .rigidBody(let value): return (value.physicsMaterialID, .rigid)
         case .forceField, .sensor: return nil
         }
     }
-    package var style: RenderStyleID {
+    /// Materiał renderu obiektu; czujnik i pole sił nie są rysowane, więc go nie mają.
+    package var renderMaterialID: RenderMaterialID? {
         switch descriptor {
-        case .bubble(let value): return value.renderStyleID
-        case .polygon(let value): return value.renderStyleID
-        case .forceField(let value): return value.renderStyleID
-        case .sensor(let value): return value.renderStyleID
+        case .bubble(let value): return value.renderMaterialID
+        case .rigidBody(let value): return value.renderMaterialID
+        case .forceField, .sensor: return nil
         }
     }
     var interests: EventInterest {
         switch descriptor {
         case .bubble(let value): return value.eventInterest
-        case .polygon(let value): return value.eventInterest
+        case .rigidBody(let value): return value.eventInterest
         case .forceField(let value): return value.eventInterest
         case .sensor(let value): return value.eventInterest
         }
@@ -96,7 +106,7 @@ package struct RuntimeObject: Equatable, Sendable {
     var mass: Float? {
         switch descriptor {
         case .bubble(let value): return value.mass
-        case .polygon(let value): return value.mass
+        case .rigidBody(let value): return value.mass
         case .forceField, .sensor: return nil
         }
     }
@@ -110,6 +120,8 @@ package struct StagedWorldChange: Sendable {
     package let removedObjectIDs: [ObjectID]
     package let replacedObjectIDs: [ObjectID]
     package let events: [WorldEvent]
+    /// Więzy usunięte przez transakcję, rosnąco po `JointID`.
+    package let removedJointIDs: [JointID]
 }
 
 package struct PendingTransaction: Sendable {
@@ -127,9 +139,26 @@ package struct StagedTransactionBatch: Sendable {
     package let frame: WorldFrame
 }
 
+extension StagedTransactionBatch {
+    /// Obiekty, które pojawiły się w partii (utworzone, zastąpione, a także scalone, podzielone i wstawione przez
+    /// `replaceRigidBodies`, bo te kończą się utworzeniem): ich poprzednia poza nie jest poprzednikiem nowego stanu,
+    /// więc renderer nie interpoluje od niej.
+    package var appearedObjectIDs: Set<ObjectID> {
+        var ids = Set<ObjectID>()
+        for change in changes {
+            ids.formUnion(change.createdObjectIDs)
+            ids.formUnion(change.replacedObjectIDs)
+        }
+        return ids
+    }
+}
+
 package enum TransactionStager {
-    package static func stage(_ transaction: WorldTransaction, against state: RuntimeState) throws -> StagedWorldChange {
-        var candidate = StagingContext(state: state)
+    /// `textureExists` mówi, czy tekstura jest w rejestrze zasobów świata; Runtime nie zna rejestru.
+    package static func stage(_ transaction: WorldTransaction, against state: RuntimeState,
+        textureExists: @escaping (TextureID) -> Bool = { _ in false },
+        glyphLookup: @escaping GlyphLookup = { _ in nil }) throws -> StagedWorldChange {
+        var candidate = StagingContext(state: state, textureExists: textureExists, glyphLookup: glyphLookup)
         for (index, operation) in transaction.operations.enumerated() {
             do { try candidate.apply(operation) }
             catch let error as TransactionRejectionReason {
@@ -140,26 +169,30 @@ package enum TransactionStager {
         }
         return StagedWorldChange(state: candidate.state, operations: transaction.operations,
                                  createdObjectIDs: candidate.created, removedObjectIDs: candidate.removed,
-                                 replacedObjectIDs: candidate.replaced, events: candidate.events)
+                                 replacedObjectIDs: candidate.replaced, events: candidate.events,
+                                 removedJointIDs: Array(Set(candidate.removedJoints)).sorted { $0.rawValue < $1.rawValue })
     }
 
     /// Wywoływane raz na granicy kroku. Odrzucona transakcja nie zmienia stanu dla następnej.
     /// To tylko staging: nie wykonuje kroku fizyki ani nie publikuje stanu na zewnątrz.
     package static func stageBatch(_ pending: [PendingTransaction], against state: RuntimeState,
-        validate: ((StagedWorldChange) throws -> Void)? = nil) -> StagedTransactionBatch {
+        validate: ((StagedWorldChange) throws -> Void)? = nil,
+        textureExists: @escaping (TextureID) -> Bool = { _ in false },
+        glyphLookup: @escaping GlyphLookup = { _ in nil }) -> StagedTransactionBatch {
         var candidate = state
         var changes: [StagedWorldChange] = []
         var receipts: [TransactionReceipt] = []
         var events: [WorldEvent] = []
         for submission in pending {
             do {
-                let change = try stage(submission.transaction, against: candidate)
+                let change = try stage(submission.transaction, against: candidate, textureExists: textureExists,
+                                       glyphLookup: glyphLookup)
                 try validate?(change)
                 candidate = change.state
                 changes.append(change)
                 receipts.append(TransactionReceipt(token: submission.token,
                     createdObjectIDs: change.createdObjectIDs, removedObjectIDs: change.removedObjectIDs,
-                    replacedObjectIDs: change.replacedObjectIDs))
+                    replacedObjectIDs: change.replacedObjectIDs, removedJointIDs: change.removedJointIDs))
                 events += change.events
             } catch let rejection as TransactionRejection {
                 events.append(.transactionRejected(submission.token, rejection))
@@ -177,9 +210,12 @@ package enum TransactionStager {
 
 private struct StagingContext {
     var state: RuntimeState
+    let textureExists: (TextureID) -> Bool
+    let glyphLookup: GlyphLookup
     var created: [ObjectID] = []
     var removed: [ObjectID] = []
     var replaced: [ObjectID] = []
+    var removedJoints: [JointID] = []
     var events: [WorldEvent] = []
 
     mutating func apply(_ operation: WorldOperation) throws {
@@ -193,6 +229,7 @@ private struct StagingContext {
             discardObjectTransitions(id)
             try validate(replacement)
             state.objects[id] = replacement
+            try validateJoints(attachedTo: id)
             replaced.append(id)
             if previous.interests.contains(.didReplace) || replacement.interests.contains(.didReplace) { events.append(.didReplace(id)) }
         case .updatePhysicsMaterial(let id, let material):
@@ -201,7 +238,29 @@ private struct StagingContext {
             for objectID in state.objects.keys.sorted(by: { $0.rawValue < $1.rawValue }) {
                 if let existing = state.objects[objectID], existing.material?.0 == id { try validate(existing) }
             }
-        case .updateRenderStyle(let id, let style): state.renderStyles[id] = style
+        case .updateRenderMaterial(let id, let material):
+            try requireTexture(material.texture)
+            state.renderMaterials[id] = material
+        case .setLayer(let id, let layer):
+            var existing = try object(id)
+            switch existing.descriptor {
+            case .bubble, .rigidBody: break
+            case .forceField, .sensor: throw TransactionRejectionReason.layerNotSupported(id)
+            }
+            existing.layer = layer
+            state.objects[id] = existing
+        case .setBackground(let texture):
+            try requireTexture(texture)
+            state.background = texture
+        case .setDecal(let id, let decal):
+            var existing = try object(id)
+            switch existing.descriptor {
+            case .bubble, .rigidBody: break
+            case .forceField, .sensor: throw TransactionRejectionReason.decalNotSupported(id)
+            }
+            try requireDecal(decal)
+            existing.decal = decal
+            state.objects[id] = existing
         case .setMotion(let id, let role):
             var existing = try physicalObject(id)
             guard role != .playerDriven || existing.playerDriveTarget != nil else {
@@ -214,8 +273,10 @@ private struct StagingContext {
             }
             if role != .pathDriven { existing.pathDrive = nil; existing.pathBlocker = nil; existing.pathStopped = false }
             if role != .motorDriven { existing.motorDrive = nil }
+            if role != .kinematic { existing.kinematicDrive = nil }
             try validate(existing)
             state.objects[id] = existing
+            try validateJoints(attachedTo: id)
         case .setPathDrive(let id, let drive):
             try apply(.setMotion(id, .pathDriven))
             state.objects[id]?.pathDrive = drive; state.objects[id]?.pathIndex = 0
@@ -223,6 +284,22 @@ private struct StagingContext {
         case .setMotorDrive(let id, let drive):
             try apply(.setMotion(id, .motorDriven))
             state.objects[id]?.motorDrive = drive
+        case .setKinematicDrive(let id, let drive):
+            switch drive {
+            case .velocity(let linear, let angular):
+                try requireDriveMagnitude(linear.x, "kinematicDrive.linear"); try requireDriveMagnitude(linear.y, "kinematicDrive.linear")
+                try requireDriveMagnitude(angular, "kinematicDrive.angular")
+            case .target(let position, let rotation):
+                try requireDriveMagnitude(position.x, "kinematicDrive.position"); try requireDriveMagnitude(position.y, "kinematicDrive.position")
+                try requireDriveMagnitude(rotation, "kinematicDrive.rotation")
+            case .path: break // `PathDrive.init` już sprawdza punkty i prędkość.
+            }
+            var existing = try object(id)
+            guard existing.motionRole == .kinematic else { throw TransactionRejectionReason.incompatibleMotionRole(id) }
+            existing.kinematicDrive = drive
+            existing.pathIndex = 0
+            existing.kinematicExactPose = nil
+            state.objects[id] = existing
         case .setGlobalForce(let force):
             try requireFinite(force, "globalForce")
             state.globalForce = force
@@ -265,24 +342,50 @@ private struct StagingContext {
             existing.radiusBlendStart = existing.collisionRadius; existing.rigidityBlendStart = existing.rigidity; existing.shapeElapsed = 0
             try validate(existing)
             state.objects[id] = existing
+            try validateJoints(attachedTo: id)
         case .startTransition(let transition):
             try validate(transition)
             state.transitions[transition.target] = transition
             state.transitionProgress.removeValue(forKey: transition.target)
         case .mergeBubbles(let sources, let result): try merge(sources, result: result)
         case .splitBubble(let source, let first, let second): try split(source, first: first, second: second)
-        case .replacePolygons(let sources, let results):
+        case .replaceRigidBodies(let sources, let results):
             guard !sources.isEmpty, !results.isEmpty, Set(sources).count == sources.count else {
                 throw TransactionRejectionReason.invalidStructuralOperation
             }
             for id in sources {
-                guard case .polygon = try object(id).descriptor else { throw TransactionRejectionReason.incompatibleObjectKind(id) }
+                guard case .rigidBody = try object(id).descriptor else { throw TransactionRejectionReason.incompatibleObjectKind(id) }
             }
             for id in sources { try remove(id) }
-            for result in results { try add(.polygon(result)) }
+            for result in results { try add(.rigidBody(result)) }
+        case .addJoint(let joint): try add(joint)
+        case .removeJoint(let id):
+            guard state.joints[id] != nil else { throw TransactionRejectionReason.jointNotFound(id) }
+            state.joints.removeValue(forKey: id)
+            removedJoints.append(id)
         }
     }
 
+    func requireTexture(_ texture: TextureID?) throws {
+        if let texture, !textureExists(texture) { throw TransactionRejectionReason.textureNotFound(texture) }
+    }
+    /// Naklejka tekstowa wymaga zarejestrowanego źródła glifów i samych znaków z jego zestawu, obrazowa zarejestrowanej tekstury.
+    func requireDecal(_ decal: Decal?) throws {
+        guard let decal else { return }
+        switch decal.content {
+        case .image(let texture, _): try requireTexture(texture)
+        case .text(let string, let source):
+            guard let contains = glyphLookup(source) else {
+                switch source {
+                case .font(let font): throw TransactionRejectionReason.fontNotFound(font)
+                case .atlas(let atlas): throw TransactionRejectionReason.glyphAtlasNotFound(atlas)
+                }
+            }
+            for character in string where !contains(character) {
+                throw TransactionRejectionReason.characterNotInGlyphSet(character)
+            }
+        }
+    }
     func object(_ id: ObjectID) throws -> RuntimeObject {
         guard let existing = state.objects[id] else { throw TransactionRejectionReason.objectNotFound(id) }
         return existing
@@ -305,12 +408,54 @@ private struct StagingContext {
         state.objects.removeValue(forKey: id)
         discardObjectTransitions(id)
         removed.append(id)
+        removeJoints(attachedTo: id)
         if existing.interests.contains(.didRemove) { events.append(.didRemove(id)) }
+    }
+    /// Usunięcie ciała (także w scaleniu, podziale i `replaceRigidBodies`) usuwa jego więzy.
+    mutating func removeJoints(attachedTo id: ObjectID) {
+        for (jointID, joint) in state.joints where joint.bodyA == id || joint.bodyB == id {
+            state.joints.removeValue(forKey: jointID)
+            removedJoints.append(jointID)
+        }
+    }
+    mutating func add(_ joint: Joint) throws {
+        guard state.joints[joint.id] == nil else { throw TransactionRejectionReason.duplicateJointID(joint.id) }
+        for bodyID in [joint.bodyA] + (joint.bodyB.map { [$0] } ?? []) {
+            let body = try object(bodyID)
+            switch body.descriptor {
+            case .bubble, .rigidBody: break
+            case .forceField, .sensor: throw TransactionRejectionReason.incompatibleObjectKind(bodyID)
+            }
+        }
+        guard jointBodiesAreSupported(joint) else { throw TransactionRejectionReason.unsupportedJointBody(joint.id) }
+        state.joints[joint.id] = joint
+    }
+    /// Więz wymaga ciała ruchomego (dynamic, motorDriven, playerDriven), nie dopuszcza `pathDriven`,
+    /// a bańka może być tylko w więzie dystansowym. Drugim końcem może być ciało nieruchome albo świat.
+    func jointBodiesAreSupported(_ joint: Joint) -> Bool {
+        var movable = false
+        for bodyID in [joint.bodyA] + (joint.bodyB.map { [$0] } ?? []) {
+            guard let body = state.objects[bodyID] else { return false }
+            if case .bubble = body.descriptor, !joint.isDistance { return false }
+            switch body.motionRole {
+            case .pathDriven: return false
+            case .dynamic, .motorDriven, .playerDriven: movable = true
+            case .static, .kinematic: break
+            }
+        }
+        return movable
+    }
+    /// Zmiana roli albo rodzaju ciała nie może zostawić przy nim więzu, którego stager by nie przyjął.
+    func validateJoints(attachedTo id: ObjectID) throws {
+        for joint in state.joints.values.sorted(by: { $0.id.rawValue < $1.id.rawValue })
+        where joint.bodyA == id || joint.bodyB == id {
+            guard jointBodiesAreSupported(joint) else { throw TransactionRejectionReason.unsupportedJointBody(joint.id) }
+        }
     }
     mutating func discardObjectTransitions(_ id: ObjectID) {
         state.transitions = state.transitions.filter { target, _ in
             switch target {
-            case .bubbleRadius(let targetID), .objectPresentation(let targetID, _): return targetID != id
+            case .bubbleRadius(let targetID): return targetID != id
             default: return true
             }
         }
@@ -321,9 +466,15 @@ private struct StagingContext {
             guard let material = state.physicsMaterials[id] else { throw TransactionRejectionReason.physicsMaterialNotFound(id) }
             guard material.kind == kind else { throw TransactionRejectionReason.incompatiblePhysicsMaterial(id, object.descriptor.id) }
         }
-        guard state.renderStyles[object.style] != nil else { throw TransactionRejectionReason.renderStyleNotFound(object.style) }
+        if let id = object.renderMaterialID, state.renderMaterials[id] == nil {
+            throw TransactionRejectionReason.renderMaterialNotFound(id)
+        }
+        try requireDecal(object.decal)
         switch object.descriptor {
         case .bubble(let value):
+            guard object.motionRole != .kinematic else {
+                throw TransactionRejectionReason.unsupportedMotionRole(value.id, .kinematic)
+            }
             // Rola runtime może różnić się od roli przy dodaniu deskryptora.
             if object.motionRole == .static {
                 var maximumRadius = object.targetRadius
@@ -332,17 +483,28 @@ private struct StagingContext {
                 }
                 try state.configuration.validate(BubbleDescriptor(id: value.id, position: object.position,
                     targetRadius: maximumRadius, motionRole: .static,
-                    physicsMaterialID: value.physicsMaterialID, renderStyleID: value.renderStyleID))
+                    physicsMaterialID: value.physicsMaterialID, renderMaterialID: value.renderMaterialID))
             }
-        case .polygon(let value):
+        case .rigidBody(let value):
             if object.motionRole == .static {
-                try state.configuration.validate(PolygonDescriptor(id: value.id, vertices: value.geometry.vertices,
+                try state.configuration.validate(RigidBodyDescriptor(id: value.id, shape: value.shape,
                     position: object.position, rotation: object.rotation, motionRole: .static,
-                    physicsMaterialID: value.physicsMaterialID, renderStyleID: value.renderStyleID))
+                    physicsMaterialID: value.physicsMaterialID, renderMaterialID: value.renderMaterialID))
             }
         case .forceField(let value): try state.configuration.validate(value)
         case .sensor(let value): try state.configuration.validate(value)
         }
+    }
+
+    /// Górna granica modułu składowej napędu kinematycznego (pozycja, obrót, prędkość). Solver dzieli różnicę póz przez `dt`
+    /// (`.target`) i mnoży prędkość przez czas (`.velocity`); skończona, ale ogromna wartość (np. 3e38) przepełniała `Float`
+    /// dopiero w kroku i zatrzymywała świat. 1e6 jest o rzędy wielkości ponad każdym realnym światem (dokładność `Float`
+    /// przy 1e6 to ok. 0,06), a `2·1e6 / dt` mieści się w `Float` dla każdego `fixedTimeStep` ≥ 1e-30.
+    private static let maximumDriveMagnitude: Float = 1_000_000
+
+    private func requireDriveMagnitude(_ value: Float, _ name: String) throws {
+        try requireFinite(value, name)
+        guard abs(value) <= Self.maximumDriveMagnitude else { throw ModelValidationError.valueOutOfRange(name) }
     }
 
     func validate(_ transition: ParameterTransition) throws {
@@ -363,12 +525,6 @@ private struct StagingContext {
             if parameter == .deformability || parameter == .restitution {
                 guard value <= 1 else { throw ModelValidationError.valueOutOfRange("transition.material") }
             }
-        case (.renderStyle(let id, _), .scalar(let value)):
-            guard state.renderStyles[id] != nil else { throw TransactionRejectionReason.renderStyleNotFound(id) }
-            try requireFinite(value, "transition.style")
-        case (.objectPresentation(let id, _), .scalar(let value)):
-            _ = try object(id)
-            try requireFinite(value, "transition.presentation")
         case (.bubbleRadius(let id), .scalar(let radius)):
             let existing = try object(id)
             guard case .bubble(let bubble) = existing.descriptor else { throw TransactionRejectionReason.incompatibleObjectKind(id) }
@@ -376,7 +532,7 @@ private struct StagingContext {
             if existing.motionRole == .static {
                 try state.configuration.validate(BubbleDescriptor(id: id, position: bubble.position,
                     targetRadius: radius, motionRole: .static,
-                    physicsMaterialID: bubble.physicsMaterialID, renderStyleID: bubble.renderStyleID))
+                    physicsMaterialID: bubble.physicsMaterialID, renderMaterialID: bubble.renderMaterialID))
             }
         default: throw TransactionRejectionReason.incompatibleTransitionValue
         }
@@ -392,8 +548,8 @@ private struct StagingContext {
         .bubble(try BubbleDescriptor(id: result.id, position: position, velocity: velocity,
             targetRadius: radius, mass: mass, motionRole: result.motionRole,
             regionExitPolicy: result.regionExitPolicy, physicsMaterialID: result.physicsMaterialID,
-            renderStyleID: result.renderStyleID, mergeGroups: result.mergeGroups,
-            eventInterest: result.eventInterest, presentation: result.presentation))
+            renderMaterialID: result.renderMaterialID, mergeGroups: result.mergeGroups,
+            eventInterest: result.eventInterest, filter: result.filter, layer: result.layer, decal: result.decal))
     }
     mutating func merge(_ sources: [ObjectID], result: BubbleResult) throws {
         guard sources.count >= 2, Set(sources).count == sources.count else { throw TransactionRejectionReason.invalidStructuralOperation }

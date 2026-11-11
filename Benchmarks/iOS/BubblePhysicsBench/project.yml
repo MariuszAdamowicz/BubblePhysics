@@ -25,10 +25,13 @@ targets:
         product: BubblePhysics
       - package: BubblePhysics
         product: BubblePhysicsMetalRender
+      - package: BubblePhysics
+        product: BubblePhysicsAssets
     configFiles:
       Debug: Signing.xcconfig
       Release: Signing.xcconfig
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
         SWIFT_VERSION: 5.0

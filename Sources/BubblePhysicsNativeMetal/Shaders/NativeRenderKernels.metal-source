@@ -1,11 +1,7 @@
 #include <metal_stdlib>
 using namespace metal;
 
-struct ContourVertexOutput {
-    float4 position [[position]];
-    float2 worldPosition;
-};
-
+// Rekord bańki ma układ `NativeBubble` solvera (sonda ABI w NativeMetalShaderABITests).
 struct RenderBubble {
     long2 identity;
     float4 position;
@@ -16,23 +12,159 @@ struct RenderBubble {
     float4 material;
     ulong2 resources;
     ulong2 eventData;
+    float4 bounds;
+    uint4 filter;
 };
 
-vertex ContourVertexOutput nativeContourVertex(
-    uint vertexID [[vertex_id]], uint bubbleIndex [[instance_id]],
+// Rekord bryły ma układ `NativeRigidBody` solvera (sonda ABI w NativeMetalShaderABITests). Po kroku niesie obie pozy:
+// `pose` to środek masy i obrót stanu nowego kroku (z `w` = obrót przed krokiem), `previous.xy` środek masy przed krokiem,
+// `previous.zw` środek masy w układzie lokalnym, `flags.z` wynik regionu (1 poza regionem i usunięta, 2 zawinięta w kroku).
+struct RenderBody {
+    ulong2 identity;
+    float4 pose;
+    float4 previous;
+    float4 motion;
+    float4 physical;
+    uint4 ranges;
+    uint4 flags;
+    uint4 filter;
+    float4 shape;
+    float4 limits;
+};
+
+// Materiał renderu jednego obiektu; lustro `NativeRenderMaterial` w Swift (sonda ABI).
+struct NativeRenderMaterial {
+    float4 color;        // RGBA, składowe w [0, 1]
+    float4 outlineColor;
+    float4 parameters;   // szerokość obrysu (jednostki świata), tryb mieszania (0 nieprzezroczysty, 1 alfa, 2 addytywny),
+                         // tryb tekstury na bańce (0 przyklejony, 1 pod maską), reserved
+    float4 uv;           // przesunięcie xy, skala zw
+};
+
+// Jedna instancja bańki w kolejności rysowania: indeks rekordu bańki w uchwycie, indeks materiału, indeks rekordu na stronie
+// t−1 (0xFFFFFFFF = bez interpolacji) i α, waga stanu t w obrazie między t−1 i t.
+struct NativeRenderInstance {
+    uint bubble;
+    uint material;
+    uint previous;
+    float alpha;
+};
+
+// Wierzchołek trójkąta bryły: pozycja w świecie, współrzędne tekstury (lokalny punkt bryły znormalizowany do prostokąta
+// otaczającego, wiersz 0 obrazu u góry; przesunięcie i skalę UV materiału nakłada fragment bryły), indeks materiału oraz zakres
+// pierścienia konturu w buforze pierścieni (pas obrysu liczy fragment jako odległość od krawędzi pierścienia).
+// `local` to punkt w układzie lokalnym bryły (pierścień, indeks bryły w uchwycie w `info.w`) albo, dla tła (`info.w` = 0xFFFFFFFF),
+// punkt świata. Pozę bryły (środek masy i obrót, z mieszaniem t−1 → t) daje rekord GPU, więc kontur jest zawsze tam, gdzie
+// go zostawił krok; `weight` to waga stanu t (1 = bez interpolacji: obiekt utworzony, zastąpiony, scalony albo podzielony).
+struct NativeRenderBodyVertex {
+    float2 local;
+    float2 uv;
+    uint4 info;          // materiał, początek pierścienia, liczba punktów pierścienia, indeks bryły (0xFFFFFFFF: punkt świata)
+    float weight;
+};
+
+// Instancja naklejki; lustro `NativeDecalInstance` w Swift (sonda ABI).
+struct NativeDecalInstance {
+    float4 color;        // kolor naklejki, RGBA w [0, 1]
+    float4 placement;    // bryła: x = waga stanu t (1 = bez interpolacji), z = promień odniesienia (kotwica i obrót z rekordu bryły);
+                         // bańka: kotwica i promień z rekordu bańki, w = α (waga stanu t)
+    uint4 info;          // indeks bańki w uchwycie (0xFFFFFFFF dla bryły), tryb (0 obraz, 1 alfa atlasu, 2 SDF), indeks bańki na
+                         // stronie t−1 (0xFFFFFFFF: bez interpolacji; tylko bańka), indeks bryły w uchwycie (tylko bryła)
+};
+
+// Wierzchołek czworokąta glifu albo obrazu: położenie względem kotwicy w jednostkach promienia odniesienia (przed obrotem),
+// współrzędne tekstury (wiersz 0 u góry) i indeks instancji naklejki.
+struct NativeDecalVertex {
+    float2 local;
+    float2 uv;
+    uint4 info;          // indeks instancji, reserved x3
+};
+
+struct BubbleVertexOutput {
+    float4 position [[position]];
+    float2 worldPosition;
+    // Odległość od krawędzi konturu: liniowa wewnątrz trójkąta (środek, punkt i, punkt i+1), więc interpolacja jest dokładna.
+    float edgeDistance;
+    // Współrzędne tekstury obu trybów bańki; fragment wybiera według materiału. Przyklejony: punkt konturu o kącie próbki θ
+    // ma 0,5 + 0,5·(cos θ, −sin θ). Pod maską: 0,5 + (p − środek)/(2·promień docelowy) z osią V w dół.
+    float2 attachedUV;
+    float2 maskedUV;
+    // Materiał obiektu z wierzchołka (kopia rekordu `NativeRenderMaterial`): fragment nie czyta bufora materiałów po indeksie.
+    float4 materialColor [[flat]];
+    float4 materialOutline [[flat]];
+    float4 materialParameters [[flat]];
+    float4 materialUV [[flat]];
+};
+
+struct BodyVertexOutput {
+    float4 position [[position]];
+    // Położenie w układzie pierścienia: lokalnym bryły albo, dla tła (bez pierścienia), świata. Ruch sztywny zachowuje odległość
+    // do krawędzi pierścienia, więc obrys liczony tu jest taki sam jak w świecie.
+    float2 ringPosition;
+    float2 uv;
+    // Materiał obiektu z wierzchołka (kopia rekordu `NativeRenderMaterial`): fragment nie czyta bufora materiałów po indeksie.
+    float4 materialColor [[flat]];
+    float4 materialOutline [[flat]];
+    float4 materialParameters [[flat]];
+    float4 materialUV [[flat]];
+    uint ringStart [[flat]];
+    uint ringCount [[flat]];
+};
+
+struct DecalVertexOutput {
+    float4 position [[position]];
+    float2 worldPosition;
+    float2 uv;
+    float2 anchor [[flat]];
+    float radius [[flat]];
+    float4 color [[flat]];
+    uint bubble [[flat]];
+    uint mode [[flat]];
+    // Czy kontur bańki jest mieszany ze stroną t−1 (decyzja wierzchołka, ta sama co dla środka) i z jaką wagą stanu t.
+    uint blend [[flat]];
+    uint previousBase [[flat]];
+    float alpha [[flat]];
+};
+
+float2 nativeClip(float2 point, float4 viewport) { return (point - viewport.xy) * 2.0 / viewport.zw; }
+
+// Układ lokalny bryły w świecie jako (początek xy, cosinus, sinus). Początek układu to środek masy minus przesunięty o obrót
+// środek masy w układzie lokalnym. Poza bryły jest mieszana t−1 → t z wagą stanu t, chyba że waga to 1 albo bryła zawinęła
+// się w tym kroku (flaga rekordu, znana dopiero po kroku GPU): wtedy poza z rekordu, bez interpolacji przez region.
+float4 nativeBodyFrame(RenderBody body, float weight) {
+    bool blend = weight < 1.0f && body.flags.z != 2;
+    float2 center = blend ? mix(body.previous.xy, body.pose.xy, weight) : body.pose.xy;
+    float angle = blend ? mix(body.pose.w, body.pose.z, weight) : body.pose.z;
+    float cosine = cos(angle), sine = sin(angle);
+    float2 centroid = body.previous.zw;
+    float2 origin = center - float2(cosine * centroid.x - sine * centroid.y, sine * centroid.x + cosine * centroid.y);
+    return float4(origin, cosine, sine);
+}
+
+float2 nativeBodyPoint(float4 frame, float2 local) {
+    return frame.xy + float2(frame.z * local.x - frame.w * local.y, frame.w * local.x + frame.z * local.y);
+}
+
+vertex BubbleVertexOutput nativeBubbleVertex(
+    uint vertexID [[vertex_id]], uint instanceID [[instance_id]],
     device const float2 *points [[buffer(0)]], device const uint *counts [[buffer(1)]],
     constant float4 &viewport [[buffer(2)]], constant uint &stride [[buffer(3)]],
     device const RenderBubble *bubbles [[buffer(4)]],
-    device const float2 *shapeVertices [[buffer(5)]],
-    constant uint &geometryMode [[buffer(6)]]) {
-    ContourVertexOutput result;
-    if (geometryMode == 1) {
-        float2 point = shapeVertices[vertexID];
-        float2 clip = (point - viewport.xy) * 2.0 / viewport.zw;
-        result.position = float4(clip.x, clip.y, 0, 1);
-        result.worldPosition = point;
-        return result;
-    }
+    device const float2 *previousPoints [[buffer(5)]], device const uint *previousCounts [[buffer(6)]],
+    device const NativeRenderInstance *instances [[buffer(7)]],
+    device const RenderBubble *previousBubbles [[buffer(8)]],
+    device const NativeRenderMaterial *materials [[buffer(9)]]) {
+    BubbleVertexOutput result;
+    NativeRenderInstance instance = instances[instanceID];
+    NativeRenderMaterial material = materials[instance.material];
+    result.materialColor = material.color;
+    result.materialOutline = material.outlineColor;
+    result.materialParameters = material.parameters;
+    result.materialUV = material.uv;
+    result.edgeDistance = 0;
+    result.attachedUV = float2(0.5);
+    result.maskedUV = float2(0.5);
+    uint bubbleIndex = instance.bubble;
     if (bubbles[bubbleIndex].publicFlags.w == 1) {
         result.position = float4(2, 2, 0, 1);
         result.worldPosition = float2(0);
@@ -42,17 +174,262 @@ vertex ContourVertexOutput nativeContourVertex(
     uint triangle = vertexID / 3;
     uint corner = vertexID % 3;
     uint first = bubbleIndex * stride;
-    float2 point = bubbles[bubbleIndex].position.xy;
+    float2 center = bubbles[bubbleIndex].position.xy;
+    // Interpolacja t−1 → t: kontury mieszane próbka po próbce (kąty próbek są stałe), środek z rekordów obu stron. Gdy liczba
+    // próbek się zmieniła albo bańka zawinęła się w tym kroku (flaga rekordu t), bańka rysuje się w stanie t.
+    uint previousIndex = instance.previous;
+    bool blend = previousIndex != 0xFFFFFFFFu && count > 2 && bubbles[bubbleIndex].publicFlags.w != 2
+        && min(previousCounts[previousIndex], stride) == count;
+    uint previousFirst = previousIndex * stride;
+    if (blend) center = mix(previousBubbles[previousIndex].position.xy, center, instance.alpha);
+    float2 point = center;
     if (count > 2 && triangle < count) {
-        if (corner == 1) point = points[first + triangle];
-        if (corner == 2) point = points[first + ((triangle + 1) % count)];
+        float2 a = points[first + triangle], b = points[first + ((triangle + 1) % count)];
+        if (blend) {
+            a = mix(previousPoints[previousFirst + triangle], a, instance.alpha);
+            b = mix(previousPoints[previousFirst + ((triangle + 1) % count)], b, instance.alpha);
+        }
+        if (corner == 1) point = a;
+        if (corner == 2) point = b;
+        if (corner != 0) {
+            float angle = 2.0f * M_PI_F * float(triangle + (corner == 2 ? 1 : 0)) / float(count);
+            result.attachedUV = float2(0.5f + 0.5f * cos(angle), 0.5f - 0.5f * sin(angle));
+        }
+        if (corner == 0) {
+            float2 edge = b - a;
+            float edgeLength = max(sqrt(dot(edge, edge)), 1e-12f);
+            result.edgeDistance = abs(edge.x * (center.y - a.y) - edge.y * (center.x - a.x)) / edgeLength;
+        }
     }
-    float2 clip = (point - viewport.xy) * 2.0 / viewport.zw;
+    float2 clip = nativeClip(point, viewport);
     result.position = float4(clip.x, clip.y, 0, 1);
     result.worldPosition = point;
+    float targetRadius = max(bubbles[bubbleIndex].physical.z, 1e-6f);
+    float2 offset = (point - center) / (2.0f * targetRadius);
+    result.maskedUV = float2(0.5f + offset.x, 0.5f - offset.y);
     return result;
 }
 
-fragment float4 nativeTechnicalFragment(ContourVertexOutput in [[stage_in]]) {
-    return float4(0.30, 0.71, 0.85, 1.0);
+vertex BodyVertexOutput nativeBodyVertex(
+    uint vertexID [[vertex_id]],
+    device const NativeRenderBodyVertex *vertices [[buffer(0)]],
+    constant float4 &viewport [[buffer(2)]],
+    device const RenderBody *bodies [[buffer(4)]],
+    device const NativeRenderMaterial *materials [[buffer(9)]]) {
+    BodyVertexOutput result;
+    NativeRenderBodyVertex source = vertices[vertexID];
+    NativeRenderMaterial material = materials[source.info.x];
+    result.materialColor = material.color;
+    result.materialOutline = material.outlineColor;
+    result.materialParameters = material.parameters;
+    result.materialUV = material.uv;
+    float2 world = source.local;
+    if (source.info.w != 0xFFFFFFFFu) {
+        RenderBody body = bodies[source.info.w];
+        // Bryła poza regionem bez zawinięcia jest usuwana w tym kroku; jak bańka, nie jest już rysowana.
+        if (body.flags.z == 1) {
+            result.position = float4(2, 2, 0, 1);
+            result.ringPosition = float2(0);
+            result.uv = float2(0);
+            result.ringStart = 0;
+            result.ringCount = 0;
+            return result;
+        }
+        world = nativeBodyPoint(nativeBodyFrame(body, source.weight), source.local);
+    }
+    float2 clip = nativeClip(world, viewport);
+    result.position = float4(clip.x, clip.y, 0, 1);
+    result.ringPosition = source.local;
+    result.uv = source.uv;
+    result.ringStart = source.info.y;
+    result.ringCount = source.info.z;
+    return result;
+}
+
+// Powiększenie bez wygładzania (kolory teksela zostają dokładne, bez mieszania z sąsiednim wierszem po zawinięciu),
+// pomniejszenie liniowe; adresowanie powtarzalne dla skali UV.
+constexpr sampler nativeTextureSampler(coord::normalized, address::repeat, mag_filter::nearest, min_filter::linear);
+
+// Kolor materiału (pomnożony przez teksel) albo obrysu w zapisie zgodnym z trybem mieszania: nieprzezroczysty ignoruje
+// alfę, pozostałe tryby zwracają kolor z alfą przemnożoną, więc potok składa `one / oneMinusSourceAlpha` (alfa) albo
+// `one / one` (addytywny). Tekstura jest z alfą przemnożoną (kontrakt `AssetRegistry.register(_:)`); materiał bez tekstury
+// dostaje białą teksturę 1×1.
+float4 nativeShade(NativeRenderMaterial material, bool outline, float4 texel) {
+    if (outline) {
+        float4 color = material.outlineColor;
+        if (uint(material.parameters.y) == 0) return float4(color.rgb, 1.0);
+        return float4(color.rgb * color.a, color.a);
+    }
+    float4 color = material.color;
+    if (uint(material.parameters.y) == 0) {
+        float3 straight = texel.a > 0.0f ? texel.rgb / texel.a : float3(0.0f);
+        return float4(color.rgb * straight, 1.0);
+    }
+    return float4(color.rgb * texel.rgb * color.a, color.a * texel.a);
+}
+
+fragment float4 nativeBubbleFragment(BubbleVertexOutput in [[stage_in]],
+    texture2d<float> texture [[texture(0)]]) {
+    NativeRenderMaterial material = {in.materialColor, in.materialOutline, in.materialParameters, in.materialUV};
+    bool outline = material.parameters.x > 0 && in.edgeDistance < material.parameters.x;
+    // Przesunięcie i skala UV materiału dotyczą tylko brył: tekstura bańki leży na kole o promieniu docelowym.
+    float4 texel;
+    if (material.parameters.z > 0.5f) {
+        // Pod maską poza kołem tekstury (kontur wystaje poza promień docelowy) zostaje sam kolor materiału.
+        texel = length(in.maskedUV - 0.5f) > 0.5f ? float4(1.0f) : texture.sample(nativeTextureSampler, in.maskedUV);
+    } else {
+        texel = texture.sample(nativeTextureSampler, in.attachedUV);
+    }
+    return nativeShade(material, outline, texel);
+}
+
+fragment float4 nativeBodyFragment(BodyVertexOutput in [[stage_in]],
+    device const float2 *rings [[buffer(1)]],
+    texture2d<float> texture [[texture(0)]]) {
+    NativeRenderMaterial material = {in.materialColor, in.materialOutline, in.materialParameters, in.materialUV};
+    bool outline = false;
+    // Znany koszt: pas obrysu liczony jest pętlą po całym pierścieniu konturu dla każdego fragmentu (O(fragmenty × punkty)),
+    // tylko dla materiałów z obrysem. Wystarcza przy małych pierścieniach brył; przy dużej liczbie punktów trzeba by
+    // zastąpić ją odległością liczoną w wierzchołkach albo siatką krawędzi.
+    if (material.parameters.x > 0 && in.ringCount > 1) {
+        float nearest = INFINITY;
+        for (uint i = 0; i < in.ringCount; ++i) {
+            float2 a = rings[in.ringStart + i], b = rings[in.ringStart + ((i + 1) % in.ringCount)];
+            float2 edge = b - a;
+            float t = clamp(dot(in.ringPosition - a, edge) / max(dot(edge, edge), 1e-12f), 0.0f, 1.0f);
+            nearest = min(nearest, distance(in.ringPosition, a + t * edge));
+        }
+        outline = nearest < material.parameters.x;
+    }
+    float4 texel = texture.sample(nativeTextureSampler, in.uv * material.uv.zw + material.uv.xy);
+    return nativeShade(material, outline, texel);
+}
+
+// Naklejka: czworokąt glifu albo obrazu w układzie kotwicy. Dla bańki kotwica i promień odniesienia (docelowy, `physical.z`:
+// stały, niezależny od chwilowej deformacji) idą z rekordu bańki w uchwycie, więc naklejka nie zna ich na CPU; dla bryły
+// z instancji. Bańka nie ma obrotu. Naklejka bańki jest
+// interpolowana t−1 → t jak sama bańka: kotwica i promień z rekordów obu stron, a decyzja o mieszaniu (jest strona t−1, ta sama
+// liczba próbek konturu, bańka nie zawinęła się w tym kroku) zapada tu i idzie do fragmentu.
+vertex DecalVertexOutput nativeDecalVertex(
+    uint vertexID [[vertex_id]],
+    device const NativeDecalVertex *vertices [[buffer(0)]],
+    device const NativeDecalInstance *instances [[buffer(1)]],
+    constant float4 &viewport [[buffer(2)]],
+    constant uint &stride [[buffer(3)]],
+    device const RenderBubble *bubbles [[buffer(4)]],
+    device const RenderBubble *previousBubbles [[buffer(5)]],
+    device const uint *counts [[buffer(6)]], device const uint *previousCounts [[buffer(7)]],
+    device const RenderBody *bodies [[buffer(8)]]) {
+    DecalVertexOutput result;
+    NativeDecalVertex source = vertices[vertexID];
+    NativeDecalInstance instance = instances[source.info.x];
+    float2 anchor;
+    float radius = instance.placement.z;
+    float cosine = 1.0f, sine = 0.0f;
+    result.color = instance.color;
+    result.bubble = instance.info.x;
+    result.mode = instance.info.y;
+    result.blend = 0;
+    result.previousBase = 0;
+    result.alpha = 1.0f;
+    result.uv = source.uv;
+    if (instance.info.x != 0xFFFFFFFFu) {
+        RenderBubble bubble = bubbles[instance.info.x];
+        if (bubble.publicFlags.w == 1) {
+            result.position = float4(2, 2, 0, 1);
+            result.worldPosition = float2(0);
+            result.anchor = float2(0);
+            result.radius = 0;
+            return result;
+        }
+        anchor = bubble.position.xy;
+        radius = bubble.physical.z;
+        uint previousIndex = instance.info.z;
+        uint count = min(counts[instance.info.x], stride);
+        if (previousIndex != 0xFFFFFFFFu && count > 2 && bubble.publicFlags.w != 2
+            && min(previousCounts[previousIndex], stride) == count) {
+            RenderBubble before = previousBubbles[previousIndex];
+            float alpha = instance.placement.w;
+            anchor = mix(before.position.xy, anchor, alpha);
+            radius = mix(before.physical.z, radius, alpha);
+            result.blend = 1;
+            result.previousBase = previousIndex * stride;
+            result.alpha = alpha;
+        }
+    } else {
+        // Bryła: kotwica (początek układu lokalnego) i obrót z rekordu, interpolowane razem z bryłą.
+        RenderBody body = bodies[instance.info.w];
+        if (body.flags.z == 1) {
+            result.position = float4(2, 2, 0, 1);
+            result.worldPosition = float2(0);
+            result.anchor = float2(0);
+            result.radius = 0;
+            return result;
+        }
+        float4 frame = nativeBodyFrame(body, instance.placement.x);
+        anchor = frame.xy;
+        cosine = frame.z;
+        sine = frame.w;
+    }
+    radius = max(radius, 1e-6f);
+    float2 offset = source.local * radius;
+    float2 world = anchor + float2(cosine * offset.x - sine * offset.y, sine * offset.x + cosine * offset.y);
+    float2 clip = nativeClip(world, viewport);
+    result.position = float4(clip.x, clip.y, 0, 1);
+    result.worldPosition = world;
+    result.anchor = anchor;
+    result.radius = radius;
+    return result;
+}
+
+// Obraz: powiększenie bez wygładzania (jak materiały), krawędź fragmentu tekstury nie miesza się z sąsiednim wierszem.
+constexpr sampler nativeDecalImageSampler(coord::normalized, address::clamp_to_edge, mag_filter::nearest, min_filter::linear);
+// Glify: pole odległości i pokrycie wymagają filtrowania liniowego.
+constexpr sampler nativeDecalGlyphSampler(coord::normalized, address::clamp_to_edge, filter::linear);
+
+// Przycięcie maską radialną: koło o promieniu odniesienia, a na bańce także kontur (promień konturu interpolowany między
+// dwiema sąsiednimi próbkami o stałych kątach 2π·i/n względem środka). Krawędź maski ma szerokość jednego piksela.
+// Kolor wychodzi z alfą przemnożoną (potok składa `one / oneMinusSourceAlpha`).
+fragment float4 nativeDecalFragment(DecalVertexOutput in [[stage_in]],
+    device const float2 *points [[buffer(0)]], device const uint *counts [[buffer(1)]],
+    constant uint &stride [[buffer(2)]], device const float2 *previousPoints [[buffer(3)]],
+    texture2d<float> texture [[texture(0)]]) {
+    float2 delta = in.worldPosition - in.anchor;
+    float distanceToAnchor = length(delta);
+    float pixel = max(fwidth(distanceToAnchor), 1e-6f);
+    float coverage = clamp((in.radius - distanceToAnchor) / pixel + 0.5f, 0.0f, 1.0f);
+    if (in.bubble != 0xFFFFFFFFu) {
+        uint count = min(counts[in.bubble], stride);
+        if (count > 2) {
+            float angle = atan2(delta.y, delta.x);
+            if (angle < 0) angle += 2.0f * M_PI_F;
+            float position = angle / (2.0f * M_PI_F) * float(count);
+            uint first = min(uint(position), count - 1);
+            float fraction = clamp(position - float(first), 0.0f, 1.0f);
+            uint base = in.bubble * stride;
+            uint second = (first + 1) % count;
+            float2 a = points[base + first], b = points[base + second];
+            // Interpolacja t−1 → t jak w `nativeBubbleVertex`: próbki konturu mieszane z tą samą wagą co kotwica.
+            if (in.blend == 1) {
+                a = mix(previousPoints[in.previousBase + first], a, in.alpha);
+                b = mix(previousPoints[in.previousBase + second], b, in.alpha);
+            }
+            float contour = mix(length(a - in.anchor), length(b - in.anchor), fraction);
+            coverage = min(coverage, clamp((contour - distanceToAnchor) / pixel + 0.5f, 0.0f, 1.0f));
+        }
+    }
+    if (coverage <= 0.0f) discard_fragment();
+    float4 color = in.color;
+    if (in.mode == 0) {
+        float4 texel = texture.sample(nativeDecalImageSampler, in.uv);
+        return float4(color.rgb * texel.rgb * color.a, color.a * texel.a) * coverage;
+    }
+    float value = texture.sample(nativeDecalGlyphSampler, in.uv).r;
+    float alpha = value;
+    if (in.mode == 2) {
+        // Pole odległości: 0,5 na krawędzi glifu, rampa o szerokości jednego piksela na ekranie w każdej skali.
+        float width = max(fwidth(value), 1e-5f);
+        alpha = clamp((value - 0.5f) / width + 0.5f, 0.0f, 1.0f);
+    }
+    return float4(color.rgb * color.a, color.a) * (alpha * coverage);
 }
