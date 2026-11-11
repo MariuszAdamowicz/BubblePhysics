@@ -245,6 +245,7 @@ final class CapacityMeasurementTests: XCTestCase {
         XCTAssertEqual(level.contourCPUReadbacks, report.contourCPUReadbacks)
         XCTAssertEqual(level.contactCandidateOverflow, report.contactCandidateOverflow)
         XCTAssertEqual(level.bubblesMatchedInEveryFrame, report.bubbleCountMismatchFrames == 0)
+        XCTAssertEqual(level.measuredFramesComplete, report.allSeriesComplete)
     }
 
     func testCapacityReportHasOneLevelLinePerLevelInTheDocumentedFormat() async throws {
@@ -414,6 +415,22 @@ final class CapacityMeasurementTests: XCTestCase {
         let level = Level(report, bubbleCount: 100, cooldownSeconds: 0, cooldownTimedOut: false)
         XCTAssertEqual(level.thermalWorst, .nominal)
         XCTAssertFalse(level.isValid)
+    }
+
+    /// Klatka, której `advance` zgłasza problem, ucina serię: raport nie ma pełnej próbki, a poziom jest nieważny.
+    func testRunWithAFailedFrameCutsTheSeriesAndGivesAnInvalidLevel() async throws {
+        let device = try device()
+        let spec = BenchmarkSceneSpec.capacity(bubbleCount: 100).addingStepTransaction { step in
+            step == 1 ? WorldTransaction().setKinematicDrive(self.triangleID, drive: .velocity(linear: [3e38, 3e38], angular: 3e38)) : nil
+        }
+        let report = try await PublicWorldStressBenchmark.run(device: device, spec: spec, renderSplit: false,
+            warmupFrames: 1, measuredFrames: 4, progress: { _, _ in })
+        XCTAssertGreaterThan(report.failedFrames, 0)
+        XCTAssertFalse(report.allSeriesComplete)
+        let level = Level(report, bubbleCount: 100, cooldownSeconds: 0, cooldownTimedOut: false)
+        XCTAssertFalse(level.measuredFramesComplete)
+        XCTAssertFalse(level.isValid)
+        XCTAssertTrue(level.text.contains("valid=0"), level.text)
     }
 
     func testRunReportsAllSeriesCompleteAndAShortRunLevelIsValid() async throws {

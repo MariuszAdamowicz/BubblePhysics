@@ -348,7 +348,7 @@ kernel void nativeValidateBubbleContainment(device NativeBubble *bubbles [[buffe
     uint pair [[thread_position_in_grid]]) {
     uint count = control.counts.x;
     // Kernel jest O(n²): host uruchamia count * count wątków, a naprawa zawierania (nativeSeparateAndGuardContainedBubbles) też przegląda
-    // wszystkie bańki. Iloczyn liczony w uint, więc host nie sprawdza go przed dispatchem; bezpieczny tylko dla count <= 65535
+    // wszystkie bańki. Iloczyn jest liczony w uint, a host go nie sprawdza; bezpieczne tylko dla count <= 65535
     // (przy kilkuset bańkach koszt jest pomijalny).
     if (pair >= count * count) return;
     uint i = pair / count, j = pair % count;

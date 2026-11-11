@@ -62,4 +62,30 @@ final class MotionCommandTests: XCTestCase {
         XCTAssertEqual(near, 0.05, accuracy: 0.01)
         XCTAssertEqual(far, 0.2, accuracy: 0.01)
     }
+
+    /// Napęd kinematyczny z NaN ma być odrzucony razem z transakcją, a świat idzie dalej: następny `advance` robi krok bez
+    /// problemu (wcześniej błąd wychodził dopiero w kroku i każdy kolejny `advance` odrzucał krok).
+    func testNonFiniteKinematicDriveRejectsTheTransactionAndTheWorldKeepsStepping() async throws {
+        let world = try BubbleWorld(configuration: WorldConfiguration(simulationRegion:
+            WorldRectangle(min: [-20,-20], max: [20,20])))
+        let id = ObjectID(rawValue: 1)
+        world.submit(try WorldTransaction()
+            .updatePhysicsMaterial(.init(rawValue: 1), material: PhysicsMaterial(kind: .rigid))
+            .updateRenderMaterial(.init(rawValue: 1), material: try RenderMaterial())
+            .add(.rigidBody(RigidBodyDescriptor(id: id, vertices: [[0, 0], [2, 0], [2, 2], [0, 2]], motionRole: .kinematic,
+                physicsMaterialID: .init(rawValue: 1), renderMaterialID: .init(rawValue: 1)))))
+        let first = await world.advance(by: 1.0 / 60)
+        XCTAssertEqual(first.stepIndex, 1)
+        let token = world.submit(WorldTransaction().setKinematicDrive(id, drive: .velocity(linear: [.nan, 0], angular: 0)))
+        let rejecting = await world.advance(by: 1.0 / 60)
+        XCTAssertTrue(rejecting.events.contains { event in
+            if case .transactionRejected(let rejected, _) = event { return rejected == token }
+            return false
+        }, "transakcja z NaN w napędzie jest odrzucona")
+        XCTAssertNil(world.diagnostics.lastAdvanceIssue)
+        let next = await world.advance(by: 1.0 / 60)
+        XCTAssertEqual(next.stepIndex, rejecting.stepIndex + 1, "świat nie stoi po odrzuconej transakcji")
+        XCTAssertGreaterThan(rejecting.stepIndex, first.stepIndex)
+        XCTAssertNil(world.diagnostics.lastAdvanceIssue)
+    }
 }

@@ -39,7 +39,7 @@ public struct PublicWorldStressReport: Sendable {
     /// Liczba klatek obu serii, w których świat nie miał oczekiwanej liczby baniek (tylko poziomy trybu pojemności).
     public internal(set) var bubbleCountMismatchFrames = 0
     /// Czy każda seria przebiegu zebrała dokładnie `measuredFrames` klatek mierzonych (nieudana klatka ucina serię).
-    public internal(set) var allSeriesComplete = true
+    package internal(set) var allSeriesComplete = true
     /// Najgorszy stan termiczny urządzenia z klatek mierzonych wszystkich serii.
     public internal(set) var worstThermalState: ProcessInfo.ThermalState = .nominal
     public let maximumMilliseconds: Double
@@ -993,6 +993,7 @@ public struct PublicWorldCapacityReport: Sendable {
         /// Czy w każdej klatce obu serii świat miał dokładnie `bubbleCount` baniek.
         public let bubblesMatchedInEveryFrame: Bool
         /// Czy obie serie zebrały pełną liczbę klatek mierzonych (seria ucięta nieudaną klatką liczy p95 z krótszej próbki).
+        /// Nie ma własnego pola w linii `level=`: ucięcie serii dziś zawsze towarzyszy `failed_frames > 0`.
         public let measuredFramesComplete: Bool
 
         /// Poziom jest ważny, gdy najgorszy stan termiczny to `nominal` albo `fair` oraz spełnione są zera poprawności
