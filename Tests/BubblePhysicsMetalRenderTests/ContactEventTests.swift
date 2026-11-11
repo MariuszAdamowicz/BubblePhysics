@@ -304,6 +304,26 @@ final class ContactEventTests: XCTestCase {
         XCTAssertTrue(ended.allSatisfy { B.isPair($0.0, $0.1, 1, floorID) })
     }
 
+    // Usunięcie wszystkich ciał z masą w jednym kroku (gałąź bez kroku GPU) nie zostawia starej historii kontaktów:
+    // ponownie dodana para o tych samych ID dostaje początek, a po rozłączeniu koniec.
+    func testReAddedPairAfterRemovingEveryMassiveBodyGetsBeganAgain() async throws {
+        let world = try world()
+        world.submit(try B.baseTransaction().add(floor())
+            .add(B.bubble(1, at: [150, 18.3], interest: .contact)))
+        let settled = await B.advance(world, steps: 30)
+        XCTAssertEqual(B.began(settled.events).count, 1)
+        world.submit(WorldTransaction().remove(ObjectID(rawValue: 1)).remove(ObjectID(rawValue: floorID)))
+        _ = await B.advance(world, steps: 2)
+        world.submit(try WorldTransaction().add(floor()).add(B.bubble(1, at: [150, 17.0], interest: .contact)))
+        let again = await B.advance(world, steps: 30)
+        XCTAssertEqual(B.began(again.events).filter { B.isPair($0.a, $0.b, 1, floorID) }.count, 1,
+            "ponownie dodana para o tych samych ID dostaje contactBegan")
+        world.submit(WorldTransaction().applyImpulse(to: ObjectID(rawValue: 1), impulse: [0, 300]))
+        let launched = await B.advance(world, steps: 20)
+        XCTAssertEqual(B.ended(launched.events).filter { B.isPair($0.0, $0.1, 1, floorID) }.count, 1,
+            "po odskoku para dostaje contactEnded")
+    }
+
     // P-B-14: scalenie bańki, która stykała się z trzecią, kończy ten kontakt w kroku scalenia.
     func testEndedGoesToThirdBubbleWhenItsPartnerIsMerged() async throws {
         let world = try world()
