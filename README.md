@@ -14,7 +14,7 @@
 | `BubblePhysicsBenchmarkSupport` | Wyłącznie moduły diagnostyczne (solvery referencyjne, historyczne eksperymenty). Nie są częścią API gry. |
 | `BubblePhysicsReferenceBench` | Runner benchmarków dla macOS z linii poleceń. |
 
-Produkty dla gry działają na backendzie `native-metal` (trwały stan na GPU, trwały cache kontaktów, solver XPBD/PBD Jacobi). Referencyjny solver CPU (`BubblePhysicsReference`) jest wyrocznią poprawności dla testów i benchmarków; nie jest fallbackiem `BubbleWorld` w czasie działania.
+Produkty dla gry działają na backendzie `native-metal` (trwały stan na GPU, trwały cache kontaktów, solver XPBD/PBD Jacobi). Referencyjny solver CPU (`BubblePhysicsReference`) jest wyrocznią poprawności dla testów i benchmarków; nie jest fallbackiem `BubbleWorld` w czasie działania. Na ścieżce gry nie ma `ReferenceWorld`, a pamięć kontaktów rośnie jak O(n·k) zamiast O(n²); kernele kontroli zawierania baniek pozostają O(n²), co jest pomijalne do kilkuset baniek.
 
 ## Szybki start
 
