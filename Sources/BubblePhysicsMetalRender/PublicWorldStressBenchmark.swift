@@ -36,6 +36,8 @@ public struct PublicWorldStressReport: Sendable {
     public internal(set) var gpuRenderDecalsEstimateMilliseconds: Double = 0
     /// Czy raport ma podział renderu (serie z samym czyszczeniem celu i bez naklejek); tylko scena akceptacyjna.
     public internal(set) var hasRenderSplit = false
+    /// Zaślepka: liczba klatek, w których świat nie miał oczekiwanej liczby baniek.
+    public internal(set) var bubbleCountMismatchFrames = 0
     public let maximumMilliseconds: Double
     public let guardCorrections: Int
     public let nonFiniteFrames: Int
@@ -338,6 +340,34 @@ public enum PublicWorldStressBenchmark {
             report.gpuRenderDecalsEstimateMilliseconds = max(0, p95(full.gpuMilliseconds) - p95(withoutDecals.gpuMilliseconds))
         }
         return report
+    }
+
+    /// Zaślepka: `run` ze specyfikacją sceny; ignoruje `spec` (zadanie 102).
+    package static func run(device: MTLDevice, spec: BenchmarkSceneSpec, renderSize: CGSize? = nil, renderSplit: Bool = true,
+                            thermalState: () -> ProcessInfo.ThermalState = { ProcessInfo.processInfo.thermalState },
+                            renderTargetObserver: ((MTLTexture) -> Void)? = nil,
+                            frameObserver: ((PublicWorldStressFrameSample) -> Void)? = nil,
+                            warmupFrames: Int, measuredFrames: Int,
+                            progress: @escaping @MainActor (Int, Int) -> Void) async throws -> PublicWorldStressReport {
+        try await run(device: device, scene: .stress300, renderSize: renderSize, renderTargetObserver: renderTargetObserver,
+                      frameObserver: frameObserver, warmupFrames: warmupFrames, measuredFrames: measuredFrames, progress: progress)
+    }
+
+    /// Zaślepka: pomiar pojemności z wartościami domyślnymi.
+    public static func measureCapacity(device: MTLDevice,
+                                       progress: @escaping @MainActor (PublicWorldCapacityProgress) -> Void = { _ in }) async throws
+        -> PublicWorldCapacityReport {
+        try await measureCapacity(device: device, levels: [100, 150, 200, 250, 300, 350, 400], warmupFrames: 30,
+                                  measuredFrames: 300, thermalState: { ProcessInfo.processInfo.thermalState },
+                                  clock: .system, cooldownLimit: 600, progress: progress)
+    }
+
+    /// Zaślepka: wariant `package` ze wstrzykniętymi poziomami, liczbą klatek, stanem termicznym, zegarem i limitem czekania.
+    package static func measureCapacity(device: MTLDevice, levels: [Int], warmupFrames: Int, measuredFrames: Int,
+                                        thermalState: () -> ProcessInfo.ThermalState, clock: CooldownClock, cooldownLimit: Double,
+                                        progress: @escaping @MainActor (PublicWorldCapacityProgress) -> Void = { _ in }) async throws
+        -> PublicWorldCapacityReport {
+        PublicWorldCapacityReport(deviceName: device.name, warmupFrames: warmupFrames, measuredFrames: measuredFrames, levels: [])
     }
 
     /// Świeży świat tej samej sceny z transakcją początkową, dla serii na identycznej fizyce.
@@ -691,6 +721,102 @@ package enum MixedScene {
         }
         return transaction
     }
+}
+
+/// Zaślepka (zadanie 101): specyfikacja sceny z poziomu pojemności; treść właściwa powstaje w zadaniu 102.
+package struct BenchmarkSceneSpec {
+    package let bubbleCount: Int
+    package static func capacity(bubbleCount: Int) -> BenchmarkSceneSpec { BenchmarkSceneSpec(bubbleCount: bubbleCount) }
+    private var scene: PublicWorldStressBenchmark.Scene { .stress(bubbleCount: bubbleCount) }
+    package var regionHeight: Float { scene.regionHeight }
+    package var renderSize: CGSize? { nil }
+    package func configuration() throws -> WorldConfiguration { try scene.configuration() }
+    @MainActor package func initialTransaction(assets: AssetRegistry) throws -> WorldTransaction {
+        try scene.initialTransaction(assets: assets)
+    }
+}
+
+/// Zaślepka: zegar schładzania z wstrzykniętym czasem i uśpieniem.
+package struct CooldownClock {
+    package var now: () -> Double
+    package var sleep: (Double) async throws -> Void
+    package static let system = CooldownClock(now: { ProcessInfo.processInfo.systemUptime }, sleep: { _ in })
+    package init(now: @escaping () -> Double, sleep: @escaping (Double) async throws -> Void) { self.now = now; self.sleep = sleep }
+}
+
+/// Zaślepka: czekanie na `nominal` przed poziomem pojemności.
+@MainActor package enum ThermalCooldown {
+    package static let pollIntervalSeconds = 5.0
+    package static func wait(thermalState: () -> ProcessInfo.ThermalState, clock: CooldownClock, limit: Double,
+                             onPoll: (Double, ProcessInfo.ThermalState) -> Void = { _, _ in }) async throws
+        -> (seconds: Double, timedOut: Bool) { (0, false) }
+}
+
+/// Zaślepka: postęp trybu pojemności.
+public struct PublicWorldCapacityProgress: Sendable {
+    public enum Phase: Sendable { case cooldown(seconds: Double, thermalState: ProcessInfo.ThermalState), measuring(done: Int, total: Int) }
+    public let bubbleCount: Int
+    public let levelIndex: Int
+    public let levelCount: Int
+    public let phase: Phase
+}
+
+/// Zaślepka: raport trybu pojemności.
+public struct PublicWorldCapacityReport: Sendable {
+    public struct Level: Sendable {
+        public let bubbleCount: Int
+        public let cooldownSeconds: Double
+        public let cooldownTimedOut: Bool
+        public let thermalWorst: ProcessInfo.ThermalState
+        public var isValid: Bool { false }
+        public let p95Milliseconds: Double
+        public let hostNonGPUP95Milliseconds: Double
+        public let gpuPhysicsP95Milliseconds: Double
+        public let gpuRenderEstimateMilliseconds: Double
+        public let maximumCandidatesPerObject: Int
+        public let candidateLimit: Int
+        public let failedFrames: Int
+        public let nonFiniteFrames: Int
+        public let contourCPUReadbacks: Int
+        public let contactCandidateOverflow: Int
+        public let bubblesMatchedInEveryFrame: Bool
+        public var passesGate: Bool { false }
+        public var text: String { "" }
+        package init(bubbleCount: Int, cooldownSeconds: Double = 0, cooldownTimedOut: Bool = false,
+                     thermalWorst: ProcessInfo.ThermalState = .nominal, p95Milliseconds: Double = 0,
+                     hostNonGPUP95Milliseconds: Double = 0, gpuPhysicsP95Milliseconds: Double = 0,
+                     gpuRenderEstimateMilliseconds: Double = 0, maximumCandidatesPerObject: Int = 0, candidateLimit: Int = 128,
+                     failedFrames: Int = 0, nonFiniteFrames: Int = 0, contourCPUReadbacks: Int = 0,
+                     contactCandidateOverflow: Int = 0, bubblesMatchedInEveryFrame: Bool = true) {
+            self.bubbleCount = bubbleCount; self.cooldownSeconds = cooldownSeconds; self.cooldownTimedOut = cooldownTimedOut
+            self.thermalWorst = thermalWorst; self.p95Milliseconds = p95Milliseconds
+            self.hostNonGPUP95Milliseconds = hostNonGPUP95Milliseconds; self.gpuPhysicsP95Milliseconds = gpuPhysicsP95Milliseconds
+            self.gpuRenderEstimateMilliseconds = gpuRenderEstimateMilliseconds
+            self.maximumCandidatesPerObject = maximumCandidatesPerObject; self.candidateLimit = candidateLimit
+            self.failedFrames = failedFrames; self.nonFiniteFrames = nonFiniteFrames
+            self.contourCPUReadbacks = contourCPUReadbacks; self.contactCandidateOverflow = contactCandidateOverflow
+            self.bubblesMatchedInEveryFrame = bubblesMatchedInEveryFrame
+        }
+    }
+    public enum Capacity: Equatable, Sendable {
+        case bubbles(Int), atLeastLargest(Int), belowSmallest(Int), undecidedThermal
+        public var reportText: String { "" }
+    }
+    public let deviceName: String
+    public let warmupFrames: Int
+    public let measuredFrames: Int
+    public let levels: [Level]
+    public let capacity: Capacity
+    public var text: String { "" }
+    package init(deviceName: String, warmupFrames: Int, measuredFrames: Int, levels: [Level]) {
+        self.deviceName = deviceName; self.warmupFrames = warmupFrames; self.measuredFrames = measuredFrames
+        self.levels = levels; self.capacity = .undecidedThermal
+    }
+}
+
+/// Zaślepka: reguła pojemności na poziomach.
+package enum CapacityRule {
+    package static func evaluate(_ levels: [PublicWorldCapacityReport.Level]) -> PublicWorldCapacityReport.Capacity { .undecidedThermal }
 }
 
 package enum StressBenchmarkError: Error {
