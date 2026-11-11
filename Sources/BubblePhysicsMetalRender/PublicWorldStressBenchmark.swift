@@ -38,6 +38,8 @@ public struct PublicWorldStressReport: Sendable {
     public internal(set) var hasRenderSplit = false
     /// Liczba klatek obu serii, w których świat nie miał oczekiwanej liczby baniek (tylko poziomy trybu pojemności).
     public internal(set) var bubbleCountMismatchFrames = 0
+    /// Czy każda seria przebiegu zebrała dokładnie `measuredFrames` klatek mierzonych (nieudana klatka ucina serię).
+    public internal(set) var allSeriesComplete = true
     /// Najgorszy stan termiczny urządzenia z klatek mierzonych wszystkich serii.
     public internal(set) var worstThermalState: ProcessInfo.ThermalState = .nominal
     public let maximumMilliseconds: Double
@@ -366,6 +368,7 @@ public enum PublicWorldStressBenchmark {
             maximumCandidatesPerObject: allSeries.map(\.maximumCandidates).max() ?? 0,
             candidateLimit: BubbleWorld.contactCandidateLimit, gateMilliseconds: spec.gateMilliseconds)
         report.bubbleCountMismatchFrames = allSeries.reduce(0) { $0 + $1.bubbleCountMismatchFrames }
+        report.allSeriesComplete = allSeries.allSatisfy { $0.frameMilliseconds.count == measuredFrames }
         report.worstThermalState = allSeries.map(\.worstThermalState).max { $0.rawValue < $1.rawValue } ?? .nominal
         if let clear, let withoutDecals {
             report.hasRenderSplit = true
@@ -989,9 +992,17 @@ public struct PublicWorldCapacityReport: Sendable {
         public let contactCandidateOverflow: Int
         /// Czy w każdej klatce obu serii świat miał dokładnie `bubbleCount` baniek.
         public let bubblesMatchedInEveryFrame: Bool
+        /// Czy obie serie zebrały pełną liczbę klatek mierzonych (seria ucięta nieudaną klatką liczy p95 z krótszej próbki).
+        public let measuredFramesComplete: Bool
 
-        /// Poziom jest ważny, gdy najgorszy stan termiczny to `nominal` albo `fair`.
-        public var isValid: Bool { thermalWorst == .nominal || thermalWorst == .fair }
+        /// Poziom jest ważny, gdy najgorszy stan termiczny to `nominal` albo `fair` oraz spełnione są zera poprawności
+        /// (CD-D-30): brak nieudanych klatek, klatek z wartościami nieskończonymi, odczytów konturów i przepełnień
+        /// kandydatów kontaktu, n baniek w każdej klatce i pełna liczba klatek mierzonych w obu seriach.
+        public var isValid: Bool {
+            (thermalWorst == .nominal || thermalWorst == .fair)
+                && failedFrames == 0 && nonFiniteFrames == 0 && contourCPUReadbacks == 0 && contactCandidateOverflow == 0
+                && bubblesMatchedInEveryFrame && measuredFramesComplete
+        }
         /// Czy p95 pełnej klatki mieści się w bramce 60 FPS.
         public var passesGate: Bool { p95Milliseconds <= PublicWorldStressBenchmark.acceptanceGateMilliseconds }
 
@@ -1014,7 +1025,7 @@ public struct PublicWorldCapacityReport: Sendable {
                      gpuRenderEstimateMilliseconds: Double = 0, maximumCandidatesPerObject: Int = 0,
                      candidateLimit: Int = 128, failedFrames: Int = 0, nonFiniteFrames: Int = 0,
                      contourCPUReadbacks: Int = 0, contactCandidateOverflow: Int = 0,
-                     bubblesMatchedInEveryFrame: Bool = true) {
+                     bubblesMatchedInEveryFrame: Bool = true, measuredFramesComplete: Bool = true) {
             self.bubbleCount = bubbleCount; self.cooldownSeconds = cooldownSeconds; self.cooldownTimedOut = cooldownTimedOut
             self.thermalWorst = thermalWorst; self.p95Milliseconds = p95Milliseconds
             self.hostNonGPUP95Milliseconds = hostNonGPUP95Milliseconds
@@ -1024,6 +1035,7 @@ public struct PublicWorldCapacityReport: Sendable {
             self.failedFrames = failedFrames; self.nonFiniteFrames = nonFiniteFrames
             self.contourCPUReadbacks = contourCPUReadbacks; self.contactCandidateOverflow = contactCandidateOverflow
             self.bubblesMatchedInEveryFrame = bubblesMatchedInEveryFrame
+            self.measuredFramesComplete = measuredFramesComplete
         }
 
         /// Poziom z raportu przebiegu `run` (obie serie zsumowane) i czasu czekania przed nim.
@@ -1037,7 +1049,8 @@ public struct PublicWorldCapacityReport: Sendable {
                       failedFrames: report.failedFrames, nonFiniteFrames: report.nonFiniteFrames,
                       contourCPUReadbacks: report.contourCPUReadbacks,
                       contactCandidateOverflow: report.contactCandidateOverflow,
-                      bubblesMatchedInEveryFrame: report.bubbleCountMismatchFrames == 0)
+                      bubblesMatchedInEveryFrame: report.bubbleCountMismatchFrames == 0,
+                      measuredFramesComplete: report.allSeriesComplete)
         }
     }
 
@@ -1049,7 +1062,7 @@ public struct PublicWorldCapacityReport: Sendable {
         case atLeastLargest(Int)
         /// Nie zdaje najmniejszy poziom; wartość to on.
         case belowSmallest(Int)
-        /// Poziom z warunku reguły jest nieważny (termika), pomiar trzeba powtórzyć.
+        /// Poziom z warunku reguły jest nieważny (termika albo naruszenie zer poprawności), pomiar trzeba powtórzyć.
         case undecidedThermal
 
         /// Wartość linii `capacity=`: liczba, `>=<największy>`, `<<najmniejszy>` albo `undecided_thermal`.
@@ -1087,7 +1100,7 @@ public struct PublicWorldCapacityReport: Sendable {
 }
 
 /// Reguła pojemności: największy poziom, przy którym p95 pełnej klatki mieści się w bramce na nim i na wszystkich niższych.
-/// Wszystkie te poziomy i pierwszy niezdający muszą być ważne, inaczej wynik jest nierozstrzygnięty (termika). Gdy zdają
+/// Wszystkie te poziomy i pierwszy niezdający muszą być ważne (termika i zera poprawności), inaczej wynik jest nierozstrzygnięty. Gdy zdają
 /// wszystkie, pojemność to „≥ największy” (pod warunkiem ważności wszystkich), a gdy nie zdaje najmniejszy, „< najmniejszy”.
 /// Poziomy powyżej pierwszego niezdającego nie wpływają na wynik, także nieważne.
 package enum CapacityRule {

@@ -388,6 +388,55 @@ final class CapacityMeasurementTests: XCTestCase {
         XCTAssertFalse(level.isValid)
     }
 
+    // MARK: - CD-D-30: zera poprawności są twardym warunkiem ważności poziomu
+
+    func testLevelWithAnyNonzeroCorrectnessCounterIsInvalidEvenWhenThermalStateIsNominal() {
+        XCTAssertTrue(Level(bubbleCount: 100).isValid, "poziom bez naruszeń jest ważny")
+        let broken: [(String, Level)] = [
+            ("failed_frames", Level(bubbleCount: 100, failedFrames: 1)),
+            ("non_finite_frames", Level(bubbleCount: 100, nonFiniteFrames: 1)),
+            ("contour_cpu_readbacks", Level(bubbleCount: 100, contourCPUReadbacks: 1)),
+            ("contact_candidate_overflow", Level(bubbleCount: 100, contactCandidateOverflow: 1)),
+            ("bubbles", Level(bubbleCount: 100, bubblesMatchedInEveryFrame: false)),
+            ("measured frames", Level(bubbleCount: 100, measuredFramesComplete: false)),
+        ]
+        for (name, level) in broken {
+            XCTAssertEqual(level.thermalWorst, .nominal)
+            XCTAssertFalse(level.isValid, "\(name) różne od zera musi unieważnić poziom")
+            XCTAssertTrue(level.text.contains("valid=0"), level.text)
+        }
+    }
+
+    func testRunWithAWorldLosingABubbleGivesAnInvalidLevel() async throws {
+        let device = try device()
+        let report = try await PublicWorldStressBenchmark.run(device: device, spec: specLosingABubble(), renderSplit: false,
+            warmupFrames: 1, measuredFrames: 2, progress: { _, _ in })
+        let level = Level(report, bubbleCount: 100, cooldownSeconds: 0, cooldownTimedOut: false)
+        XCTAssertEqual(level.thermalWorst, .nominal)
+        XCTAssertFalse(level.isValid)
+    }
+
+    func testRunReportsAllSeriesCompleteAndAShortRunLevelIsValid() async throws {
+        let device = try device()
+        let report = try await PublicWorldStressBenchmark.run(device: device, spec: .capacity(bubbleCount: 100),
+            renderSplit: false, warmupFrames: 1, measuredFrames: 3, progress: { _, _ in })
+        XCTAssertTrue(report.allSeriesComplete)
+        XCTAssertTrue(Level(report, bubbleCount: 100, cooldownSeconds: 0, cooldownTimedOut: false).isValid)
+    }
+
+    func testCapacityIsUndecidedWhenALevelAtOrBelowTheFirstFailingOneHasACorrectnessViolation() {
+        // Zdają 100–250, nie zdaje 300; poziom 200 (poniżej) i 300 (pierwszy niezdający) z licznikiem ≠ 0 są nieważne.
+        var below = levels(passing: [100, 150, 200, 250])
+        below[2] = Level(bubbleCount: 200, p95Milliseconds: 12, failedFrames: 1)
+        XCTAssertEqual(CapacityRule.evaluate(below), .undecidedThermal)
+        var first = levels(passing: [100, 150, 200, 250])
+        first[4] = Level(bubbleCount: 300, p95Milliseconds: 20, contactCandidateOverflow: 2)
+        XCTAssertEqual(CapacityRule.evaluate(first), .undecidedThermal)
+        var all = levels(passing: Set(levelCounts))
+        all[6] = Level(bubbleCount: 400, p95Milliseconds: 12, nonFiniteFrames: 1)
+        XCTAssertEqual(CapacityRule.evaluate(all), .undecidedThermal, "zdają wszystkie, ale 400 ma naruszenie")
+    }
+
     // MARK: - P-B-96: reguła pojemności
 
     private func levels(passing: Set<Int>, invalid: Set<Int> = [], counts: [Int]? = nil) -> [Level] {
