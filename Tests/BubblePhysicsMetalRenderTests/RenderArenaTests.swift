@@ -116,6 +116,26 @@ final class RenderArenaTests: XCTestCase {
         try await assertPool(scene, 3, "pula nadal ≤ 3")
     }
 
+    /// Klatka większa niż bufor w puli dostaje nowy, większy bufor, a za mały wolny bufor jest zwalniany.
+    func testLargerFrameAllocatesALargerBufferAndDropsTheTooSmallOneFromThePool() async throws {
+        let scene = try await makeScene()
+        try await scene.render()
+        try await assertPool(scene, 1, "mała klatka oddała bufor")
+        var transaction = WorldTransaction()
+        for index in 0..<400 {
+            transaction = try transaction.add(B.box(UInt64(100 + index), at: [Float(index % 20) - 10, Float(index / 20) - 10],
+                half: [0.2, 0.2], filter: RenderTestScene.ghost, render: RenderMaterialID(rawValue: 10)))
+        }
+        scene.world.submit(transaction)
+        await scene.step()
+        try await scene.render()
+        XCTAssertEqual(scene.renderer.arenaAllocationCount, 2, "duża klatka nie mieści się w małym buforze z puli")
+        try await assertPool(scene, 1, "mały bufor zwolniony, duży wrócił do puli")
+        try await scene.render()
+        XCTAssertEqual(scene.renderer.arenaAllocationCount, 2, "kolejna duża klatka bierze duży bufor z puli")
+        try await assertPool(scene, 1, "pula nadal ma jeden bufor")
+    }
+
     func testFrameWithoutObjectsAllocatesNoArena() async throws {
         let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
         let scene = try RenderTestScene(device: device)

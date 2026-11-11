@@ -3,6 +3,7 @@ import BubblePhysicsAssets
 import BubblePhysicsModel
 import Metal
 import BubblePhysicsNativeMetal
+import os
 import simd
 
 public enum BubblePhysicsMetalRenderError: Error {
@@ -33,12 +34,17 @@ public final class BubblePhysicsMetalRender {
     package private(set) var lastDrawCallCount = 0
     /// Liczba przydzielonych dotąd buforów areny (szew testów puli: kolejne klatki nie przydzielają nowych).
     package private(set) var arenaAllocationCount = 0
+    /// Wolne bufory areny. Bufor wraca do puli w `addCompletedHandler` swojego bufora poleceń, czyli na wątku Metala, a
+    /// renderer żyje na `MainActor`, więc pula stoi pod `OSAllocatedUnfairLock` (iOS 16; `Mutex` wymaga iOS 18).
+    private let arenaPool = ArenaPool()
     /// Liczba wolnych buforów areny w puli.
-    package var arenaPoolCount: Int { 0 }
+    package var arenaPoolCount: Int { arenaPool.count }
     /// Wyłącza rysowanie naklejek (szew benchmarku: podział kosztu renderu na część naklejek i resztę); domyślnie włączone.
     package var drawsDecals = true
     /// Zakres bufora pomocniczego klatki jest wyrównany, bo `setVertexBuffer` wymaga wyrównanego przesunięcia.
     private static let arenaAlignment = 256
+    /// Rozmiar nowego bufora areny jest zaokrąglany w górę do wielokrotności tej wartości.
+    private static let arenaGranularity = 64 * 1024
 
     /// Rejestr musi należeć do urządzenia renderera, a przy kodowaniu do tego samego świata (`world.assets`).
     public init(device: MTLDevice, assets: AssetRegistry) throws {
@@ -310,7 +316,7 @@ public final class BubblePhysicsMetalRender {
         let instances: Int, materials: Int, vertices: Int, rings: Int, decalInstances: Int, decalVertices: Int
     }
 
-    /// Jeden bufor współdzielony na klatkę z czterema blokami; żyje do końca bufora poleceń.
+    /// Jeden bufor na klatkę z sześcioma blokami; należy do klatki do ukończenia jej bufora poleceń, potem wraca do puli.
     private func makeArena(_ frame: FrameData, commandBuffer: MTLCommandBuffer) throws -> Arena {
         func aligned(_ value: Int) -> Int { (value + Self.arenaAlignment - 1) / Self.arenaAlignment * Self.arenaAlignment }
         let instances = 0
@@ -322,12 +328,20 @@ public final class BubblePhysicsMetalRender {
         let decalInstances = aligned(rings + max(frame.rings.count, 1) * MemoryLayout<SIMD2<Float>>.stride)
         let decalVertices = aligned(decalInstances + max(frame.decalInstances.count, 1) * MemoryLayout<NativeDecalInstance>.stride)
         let length = aligned(decalVertices + max(frame.decalVertices.count, 1) * MemoryLayout<NativeDecalVertex>.stride)
-        // Bufor jest przydzielany co klatkę (zawartość zależy od klatki i musi przeżyć jej bufor poleceń); pierścień
-        // buforów byłby optymalizacją, której ta klatka jeszcze nie wymaga.
-        guard let buffer = device.makeBuffer(length: length, options: .storageModeShared) else {
-            throw BubblePhysicsMetalRenderError.bufferAllocationFailed
+        // Bufor z puli albo nowy, gdy żaden wolny nie jest dość duży. Bufor poleceń bez commit nigdy nie odda bufora, więc
+        // pula bez wolnego bufora przydziela nowy zamiast czekać.
+        let buffer: MTLBuffer
+        if let pooled = arenaPool.take(minimumLength: length) {
+            buffer = pooled
+        } else {
+            // Zaokrąglenie w górę do 64 KiB, żeby drobna zmiana rozmiaru klatki nie wymuszała nowego przydziału.
+            let capacity = (length + Self.arenaGranularity - 1) / Self.arenaGranularity * Self.arenaGranularity
+            guard let allocated = device.makeBuffer(length: capacity, options: .storageModeShared) else {
+                throw BubblePhysicsMetalRenderError.bufferAllocationFailed
+            }
+            buffer = allocated
+            arenaAllocationCount += 1
         }
-        arenaAllocationCount += 1
         func copy<T>(_ values: [T], to offset: Int) {
             values.withUnsafeBytes { bytes in
                 guard let base = bytes.baseAddress else { return }
@@ -338,7 +352,9 @@ public final class BubblePhysicsMetalRender {
         copy(frame.vertices, to: vertices); copy(frame.rings, to: rings)
         copy(frame.decalInstances, to: decalInstances); copy(frame.decalVertices, to: decalVertices)
         let retained = RetainedFrameBuffer(buffer)
-        commandBuffer.addCompletedHandler { _ in withExtendedLifetime(retained) {} }
+        let pool = arenaPool
+        // Uchwyt trzyma bufor do końca bufora poleceń i oddaje go do puli (wątek Metala).
+        commandBuffer.addCompletedHandler { _ in pool.give(retained.buffer) }
         return Arena(buffer: buffer, instances: instances, materials: materials, vertices: vertices, rings: rings,
                      decalInstances: decalInstances, decalVertices: decalVertices)
     }
@@ -399,4 +415,33 @@ public final class BubblePhysicsMetalRender {
 private struct RetainedFrameBuffer: @unchecked Sendable {
     let buffer: MTLBuffer
     init(_ buffer: MTLBuffer) { self.buffer = buffer }
+}
+
+/// Pula wolnych buforów areny, najwyżej `limit` naraz. Dostęp z `MainActor` (pobranie) i z wątku Metala (oddanie).
+private final class ArenaPool: @unchecked Sendable {
+    static let limit = 3
+    private struct Storage: @unchecked Sendable { var free: [MTLBuffer] = [] }
+    private let storage = OSAllocatedUnfairLock(initialState: Storage())
+
+    var count: Int { storage.withLock { $0.free.count } }
+
+    /// Najmniejszy wolny bufor o długości co najmniej `minimumLength`, usunięty z puli. Wolne bufory za małe na tę klatkę
+    /// są zwalniane, bo następny przydział będzie od nich większy.
+    func take(minimumLength: Int) -> MTLBuffer? {
+        storage.withLock { storage in
+            guard let index = storage.free.indices.filter({ storage.free[$0].length >= minimumLength })
+                .min(by: { storage.free[$0].length < storage.free[$1].length }) else {
+                storage.free.removeAll()
+                return nil
+            }
+            let taken = storage.free.remove(at: index)
+            storage.free.removeAll { $0.length < minimumLength }
+            return taken
+        }
+    }
+
+    /// Oddany bufor, o ile pula nie ma już `limit` wolnych; nadmiarowy jest zwalniany.
+    func give(_ buffer: MTLBuffer) {
+        storage.withLock { if $0.free.count < Self.limit { $0.free.append(buffer) } }
+    }
 }
