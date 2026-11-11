@@ -285,6 +285,13 @@ private struct StagingContext {
             try apply(.setMotion(id, .motorDriven))
             state.objects[id]?.motorDrive = drive
         case .setKinematicDrive(let id, let drive):
+            switch drive {
+            case .velocity(let linear, let angular):
+                try requireFinite(linear, "kinematicDrive.linear"); try requireFinite(angular, "kinematicDrive.angular")
+            case .target(let position, let rotation):
+                try requireFinite(position, "kinematicDrive.position"); try requireFinite(rotation, "kinematicDrive.rotation")
+            case .path: break // `PathDrive.init` już sprawdza punkty i prędkość.
+            }
             var existing = try object(id)
             guard existing.motionRole == .kinematic else { throw TransactionRejectionReason.incompatibleMotionRole(id) }
             existing.kinematicDrive = drive

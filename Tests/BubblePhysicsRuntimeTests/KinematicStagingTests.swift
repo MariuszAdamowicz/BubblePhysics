@@ -74,4 +74,22 @@ final class KinematicStagingTests: XCTestCase {
         let dynamic = try TransactionStager.stage(WorldTransaction().setMotion(id(2), role: .dynamic), against: seeded).state
         XCTAssertNil(dynamic.objects[id(2)]?.kinematicDrive)
     }
+
+    /// Napęd z NaN albo ∞ ma być odrzucony przy wejściu transakcji (jak siła globalna i impuls), a stan zostaje nietknięty;
+    /// inaczej błąd wychodzi dopiero w kroku i każdy kolejny `advance` odrzuca krok.
+    func testNonFiniteKinematicDriveIsRejectedAtStagingAndLeavesStateUntouched() throws {
+        let seeded = try TransactionStager.stage(resources().add(.rigidBody(box(2, role: .kinematic))), against: state()).state
+        let cases: [(KinematicDrive, String)] = [
+            (.velocity(linear: [.nan, 0], angular: 0), "kinematicDrive.linear"),
+            (.velocity(linear: [0, .infinity], angular: 0), "kinematicDrive.linear"),
+            (.velocity(linear: [1, 0], angular: .nan), "kinematicDrive.angular"),
+            (.target(position: [.infinity, 0], rotation: 0), "kinematicDrive.position"),
+            (.target(position: [0, 1], rotation: -.infinity), "kinematicDrive.rotation"),
+        ]
+        for (drive, name) in cases {
+            assertRejected(WorldTransaction().setKinematicDrive(id(2), drive: drive), against: seeded, index: 0,
+                           reason: .invalidValue(.nonFiniteValue(name)))
+        }
+        XCTAssertNil(seeded.objects[id(2)]?.kinematicDrive)
+    }
 }
