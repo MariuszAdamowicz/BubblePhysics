@@ -31,7 +31,7 @@ Fizyka GPU `8,0262 ms` przekracza próg `6,0 ms` wskazany w zadaniu 98: plan prz
 
 ## Weryfikacja prognozy i decyzja wykonalności renderu (zadanie 98, agent)
 
-Weryfikacja prognozy na Macu (`swift run -c release BubblePhysicsPerfGuard --scene acceptance --check-prediction <kopia tego raportu spoza drzewa>`), w tymczasowym detached worktree na mierzonym commicie `c02571a` (kod równy `3c51d19`; zmiany po nim dotyczą tylko dokumentacji), z kalibracją z punktu kontrolnego 8 (`cpu` 5,853, `physics` 5,155), czyli sprzed tego pomiaru. Obciążenie (`uptime`) przed przebiegiem: load averages 0,83 2,86 4,83, po: 1,59 2,77 4,69:
+Weryfikacja prognozy na Macu (`swift run -c release BubblePhysicsPerfGuard --scene acceptance --check-prediction <kopia tego raportu spoza drzewa>`), w tymczasowym detached worktree na mierzonym commicie `c02571a` (kod równy `3c51d19`; zmiany po nim dotyczą tylko dokumentacji), z kalibracją z punktu kontrolnego 8 (`cpu` 5,853, `physics` 5,155), czyli sprzed tego pomiaru. Obciążenie (`uptime`) przed przebiegiem: load averages 0,83 2,86 4,83, po: 1,59 2,77 4,69. Średnie 5- i 15-minutowe (2,86 i 4,83) przekraczają próg ≤ 2 z planu, więc przebieg nie spełnił warunku bezczynnej maszyny (odstępstwo, jak wcześniejsze wiersze 113 i 122):
 
 ```text
 PREDICT iphone-x acceptance: p95=18.7811 cpu=6.6275 physics=5.8229 render=6.3307 target=15.00 gate=16.67
@@ -49,7 +49,7 @@ Błąd łączny -8,7% mieści się w limicie 10%, ale rozkład po składowych (b
 
 Kalibracja CPU z punktu kontrolnego 8 trafia teraz w granicach 2,4%. Składowa fizyki jest zaniżona o 2,20 ms: na Macu fizyka GPU spadła z 1,6434 do 1,1303 ms (-31%), a na iPhonie X tylko z 8,4717 do 8,0262 ms (-5%). Zysk z poprawek etapu 9 na Macu prawie nie przekłada się więc na A11, a rzeczywisty stosunek fizyki iPhone/Mac to około 7,10 zamiast skalibrowanego 5,16. Błąd łączny -1,79 ms (-8,7%) to niemal w całości niedobór fizyki (-2,20 ms); CPU (+0,16 ms) i render (-0,04 ms) go prawie nie zmieniają, a łączny p95 klatki nie jest sumą p95 składowych (różnica 0,3 ms).
 
-Nowa kalibracja z tego raportu (`--calibrate` w tymczasowym detached worktree na `c02571a`, kopia raportu spoza drzewa; `docs/benchmarks/iphone-x-calibration.json`): `ratios.cpu` 5,968, `ratios.physics` 7,101; składowe Maca: przygotowanie 0,1688, kodowanie 0,3521, publikacja 0,3029 ms.
+Nowa kalibracja z tego raportu (`--calibrate` w tymczasowym detached worktree na `c02571a`, kopia raportu spoza drzewa; `docs/benchmarks/iphone-x-calibration.json`): `ratios.cpu` 5,968, `ratios.physics` 7,101; składowe Maca zapisane w kalibracji: przygotowanie 0,1688, kodowanie 0,3521, publikacja 0,3029 ms, `host_non_gpu` 1,0844 ms, `gpu_physics` 1,1303 ms (`gpu` 1,4128 ms, oczekiwanie 1,6868 ms). Obciążenie (`uptime`) tego przebiegu oraz linie `PASS`/`FAIL` i `STAGES` nie zostały zapisane. Zakłócony przebieg może zaniżyć `ratios.physics` (powtórka kontrolna pod obciążeniem dała 5,157 zamiast około 7,1 na spokojnej maszynie); spokojna powtórka kontrolna dała `ratios.cpu` 5,856 i `ratios.physics` 7,131, zgodnie z zapisanymi wartościami.
 
 ### Decyzja wykonalności renderu
 
@@ -68,5 +68,7 @@ Decyzja: budżet renderu 4,0 ms jest wykonalny według kryterium P-B-87 (nie jes
 | `host_encoding_p95_ms` | 2,0140 ms | < 2,42 ms | spełniony |
 | `gpu_render_clear_estimate_ms` | 0,9313 ms | < 4,0 ms | spełniony |
 | cięcie renderu ≤ 50% części kandydatów | 43,6% | ≤ 50% | spełniony |
+
+Z nową kalibracją (`ratios.cpu` 5,968, `ratios.physics` 7,101) strażnik na HEAD prognozuje już fizykę GPU ≈ 8,02 ms i CPU ≈ 6,67 ms (`--check-prediction` na HEAD: `PREDICT p95=21.0629 cpu=6.6718 physics=8.0176`, błąd +2,4%, PASS), więc oba budżety 6,0 ms są niespełnione już w prognozie. Ponowny przebieg `--scene acceptance` na HEAD dał `PREDICT p95=20.9304 cpu=6.5535 physics=8.0034` (load averages 1,96 1,77 2,76 przed przebiegiem, 15-minutowa powyżej 2, więc orientacyjnie), a wcześniejsze dwa przebiegi pod nieco większym obciążeniem cpu 6,71–7,21 i physics 7,89–7,99.
 
 Dla odniesienia: przy fizyce 6,0 ms i renderze 4,0 ms GPU miałoby 10,0 ms, a przy CPU 6,47 ms daje to około 16,5 ms przy bramce 16,67 ms, czyli bez zapasu. Zgodnie z decyzją właściciela agent zapisał dane zadania 98 i na tym zatrzymał etap 9; zadania 99–102 i optymalizacje czekają na jego decyzję.
