@@ -1607,6 +1607,17 @@ Każde `verify` uruchamia się z katalogu głównego repozytorium w `zsh` albo `
     # kontrola: ten sam strażnik na 7a832bc o 15:07 (na nim zadanie 104 o ok. 14:30 dało PASS +0,1…+3,4%): FAIL +14,4…+68,5%
     # → spowolnienie maszyny po softwareupdated (ok. 150% CPU o 14:53), nie kodu; strażnik do powtórzenia na bezczynnej maszynie
     base=a9901838 (zadanie 99), git diff base..HEAD na wymienionych plikach niepusty
+    # powtórzenie 2026-11-11 na HEAD c31003a (kod jak w c68afd0), start 16:38 przy obciążeniu 1,99 (1 min)
+    $ swift test --filter 'AcceptanceEquivalenceTests|AcceptanceRenderEquivalenceTests|PublishedStateDeterminismTests' > .build/t100.txt
+    Executed 9 tests, with 0 failures (0 unexpected) in 20.825 (20.828) seconds   (exit=0, bez 'skipped')
+    $ swift run -c release BubblePhysicsPerfGuard > .build/guard-all.txt   (exit=0)
+    PASS stress-300: p95 2.0268 ms, punkt odniesienia 1.9634 ms, limit 2.1598 ms (+3.2%)
+    PASS mixed: p95 3.8127 ms, punkt odniesienia 3.7942 ms, limit 4.1736 ms (+0.5%)
+    PASS decals: p95 2.1539 ms, punkt odniesienia 2.1770 ms, limit 2.3947 ms (-1.1%)
+    PASS acceptance: p95 2.5182 ms, punkt odniesienia 2.4590 ms, limit 2.7049 ms (+2.4%)
+    scaling 600/300: 1.59 (limit 2.50) PASS
+    PREDICT iphone-x acceptance: p95=20.1498 cpu=5.7341 physics=8.0422 render=6.3735 target=15.00 gate=16.67
+    base=a9901838, diff niepusty → verify exit=0
     ```
 
 101. Testy (czerwone, na zaślepce publicznego `measureCapacity(device:progress:)`, wariantu `package` z R2 ze wstrzykniętymi poziomami, liczbą klatek, stanem termicznym, zegarem i limitem czekania, `BenchmarkSceneSpec.capacity(bubbleCount:)` i `PublicWorldCapacityReport`): `CapacityMeasurementTests` — wymiary obszaru i celu poziomów, pierwsze n baniek i poziom 300 równy `Scene.acceptance`, odstępy obwiedni trójkąta 53 i 71, krótki przebieg każdego poziomu (dwie serie, bez serii podziału renderu, n baniek w każdej klatce, linia `level=`), termika na wstrzykniętym stanie i zegarze, reguła pojemności na wstrzykniętych poziomach, covering [P-B-92](#p-b-92)–[P-B-96](#p-b-96) · verify: `swift build --build-tests && ! swift test --filter CapacityMeasurementTests`
@@ -1644,6 +1655,13 @@ Każde `verify` uruchamia się z katalogu głównego repozytorium w `zsh` albo `
     API_OK
     ** BUILD SUCCEEDED **
     # push czeka na zgodę właściciela
+    # powtórzenie 2026-11-11 na HEAD c31003a (kod jak w c68afd0)
+    $ swift test
+    Executed 1295 tests, with 1 test skipped and 0 failures (0 unexpected) in 456.435 (456.553) seconds   (exit=0)
+    $ swift run -c release BubblePhysicsPerfGuard → exit=0, wszystkie sceny PASS, scaling 600/300: 1.59 PASS (wiersze w zadaniu 100); punkty odniesienia bez zmian (wynik mieszany −1,1…+3,2%)
+    $ (diff API z docs/migration/v1-api-diff.txt) && xcodebuild … BubblePhysicsBench … build
+    API_OK
+    ** BUILD SUCCEEDED **
     ```
 
 105. (właściciel: iPhone X) Pomiar pojemności z commitu po zadaniu 104, raport `docs/benchmarks/v2-iphone-x-capacity.md` z linią `Mierzony commit` w nagłówku, do którego agent dopisuje w README wynik w postaci `pojemność <wartość linii capacity=>` przy odnośniku do raportu; `capacity=undecided_thermal` to powtórzenie pomiaru przez właściciela, a niezerowy licznik poprawności albo `bubbles=mismatch` na którymkolwiek poziomie to stop i decyzja właściciela, covering [P-B-61](#p-b-61) · verify: `f=docs/benchmarks/v2-iphone-x-capacity.md && grep -q 'Mierzony commit' $f && grep -q 'warmup=30; measured=300' $f && (for n in 100 150 200 250 300 350 400; do l=$(grep "^level=$n;" $f) && test -n "$l" && echo "$l" | grep -q 'failed_frames=0;' && echo "$l" | grep -q 'non_finite_frames=0;' && echo "$l" | grep -q 'contour_cpu_readbacks=0;' && echo "$l" | grep -q 'contact_candidate_overflow=0;' && echo "$l" | grep -q "bubbles=$n\$" && echo "$l" | grep -q 'cooldown_s=' && echo "$l" | grep -q 'thermal_worst=' && k=$(echo "$l" | sed -n 's/.*max_candidates_per_object=\([0-9]*\).*/\1/p') && test -n "$k" && test "$k" -le 64 || exit 1; done) && c=$(sed -n 's/^capacity=//p' $f) && echo "$c" | grep -Eq '^([0-9]+|>=400|<100)$' && grep 'v2-iphone-x-capacity.md' README.md | grep -qF "pojemność $c"`
