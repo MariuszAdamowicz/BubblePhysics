@@ -210,6 +210,23 @@ final class DecalRenderTests: XCTestCase {
         scene.assertPixel([0, 6], black, "nad linią tekstu")
     }
 
+    /// Szew benchmarku podziału renderu (P-B-90): bez naklejek reszta obrazu jest ta sama, a po włączeniu naklejka wraca.
+    func testRendererWithoutDecalsDrawsTheObjectsAndSkipsTheirDecals() async throws {
+        let scene = try makeScene()
+        let atlas = try readyAtlas(scene)
+        let tint = RGBA(1, 0.5, 0)
+        scene.world.submit(try WorldTransaction().add(B.bubble(1, at: .zero, radius: 8, filter: ghost, role: .static, render: blackID,
+            decal: .text("AB", source: .atlas(atlas), color: tint))))
+        await scene.step()
+        scene.renderer.drawsDecals = false
+        try await scene.render()
+        scene.assertPixel([-2, 2], black, "naklejka pominięta, bańka narysowana")
+        scene.assertPixel([0, 0], black, "bańka nadal jest")
+        scene.renderer.drawsDecals = true
+        try await scene.render()
+        scene.assertPixel([-2, 2], tint, "z włączonymi naklejkami glif wraca")
+    }
+
     // MARK: P-B-45 — obraz
 
     func testImageDecalShowsTheChosenRegionOfTheTexture() async throws {

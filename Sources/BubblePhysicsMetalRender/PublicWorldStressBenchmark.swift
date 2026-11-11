@@ -34,6 +34,8 @@ public struct PublicWorldStressReport: Sendable {
     public var gpuRenderClearEstimateMilliseconds: Double = 0
     /// Udział naklejek w renderze: czas GPU pełnego renderu minus czas GPU renderu bez naklejek (nie mniej niż 0).
     public var gpuRenderDecalsEstimateMilliseconds: Double = 0
+    /// Czy raport ma podział renderu (serie z samym czyszczeniem celu i bez naklejek); tylko scena akceptacyjna.
+    public var hasRenderSplit = false
     public let maximumMilliseconds: Double
     public let guardCorrections: Int
     public let nonFiniteFrames: Int
@@ -60,6 +62,13 @@ public struct PublicWorldStressReport: Sendable {
 
     public var passesP95Gate: Bool { p95Milliseconds <= gateMilliseconds }
 
+    /// Linia podziału renderu z końcowym znakiem nowej linii albo pusty tekst, gdy scena nie mierzy podziału.
+    private var renderSplitLine: String {
+        hasRenderSplit
+            ? "gpu_render_clear_estimate_ms=\(String(format: "%.4f", gpuRenderClearEstimateMilliseconds)); gpu_render_decals_estimate_ms=\(String(format: "%.4f", gpuRenderDecalsEstimateMilliseconds))\n"
+            : ""
+    }
+
     public var text: String {
         """
         path=public BubbleWorld + BubblePhysicsMetalRender, same command buffer
@@ -72,7 +81,7 @@ public struct PublicWorldStressReport: Sendable {
         host_preparation_p95_ms=\(String(format: "%.4f", hostPreparationP95Milliseconds)); host_publication_p95_ms=\(String(format: "%.4f", hostPublicationP95Milliseconds))
         host_encoding_p95_ms=\(String(format: "%.4f", hostEncodingP95Milliseconds)); host_waiting_p95_ms=\(String(format: "%.4f", hostWaitingP95Milliseconds))
         gpu_physics_p95_ms=\(String(format: "%.4f", gpuPhysicsP95Milliseconds)); gpu_render_estimate_ms=\(String(format: "%.4f", gpuRenderEstimateMilliseconds))
-        guard_corrections=\(guardCorrections); non_finite_frames=\(nonFiniteFrames)
+        \(renderSplitLine)guard_corrections=\(guardCorrections); non_finite_frames=\(nonFiniteFrames)
         fallback_frames=\(fallbackFrames); failed_frames=\(failedFrames)
         contour_cpu_readbacks=\(contourCPUReadbacks)
         contact_candidate_overflow=\(contactCandidateOverflow); max_candidates_per_object=\(maximumCandidatesPerObject); candidate_limit=\(candidateLimit)
@@ -256,20 +265,48 @@ public enum PublicWorldStressBenchmark {
         pass.colorAttachments[0].loadAction = .clear
         pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1)
         pass.colorAttachments[0].storeAction = .store
+        let splitsRender = scene == .acceptance
+        let seriesCount = splitsRender ? 4 : 2
         let total = warmupFrames + measuredFrames
+        func seriesProgress(_ number: Int) -> @MainActor (Int, Int) -> Void {
+            { done, _ in progress(number * total + done, seriesCount * total) }
+        }
         let full = try await runSeries(.full, world: world, scene: scene, queue: queue, warmupFrames: warmupFrames,
-            totalFrames: total, observer: frameObserver, progress: { done, _ in progress(done, 2 * total) }) { command in
+            totalFrames: total, observer: frameObserver, progress: seriesProgress(0)) { command in
                 try renderer.encode(world: world, viewport: viewport, commandBuffer: command, renderPassDescriptor: pass)
             }
         // Druga seria: świeży świat tej samej sceny, ta sama rozgrzewka i te same indeksy kroków, `encodeRender` pusty.
         // Fizyka obu serii jest identyczna, więc czas GPU drugiej to czas fizyki bez renderu.
-        let physicsWorld = try BubbleWorld.makeBenchmarkWorld(configuration: try scene.configuration(),
-            device: device, solverIterationLimit: 4)
-        guard let physicsAssets = physicsWorld.assets else { throw StressBenchmarkError.metalUnavailable }
-        physicsWorld.submit(try scene.initialTransaction(assets: physicsAssets))
+        let physicsWorld = try freshWorld(scene, device: device)
         let physics = try await runSeries(.physicsOnly, world: physicsWorld, scene: scene, queue: queue,
-            warmupFrames: warmupFrames, totalFrames: total, observer: frameObserver, progress: { done, _ in progress(total + done, 2 * total) },
+            warmupFrames: warmupFrames, totalFrames: total, observer: frameObserver, progress: seriesProgress(1),
             render: nil)
+        // Podział renderu (tylko scena akceptacyjna): każda seria na świeżym świecie tej samej sceny, z tą samą rozgrzewką
+        // i tymi samymi indeksami kroków, więc fizyka jest identyczna. Pass z samym czyszczeniem celu mierzy koszt, którego
+        // nie da się zbić (prawdziwy drawable też musi być zapisany), a render bez naklejek odsłania udział naklejek.
+        var clear: SeriesResult?, withoutDecals: SeriesResult?
+        var splitWorlds: [BubbleWorld] = []
+        if splitsRender {
+            let clearWorld = try freshWorld(scene, device: device)
+            clear = try await runSeries(.clearOnly, world: clearWorld, scene: scene, queue: queue,
+                warmupFrames: warmupFrames, totalFrames: total, observer: frameObserver, progress: seriesProgress(2)) { command in
+                    guard let encoder = command.makeRenderCommandEncoder(descriptor: pass) else {
+                        throw BubblePhysicsMetalRenderError.renderEncoderUnavailable
+                    }
+                    encoder.label = "bubble-physics.benchmark-clear-only"
+                    encoder.endEncoding()
+                }
+            let decalsWorld = try freshWorld(scene, device: device)
+            guard let decalsAssets = decalsWorld.assets else { throw StressBenchmarkError.metalUnavailable }
+            let decalsRenderer = try BubblePhysicsMetalRender(device: device, assets: decalsAssets)
+            decalsRenderer.drawsDecals = false
+            withoutDecals = try await runSeries(.withoutDecals, world: decalsWorld, scene: scene, queue: queue,
+                warmupFrames: warmupFrames, totalFrames: total, observer: frameObserver, progress: seriesProgress(3)) { command in
+                    try decalsRenderer.encode(world: decalsWorld, viewport: viewport, commandBuffer: command,
+                                              renderPassDescriptor: pass)
+                }
+            splitWorlds = [clearWorld, decalsWorld]
+        }
         func p95(_ values: [Double]) -> Double {
             let sorted = values.sorted()
             return sorted.isEmpty ? .infinity : sorted[min(sorted.count - 1,
@@ -277,7 +314,8 @@ public enum PublicWorldStressBenchmark {
         }
         let measured = full.frameMilliseconds.sorted()
         let frameP95 = p95(measured)
-        return PublicWorldStressReport(scene: scene.name, deviceName: device.name, warmupFrames: warmupFrames,
+        let extra = [clear, withoutDecals].compactMap { $0 }
+        var report = PublicWorldStressReport(scene: scene.name, deviceName: device.name, warmupFrames: warmupFrames,
             measuredFrames: measured.count, solverIterationLimit: 4, p95Milliseconds: frameP95,
             gpuP95Milliseconds: p95(full.gpuMilliseconds), hostNonGPUP95Milliseconds: p95(full.hostNonGPUMilliseconds),
             hostEncodingP95Milliseconds: p95(full.encodingMilliseconds),
@@ -286,14 +324,29 @@ public enum PublicWorldStressBenchmark {
             hostPublicationP95Milliseconds: p95(full.publicationMilliseconds),
             gpuPhysicsP95Milliseconds: p95(physics.gpuMilliseconds),
             maximumMilliseconds: measured.last ?? .infinity, guardCorrections: full.guardCorrections,
-            nonFiniteFrames: full.nonFiniteFrames + physics.nonFiniteFrames,
-            fallbackFrames: full.fallbackFrames + physics.fallbackFrames,
-            failedFrames: full.failedFrames + physics.failedFrames,
-            contourCPUReadbacks: world.benchmarkContourCPUReadbackCount + physicsWorld.benchmarkContourCPUReadbackCount,
+            nonFiniteFrames: ([full, physics] + extra).reduce(0) { $0 + $1.nonFiniteFrames },
+            fallbackFrames: ([full, physics] + extra).reduce(0) { $0 + $1.fallbackFrames },
+            failedFrames: ([full, physics] + extra).reduce(0) { $0 + $1.failedFrames },
+            contourCPUReadbacks: ([world, physicsWorld] + splitWorlds).reduce(0) { $0 + $1.benchmarkContourCPUReadbackCount },
             renderWidth: pixelWidth, renderHeight: pixelHeight,
             contactCandidateOverflow: world.diagnostics.contactCandidateOverflow,
             maximumCandidatesPerObject: full.maximumCandidates, candidateLimit: BubbleWorld.contactCandidateLimit,
             gateMilliseconds: scene.gateMilliseconds)
+        if let clear, let withoutDecals {
+            report.hasRenderSplit = true
+            report.gpuRenderClearEstimateMilliseconds = max(0, p95(clear.gpuMilliseconds) - p95(physics.gpuMilliseconds))
+            report.gpuRenderDecalsEstimateMilliseconds = max(0, p95(full.gpuMilliseconds) - p95(withoutDecals.gpuMilliseconds))
+        }
+        return report
+    }
+
+    /// Świeży świat tej samej sceny z transakcją początkową, dla serii na identycznej fizyce.
+    private static func freshWorld(_ scene: Scene, device: MTLDevice) throws -> BubbleWorld {
+        let world = try BubbleWorld.makeBenchmarkWorld(configuration: try scene.configuration(),
+            device: device, solverIterationLimit: 4)
+        guard let assets = world.assets else { throw StressBenchmarkError.metalUnavailable }
+        world.submit(try scene.initialTransaction(assets: assets))
+        return world
     }
 
     /// Zmierzone klatki jednej serii (bez rozgrzewki) i liczniki bezpieczeństwa całej serii.

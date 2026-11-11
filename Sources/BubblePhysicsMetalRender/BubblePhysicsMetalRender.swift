@@ -35,6 +35,8 @@ public final class BubblePhysicsMetalRender {
     package private(set) var arenaAllocationCount = 0
     /// Liczba wolnych buforów areny w puli.
     package var arenaPoolCount: Int { 0 }
+    /// Wyłącza rysowanie naklejek (szew benchmarku: podział kosztu renderu na część naklejek i resztę); domyślnie włączone.
+    package var drawsDecals = true
     /// Zakres bufora pomocniczego klatki jest wyrównany, bo `setVertexBuffer` wymaga wyrównanego przesunięcia.
     private static let arenaAlignment = 256
 
@@ -162,7 +164,7 @@ public final class BubblePhysicsMetalRender {
                     lastDrawCallCount += 1
                 case .decal:
                     // Kotwica naklejki (bańki i bryły) pochodzi z rekordów uchwytu, więc bez uchwytu nie ma naklejek.
-                    guard let handoff = published?.handoff else { continue }
+                    guard drawsDecals, let handoff = published?.handoff else { continue }
                     if boundGeometry != .decal {
                         handoff.bindDecals(encoder, viewport: viewport, vertices: arena.buffer, vertexOffset: arena.decalVertices,
                                            instances: arena.buffer, instanceOffset: arena.decalInstances)
