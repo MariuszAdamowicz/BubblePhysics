@@ -150,7 +150,7 @@ public final class BubblePhysicsMetalRender {
                     guard let handoff = published?.handoff else { continue }
                     if boundGeometry != .bubble {
                         handoff.bindBubbles(encoder, viewport: viewport, instances: arena.buffer, instanceOffset: arena.instances)
-                        encoder.setFragmentBuffer(arena.buffer, offset: arena.materials, index: 0)
+                        encoder.setVertexBuffer(arena.buffer, offset: arena.materials, index: 9)
                         boundGeometry = .bubble
                     }
                     handoff.drawBubbles(encoder, first: run.first, count: run.count)
@@ -162,7 +162,7 @@ public final class BubblePhysicsMetalRender {
                         // Rekordy brył z uchwytu niosą pozy t−1 i t; tło ma współrzędne świata i nie czyta rekordów.
                         if let handoff = published?.handoff { handoff.bindBodies(encoder) }
                         else { encoder.setVertexBuffer(arena.buffer, offset: 0, index: 4) }
-                        encoder.setFragmentBuffer(arena.buffer, offset: arena.materials, index: 0)
+                        encoder.setVertexBuffer(arena.buffer, offset: arena.materials, index: 9)
                         encoder.setFragmentBuffer(arena.buffer, offset: arena.rings, index: 1)
                         boundGeometry = .body
                     }

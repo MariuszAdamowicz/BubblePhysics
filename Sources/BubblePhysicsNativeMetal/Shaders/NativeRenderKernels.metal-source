@@ -89,7 +89,11 @@ struct BubbleVertexOutput {
     // ma 0,5 + 0,5·(cos θ, −sin θ). Pod maską: 0,5 + (p − środek)/(2·promień docelowy) z osią V w dół.
     float2 attachedUV;
     float2 maskedUV;
-    uint material [[flat]];
+    // Materiał obiektu z wierzchołka (kopia rekordu `NativeRenderMaterial`): fragment nie czyta bufora materiałów po indeksie.
+    float4 materialColor [[flat]];
+    float4 materialOutline [[flat]];
+    float4 materialParameters [[flat]];
+    float4 materialUV [[flat]];
 };
 
 struct BodyVertexOutput {
@@ -98,7 +102,11 @@ struct BodyVertexOutput {
     // do krawędzi pierścienia, więc obrys liczony tu jest taki sam jak w świecie.
     float2 ringPosition;
     float2 uv;
-    uint material [[flat]];
+    // Materiał obiektu z wierzchołka (kopia rekordu `NativeRenderMaterial`): fragment nie czyta bufora materiałów po indeksie.
+    float4 materialColor [[flat]];
+    float4 materialOutline [[flat]];
+    float4 materialParameters [[flat]];
+    float4 materialUV [[flat]];
     uint ringStart [[flat]];
     uint ringCount [[flat]];
 };
@@ -144,10 +152,15 @@ vertex BubbleVertexOutput nativeBubbleVertex(
     device const RenderBubble *bubbles [[buffer(4)]],
     device const float2 *previousPoints [[buffer(5)]], device const uint *previousCounts [[buffer(6)]],
     device const NativeRenderInstance *instances [[buffer(7)]],
-    device const RenderBubble *previousBubbles [[buffer(8)]]) {
+    device const RenderBubble *previousBubbles [[buffer(8)]],
+    device const NativeRenderMaterial *materials [[buffer(9)]]) {
     BubbleVertexOutput result;
     NativeRenderInstance instance = instances[instanceID];
-    result.material = instance.material;
+    NativeRenderMaterial material = materials[instance.material];
+    result.materialColor = material.color;
+    result.materialOutline = material.outlineColor;
+    result.materialParameters = material.parameters;
+    result.materialUV = material.uv;
     result.edgeDistance = 0;
     result.attachedUV = float2(0.5);
     result.maskedUV = float2(0.5);
@@ -201,9 +214,15 @@ vertex BodyVertexOutput nativeBodyVertex(
     uint vertexID [[vertex_id]],
     device const NativeRenderBodyVertex *vertices [[buffer(0)]],
     constant float4 &viewport [[buffer(2)]],
-    device const RenderBody *bodies [[buffer(4)]]) {
+    device const RenderBody *bodies [[buffer(4)]],
+    device const NativeRenderMaterial *materials [[buffer(9)]]) {
     BodyVertexOutput result;
     NativeRenderBodyVertex source = vertices[vertexID];
+    NativeRenderMaterial material = materials[source.info.x];
+    result.materialColor = material.color;
+    result.materialOutline = material.outlineColor;
+    result.materialParameters = material.parameters;
+    result.materialUV = material.uv;
     float2 world = source.local;
     if (source.info.w != 0xFFFFFFFFu) {
         RenderBody body = bodies[source.info.w];
@@ -212,7 +231,6 @@ vertex BodyVertexOutput nativeBodyVertex(
             result.position = float4(2, 2, 0, 1);
             result.ringPosition = float2(0);
             result.uv = float2(0);
-            result.material = source.info.x;
             result.ringStart = 0;
             result.ringCount = 0;
             return result;
@@ -223,7 +241,6 @@ vertex BodyVertexOutput nativeBodyVertex(
     result.position = float4(clip.x, clip.y, 0, 1);
     result.ringPosition = source.local;
     result.uv = source.uv;
-    result.material = source.info.x;
     result.ringStart = source.info.y;
     result.ringCount = source.info.z;
     return result;
@@ -252,9 +269,8 @@ float4 nativeShade(NativeRenderMaterial material, bool outline, float4 texel) {
 }
 
 fragment float4 nativeBubbleFragment(BubbleVertexOutput in [[stage_in]],
-    device const NativeRenderMaterial *materials [[buffer(0)]],
     texture2d<float> texture [[texture(0)]]) {
-    NativeRenderMaterial material = materials[in.material];
+    NativeRenderMaterial material = {in.materialColor, in.materialOutline, in.materialParameters, in.materialUV};
     bool outline = material.parameters.x > 0 && in.edgeDistance < material.parameters.x;
     // Przesunięcie i skala UV materiału dotyczą tylko brył: tekstura bańki leży na kole o promieniu docelowym.
     float4 texel;
@@ -268,10 +284,9 @@ fragment float4 nativeBubbleFragment(BubbleVertexOutput in [[stage_in]],
 }
 
 fragment float4 nativeBodyFragment(BodyVertexOutput in [[stage_in]],
-    device const NativeRenderMaterial *materials [[buffer(0)]],
     device const float2 *rings [[buffer(1)]],
     texture2d<float> texture [[texture(0)]]) {
-    NativeRenderMaterial material = materials[in.material];
+    NativeRenderMaterial material = {in.materialColor, in.materialOutline, in.materialParameters, in.materialUV};
     bool outline = false;
     // Znany koszt: pas obrysu liczony jest pętlą po całym pierścieniu konturu dla każdego fragmentu (O(fragmenty × punkty)),
     // tylko dla materiałów z obrysem. Wystarcza przy małych pierścieniach brył; przy dużej liczbie punktów trzeba by
