@@ -347,10 +347,9 @@ enum PerfGuard {
             if options.checkPredictionReportPath != nil { throw PerfGuardError.missingCalibration(calibrationURL.path) }
             return (lines, nil)
         }
-        lines.append(DevicePrediction.predictLine(scene: predictionScene,
-            DevicePrediction.predict(calibration: calibration, mac: mac)))
-        lines.append(DevicePrediction.predictCPULine(scene: predictionScene,
-            DevicePrediction.predict(calibration: calibration, mac: mac)))
+        let prediction = DevicePrediction.predict(calibration: calibration, mac: mac)
+        lines.append(DevicePrediction.predictLine(scene: predictionScene, prediction))
+        lines.append(DevicePrediction.predictCPULine(scene: predictionScene, prediction))
         guard let path = options.checkPredictionReportPath else { return (lines, nil) }
         let check = try DevicePrediction.checkPrediction(report: String(contentsOfFile: path, encoding: .utf8),
             calibration: calibration, mac: mac)

@@ -31,11 +31,11 @@ public struct PublicWorldStressReport: Sendable {
     /// Szacunek kosztu renderu GPU: czas GPU klatki z renderem minus czas GPU fizyki.
     public var gpuRenderEstimateMilliseconds: Double { gpuP95Milliseconds - gpuPhysicsP95Milliseconds }
     /// Koszt samego czyszczenia celu renderu: czas GPU passa z samym czyszczeniem minus czas GPU fizyki (nie mniej niż 0).
-    public var gpuRenderClearEstimateMilliseconds: Double = 0
+    public internal(set) var gpuRenderClearEstimateMilliseconds: Double = 0
     /// Udział naklejek w renderze: czas GPU pełnego renderu minus czas GPU renderu bez naklejek (nie mniej niż 0).
-    public var gpuRenderDecalsEstimateMilliseconds: Double = 0
+    public internal(set) var gpuRenderDecalsEstimateMilliseconds: Double = 0
     /// Czy raport ma podział renderu (serie z samym czyszczeniem celu i bez naklejek); tylko scena akceptacyjna.
-    public var hasRenderSplit = false
+    public internal(set) var hasRenderSplit = false
     public let maximumMilliseconds: Double
     public let guardCorrections: Int
     public let nonFiniteFrames: Int

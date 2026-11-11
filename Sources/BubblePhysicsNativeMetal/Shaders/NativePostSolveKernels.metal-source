@@ -773,8 +773,12 @@ kernel void nativeGenerateContoursFused(device float4 *input [[buffer(0)]], devi
     constant NativeContourControl &contour [[buffer(4)]], device atomic_uint *safety [[buffer(5)]],
     threadgroup float *pressure [[threadgroup(0)]],
     uint bubbleIndex [[threadgroup_position_in_grid]], uint sample [[thread_position_in_threadgroup]]) {
-    // Warunek jest jednolity dla grupy, więc żaden wątek nie omija barier.
-    if (bubbleIndex >= control.counts.x || atomic_load_explicit(safety + 3, memory_order_relaxed)) return;
+    // Bit awarii może zapalić inna grupa tego samego dispatchu w dowolnej chwili, więc wątki jednej grupy
+    // nie mogą czytać go każdy osobno: wątek 0 czyta raz, a po barierze wszyscy wychodzą jednolicie.
+    threadgroup uint halted;
+    if (sample == 0) halted = (bubbleIndex >= control.counts.x || atomic_load_explicit(safety + 3, memory_order_relaxed)) ? 1 : 0;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (halted) return;
     uint count = counts[bubbleIndex];
     uint base = bubbleIndex * contour.counts.x;
     bool active = sample < count;

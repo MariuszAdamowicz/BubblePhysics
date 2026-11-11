@@ -117,10 +117,16 @@ Scena `acceptance` ma w `docs/benchmarks/perf-guard.json` punkt odniesienia i li
 `--calibrate` czyta raport z iPhone'a (jego commit z nagłówka `Mierzony kod: ...` jest wymagany i musi być bieżącym commitem; raport bez commitu jest odrzucany) i zapisuje `docs/benchmarks/iphone-x-calibration.json`: składowe iPhone'a i Maca z jednego commitu, mnożniki `cpu` i `physics` oraz koszt renderu GPU iPhone'a. Gdy plik istnieje, strażnik wypisuje linię `PREDICT`:
 
 ```text
-prognoza = r_cpu · host_non_gpu(Mac) + r_fiz · gpu_physics(Mac) + render_GPU(iPhone)
+prognoza = CPU_skladowe + r_fiz · gpu_physics(Mac) + render_GPU(iPhone)
+CPU_skladowe = Σ_i (iphone_i / mac_i) · mac_teraz_i,  i ∈ {przygotowanie, kodowanie, publikacja, reszta}
+reszta = host_non_gpu − przygotowanie − kodowanie − publikacja   (oczekiwanie ponad GPU, nie mniej niż 0)
 ```
 
-Prognoza celuje w 15,0 ms przy bramce 16,67 ms. Na commicie kalibracji równa się `host_non_gpu_p95_ms + gpu_p95_ms` raportu. `--check-prediction` porównuje prognozę z p95 nowego raportu z urządzenia, wypisuje `PREDICTION_ERROR` i kończy się kodem 1 przy błędzie większym niż 10%. Kalibrację powtarza się tylko wtedy, gdy punkt kontrolny rozjedzie się z prognozą o ponad 10%. Od etapu 9 składowa CPU prognozy to suma przygotowania, kodowania, publikacji i oczekiwania ponad GPU (reszta `host_non_gpu` po odjęciu pozostałych), każda z własnym mnożnikiem `iphone_i / mac_i` z pól `iphone` i `mac` pliku kalibracji; gdy reszta Maca w kalibracji nie przekracza 0,1 ms, reszta dostaje mnożnik łączny `ratios.cpu`. Linia `PREDICT_CPU` podaje te składowe (`preparation`, `encoding`, `publication`, `waiting`).
+Każda składowa CPU ma własny mnożnik `iphone_i / mac_i` z pól `iphone` i `mac` pliku kalibracji. Gdy reszta Maca w kalibracji nie przekracza 0,1 ms (szum pomiaru, zła podstawa dzielnika), reszta dostaje mnożnik łączny `ratios.cpu = host_non_gpu(iPhone) / host_non_gpu(Mac)`; ten sam mnożnik zastępuje mnożnik składowej, której Mac nie ma do podzielenia. Linia `PREDICT_CPU` podaje składowe (`preparation`, `encoding`, `publication`, `waiting`), a `PREDICT` ich sumę jako `cpu=`.
+
+Na commicie kalibracji prognoza równa się `host_non_gpu_p95_ms + gpu_p95_ms` raportu. Od etapu 9 prognoza nie ma własnego celu w milisekundach (`target=15.00` nie jest kryterium): budżety to CPU ≤ 6,0 ms, fizyka ≤ 6,0 ms i render ≤ 4,0 ms, a bramką jest p95 pełnej klatki ≤ 16,67 ms. `--check-prediction` porównuje prognozę z p95 nowego raportu z urządzenia, wypisuje `PREDICTION_ERROR` i kończy się kodem 1 przy błędzie większym niż 10%. Etap 9 kalibruje na nowo na punkcie kontrolnym 9 (raport z urządzenia z commitu po zadaniu 97), a kolejne kalibracje robi się po każdym pomiarze, który rozjedzie się z prognozą o ponad 10%.
+
+Raport z punktu kontrolnego 9 musi mieć dwie dodatkowe linie podziału renderu, wypisywane tylko dla sceny akceptacyjnej: `gpu_render_clear_estimate_ms` (koszt samego czyszczenia celu renderu: czas GPU passa z samym czyszczeniem minus czas GPU fizyki) i `gpu_render_decals_estimate_ms` (udział naklejek: czas GPU pełnego renderu minus czas GPU renderu bez naklejek). Właściciel potrzebuje ich, by rozstrzygnąć wykonalność budżetu renderu 4,0 ms obok `gpu_render_estimate_ms`.
 
 ## Układ repozytorium
 

@@ -128,6 +128,54 @@ final class NativeMetalChainKernelTests: XCTestCase {
         }
     }
 
+    /// Przypadek awarii: bit awarii zapalony przed dispatchem albo przez dane niefinitne w trakcie. Zapalenie bitu przez
+    /// jedną grupę w trakcie dispatchu nie może rozjechać wątków innej grupy przy barierze (wyjście jest jednolite),
+    /// więc oba warianty kończą się ukończonym buforem poleceń i tym samym bitem awarii co dawna ścieżka.
+    func testFusedContourSmoothingHonoursTheFailureBitLikeThirteenPasses() throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let pipelines = try NativeMetalPipelineCache.pipelines(for: device).stages
+        let bubbles = 40, stride = 64
+        var generator = Generator(state: 20_240_611)
+        let counts = [UInt32](repeating: UInt32(stride), count: bubbles)
+        var values: [SIMD4<Float>] = (0..<bubbles * stride).map { _ in
+            SIMD4(generator.unit(), generator.unit() * 0.3, generator.unit(), generator.unit())
+        }
+        let sentinel = SIMD4<Float>(7, 7, 7, 7)
+        let countBuffer = try makeBuffer(counts, device: device)
+        let control = try makeBuffer([NativeMetalControl(counts: SIMD4(UInt32(bubbles), 0, 0, 0), physics: .zero,
+                                                         contactDamping: .zero)], device: device)
+        let contour = try makeBuffer([NativeMetalContourControl(counts: SIMD4(UInt32(stride), 0, 0, 0),
+                                                                shape: SIMD4(1, 0, 4, 0))], device: device)
+        func smooth(_ input: [SIMD4<Float>], safetyBit: UInt32, fused: Bool) throws -> (output: [SIMD4<Float>], safety: UInt32) {
+            let inputBuffer = try makeBuffer(input, device: device)
+            let output = try makeBuffer([SIMD4<Float>](repeating: sentinel, count: bubbles * stride), device: device)
+            let safety = try makeBuffer([0, 0, 0, safetyBit, 0, 0, 0, 0] as [UInt32], device: device)
+            _ = try run(device: device) {
+                NativeMetalContourSmoothing.encode($0, pipelines: pipelines, input: inputBuffer, output: output,
+                    counts: countBuffer, control: control, contour: contour, safety: safety,
+                    bubbleCount: bubbles, stride: stride, fused: fused)
+            }
+            let result = Array(UnsafeBufferPointer(
+                start: output.contents().bindMemory(to: SIMD4<Float>.self, capacity: bubbles * stride), count: bubbles * stride))
+            return (result, safety.contents().load(fromByteOffset: 12, as: UInt32.self))
+        }
+        // Bit awarii zapalony przed dispatchem: żadna grupa nie pisze, wyjście zostaje nietknięte, bit zostaje.
+        for fused in [false, true] {
+            let halted = try smooth(values, safetyBit: 1, fused: fused)
+            XCTAssertEqual(halted.safety, 1, "fused \(fused)")
+            XCTAssertTrue(halted.output.allSatisfy { $0 == sentinel }, "fused \(fused): przerwany krok nie zapisuje konturów")
+        }
+        // Dane niefinitne w jednej bańce w środku zestawu: obie ścieżki zapalają bit i kończą bez zawieszenia.
+        values[(bubbles / 2) * stride + 5].w = .nan
+        let legacy = try smooth(values, safetyBit: 0, fused: false)
+        let fused = try smooth(values, safetyBit: 0, fused: true)
+        XCTAssertEqual(legacy.safety, 1)
+        XCTAssertEqual(fused.safety, 1)
+        // Wyniki nie są porównywane bit w bit: dawna ścieżka przerywa kolejne przejścia po zapaleniu bitu, a o tym, które
+        // wątki zdążą jeszcze zapisać, decyduje kolejność grup, więc zgodność dotyczy bitu awarii i braku zawieszenia.
+        XCTAssertTrue(fused.output.contains { $0 != sentinel }, "grupy sprzed zapalenia bitu zapisały kontury")
+    }
+
     // MARK: kandydaci brył (zadanie 94)
 
     private struct RigidCandidatesResult: Equatable {

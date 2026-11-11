@@ -57,6 +57,8 @@ enum NativeMetalContourSmoothing {
     /// Wersja wielokrokowa zamienia `input` i `output` na przemian, więc `input` traci zawartość.
     /// Zwraca liczbę zakodowanych dispatchy.
     @discardableResult
+    /// `fused: false` to dawna ścieżka trzynastu dispatchów, zachowana wyłącznie jako wzorzec bit w bit dla
+    /// `NativeMetalChainKernelTests`; produkcja zawsze przekazuje `fused: true`.
     static func encode(_ encoder: MTLComputeCommandEncoder, pipelines: [String: MTLComputePipelineState],
                        input: MTLBuffer, output: MTLBuffer, counts: MTLBuffer, control: MTLBuffer,
                        contour: MTLBuffer, safety: MTLBuffer, bubbleCount: Int, stride: Int, fused: Bool) -> Int {
@@ -111,7 +113,8 @@ enum NativeMetalRigidCandidates {
                                 jointRanges, jointPartners].enumerated() {
             encoder.setBuffer(buffer, offset: 0, index: index)
         }
-        encoder.setThreadgroupMemoryLength(width, index: 0)
+        // Pamięć grupy ma długość będącą wielokrotnością 16 bajtów (wymóg Metala); jądro używa `width` bajtów.
+        encoder.setThreadgroupMemoryLength((width + 15) / 16 * 16, index: 0)
         encoder.dispatchThreadgroups(.init(width: bodyCount, height: 1, depth: 1),
                                      threadsPerThreadgroup: .init(width: width, height: 1, depth: 1))
         return 1
@@ -120,6 +123,8 @@ enum NativeMetalRigidCandidates {
 
 /// Kodowanie przygotowania danych renderu (punkty konturu, ramka, pakiet bańki). `grouped`: jedna grupa na bańkę,
 /// gdy stride mieści się w grupie i w pamięci grupy; inaczej, i dla `grouped: false`, dawny wątek na bańkę.
+/// `grouped: false` istnieje wyłącznie jako wzorzec bit w bit dla `NativeMetalChainKernelTests`; produkcja zawsze
+/// przekazuje `grouped: true` (wątek na bańkę zostaje tylko jako zapas dla zbyt szerokiego stride).
 enum NativeMetalRenderPreparation {
     /// Bajty pamięci grupy na próbkę: poziom, punkt, ramka i skrajne wartości.
     static let bytesPerSample = MemoryLayout<Float>.stride + MemoryLayout<SIMD2<Float>>.stride
@@ -160,6 +165,10 @@ enum NativeMetalRenderPreparation {
 /// Skan prefiksowy wartości `uint4` (liczniki kandydatów, kontaktów i cache'u). Dawny skan blokowy to osobny dispatch na
 /// poziom, dispatchy dodające sumy bloków i dispatch kończący; skan jednej grupy robi to w jednym dispatchu, w porcjach
 /// szerokości grupy z przeniesioną sumą. Sumy całkowite nie zależą od kolejności, więc wynik jest ten sam bit w bit.
+/// `blockSums` i `blockOffsets` służą wyłącznie dawnemu skanowi blokowemu (wzorzec bit w bit dla
+/// `NativeMetalChainKernelTests`); produkcja przekazuje `singleGroup: true` i ich nie czyta. Bufory są małe
+/// (pojemność skanu / 256 wpisów na poziom), a liczba poziomów wyznacza rozmiar `indirectArguments`, więc zostają
+/// przydzielone razem z resztą stanu.
 struct NativeMetalScanBuffers {
     let values: MTLBuffer
     let offsets: MTLBuffer
@@ -175,6 +184,8 @@ enum NativeMetalScan {
     static let singleGroupWidth = 512
 
     /// `mode` 0 skanuje liczniki kandydatów po bańkach (`maximum` to ich liczba), 1 aktywne kontakty, 2 scalony cache.
+    /// `singleGroup: false` to dawny skan blokowy, zachowany wyłącznie jako wzorzec bit w bit dla
+    /// `NativeMetalChainKernelTests`; produkcja zawsze przekazuje `singleGroup: true`.
     /// Zwraca liczbę zakodowanych dispatchy.
     @discardableResult
     static func encode(_ encoder: MTLComputeCommandEncoder, pipelines: [String: MTLComputePipelineState],
@@ -256,6 +267,8 @@ enum NativeMetalScan {
 /// Jeden przebieg naprawy zawierania: rozsunięcie baniek i guard środków po nim. `fused`: jeden dispatch zamiast dwóch
 /// (nativeSeparateContainedBubbles, potem nativeReapplyCenterGuards na wyniku); guard dotyka tylko własnej pozycji
 /// bańki i danych tylko do odczytu, więc może iść tym samym wątkiem zaraz po zapisie pozycji.
+/// `fused: false` (dwa dispatche) zostaje wyłącznie jako wzorzec bit w bit dla `NativeMetalChainKernelTests`;
+/// produkcja zawsze przekazuje `fused: true`.
 enum NativeMetalContainmentRepair {
     /// Zwraca liczbę zakodowanych dispatchy.
     @discardableResult

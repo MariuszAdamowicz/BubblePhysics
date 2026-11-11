@@ -58,6 +58,29 @@ final class RenderArenaTests: XCTestCase {
         scene.assertPixel([0, 0], red, "obraz z buforu z puli jest poprawny")
     }
 
+    /// Prawdziwa ścieżka klatki: `advance(by:commandBuffer:encodeRender:)` koduje fizykę i render do jednego bufora poleceń,
+    /// zatwierdza go i czeka na ukończenie; test niczego nie czeka ręcznie. Przydział areny nie rośnie z liczbą klatek.
+    func testArenaAllocationsStayBoundedOverFramesDrivenByAdvance() async throws {
+        let scene = try await makeScene()
+        let queue = try XCTUnwrap(scene.device.makeCommandQueue())
+        let frames = 30
+        for frame in 1...frames {
+            let command = try XCTUnwrap(queue.makeCommandBuffer())
+            let pass = scene.harness.makePass()
+            _ = await scene.world.advance(by: SceneBuilders.step, commandBuffer: command) {
+                try scene.renderer.encode(world: scene.world, viewport: RenderTestScene.viewport, commandBuffer: command,
+                                          renderPassDescriptor: pass)
+            }
+            XCTAssertEqual(command.status, .completed, "klatka \(frame)")
+            XCTAssertNil(scene.world.diagnostics.lastAdvanceIssue, "klatka \(frame)")
+            XCTAssertLessThanOrEqual(scene.renderer.arenaAllocationCount, 2,
+                "klatka \(frame): bufor wraca do puli, więc przydział nie rośnie z liczbą klatek")
+        }
+        XCTAssertGreaterThanOrEqual(scene.renderer.arenaAllocationCount, 1)
+        XCTAssertLessThanOrEqual(scene.renderer.arenaPoolCount, 3)
+        scene.assertPixel([0, 0], red, "obraz z klatek `advance` jest poprawny")
+    }
+
     func testTwoEncodesInOneCommandBufferGetDifferentBuffers() async throws {
         let scene = try await makeScene()
         let command = try scene.harness.makeCommandBuffer()

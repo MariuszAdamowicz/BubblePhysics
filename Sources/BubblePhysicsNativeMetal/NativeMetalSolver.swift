@@ -61,6 +61,7 @@ final class NativeMetalPersistentState {
     let mergedCache: MTLBuffer
     let scanValues: MTLBuffer
     let scanOffsets: MTLBuffer
+    /// Tylko dla dawnego skanu blokowego (wzorzec testowy); `scanBlockSums.count` wyznacza też rozmiar `indirectArguments`.
     let scanBlockSums: [MTLBuffer]
     let scanBlockOffsets: [MTLBuffer]
     let scanCapacity: Int
@@ -1225,6 +1226,9 @@ enum NativeMetalPipelineCache {
 
     private static var compiled: [UInt64: Compiled] = [:]
 
+    /// Kernele `nativeScanBlocks`, `nativeAddScanBlockOffsets`, `nativeFinishScan`, `nativeSeparateContainedBubbles`,
+    /// `nativeReapplyCenterGuards` (oraz `nativeGenerateContours`, `nativePrepareRenderData`) obsługują dawne ścieżki,
+    /// które produkcja pomija; zostają jako wzorzec bit w bit dla `NativeMetalChainKernelTests`.
     static let stageNames: [String] = ["nativePrepareGrid", "nativeBuildGrid", "nativeSortGrid", "nativeSortGridChunk", "nativeEmitCandidates",
         "nativePrepareCandidateCounts", "nativeCompactCandidates", "nativeBuildContacts",
         "nativePrepareContactFlags", "nativeCompactActiveContacts", "nativeMatchContactCache",

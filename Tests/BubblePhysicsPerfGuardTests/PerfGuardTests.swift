@@ -454,13 +454,31 @@ final class PerfGuardTests: XCTestCase {
 
     // P-B-91: granica 0,1 ms: równe 0,1 to jeszcze mnożnik łączny, ponad 0,1 własny.
     func testTheTenthOfAMillisecondBoundaryOfTheRestSelectsTheRatio() throws {
+        // Składowe są potęgami dwójki, a `host_non_gpu` ich sumą z 0,1, więc reszta (`host_non_gpu` minus składowe,
+        // w tej samej kolejności działań co w predykcji) wynosi dokładnie 0,1, a nie 0,0999…987.
+        func frame(rest: Double) -> StageComponents {
+            let preparation = 0.015625, encoding = 0.03125, publication = 0.0625
+            return StageComponents(hostPreparationMilliseconds: preparation, hostEncodingMilliseconds: encoding,
+                hostWaitingMilliseconds: 1.0, hostPublicationMilliseconds: publication,
+                hostNonGPUMilliseconds: preparation + encoding + publication + rest, gpuMilliseconds: 1.9,
+                gpuPhysicsMilliseconds: 1.6)
+        }
+        func restOf(_ mac: StageComponents) -> Double {
+            mac.hostNonGPUMilliseconds - mac.hostPreparationMilliseconds - mac.hostEncodingMilliseconds
+                - mac.hostPublicationMilliseconds
+        }
         let parsed = try DevicePrediction.parse(report: report())
-        let atBoundary = try DevicePrediction.calibrate(iPhone: parsed, mac: macFrame(rest: 0.1), commit: "a367bd0")
-        let atBoundaryMac = macFrame(rest: 0.1)
+        let atBoundaryMac = frame(rest: 0.1)
+        XCTAssertEqual(restOf(atBoundaryMac), DevicePrediction.smallestRestForOwnRatioMilliseconds,
+                       "warunek wstępny: reszta Maca wynosi dokładnie 0,1 ms")
+        let atBoundary = try DevicePrediction.calibrate(iPhone: parsed, mac: atBoundaryMac, commit: "a367bd0")
+        // Dokładnie 0,1 to jeszcze mnożnik łączny (`<=`), więc oczekiwanie nie dostaje własnego mnożnika.
         XCTAssertEqual(DevicePrediction.predict(calibration: atBoundary, mac: atBoundaryMac).cpuComponents.waitingMilliseconds,
-            atBoundary.ratios.cpu * 0.1, accuracy: 1e-9)
-        let above = try DevicePrediction.calibrate(iPhone: parsed, mac: macFrame(rest: 0.11), commit: "a367bd0")
-        XCTAssertEqual(DevicePrediction.predict(calibration: above, mac: macFrame(rest: 0.11)).cpuComponents.waitingMilliseconds,
+            atBoundary.ratios.cpu * 0.1, accuracy: 1e-12)
+        let aboveMac = frame(rest: 0.1.nextUp * 1.001)
+        XCTAssertGreaterThan(restOf(aboveMac), DevicePrediction.smallestRestForOwnRatioMilliseconds)
+        let above = try DevicePrediction.calibrate(iPhone: parsed, mac: aboveMac, commit: "a367bd0")
+        XCTAssertEqual(DevicePrediction.predict(calibration: above, mac: aboveMac).cpuComponents.waitingMilliseconds,
             iPhoneRest, accuracy: 1e-9, "ponad 0,1 ms reszta ma własny mnożnik")
     }
 
