@@ -2,51 +2,51 @@
   "device" : "Apple M1 Pro",
   "scenes" : {
     "acceptance" : {
-      "note" : "scena acceptance po etapie 7 w 1125×2436 (decals, trójkąt kinematyczny, dwie warstwy, materiały alfa) — po etapie 8 (optymalizacja CPU klatki: przygotowanie, publikacja, kodowanie); 5 przebiegów po 30+300 klatek, maszyna bezczynna (obciążenie 1 min 0,6–1,0)",
-      "p95Milliseconds" : 3.008,
-      "recordedAt" : "2026-11-10T19:54:41Z",
+      "note" : "scena acceptance po etapie 9 (łańcuch fizyki krótszy, pula buforów areny renderera); 5 przebiegów po 30+300 klatek, maszyna bezczynna",
+      "p95Milliseconds" : 2.459042,
+      "recordedAt" : "2026-11-11T00:15:00Z",
       "runs" : [
-        2.9932,
-        3.0361,
-        2.9876,
-        4.3358,
-        3.008
+        2.477833,
+        2.441584,
+        2.444125,
+        2.459042,
+        2.473958
       ]
     },
     "decals" : {
-      "note" : "scena decals po etapie 6: stress-300 z teksturą przyklejoną i naklejką tekstową na każdej bańce (maska radialna w shaderze) — po etapie 8 (optymalizacja CPU klatki: przygotowanie, publikacja, kodowanie); 5 przebiegów po 30+300 klatek, maszyna bezczynna (obciążenie 1 min 0,6–1,0)",
-      "p95Milliseconds" : 2.5761,
-      "recordedAt" : "2026-11-10T19:54:41Z",
+      "note" : "scena decals po etapie 9 (łańcuch fizyki krótszy, pula buforów areny renderera); 5 przebiegów po 30+300 klatek, maszyna bezczynna",
+      "p95Milliseconds" : 2.177,
+      "recordedAt" : "2026-11-11T00:14:44Z",
       "runs" : [
-        2.594,
-        2.5761,
-        2.5678,
-        2.5423,
-        2.5861
+        2.142625,
+        2.205,
+        2.176625,
+        2.177,
+        2.197959
       ]
     },
     "mixed" : {
-      "note" : "scena mieszana po etapie 3 (200 baniek, 55 brył dynamicznych, 5 belek kinematycznych, 10 więzów, k = 128) — po etapie 8 (optymalizacja CPU klatki: przygotowanie, publikacja, kodowanie); 5 przebiegów po 30+300 klatek, maszyna bezczynna (obciążenie 1 min 0,6–1,0)",
-      "p95Milliseconds" : 4.4348,
-      "recordedAt" : "2026-11-10T19:54:41Z",
+      "note" : "scena mixed po etapie 9 (łańcuch fizyki krótszy, pula buforów areny renderera); 5 przebiegów po 30+300 klatek, maszyna bezczynna",
+      "p95Milliseconds" : 3.794209,
+      "recordedAt" : "2026-11-11T00:14:37Z",
       "runs" : [
-        4.3947,
-        4.4405,
-        4.4463,
-        4.4209,
-        4.4348
+        3.862333,
+        3.836375,
+        3.776458,
+        3.794209,
+        3.748625
       ]
     },
     "stress-300" : {
-      "note" : "stress-300 po etapie 2 (wiersze kandydatów n·k, filtr kolizji, kontakty brył po liście kandydatów, kinematyka, zdarzenia kontaktu) — po etapie 8 (optymalizacja CPU klatki: przygotowanie, publikacja, kodowanie); 5 przebiegów po 30+300 klatek, maszyna bezczynna (obciążenie 1 min 0,6–1,0)",
-      "p95Milliseconds" : 2.3449,
-      "recordedAt" : "2026-11-10T19:54:41Z",
+      "note" : "scena stress-300 po etapie 9 (łańcuch fizyki krótszy, pula buforów areny renderera); 5 przebiegów po 30+300 klatek, maszyna bezczynna",
+      "p95Milliseconds" : 1.963417,
+      "recordedAt" : "2026-11-11T00:14:25Z",
       "runs" : [
-        2.4871,
-        2.341,
-        2.328,
-        2.3449,
-        2.4583
+        1.957208,
+        1.965583,
+        1.999292,
+        1.963417,
+        1.955208
       ]
     }
   }
