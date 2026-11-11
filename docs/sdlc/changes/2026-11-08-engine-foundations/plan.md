@@ -34,6 +34,7 @@
 **Agent Sessions:** claude-code: ee74dab6-5d01-4bc8-aba7-7006cd7c11c3
 **Agent Sessions:** claude-code: f69e033d-87c8-4daf-a204-cff1ea3e8c0d
 **Agent Sessions:** claude-code: 8c04e547-ecd1-441a-a247-1c00faf54991
+**Agent Sessions:** claude-code: 84ffcd56-1d95-410a-9ec0-c8e1ee1fe8bf
 
 ---
 
@@ -477,7 +478,7 @@ Liczniki poziomu sumują obie serie. `bubbles` podaje n tylko wtedy, gdy każda 
 | <a id="p-b-7"></a>P-B-7 | Strażnik mierzy przygotowanie i publikację kroku dla 300 i 600 obiektów | Stosunek ≤ 2,5, inaczej strażnik kończy się błędem | [G12-AC1](change-design.md#g12-ac1) |
 | <a id="p-b-8"></a>P-B-8 | Strażnik: mediana z 5 przebiegów po 300 klatek, p95 kroku i renderu | Wynik > punkt odniesienia z `perf-guard.json` + 10% kończy się błędem; wstrzyknięte spowolnienie o 20% kończy się błędem; punkt odniesienia odpowiada stanowi po ostatnim ukończonym etapie | [G12-AC3](change-design.md#g12-ac3) |
 | <a id="p-b-9"></a>P-B-9 | Ta sama scena (stress-300, a od etapu brył mieszana) dwa razy po 300 kroków | Identyczny hash stanu obiektów; przebieg ze wzrostem licznika przepełnienia jest zwolniony z porównania od tego kroku | [G10-AC5](change-design.md#g10-ac5) |
-| <a id="p-b-10"></a>P-B-10 | Diff publicznych symboli z `swift-api-digester -diagnose-sdk` między `v1.0.0` a HEAD, zapisany w `docs/migration/v1-api-diff.txt` | Każdy usunięty lub zmieniony symbol ma zamiennik w `docs/MIGRATION-v2.md`; README podaje 2.0.0 (tag `v2.0.0` zakłada właściciel w etapie 10) | [G1-AC1](change-design.md#g1-ac1) |
+| <a id="p-b-10"></a>P-B-10 | Diff publicznych symboli z `swift-api-digester -diagnose-sdk` między `v1.0.0` a HEAD, zapisany w `docs/migration/v1-api-diff.txt` | Każdy usunięty lub zmieniony symbol ma zamiennik w `docs/MIGRATION-v2.md`; README podaje 2.0.0 (tag `v2.0.0` zakłada agent za zgodą właściciela w etapie 10) | [G1-AC1](change-design.md#g1-ac1) |
 
 **Kolizje, kontakty, kinematyka i pamięć kontaktów**
 
@@ -660,7 +661,7 @@ Od etapu 8 optymalizację prowadzi pomiar zastępczy: strażnik na Macu mierzy s
 | 7 | Przykład, dokumentacja, wydanie 2.0.0 | Przykładowa aplikacja, przewodnik, migracja i scena akceptacyjna w benchmarku iOS w natywnej rozdzielczości ([G13](change-design.md#g13-ac1), [G1-AC1](change-design.md#g1-ac1)); pierwszy pomiar na iPhonie X nie przeszedł bramki, więc pomiar końcowy i wydanie przeszły do etapów 9 i 10 | `Examples/BubblePhysicsShowcase`, `Benchmarks/iOS/BubblePhysicsBench`, `PublicWorldStressBenchmark.swift` (publiczna scena akceptacyjna), `MigrationGuideTests.swift`, `IntegrationGuideTests.swift`, `AcceptanceSceneTests.swift`, `docs/integration-guide.md`, `docs/MIGRATION-v2.md`, `docs/migration/v1-api-diff.txt`, `README.md` | [P-B-10](#p-b-10), [P-B-59](#p-b-59), [P-B-60](#p-b-60) | done |
 | 8 | Pomiar zastępczy i ścieżka CPU klatki | Prognoza p95 iPhone'a X ze strażnika na Macu; ścieżka CPU klatki bez zmiany wyniku, składowa CPU prognozy ≤ 5,0 ms; punkt kontrolny na iPhonie ([G12-AC4](change-design.md#g12-ac4), [G12-AC3](change-design.md#g12-ac3)) | `PublicWorldStressBenchmark.swift` (składowe raportu), `NativeMetalBufferLayout.swift`, `NativeMetalSolver.swift`, `NativePublicWorld.swift`, `NativeCompleteStepper.swift`, `MotionControllers.swift`, `BubbleWorldRenderState.swift`, `DecalRenderer.swift`, `PerfGuard.swift`, `DevicePrediction.swift`, `AcceptanceEquivalenceTests.swift`, `Support/PublishedStateHash.swift`, `iphone-x-calibration.json`, `perf-guard.json`, `README.md` | [P-B-78](#p-b-78)–[P-B-83](#p-b-83) | done |
 | 9 | Fizyka, render, CPU i pomiar pojemności | Ponowna kalibracja na raporcie punktu kontrolnego 8; łańcuch fizyki krótszy bez zmiany bitów wyniku; podział renderu w raporcie; punkt kontrolny 9 na iPhonie jako nowa kalibracja; render i CPU klatki tańsze bez zmiany bitów i pikseli jako najlepsze starania; tryb pojemności w benchmarku i aplikacji iOS; pomiar pojemności właściciela na iPhonie X ([G12-AC4](change-design.md#g12-ac4), [G12-AC2](change-design.md#g12-ac2)) | `NativeMetalSolver.swift`, `NativeMetalChainKernels.swift`, kernele `Shaders/*.metal-source`, `NativeRenderKernels.metal-source`, `BubblePhysicsMetalRender.swift`, `PublicWorldStressBenchmark.swift`, `PublicWorldStressView.swift`, `DevicePrediction.swift`, `PerfGuardTests.swift`, `BubbleWorld.swift`, `BubbleWorldRenderState.swift`, `NativeCompleteStepper.swift`, `NativePublicWorld.swift`, `NativeMetalBufferLayout.swift`, `DecalRenderer.swift`, `AcceptanceRenderEquivalenceTests.swift`, `RenderArenaTests.swift`, `AcceptanceSceneTests.swift`, `CapacityMeasurementTests.swift`, `iphone-x-calibration.json`, `perf-guard.json`, `docs/benchmarks/v2-iphone-x-checkpoint-9.md`, `docs/benchmarks/v2-iphone-x-capacity.md`, `README.md` | [P-B-61](#p-b-61), [P-B-84](#p-b-84)–[P-B-97](#p-b-97) | done |
-| 10 | Wydanie 2.0.0 | PR gałęzi do `main` scalony commitem scalającym i tag `v2.0.0` (dawne zadanie 78) ([G1-AC1](change-design.md#g1-ac1)) | brak plików kodu; `plan.md` | brak nowych; tag zamyka [P-B-10](#p-b-10) z etapu 7 | unplanned |
+| 10 | Wydanie 2.0.0 | PR gałęzi do `main` scalony commitem scalającym i tag `v2.0.0` na tym commicie, więc gra przypina się do `from: "2.0.0"` (dawne zadanie 78) ([G1-AC1](change-design.md#g1-ac1)) | brak plików kodu; `plan.md`; PR i tag w `origin` | brak nowych; tag zamyka [P-B-10](#p-b-10) z etapu 7 | unplanned |
 
 Każdy etap kończy się zielonym pełnym `swift test`, strażnikiem i testem determinizmu. Gdy wynik się poprawił, etap zapisuje też nowy punkt odniesienia w osobnym commicie. Dzięki temu każdy etap można scalić osobno, a następny zaczyna od zmierzonego stanu.
 - **Etap 1** daje szybszy krok i stan obiektów. Gra nie ma jeszcze nowych funkcji fizyki ani renderu.
@@ -671,7 +672,7 @@ Każdy etap kończy się zielonym pełnym `swift test`, strażnikiem i testem de
 - **Etap 7** daje przykładową aplikację, przewodnik, migrację i scenę akceptacyjną w benchmarku iOS. Pierwszy pomiar na iPhonie X (24,27 ms) nie przeszedł bramki 16,67 ms.
 - **Etap 8** daje prognozę iPhone'a z Maca i szybszą ścieżkę CPU bez zmiany wyniku. Punkt kontrolny na iPhonie X (raport z 2c22f84) dał p95 21,74 ms: CPU 7,05 ms zamiast prognozowanych 4,89 ms (współczynnik CPU iPhone/Mac ok. 5,66 zamiast skalibrowanych 3,93) i GPU 14,80 ms. Do bramki 16,67 ms brakuje więc około 5,07 ms; przy CPU 7,05 ms GPU musi spaść do około 9,6 ms (−5,2 ms), a do celu prognozy 15,0 ms do około 7,95 ms (−6,85 ms). Etap 9 planuje pod te liczby, po ponownej kalibracji współczynnika CPU (wiersz odchyleń 115).
 - **Etap 9** zbija fizykę bez zmiany bitów wyniku i mierzy podział renderu w punkcie kontrolnym 9. Po zmianie kryterium wydajności ([CD-D-30](change-design.md#cd-d-30), [CD-D-31](change-design.md#cd-d-31)) render i CPU klatki tanieją jako najlepsze starania, bez budżetów, a benchmark i aplikacja iOS dostają tryb pojemności. Etap kończy pomiar pojemności właściciela na iPhonie X, a jego wynik nie blokuje wydania. Brakuje tylko wydania.
-- **Etap 10** to wydanie: PR i tag `v2.0.0`, które wykonuje właściciel.
+- **Etap 10** to wydanie: push i PR gałęzi, scalenie commitem scalającym przez właściciela i tag `v2.0.0`. Po nim nic nie brakuje; flaky test determinizmu (odstępstwo nr 130) idzie do wydania jako znane ryzyko.
 
 ## Slice 1: Fundament, stan obiektów, strażnik
 
@@ -1679,6 +1680,17 @@ Każde `verify` uruchamia się z katalogu głównego repozytorium w `zsh` albo `
     Executed 1295 tests, with 1 test skipped and 0 failures (0 unexpected) in 457.137 (457.256) seconds   (exit=0)
     ```
 
+## Slice 10: Wydanie 2.0.0
+
+**Delivers:** `main` zawiera całą wersję `v2` przez commit scalający PR gałęzi, a tag `v2.0.0` na tym commicie jest w `origin`.
+
+Etap nie ma kodu ani nowych zachowań, więc nie ma faz czerwonych. Każdy krok w `origin` (push, PR, tag) agent wykonuje dopiero po jawnej zgodzie właściciela, poleceniem `git -c credential.helper= -c 'credential.helper=!gh auth git-credential' …` (zwykły push daje 403). Po scaleniu na gałęzi nie powstaje żaden commit, więc status `done` etapu i `Done` planu trafiają na gałąź przed PR, a dowody zadań 106–109 zostają w opisie PR i w wiadomości końcowej sesji (commit zadania 106 nie może zawierać dowodu własnego pusha). Bez przeglądu `review-implementation` przed PR (decyzja właściciela).
+
+106. Ostatni commit gałęzi: kod bez zmian od ostatniego zielonego strażnika (`c31003a`), etap 10 `done` w `## Slice Status` i `**Status:** Done` planu w `plan.md` (bez dowodu zadania), potem push gałęzi za zgodą właściciela, covering [P-B-10](#p-b-10) · verify: `f=docs/sdlc/changes/2026-11-08-engine-foundations/plan.md && git diff --quiet c31003a HEAD -- Sources Tests Package.swift Benchmarks Examples && grep -q '^\*\*Status:\*\* Done' $f && grep -Eq '^\| 10 \| Wydanie 2\.0\.0 \|.*\| done \|$' $f && git fetch origin && test "$(git rev-parse HEAD)" = "$(git rev-parse origin/feature/engine-foundations)"`
+107. PR `feature/engine-foundations` → `main` przez `gh pr create`, za zgodą właściciela; opis: podsumowanie `v2`, odnośniki do `docs/MIGRATION-v2.md`, `docs/integration-guide.md` i raportu pojemności (150), znane ryzyko z odstępstwa nr 130 (jednorazowo różne hashe w teście determinizmu stress-300, przyczyna nieznana), covering [P-B-10](#p-b-10) · verify: `gh pr list --head feature/engine-foundations --state open --json body --jq '.[0].body' | grep -q 'MIGRATION-v2.md'`
+108. (właściciel) Scalenie PR commitem scalającym, nie squash ani rebase, covering [P-B-10](#p-b-10) · verify: `git fetch origin && c=$(gh pr list --head feature/engine-foundations --state merged --json mergeCommit --jq '.[0].mergeCommit.oid') && test -n "$c" && test "$(git rev-list --parents -n 1 $c | wc -w)" -ge 3 && git merge-base --is-ancestor $c origin/main`
+109. Tag `v2.0.0` na commicie scalającym z zadania 108, wypchnięty do `origin` za zgodą właściciela, covering [P-B-10](#p-b-10) · verify: `git fetch origin --tags && c=$(gh pr list --head feature/engine-foundations --state merged --json mergeCommit --jq '.[0].mergeCommit.oid') && test -n "$c" && git ls-remote --tags origin v2.0.0 | grep -q v2.0.0 && test "$(git rev-parse 'v2.0.0^{commit}')" = "$c" && git merge-base --is-ancestor v2.0.0 origin/main`
+
 ## Deviations from Design
 
 | ID | Type | Status | Design updated? | Note |
@@ -1807,6 +1819,11 @@ Każde `verify` uruchamia się z katalogu głównego repozytorium w `zsh` albo `
 | 9 | Aplikacja benchmarku mierzy jedną scenę | Aplikacja widzi tylko publiczne API; `Scene.acceptance` ma 300 baniek na stałe (`PublicWorldStressBenchmark.swift:167,175,187`), tor trójkąta stały (`:529`), podział renderu włącza `scene == .acceptance` (`:268`), widok ma stałą 660 klatek; nikt nie czyta `thermalState` | Publiczne `measureCapacity` i `PublicWorldCapacityReport`; `Scene.acceptance` i strażnik zostają przy 300 (zadania 102–103); raport tylko przez schowek (decyzja właściciela) | 2026-11-11 |
 | 9 | Numeracja zadań 99–102 | Zadania 99–102 z 2026-11-10 niezbudowane | Decyzja właściciela: zadania 99–102 przepisane, dopisane 103–105; sesja zatrzymuje się po 97 i 104 | 2026-11-11 |
 | 9 | Źródła dryfu (replan reszty etapu 9) | Brak PR gałęzi (`gh pr list` pusty), wszystkie odstępstwa etapu 9 (117–124) zatwierdzone, edycje projektu tylko w zmianie [G12-AC4](change-design.md#g12-ac4) | none | 2026-11-11 |
+| 10 | Wydanie (zadanie 78) wykonuje właściciel, bo ma dostęp do zdalnego repo | Push działa tylko z poświadczeniami `gh` (keychain daje 403); 2 commity niewypchnięte; repo pozwala na commit scalający | Decyzja właściciela: push, PR i tag robi agent za zgodą, scalenie właściciel (zadania 106–109) | 2026-11-11 |
+| 10 | Status `done` przed PR, bez commita na gałęzi po scaleniu | Status etapu 10 i planu też musi trafić na gałąź przed scaleniem | Zadanie 106 ustawia etap 10 `done` i plan `Done`; dowody 107–109 w opisie PR i wiadomości końcowej, bez commita na `main` po tagu | 2026-11-11 |
+| 10 | Kod sprawdzony przed wydaniem | Strażnik PASS na `c31003a`, `swift test` na `db937c4`; później tylko dokumentacja | Zadanie 106 sprawdza pusty `git diff` kodu od `c31003a`, bez ponownego `swift test` i strażnika | 2026-11-11 |
+| 10 | Determinizm [G10-AC5](change-design.md#g10-ac5) udowodniony | Odstępstwo nr 130: jednorazowo różne hashe testu stress-300, nieodtworzone, przyczyna nieznana | Decyzja właściciela: wydanie ze znanym ryzykiem, wpis w opisie PR (zadanie 107) | 2026-11-11 |
+| 10 | Źródła dryfu | Brak PR gałęzi, brak edycji projektu po `ab130ae`, brak odstępstw `pending`; PR #1 już w gałęzi; przegląd `review-implementation` pominięty decyzją właściciela | none | 2026-11-11 |
 
 ## Implementation deviations
 
