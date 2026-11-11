@@ -268,8 +268,9 @@ kernel void nativeClearAdjacency(constant NativeControl &control [[buffer(0)]],
 }
 
 // Każdy aktywny kontakt trafia do wiersza k obu końców; miejsce przydziela atomowy licznik, a kolejność
-// ustala dopiero nativeBuildAdjacency (sortowanie wiersza po sąsiedzie), więc nie zależy od harmonogramu.
-// Wiersz pełny odrzuca kontakt i zwiększa licznik przepełnienia.
+// wewnątrz wiersza ustala dopiero nativeBuildAdjacency (sortowanie po sąsiedzie), więc przy stopniu <= k
+// wynik nie zależy od harmonogramu. Wiersz pełny odrzuca kontakt i zwiększa licznik przepełnienia; WYBÓR odrzuconych
+// kontaktów (kto dostał slot < k) zależy od kolejności wątków GPU, więc po przepełnieniu wynik NIE jest deterministyczny.
 void nativeAppendAdjacency(device uint4 *adjacency, device atomic_uint *degrees, uint limit, uint bubble,
                            uint4 edge, device atomic_uint *overflow) {
     uint slot = atomic_fetch_add_explicit(degrees + bubble, 1, memory_order_relaxed);

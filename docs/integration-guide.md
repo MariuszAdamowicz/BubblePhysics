@@ -69,6 +69,8 @@ private func advanceAndPresent(world: BubbleWorld, seconds: TimeInterval, comman
 
 Świat sam pauzuje, gdy aplikacja przechodzi w tło (`WorldConfiguration.automaticPause`, domyślnie włączone; na iOS według powiadomień UIKit, własne źródło podaje parametr `lifecycle:` inicjalizatora). W pauzie `advance` zwraca ostatnią klatkę, nie rysuje i nie zatwierdza bufora, a po powrocie pierwszy przyrost czasu jest odrzucany, więc czas spędzony w tle nie jest czasem gry. Pauza ręczna (`pause()` i `resume()`) jest od automatycznej niezależna. Błąd wykonania bufora na GPU albo wartości nieskończone kończą świat stanem „zawiódł” (`diagnostics.failureReason`); dalej prowadzi tylko nowy `BubbleWorld`.
 
+Limit kontaktów: solver trzyma na jedną bańkę najwyżej 128 kontaktów w kroku (`diagnostics.contactCandidateOverflow` liczy odrzucone). Poniżej limitu wynik kroku jest deterministyczny, a po jego przekroczeniu to, które kontakty zostaną zachowane, zależy od kolejności wątków GPU, więc dwa przebiegi tej samej sceny mogą się różnić. Gra, która widzi niezerowy `contactCandidateOverflow`, jest poza zakresem gwarancji determinizmu (typowo: bańki ściśnięte w gęstą kupkę).
+
 <!-- guide-region: lifecycle -->
 ```swift
 /// Konfiguracja ma `automaticPause` (domyślnie włączone): w tle świat pauzuje sam i po powrocie odrzuca czas
