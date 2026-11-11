@@ -418,10 +418,12 @@ final class CapacityMeasurementTests: XCTestCase {
     }
 
     /// Klatka, której `advance` zgłasza problem, ucina serię: raport nie ma pełnej próbki, a poziom jest nieważny.
+    /// Napęd kinematyczny z ogromną wartością jest odrzucany w stagerze, więc klatkę psuje ogromna skończona siła globalna
+    /// (wartości stanu przepełniają się do ∞, świat kończy się jako `.worldFailed`).
     func testRunWithAFailedFrameCutsTheSeriesAndGivesAnInvalidLevel() async throws {
         let device = try device()
         let spec = BenchmarkSceneSpec.capacity(bubbleCount: 100).addingStepTransaction { step in
-            step == 1 ? WorldTransaction().setKinematicDrive(self.triangleID, drive: .velocity(linear: [3e38, 3e38], angular: 3e38)) : nil
+            step == 1 ? WorldTransaction().setGlobalForce([3e38, 3e38]) : nil
         }
         let report = try await PublicWorldStressBenchmark.run(device: device, spec: spec, renderSplit: false,
             warmupFrames: 1, measuredFrames: 4, progress: { _, _ in })

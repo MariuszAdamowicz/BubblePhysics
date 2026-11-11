@@ -88,4 +88,56 @@ final class MotionCommandTests: XCTestCase {
         XCTAssertGreaterThan(rejecting.stepIndex, first.stepIndex)
         XCTAssertNil(world.diagnostics.lastAdvanceIssue)
     }
+
+    /// Skończona, ale ogromna wartość napędu (target / velocity) przepełniała `Float` dopiero przy dzieleniu przez `dt`
+    /// w kroku: transakcja nie była odrzucona ani zastosowana i świat stał. Ma być odrzucona w stagerze.
+    func testHugeFiniteKinematicDriveRejectsTheTransactionAndTheWorldKeepsStepping() async throws {
+        let drives: [(String, KinematicDrive)] = [
+            ("target.position", .target(position: [3e38, 0], rotation: 0)),
+            ("target.rotation", .target(position: .zero, rotation: 3e38)),
+            ("velocity.linear", .velocity(linear: [0, -3e38], angular: 0)),
+            ("velocity.angular", .velocity(linear: .zero, angular: 3e38)),
+        ]
+        for (name, drive) in drives {
+            let world = try BubbleWorld(configuration: WorldConfiguration(simulationRegion:
+                WorldRectangle(min: [-20,-20], max: [20,20])))
+            let id = ObjectID(rawValue: 1)
+            world.submit(try WorldTransaction()
+                .updatePhysicsMaterial(.init(rawValue: 1), material: PhysicsMaterial(kind: .rigid))
+                .updateRenderMaterial(.init(rawValue: 1), material: try RenderMaterial())
+                .add(.rigidBody(RigidBodyDescriptor(id: id, vertices: [[0, 0], [2, 0], [2, 2], [0, 2]], motionRole: .kinematic,
+                    physicsMaterialID: .init(rawValue: 1), renderMaterialID: .init(rawValue: 1)))))
+            let first = await world.advance(by: 1.0 / 60)
+            XCTAssertEqual(first.stepIndex, 1, name)
+            let token = world.submit(WorldTransaction().setKinematicDrive(id, drive: drive))
+            let rejecting = await world.advance(by: 1.0 / 60)
+            XCTAssertTrue(rejecting.events.contains { event in
+                if case .transactionRejected(let rejected, _) = event { return rejected == token }
+                return false
+            }, "\(name): transakcja z ogromną wartością jest odrzucona")
+            XCTAssertNil(world.diagnostics.lastAdvanceIssue, name)
+            let next = await world.advance(by: 1.0 / 60)
+            XCTAssertEqual(next.stepIndex, rejecting.stepIndex + 1, "\(name): świat nie stoi po odrzuconej transakcji")
+            XCTAssertNil(world.diagnostics.lastAdvanceIssue, name)
+        }
+    }
+
+    /// Wartości dużo większe niż realny świat, ale poniżej limitu, nadal przechodzą (limit nie jest zbyt ciasny).
+    func testLargeButReasonableKinematicTargetIsAccepted() async throws {
+        let world = try BubbleWorld(configuration: WorldConfiguration(simulationRegion:
+            WorldRectangle(min: [-20,-20], max: [20,20])))
+        let id = ObjectID(rawValue: 1)
+        world.submit(try WorldTransaction()
+            .updatePhysicsMaterial(.init(rawValue: 1), material: PhysicsMaterial(kind: .rigid))
+            .updateRenderMaterial(.init(rawValue: 1), material: try RenderMaterial())
+            .add(.rigidBody(RigidBodyDescriptor(id: id, vertices: [[0, 0], [2, 0], [2, 2], [0, 2]], motionRole: .kinematic,
+                physicsMaterialID: .init(rawValue: 1), renderMaterialID: .init(rawValue: 1)))))
+        _ = await world.advance(by: 1.0 / 60)
+        let token = world.submit(WorldTransaction().setKinematicDrive(id, drive: .velocity(linear: [1000, 0], angular: 1)))
+        let frame = await world.advance(by: 1.0 / 60)
+        XCTAssertFalse(frame.events.contains { event in
+            if case .transactionRejected(let rejected, _) = event { return rejected == token }
+            return false
+        })
+    }
 }

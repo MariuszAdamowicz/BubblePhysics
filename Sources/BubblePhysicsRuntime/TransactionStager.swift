@@ -287,9 +287,11 @@ private struct StagingContext {
         case .setKinematicDrive(let id, let drive):
             switch drive {
             case .velocity(let linear, let angular):
-                try requireFinite(linear, "kinematicDrive.linear"); try requireFinite(angular, "kinematicDrive.angular")
+                try requireDriveMagnitude(linear.x, "kinematicDrive.linear"); try requireDriveMagnitude(linear.y, "kinematicDrive.linear")
+                try requireDriveMagnitude(angular, "kinematicDrive.angular")
             case .target(let position, let rotation):
-                try requireFinite(position, "kinematicDrive.position"); try requireFinite(rotation, "kinematicDrive.rotation")
+                try requireDriveMagnitude(position.x, "kinematicDrive.position"); try requireDriveMagnitude(position.y, "kinematicDrive.position")
+                try requireDriveMagnitude(rotation, "kinematicDrive.rotation")
             case .path: break // `PathDrive.init` już sprawdza punkty i prędkość.
             }
             var existing = try object(id)
@@ -492,6 +494,17 @@ private struct StagingContext {
         case .forceField(let value): try state.configuration.validate(value)
         case .sensor(let value): try state.configuration.validate(value)
         }
+    }
+
+    /// Górna granica modułu składowej napędu kinematycznego (pozycja, obrót, prędkość). Solver dzieli różnicę póz przez `dt`
+    /// (`.target`) i mnoży prędkość przez czas (`.velocity`); skończona, ale ogromna wartość (np. 3e38) przepełniała `Float`
+    /// dopiero w kroku i zatrzymywała świat. 1e6 jest o rzędy wielkości ponad każdym realnym światem (dokładność `Float`
+    /// przy 1e6 to ok. 0,06), a `2·1e6 / dt` mieści się w `Float` dla każdego `fixedTimeStep` ≥ 1e-30.
+    private static let maximumDriveMagnitude: Float = 1_000_000
+
+    private func requireDriveMagnitude(_ value: Float, _ name: String) throws {
+        try requireFinite(value, name)
+        guard abs(value) <= Self.maximumDriveMagnitude else { throw ModelValidationError.valueOutOfRange(name) }
     }
 
     func validate(_ transition: ParameterTransition) throws {
