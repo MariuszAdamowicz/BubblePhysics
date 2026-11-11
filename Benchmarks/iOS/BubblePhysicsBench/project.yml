@@ -26,6 +26,8 @@ targets:
       - package: BubblePhysics
         product: BubblePhysicsMetalRender
       - package: BubblePhysics
+        product: BubblePhysicsMetalRenderBenchmark
+      - package: BubblePhysics
         product: BubblePhysicsAssets
     configFiles:
       Debug: Signing.xcconfig

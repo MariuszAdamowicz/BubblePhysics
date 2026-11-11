@@ -76,7 +76,7 @@ Testy Metal działają na macOS z lokalnym GPU. Źródła shaderów są dołącz
 
 ## Benchmark na urządzeniu
 
-Aplikacja hosta iOS jest w `Benchmarks/iOS/BubblePhysicsBench` i ma jeden ekran, który uruchamia `PublicWorldStressBenchmark` na wybranej scenie. Świat i renderer (`BubblePhysicsMetalRender`) działają w tym samym command bufferze co krok fizyki, a render idzie poza ekranem w natywnej rozdzielczości ekranu (`UIScreen.main.nativeBounds`):
+Aplikacja hosta iOS jest w `Benchmarks/iOS/BubblePhysicsBench` i ma jeden ekran, który uruchamia `PublicWorldStressBenchmark` (moduł i produkt `BubblePhysicsMetalRenderBenchmark`, poza rendererem gry) na wybranej scenie. Świat i renderer (`BubblePhysicsMetalRender`) działają w tym samym command bufferze co krok fizyki, a render idzie poza ekranem w natywnej rozdzielczości ekranu (`UIScreen.main.nativeBounds`):
 
 | Scena | Skład | Bramka p95 |
 |-------|-------|------------|

@@ -91,7 +91,7 @@ Usunięcie obiektu po wyjściu z regionu symulacji nie jest transakcją, więc n
 | `BubblePhysicsMetalRender.makeContourVertexFunction`, `RenderStylePipeline` | Brak (własne shadery usunięto). Własne rysowanie przez `RenderHooks`. |
 | `BubblePhysicsMetalRender.encode` | `encode(world:viewport:commandBuffer:renderPassDescriptor:hooks:)`; `hooks` ma wartość domyślną `.none`, więc dotychczasowe wywołania działają. Pass wymaga tylko koloru, bez bufora szablonu. |
 | `BubblePhysicsMetalRenderError.bufferAllocationFailed` | Nowy przypadek: nie udało się przydzielić bufora pomocniczego klatki. Błąd odrzuca klatkę (`.frameRejected`). |
-| `PublicWorldStressBenchmark.measure` | `measure(device:scene:renderSize:progress:)`: scena (`.stress(bubbleCount:)`, `.mixed`, `.decals`, `.acceptance`) i rozmiar celu w pikselach (`nil`: 375 × wysokość regionu). |
+| `PublicWorldStressBenchmark.measure` | `measure(device:scene:renderSize:progress:)`: scena (`.stress(bubbleCount:)`, `.mixed`, `.decals`, `.acceptance`) i rozmiar celu w pikselach (`nil`: 375 × wysokość regionu). Benchmark przeniesiono do modułu `BubblePhysicsMetalRenderBenchmark` (osobny produkt), więc wywołanie wymaga `import BubblePhysicsMetalRenderBenchmark`. |
 
 ## Symbole `package` widoczne w diffie
 
@@ -106,3 +106,7 @@ Usunięcie obiektu po wyjściu z regionu symulacji nie jest transakcją, więc n
 ## Narzędzia diagnostyczne w `BubblePhysicsNativeMetalDiagnostics`
 
 Narzędzia, które budowały wejście solvera przez `ReferenceWorld`, przeniesiono z `BubblePhysicsNativeMetal` do nowego modułu `BubblePhysicsNativeMetalDiagnostics` (w produkcie `BubblePhysicsBenchmarkSupport`): `NativeMetalBenchmarkRunner`, `NativeMetalWorldRunner`, `VisualSimulationDriver`, `NativeMetalVisualReplay` i `NativeMetalQualityEnvelope`, razem z adapterem `ReferenceSolverInputAdapter`. `BubblePhysicsNativeMetal` nie reeksportuje już `BubblePhysicsReference`, więc kod, który korzystał z tych narzędzi, dopisuje `import BubblePhysicsNativeMetalDiagnostics` (i `import BubblePhysicsReference`, gdy używa `ReferenceWorld`). Gry produkcyjne nie zależą od żadnego z tych modułów.
+
+## Benchmark publicznego świata w `BubblePhysicsMetalRenderBenchmark`
+
+`PublicWorldStressBenchmark` (sceny, tryb pojemności, bramki i raporty `PublicWorldStressReport`, `PublicWorldCapacityReport`, `PublicWorldCapacityProgress`) przeniesiono z `BubblePhysicsMetalRender` do modułu `BubblePhysicsMetalRenderBenchmark` w osobnym produkcie o tej samej nazwie. Renderer, który linkuje gra, nie zawiera już harnessu benchmarku. Aplikacja benchmarku i strażnik wydajności linkują nowy produkt i dopisują `import BubblePhysicsMetalRenderBenchmark`.

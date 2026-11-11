@@ -475,8 +475,8 @@ bool nativeRigidInside(float2 p, NativeRigidBody body, device float2 *vertices, 
 // wynik niesie ją w tym samym zapisie.
 struct NativeHitTestResult { ulong identity; uint layer; uint found; };
 
-// Wątek na punkt, na buforach roboczych tego kroku. Bańka: kontur po kroku, parzystość przecięć (kontur zdeformowany,
-// nie koło nominalne). Bryła: dokładny kształt (trójkąty, koło, kapsuła). Obiekty usunięte przez region nie biorą udziału.
+// Wątek na punkt, na buforach roboczych tego kroku. Bańka: najpierw odrzucenie po AABB konturu, potem kontur po kroku,
+// parzystość przecięć (kontur zdeformowany, nie koło nominalne). Bryła: dokładny kształt (trójkąty, koło, kapsuła). Obiekty usunięte przez region nie biorą udziału.
 // counts: liczba punktów, liczba brył, stride konturu.
 kernel void nativeHitTest(device float2 *points [[buffer(0)]],
     device float2 *contourPoints [[buffer(1)]], device uint *contourCounts [[buffer(2)]],
@@ -489,6 +489,10 @@ kernel void nativeHitTest(device float2 *points [[buffer(0)]],
     bool found = false; uint bestLayer = 0; ulong bestID = 0;
     for (uint i = 0; i < control.counts.x; ++i) {
         if (bubbles[i].publicFlags.w == 1) continue;
+        // AABB konturu z `nativePrepareRenderData` (przesuwany przy zawinięciu): punkt poza nim nie leży w konturze,
+        // więc pętla po punktach konturu biegnie tylko dla baniek, których obwiednia zawiera punkt.
+        float4 box = bubbles[i].bounds;
+        if (any(query < box.xy) || any(query > box.zw)) continue;
         uint count = min(contourCounts[i], counts.z);
         if (count < 3) continue;
         bool inside = false;

@@ -1,5 +1,6 @@
 import BubblePhysics
 import BubblePhysicsAssets
+import BubblePhysicsMetalRender
 import Metal
 import CoreGraphics
 import Foundation

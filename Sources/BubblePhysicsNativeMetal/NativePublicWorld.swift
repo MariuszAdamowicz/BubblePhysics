@@ -113,6 +113,9 @@ package final class NativePublicWorld {
         solver = try NativeMetalSolver(device: device, commandExecutor: commandExecutor, configuration: configuration)
     }
     package var hasSensorPairHistory: Bool { solver.hasSensorPairHistory }
+    /// Krok bez GPU (brak ciał z masą) kończy wszystkie pary w `EventCompactor`, więc i tu historia par musi zniknąć;
+    /// inaczej para o tych samych ID dodana później nie dostałaby `contactBegan`.
+    package func forgetContactHistory() { contactHistory = [] }
     package var publishedRenderHandoff: NativeMetalRenderHandoff? { solver.publishedRenderHandoff }
     package var publishedContourCPUReadbackCount: Int { solver.publishedContourCPUReadbackCount }
     package var publishedTelemetry: NativeMetalFrameTelemetry? { solver.publishedSolverFrame?.telemetry }

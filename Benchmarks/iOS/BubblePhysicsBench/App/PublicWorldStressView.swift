@@ -1,4 +1,5 @@
 import BubblePhysicsMetalRender
+import BubblePhysicsMetalRenderBenchmark
 import Metal
 import SwiftUI
 import UIKit

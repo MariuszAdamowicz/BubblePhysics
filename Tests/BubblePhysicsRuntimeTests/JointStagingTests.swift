@@ -100,6 +100,54 @@ final class JointStagingTests: XCTestCase {
             TransactionRejection(operationIndex: 1, reason: .unsupportedJointBody(joint(2))))])
     }
 
+    /// Skończona, ale ogromna kotwica, kąt odniesienia albo parametr dystansu (np. 3e38) przepełniała `Float` dopiero
+    /// w kroku solvera i zatrzymywała świat; jak napęd kinematyczny ma być odrzucona przy wejściu transakcji.
+    func testHugeFiniteJointValuesAreRejectedAtStaging() throws {
+        let state = try world([box(1), box(2, at: 5)])
+        let huge: Float = 3e38
+        let cases: [(Joint, String)] = [
+            (try Joint(id: joint(1), bodyA: id(1), bodyB: id(2), anchorA: [huge, 0], kind: .weld), "joint.anchorA"),
+            (try Joint(id: joint(1), bodyA: id(1), bodyB: nil, anchorB: [0, -huge], kind: .weld), "joint.anchorB"),
+            (try Joint(id: joint(1), bodyA: id(1), bodyB: id(2), referenceAngle: huge, kind: .weld), "joint.referenceAngle"),
+            (try Joint(id: joint(1), bodyA: id(1), bodyB: id(2), kind: .distance(length: huge, softness: 0, damping: 0)),
+             "joint.length"),
+            (try Joint(id: joint(1), bodyA: id(1), bodyB: id(2), kind: .distance(length: 5, softness: huge, damping: 0)),
+             "joint.softness"),
+            (try Joint(id: joint(1), bodyA: id(1), bodyB: id(2), kind: .distance(length: 5, softness: 0, damping: huge)),
+             "joint.damping"),
+        ]
+        for (candidate, name) in cases {
+            assertRejected(WorldTransaction().addJoint(candidate), against: state, index: 0,
+                           reason: .invalidValue(.valueOutOfRange(name)))
+        }
+        // Granica 1e6 jest jeszcze dopuszczalna.
+        _ = try assertAccepted(WorldTransaction().addJoint(try Joint(id: joint(1), bodyA: id(1), bodyB: id(2),
+            anchorA: [1e6, -1e6], kind: .distance(length: 1e6, softness: 1e6, damping: 1e6))), against: state)
+    }
+
+    /// Zakres i docelowa prędkość zawiasu trafiają do solvera tak jak kotwice; ogromne skończone wartości (np. 3e38)
+    /// przepełniały `Float` w kroku (świat `failed` albo każdy krok odrzucony), więc odrzuca je wejście transakcji.
+    func testHugeFiniteHingeLimitsAndMotorTargetAreRejectedAtStaging() throws {
+        let state = try world([box(1), box(2, at: 5)])
+        func hingeJoint(_ limits: HingeLimits?, _ motor: HingeMotor?) throws -> Joint {
+            try Joint(id: joint(1), bodyA: id(1), bodyB: id(2), kind: .hinge(limits: limits, motor: motor))
+        }
+        let cases: [(Joint, String)] = [
+            (try hingeJoint(try HingeLimits(lower: -3e38, upper: 0), nil), "hinge.lower"),
+            (try hingeJoint(try HingeLimits(lower: 1e30, upper: 1e30), nil), "hinge.lower"),
+            (try hingeJoint(try HingeLimits(lower: 0, upper: 3e38), nil), "hinge.upper"),
+            (try hingeJoint(nil, try HingeMotor(targetAngularVelocity: 3e38, maximumTorque: 1)),
+             "hinge.motor.targetAngularVelocity"),
+        ]
+        for (candidate, name) in cases {
+            assertRejected(WorldTransaction().addJoint(candidate), against: state, index: 0,
+                           reason: .invalidValue(.valueOutOfRange(name)))
+        }
+        // Granica 1e6 jest jeszcze dopuszczalna.
+        _ = try assertAccepted(WorldTransaction().addJoint(try hingeJoint(try HingeLimits(lower: -1e6, upper: 1e6),
+            try HingeMotor(targetAngularVelocity: -1e6, maximumTorque: 1e6))), against: state)
+    }
+
     // MARK: P-B-70: role ciał
 
     func testJointBetweenTwoImmobileBodiesOrWithPathDrivenBodyIsRejected() throws {

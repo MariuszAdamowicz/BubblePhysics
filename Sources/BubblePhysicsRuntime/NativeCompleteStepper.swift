@@ -105,6 +105,7 @@ package final class NativeCompleteStepper: CompleteStepper {
             // Bez kroku GPU pary usuniętych obiektów i tak dostają koniec kontaktu.
             // Bez bańki i bryły nie ma czego trafić: każdy punkt hit-testu daje puste miejsce.
             let noHits = [ObjectID?](repeating: nil, count: hitTests.count)
+            native?.forgetContactHistory()
             guard !previousContacts.isEmpty else {
                 return .init(state: state, hitTestResults: noHits, snappedObjectIDs: batch.appearedObjectIDs)
             }

@@ -1,4 +1,5 @@
 import BubblePhysicsMetalRender
+import BubblePhysicsMetalRenderBenchmark
 import Foundation
 import Metal
 import XCTest
