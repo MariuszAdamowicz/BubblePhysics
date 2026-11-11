@@ -39,6 +39,23 @@ struct NativeRigidBody: Equatable {
     var limits: SIMD4<Float>
 }
 
+/// Lustro `NativeRigidCorrection` z shadera (64 B): korekta pary na wierszu kontaktu. `first.w` i `second.w` niosą normalną,
+/// `velocityFirst.w` i `velocitySecond.w` punkt kontaktu. Układ pilnuje `NativeMetalShaderABITests`.
+struct NativeRigidCorrection: Equatable {
+    var first: SIMD4<Float>
+    var second: SIMD4<Float>
+    var velocityFirst: SIMD4<Float>
+    var velocitySecond: SIMD4<Float>
+}
+
+/// Lustro `NativeRigidWall` z shadera (48 B): ostatni kontakt bryły ze ścianą zatrzymany przez sweep. `participants` to
+/// (bryła, właściciel ściany), `geometry` to normalna i punkt, `extra.x` to zatrzymany pęd. Układ pilnuje `NativeMetalShaderABITests`.
+struct NativeRigidWall: Equatable {
+    var participants: SIMD2<Int64>
+    var geometry: SIMD4<Float>
+    var extra: SIMD4<Float>
+}
+
 struct NativeRigidGeometry {
     let vertices: [SIMD2<Float>]
     let triangles: [SIMD4<UInt32>]
@@ -177,11 +194,11 @@ final class NativeRigidPolygonState {
         _ = try buffer("published", count: count, stride: MemoryLayout<NativeRigidBody>.stride)
         _ = try buffer("working", count: count, stride: MemoryLayout<NativeRigidBody>.stride)
         let updates = try buffer("updates", count: count, stride: MemoryLayout<NativeRigidBody>.stride)
-        // Wiersz bryły: klucz pary (NativeCandidate, 32 B) i korekta (NativeRigidCorrection, 64 B) na tym samym miejscu.
-        _ = try buffer("contacts", count: rowCapacity, stride: 64)
+        // Wiersz bryły: klucz pary (NativeCandidate, 32 B) i korekta (NativeRigidCorrection) na tym samym miejscu.
+        _ = try buffer("contacts", count: rowCapacity, stride: MemoryLayout<NativeRigidCorrection>.stride)
         _ = try buffer("candidates", count: rowCapacity, stride: 32)
         _ = try buffer("rowCounts", count: count, stride: MemoryLayout<SIMD2<UInt32>>.stride)
-        _ = try buffer("walls", count: count, stride: 48)
+        _ = try buffer("walls", count: count, stride: MemoryLayout<NativeRigidWall>.stride)
         let control = try buffer("control", count: 1, stride: 16)
         control.contents().storeBytes(of: SIMD4(UInt32(count), UInt32(bubbleCount), UInt32(limit), 0), as: SIMD4<UInt32>.self)
         records = []; changes = []; remaps = []
@@ -325,8 +342,9 @@ final class NativeRigidPolygonState {
     func contactRecords() -> [ContactRecord] {
         let limit = NativeMetalSolver.candidateLimitPerObject
         let counts = rowCounts.contents().bindMemory(to: SIMD2<UInt32>.self, capacity: max(1, count))
-        let keys = candidates.contents(), wallRecords = walls.contents()
-        let values = contacts.contents().bindMemory(to: SIMD4<Float>.self, capacity: max(1, rowCapacity) * 4)
+        let keys = candidates.contents()
+        let wallRecords = walls.contents().bindMemory(to: NativeRigidWall.self, capacity: max(1, count))
+        let corrections = contacts.contents().bindMemory(to: NativeRigidCorrection.self, capacity: max(1, rowCapacity))
         var result: [ContactRecord] = []
         var emittedBodyPairs = Set<SIMD2<UInt64>>()
         for body in 0..<count {
@@ -334,9 +352,9 @@ final class NativeRigidPolygonState {
                 let index = body * limit + slot
                 let kind = keys.load(fromByteOffset: index * 32 + 16, as: UInt32.self)
                 if kind == 3, Int(keys.load(fromByteOffset: index * 32 + 20, as: UInt32.self)) != body { continue }
-                let normal = WorldPoint(values[index * 4].w, values[index * 4 + 1].w)
+                let normal = WorldPoint(corrections[index].first.w, corrections[index].second.w)
                 guard normal.x != 0 || normal.y != 0 else { continue }
-                let point = WorldPoint(values[index * 4 + 2].w, values[index * 4 + 3].w)
+                let point = WorldPoint(corrections[index].velocityFirst.w, corrections[index].velocitySecond.w)
                 let first = ObjectID(rawValue: UInt64(bitPattern: keys.load(fromByteOffset: index * 32, as: Int64.self)))
                 let second = ObjectID(rawValue: UInt64(bitPattern: keys.load(fromByteOffset: index * 32 + 8, as: Int64.self)))
                 if kind == 3 { emittedBodyPairs.insert(SIMD2(first.rawValue, second.rawValue)) }
@@ -346,16 +364,16 @@ final class NativeRigidPolygonState {
         }
         let position = Dictionary(uniqueKeysWithValues: current.enumerated().map { ($0.element.object.descriptor.id, $0.offset) })
         for body in 0..<count {
-            let geometry = wallRecords.load(fromByteOffset: body * 48 + 16, as: SIMD4<Float>.self)
+            let geometry = wallRecords[body].geometry
             guard geometry.x != 0 || geometry.y != 0 else { continue }
             let id = current[body].object.descriptor.id
-            let owner = ObjectID(rawValue: UInt64(bitPattern: wallRecords.load(fromByteOffset: body * 48 + 8, as: Int64.self)))
+            let owner = ObjectID(rawValue: UInt64(bitPattern: wallRecords[body].participants.y))
             guard let other = position[owner] else { continue }
             // Normalna pary jest liczona od bryły o mniejszym indeksie.
             let first = body < other ? id : owner, second = body < other ? owner : id
             guard emittedBodyPairs.insert(SIMD2(first.rawValue, second.rawValue)).inserted else { continue }
             let wallNormal = WorldPoint(geometry.x, geometry.y)
-            let stopped = wallRecords.load(fromByteOffset: body * 48 + 32, as: Float.self)
+            let stopped = wallRecords[body].extra.x
             result.append(.init(first: first, second: second, point: WorldPoint(geometry.z, geometry.w),
                                 normal: body < other ? -wallNormal : wallNormal, impulseSum: stopped))
         }

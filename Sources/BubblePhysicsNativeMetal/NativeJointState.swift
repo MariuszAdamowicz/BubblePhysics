@@ -110,7 +110,7 @@ final class NativeJointState {
                                                 UInt32(clamping: iterations)), as: SIMD4<UInt32>.self)
         guard count > 0 else { return }
         _ = try buffer("records", count: count, stride: MemoryLayout<NativeJointRecord>.stride)
-        _ = try buffer("corrections", count: count, stride: 64)
+        _ = try buffer("corrections", count: count, stride: MemoryLayout<NativeRigidCorrection>.stride)
         let referenceTotal = lists.reduce(0) { $0 + $1.count }
         _ = try buffer("references", count: referenceTotal, stride: MemoryLayout<SIMD2<UInt32>>.stride)
         _ = try buffer("ranges", count: entityCount, stride: MemoryLayout<SIMD4<UInt32>>.stride)

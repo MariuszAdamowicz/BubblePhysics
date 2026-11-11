@@ -113,6 +113,15 @@ final class NativeMetalShaderABITests: XCTestCase {
                 ("filter", MemoryLayout<NativeRigidBody>.offset(of: \.filter)),
                 ("shape", MemoryLayout<NativeRigidBody>.offset(of: \.shape)),
                 ("limits", MemoryLayout<NativeRigidBody>.offset(of: \.limits))]),
+            Probe(name: "rigidCorrection", mslSize: "NativeRigidCorrection", swiftSize: MemoryLayout<NativeRigidCorrection>.stride, fields: [
+                ("first", MemoryLayout<NativeRigidCorrection>.offset(of: \.first)),
+                ("second", MemoryLayout<NativeRigidCorrection>.offset(of: \.second)),
+                ("velocityFirst", MemoryLayout<NativeRigidCorrection>.offset(of: \.velocityFirst)),
+                ("velocitySecond", MemoryLayout<NativeRigidCorrection>.offset(of: \.velocitySecond))]),
+            Probe(name: "rigidWall", mslSize: "NativeRigidWall", swiftSize: MemoryLayout<NativeRigidWall>.stride, fields: [
+                ("participants", MemoryLayout<NativeRigidWall>.offset(of: \.participants)),
+                ("geometry", MemoryLayout<NativeRigidWall>.offset(of: \.geometry)),
+                ("extra", MemoryLayout<NativeRigidWall>.offset(of: \.extra))]),
             Probe(name: "joint", mslSize: "NativeJoint", swiftSize: MemoryLayout<NativeJointRecord>.stride, fields: [
                 ("ends", MemoryLayout<NativeJointRecord>.offset(of: \.ends)),
                 ("anchors", MemoryLayout<NativeJointRecord>.offset(of: \.anchors)),
