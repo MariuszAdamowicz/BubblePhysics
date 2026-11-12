@@ -16,7 +16,8 @@ public enum WorldObject: Equatable, Sendable {
     }
 }
 
-/// Atrybuty wyniku operacji semantycznej. Pozycję, prędkość, masę i kontur wyznacza silnik.
+/// Atrybuty wyniku operacji semantycznej. Pozycję, prędkość i kontur wyznacza silnik,
+/// a masę także, chyba że nadpisuje ją `mass`.
 public struct BubbleResult: Equatable, Sendable {
     public let id: ObjectID
     public let physicsMaterialID: PhysicsMaterialID
@@ -29,11 +30,19 @@ public struct BubbleResult: Equatable, Sendable {
     public let layer: Int32
     /// Naklejka wyniku scalenia albo podziału; `nil` oznacza brak.
     public let decal: Decal?
+    /// Polityka jazdy wyniku scalenia albo podziału; domyślnie `.standard`.
+    public let drivePolicy: BubbleDrivePolicy
+    /// Masa wyniku scalenia; `nil` oznacza sumę mas źródeł. Prędkość wyniku zawsze wynosi pęd źródeł
+    /// podzielony przez sumę ich mas, więc przy nadpisanej masie pęd nie jest zachowany. Pole działa
+    /// tylko w `mergeBubbles`: w `splitBubble` wartość różna od `nil` odrzuca transakcję.
+    public let mass: Float?
     public init(id: ObjectID, physicsMaterialID: PhysicsMaterialID, renderMaterialID: RenderMaterialID,
                 motionRole: MotionRole = .dynamic, regionExitPolicy: RegionExitPolicy = .remove,
                 mergeGroups: MergeGroupSet = [], eventInterest: EventInterest = [],
-                filter: CollisionFilter = .default, layer: Int32 = 0, decal: Decal? = nil) {
+                filter: CollisionFilter = .default, layer: Int32 = 0, decal: Decal? = nil,
+                drivePolicy: BubbleDrivePolicy = .standard, mass: Float? = nil) {
         self.filter = filter; self.layer = layer; self.decal = decal
+        self.drivePolicy = drivePolicy; self.mass = mass
         self.id = id; self.physicsMaterialID = physicsMaterialID; self.renderMaterialID = renderMaterialID
         self.motionRole = motionRole; self.regionExitPolicy = regionExitPolicy
         self.mergeGroups = mergeGroups; self.eventInterest = eventInterest

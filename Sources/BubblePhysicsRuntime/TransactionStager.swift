@@ -566,7 +566,8 @@ private struct StagingContext {
             targetRadius: radius, mass: mass, motionRole: result.motionRole,
             regionExitPolicy: result.regionExitPolicy, physicsMaterialID: result.physicsMaterialID,
             renderMaterialID: result.renderMaterialID, mergeGroups: result.mergeGroups,
-            eventInterest: result.eventInterest, filter: result.filter, layer: result.layer, decal: result.decal))
+            eventInterest: result.eventInterest, drivePolicy: result.drivePolicy,
+            filter: result.filter, layer: result.layer, decal: result.decal))
     }
     mutating func merge(_ sources: [ObjectID], result: BubbleResult) throws {
         guard sources.count >= 2, Set(sources).count == sources.count else { throw TransactionRejectionReason.invalidStructuralOperation }
@@ -582,10 +583,11 @@ private struct StagingContext {
         // Wyłącznie logiczna rezerwacja wyniku. Kontur, kontakt i stan solvera obsługuje backend.
         let inputs = try sources.sorted { $0.rawValue < $1.rawValue }.map { try bubble($0).0 }
         let center = StructuralOperations.mergeCenter(inputs)
+        // Prędkość to pęd przez sumę mas źródeł także wtedy, gdy `result.mass` nadpisuje masę wyniku.
         let descriptor = try resultDescriptor(result,
             position: center,
             velocity: WorldPoint(Float(momentum.x / mass), Float(momentum.y / mass)),
-            radius: Float(sqrt(radiusSquared)), mass: Float(mass))
+            radius: Float(sqrt(radiusSquared)), mass: result.mass ?? Float(mass))
         for id in sources { try remove(id) }
         try add(descriptor)
         if var merged = state.objects[result.id] {
@@ -601,6 +603,10 @@ private struct StagingContext {
         }
         let shares = (Double(first.share) / totalShare, Double(second.share) / totalShare)
         guard shares.0 > 0, shares.0 < 1, shares.1 > 0, shares.1 < 1 else {
+            throw TransactionRejectionReason.invalidStructuralOperation
+        }
+        // Masa części to masa źródła razy udział; nadpisania nie da się przy niej zachować.
+        guard first.result.mass == nil, second.result.mass == nil else {
             throw TransactionRejectionReason.invalidStructuralOperation
         }
         let (existing, descriptor) = try bubble(source)
