@@ -301,6 +301,78 @@ final class TransactionStagerTests: XCTestCase {
                        reason: .invalidValue(.staticGeometryOutsideSimulationRegion))
     }
 
+    func testMergeResultTakesDrivePolicyFromBubbleResultAndDefaultsToStandard() throws {
+        let policy = try BubbleDrivePolicy(maximumSpeed: 3)
+        let initial = try TransactionStager.stage(resources().add(.bubble(bubble(1))).add(.bubble(bubble(2))), against: state()).state
+        let custom = try mergedBubble(against: initial,
+            result: BubbleResult(id: id(3), physicsMaterialID: materialID, renderMaterialID: styleID, drivePolicy: policy))
+        XCTAssertEqual(custom.drivePolicy, policy)
+        let standard = try mergedBubble(against: initial,
+            result: BubbleResult(id: id(3), physicsMaterialID: materialID, renderMaterialID: styleID))
+        XCTAssertEqual(standard.drivePolicy, .standard)
+    }
+
+    func testSplitPartsTakeDrivePolicyFromTheirBubbleResults() throws {
+        let policy = try BubbleDrivePolicy(rigidifies: false, maximumSpeed: 3)
+        let initial = try TransactionStager.stage(resources().add(.bubble(bubble(1))), against: state()).state
+        let split = try TransactionStager.stage(WorldTransaction().splitBubble(id(1),
+            first: BubbleSplitPart(result: BubbleResult(id: id(4), physicsMaterialID: materialID,
+                                                        renderMaterialID: styleID, drivePolicy: policy), share: 0.5),
+            second: BubbleSplitPart(result: BubbleResult(id: id(5), physicsMaterialID: materialID,
+                                                         renderMaterialID: styleID), share: 0.5)), against: initial).state
+        guard case .bubble(let first) = try XCTUnwrap(split.objects[id(4)]).descriptor,
+              case .bubble(let second) = try XCTUnwrap(split.objects[id(5)]).descriptor else { return XCTFail("brak baniek") }
+        XCTAssertEqual(first.drivePolicy, policy)
+        XCTAssertEqual(second.drivePolicy, .standard)
+    }
+
+    func testMergeMassOverridesResultMassAndNilKeepsTheSumOfSourceMasses() throws {
+        let initial = try TransactionStager.stage(resources().add(.bubble(bubble(1))).add(.bubble(bubble(2))), against: state()).state
+        let overridden = try mergedBubble(against: initial,
+            result: BubbleResult(id: id(3), physicsMaterialID: materialID, renderMaterialID: styleID, mass: 10))
+        XCTAssertEqual(overridden.mass, 10)
+        let summed = try mergedBubble(against: initial,
+            result: BubbleResult(id: id(3), physicsMaterialID: materialID, renderMaterialID: styleID))
+        XCTAssertEqual(summed.mass, 4)
+        assertRejected(WorldTransaction().mergeBubbles([id(1), id(2)],
+            result: BubbleResult(id: id(3), physicsMaterialID: materialID, renderMaterialID: styleID, mass: 0)),
+            against: initial, reason: .invalidValue(.nonPositiveValue("bubble.mass")))
+    }
+
+    func testMergeVelocityIsSourceMomentumOverSourceMassRegardlessOfOverriddenMass() throws {
+        let light = try BubbleDescriptor(id: id(1), position: [0, 0], velocity: [4, 0], targetRadius: 1, mass: 1,
+                                         physicsMaterialID: materialID, renderMaterialID: styleID)
+        let heavy = try BubbleDescriptor(id: id(2), position: [1, 0], velocity: [0, 0], targetRadius: 1, mass: 3,
+                                         physicsMaterialID: materialID, renderMaterialID: styleID)
+        let initial = try TransactionStager.stage(resources().add(.bubble(light)).add(.bubble(heavy)), against: state()).state
+        let merged = try mergedBubble(against: initial,
+            result: BubbleResult(id: id(3), physicsMaterialID: materialID, renderMaterialID: styleID, mass: 10))
+        XCTAssertEqual(merged.velocity.x, 1, accuracy: 1e-6)
+        XCTAssertEqual(merged.velocity.y, 0, accuracy: 1e-6)
+        XCTAssertEqual(merged.mass, 10)
+    }
+
+    func testSplitWithMassInAnyPartIsRejected() throws {
+        let initial = try TransactionStager.stage(resources().add(.bubble(bubble(1))), against: state()).state
+        let plain = BubbleResult(id: id(4), physicsMaterialID: materialID, renderMaterialID: styleID)
+        let heavy = BubbleResult(id: id(5), physicsMaterialID: materialID, renderMaterialID: styleID, mass: 1)
+        assertRejected(WorldTransaction().splitBubble(id(1), first: BubbleSplitPart(result: plain, share: 0.5),
+            second: BubbleSplitPart(result: heavy, share: 0.5)), against: initial, reason: .invalidStructuralOperation)
+        let heavyFirst = BubbleResult(id: id(4), physicsMaterialID: materialID, renderMaterialID: styleID, mass: 1)
+        let plainSecond = BubbleResult(id: id(5), physicsMaterialID: materialID, renderMaterialID: styleID)
+        assertRejected(WorldTransaction().splitBubble(id(1), first: BubbleSplitPart(result: heavyFirst, share: 0.5),
+            second: BubbleSplitPart(result: plainSecond, share: 0.5)), against: initial, reason: .invalidStructuralOperation)
+    }
+
+    private func mergedBubble(against initial: RuntimeState, result: BubbleResult) throws -> BubbleDescriptor {
+        let merged = try TransactionStager.stage(WorldTransaction().mergeBubbles([id(1), id(2)], result: result),
+                                                 against: initial).state
+        guard case .bubble(let descriptor) = try XCTUnwrap(merged.objects[result.id]).descriptor else {
+            XCTFail("wynik scalenia nie jest bańką"); throw TransactionRejectionReason.incompatibleObjectKind(result.id)
+        }
+        return descriptor
+    }
+
     private func assertRejected(_ transaction: WorldTransaction, against initial: RuntimeState? = nil,
                                 reason: TransactionRejectionReason, file: StaticString = #filePath, line: UInt = #line) {
         do {
