@@ -63,6 +63,32 @@ final class MotionCommandTests: XCTestCase {
         XCTAssertEqual(far, 0.2, accuracy: 0.01)
     }
 
+    /// Wynik scalenia jedzie z polityką z `BubbleResult`: przy `maximumSpeed` 3 przesuwa się w kroku 1/60 o ≈ 0.05,
+    /// a nie o 0.2 jak przy `.standard` z prędkością 12.
+    func testMergedBubbleDrivesWithDrivePolicyFromBubbleResult() async throws {
+        let world = try BubbleWorld(configuration: WorldConfiguration(simulationRegion:
+            WorldRectangle(min: [-20,-20], max: [20,20])))
+        let material = PhysicsMaterialID(rawValue: 1), style = RenderMaterialID(rawValue: 1)
+        let merged = ObjectID(rawValue: 3)
+        let policy = try BubbleDrivePolicy(maximumSpeed: 3)
+        world.submit(try WorldTransaction()
+            .updatePhysicsMaterial(material, material: PhysicsMaterial(kind: .bubble))
+            .updateRenderMaterial(style, material: try RenderMaterial())
+            .add(.bubble(BubbleDescriptor(id: ObjectID(rawValue: 1), position: [-1, 0], targetRadius: 0.5,
+                physicsMaterialID: material, renderMaterialID: style)))
+            .add(.bubble(BubbleDescriptor(id: ObjectID(rawValue: 2), position: [1, 0], targetRadius: 0.5,
+                physicsMaterialID: material, renderMaterialID: style)))
+            .mergeBubbles([ObjectID(rawValue: 1), ObjectID(rawValue: 2)], result: BubbleResult(id: merged,
+                physicsMaterialID: material, renderMaterialID: style, drivePolicy: policy))
+            .beginPlayerDrive(merged, target: [10, 0]))
+        let frame = await world.advance(by: 1.0 / 60)
+        XCTAssertEqual(frame.transactionReceipts.count, 1)
+        let feedback = try XCTUnwrap(frame.driveFeedback.first)
+        XCTAssertEqual(feedback.objectID, merged)
+        XCTAssertEqual(feedback.achievedPoint.x, 0.05, accuracy: 0.01)
+        XCTAssertNil(world.diagnostics.lastAdvanceIssue)
+    }
+
     /// Napęd kinematyczny z NaN ma być odrzucony razem z transakcją, a świat idzie dalej: następny `advance` robi krok bez
     /// problemu (wcześniej błąd wychodził dopiero w kroku i każdy kolejny `advance` odrzucał krok).
     func testNonFiniteKinematicDriveRejectsTheTransactionAndTheWorldKeepsStepping() async throws {
