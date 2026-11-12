@@ -32,8 +32,9 @@ public struct BubbleResult: Equatable, Sendable {
     public let decal: Decal?
     /// Polityka jazdy wyniku scalenia albo podziału; domyślnie `.standard`.
     public let drivePolicy: BubbleDrivePolicy
-    /// Masa wyniku scalenia; `nil` oznacza sumę mas źródeł. Prędkość wyniku zawsze wynosi pęd źródeł
-    /// podzielony przez sumę ich mas, więc przy nadpisanej masie pęd nie jest zachowany. Pole działa
+    /// Masa wyniku scalenia; `nil` oznacza sumę mas źródeł. Prędkość liniowa i kątowa wyniku zawsze
+    /// pochodzą z mas źródeł (pęd i moment pędu źródeł podzielone przez ich sumę mas i wynikającą z niej
+    /// bezwładność), więc przy nadpisanej masie pęd nie jest zachowany. Pole działa
     /// tylko w `mergeBubbles`: w `splitBubble` wartość różna od `nil` odrzuca transakcję.
     public let mass: Float?
     public init(id: ObjectID, physicsMaterialID: PhysicsMaterialID, renderMaterialID: RenderMaterialID,

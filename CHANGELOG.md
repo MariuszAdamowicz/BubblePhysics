@@ -8,7 +8,7 @@ Zmiany w wydaniach `BubblePhysics`. Przejście z 1.x na 2.0.0 opisuje [docs/MIGR
 
 - `BubbleResult` ma dwa nowe pola, oba z wartościami domyślnymi, więc istniejące wywołania `BubbleResult(...)` kompilują się bez zmian. W `init` są ostatnimi parametrami, po `decal:`.
   - `drivePolicy: BubbleDrivePolicy = .standard`: polityka jazdy wyniku scalenia i każdej części podziału. Wcześniej wynik zawsze dostawał `.standard` (sztywnienie i `maximumSpeed` 12).
-  - `mass: Float? = nil`: masa wyniku scalenia. `nil` oznacza sumę mas źródeł, jak dotąd. Prędkość wyniku zawsze wynosi pęd źródeł podzielony przez sumę ich mas, także przy nadpisanej masie, więc pęd nie jest wtedy zachowany. Niedodatnia albo nieskończona masa odrzuca transakcję z `invalidValue(.nonPositiveValue("bubble.mass"))` albo `invalidValue(.nonFiniteValue("bubble.mass"))`.
+  - `mass: Float? = nil`: masa wyniku scalenia. `nil` oznacza sumę mas źródeł, jak dotąd. Prędkość liniowa i kątowa wyniku zawsze pochodzą z mas źródeł (pęd i moment pędu źródeł podzielone przez ich sumę mas i wynikającą z niej bezwładność), także przy nadpisanej masie, więc pęd nie jest wtedy zachowany. Niedodatnia albo nieskończona masa odrzuca transakcję z `invalidValue(.nonPositiveValue("bubble.mass"))` albo `invalidValue(.nonFiniteValue("bubble.mass"))`.
 
 ### Zmienione
 

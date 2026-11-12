@@ -583,7 +583,7 @@ private struct StagingContext {
         // Wyłącznie logiczna rezerwacja wyniku. Kontur, kontakt i stan solvera obsługuje backend.
         let inputs = try sources.sorted { $0.rawValue < $1.rawValue }.map { try bubble($0).0 }
         let center = StructuralOperations.mergeCenter(inputs)
-        // Prędkość to pęd przez sumę mas źródeł także wtedy, gdy `result.mass` nadpisuje masę wyniku.
+        // Prędkość liniowa i kątowa wyniku pochodzą z mas źródeł także wtedy, gdy `result.mass` nadpisuje masę wyniku.
         let descriptor = try resultDescriptor(result,
             position: center,
             velocity: WorldPoint(Float(momentum.x / mass), Float(momentum.y / mass)),

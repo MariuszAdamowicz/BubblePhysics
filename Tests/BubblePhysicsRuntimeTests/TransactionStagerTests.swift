@@ -337,6 +337,9 @@ final class TransactionStagerTests: XCTestCase {
         assertRejected(WorldTransaction().mergeBubbles([id(1), id(2)],
             result: BubbleResult(id: id(3), physicsMaterialID: materialID, renderMaterialID: styleID, mass: 0)),
             against: initial, reason: .invalidValue(.nonPositiveValue("bubble.mass")))
+        assertRejected(WorldTransaction().mergeBubbles([id(1), id(2)],
+            result: BubbleResult(id: id(3), physicsMaterialID: materialID, renderMaterialID: styleID, mass: .infinity)),
+            against: initial, reason: .invalidValue(.nonFiniteValue("bubble.mass")))
     }
 
     func testMergeVelocityIsSourceMomentumOverSourceMassRegardlessOfOverriddenMass() throws {
@@ -350,6 +353,23 @@ final class TransactionStagerTests: XCTestCase {
         XCTAssertEqual(merged.velocity.x, 1, accuracy: 1e-6)
         XCTAssertEqual(merged.velocity.y, 0, accuracy: 1e-6)
         XCTAssertEqual(merged.mass, 10)
+    }
+
+    func testMergeAngularVelocityComesFromSourceMassesRegardlessOfOverriddenMass() throws {
+        let left = try BubbleDescriptor(id: id(1), position: [-1, 0], velocity: [0, 1], targetRadius: 1, mass: 1,
+                                        physicsMaterialID: materialID, renderMaterialID: styleID)
+        let right = try BubbleDescriptor(id: id(2), position: [1, 0], velocity: [0, -1], targetRadius: 1, mass: 1,
+                                         physicsMaterialID: materialID, renderMaterialID: styleID)
+        let initial = try TransactionStager.stage(resources().add(.bubble(left)).add(.bubble(right)), against: state()).state
+        func angularVelocity(_ mass: Float?) throws -> Float {
+            let result = BubbleResult(id: id(3), physicsMaterialID: materialID, renderMaterialID: styleID, mass: mass)
+            let merged = try TransactionStager.stage(WorldTransaction().mergeBubbles([id(1), id(2)], result: result),
+                                                     against: initial).state
+            return try XCTUnwrap(merged.objects[id(3)]).angularVelocity
+        }
+        let summed = try angularVelocity(nil)
+        XCTAssertNotEqual(summed, 0)
+        XCTAssertEqual(try angularVelocity(10), summed, accuracy: 1e-6)
     }
 
     func testSplitWithMassInAnyPartIsRejected() throws {
@@ -367,10 +387,11 @@ final class TransactionStagerTests: XCTestCase {
     private func mergedBubble(against initial: RuntimeState, result: BubbleResult) throws -> BubbleDescriptor {
         let merged = try TransactionStager.stage(WorldTransaction().mergeBubbles([id(1), id(2)], result: result),
                                                  against: initial).state
-        guard case .bubble(let descriptor) = try XCTUnwrap(merged.objects[result.id]).descriptor else {
-            XCTFail("wynik scalenia nie jest bańką"); throw TransactionRejectionReason.incompatibleObjectKind(result.id)
+        let descriptor: BubbleDescriptor? = switch try XCTUnwrap(merged.objects[result.id]).descriptor {
+        case .bubble(let bubble): bubble
+        default: nil
         }
-        return descriptor
+        return try XCTUnwrap(descriptor, "wynik scalenia nie jest bańką")
     }
 
     private func assertRejected(_ transaction: WorldTransaction, against initial: RuntimeState? = nil,

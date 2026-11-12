@@ -202,7 +202,7 @@ private func merge(_ first: ObjectID, _ second: ObjectID, value: Int, world: Bub
 }
 ```
 
-`BubbleResult` ma też `drivePolicy:` i `mass:` na końcu parametrów. `drivePolicy:` (domyślnie `.standard`) to polityka jazdy wyniku scalenia albo części podziału, z której korzysta `beginPlayerDrive` na nowej bańce, np. `BubbleDrivePolicy(maximumSpeed: 3)` dla wolniej prowadzonej bańki. `mass:` (domyślnie `nil`, czyli suma mas źródeł) nadpisuje masę wyniku scalenia. Prędkość wyniku zawsze wynosi pęd źródeł podzielony przez sumę ich mas, więc nadpisana masa wpływa tylko na dalszą fizykę. W `splitBubble` `mass` różne od `nil` w którejkolwiek części odrzuca transakcję z `invalidStructuralOperation`.
+`BubbleResult` ma też `drivePolicy:` i `mass:` na końcu parametrów. `drivePolicy:` (domyślnie `.standard`) to polityka jazdy wyniku scalenia albo części podziału, z której korzysta `beginPlayerDrive` na nowej bańce, np. `BubbleDrivePolicy(maximumSpeed: 3)` dla wolniej prowadzonej bańki. `mass:` (domyślnie `nil`, czyli suma mas źródeł) nadpisuje masę wyniku scalenia. Prędkość liniowa i kątowa wyniku zawsze pochodzą z mas źródeł (pęd i moment pędu źródeł podzielone przez ich sumę mas i wynikającą z niej bezwładność), więc nadpisana masa wpływa tylko na dalszą fizykę. W `splitBubble` `mass` różne od `nil` w którejkolwiek części odrzuca transakcję z `invalidStructuralOperation`.
 
 ## Formaty passu renderu
 

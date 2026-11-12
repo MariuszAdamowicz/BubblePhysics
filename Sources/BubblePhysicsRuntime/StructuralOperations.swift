@@ -22,13 +22,15 @@ enum StructuralOperations {
     }
     static func initializeMerge(_ result: inout RuntimeObject, sources inputs: [RuntimeObject]) {
         result.structuralShape = .init(origin: result.position, sources: inputs.flatMap(sources))
-        var angularMomentum: Double = 0
+        var angularMomentum: Double = 0, sourceMass: Double = 0
         for object in inputs {
             let m = Double(object.mass!), r = Double(object.targetRadius), d = object.position-result.position
+            sourceMass += m
             angularMomentum += 0.5*m*r*r*Double(object.angularVelocity)
                 + m*(Double(d.x)*Double(object.velocity.y)-Double(d.y)*Double(object.velocity.x))
         }
-        result.angularVelocity = Float(angularMomentum/(0.5*Double(result.mass!)*Double(result.targetRadius)*Double(result.targetRadius)))
+        // Bezwładność z sumy mas źródeł: nadpisana `result.mass` nie zmienia prędkości kątowej wyniku.
+        result.angularVelocity = Float(angularMomentum/(0.5*sourceMass*Double(result.targetRadius)*Double(result.targetRadius)))
     }
     static func initializeSplit(_ first: inout RuntimeObject, _ second: inout RuntimeObject,
                                 source: RuntimeObject, shares: (Double, Double)) throws {
