@@ -69,4 +69,8 @@ Do sprawdzenia przy implementacji: czy `StructuralOperations.initializeMerge` (w
 
 | #   | Task | Type (change/gap) | Description | Date |
 | --- | ---- | ----------------- | ----------- | ---- |
-|     |      |                   |             |      |
+| 1   | 1    | change            | Test nadpisanej masy obejmuje też odrzucenie `mass: 0` (`nonPositiveValue`) i `mass: .infinity` (`nonFiniteValue`), czyli pokrywa walidację z LD-D-5 | 2026-11-12 |
+| 2   | 3    | change            | `beginPlayerDrive` działa w tej samej transakcji co scalenie, więc test GPU nie potrzebuje `advance` między nimi | 2026-11-12 |
+| 3   | 4    | gap               | Wiersze `BubbleResult` w ponownie wygenerowanym `v1-api-diff.txt` są bez zmian, więc `MIGRATION-v2.md:18` nie zmieniono. Odświeżony diff różni się jednak od zapisanego przeniesieniem benchmarku do `BubblePhysicsMetalRenderBenchmark` (3417992, wydane w 2.0.1) i jego zapis złamałby `MigrationGuideTests`. Plik zostawiono bez zmian, a jego synchronizacja to osobna zmiana | 2026-11-12 |
+| 4   | 6    | change            | Akapit o `drivePolicy:` i `mass:` stoi pod blokiem `merge(...)` w `integration-guide.md`, bo blok musi być identyczny z regionem aplikacji przykładowej (`IntegrationGuideTests`) | 2026-11-12 |
+| 5   | 2    | change            | Po przeglądzie końcowym: `StructuralOperations.initializeMerge` liczył prędkość kątową z nadpisanej masy. Teraz liczy bezwładność z sumy mas źródeł zgodnie z LD-D-1, a test sprawdza `angularVelocity` przy `mass: 10` i `nil` (a2ba29f) | 2026-11-12 |
