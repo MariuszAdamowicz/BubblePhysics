@@ -202,6 +202,8 @@ private func merge(_ first: ObjectID, _ second: ObjectID, value: Int, world: Bub
 }
 ```
 
+`BubbleResult` ma też `drivePolicy:` i `mass:` na końcu parametrów. `drivePolicy:` (domyślnie `.standard`) to polityka jazdy wyniku scalenia albo części podziału, z której korzysta `beginPlayerDrive` na nowej bańce, np. `BubbleDrivePolicy(maximumSpeed: 3)` dla wolniej prowadzonej bańki. `mass:` (domyślnie `nil`, czyli suma mas źródeł) nadpisuje masę wyniku scalenia. Prędkość wyniku zawsze wynosi pęd źródeł podzielony przez sumę ich mas, więc nadpisana masa wpływa tylko na dalszą fizykę. W `splitBubble` `mass` różne od `nil` w którejkolwiek części odrzuca transakcję z `invalidStructuralOperation`.
+
 ## Formaty passu renderu
 
 Pass gry ma wyłącznie załącznik koloru: renderer bierze format koloru z deskryptora passu (`bgra8Unorm` w przykładzie; potok powstaje dla formatu koloru z deskryptora), a bufor głębi i bufor szablonu nie są potrzebne. Naklejki są przycinane maską w shaderze fragmentu, nie buforem szablonu. Własne rysowanie gry w tym samym passie podpina się przez `RenderHooks` (po tle, po wybranej warstwie, na końcu).
