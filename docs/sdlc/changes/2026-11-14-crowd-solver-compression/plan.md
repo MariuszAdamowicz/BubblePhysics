@@ -8,7 +8,7 @@
 **References:** `../2KBubbles-iOS/docs/benchmarks/stage-0-physics-gate.md`, sekcja „Specyfikacja zmiany silnika”
 **Strategy:** slices
 **Test command:** `swift test`
-**Status:** Draft
+**Status:** Approved
 **Template version:** default/0.3.3
 **Plugin version:** 0.7.10
 **Agent Sessions:** claude-code: ef9afe81-5293-4d9d-99d5-ada5d3e46e43
