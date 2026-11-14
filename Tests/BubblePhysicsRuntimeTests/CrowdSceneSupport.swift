@@ -9,7 +9,7 @@ import XCTest
 /// Ściany boczne mają pełną wysokość, górna i dolna leżą między nimi, więc bryły stykają się krawędziami bez nakładania.
 @MainActor
 enum CrowdScene {
-    static let step = 1.0 / 60
+    nonisolated static let step = 1.0 / 60
     static let wallThickness: Float = 48
     static let interiorHalfSize = WorldPoint(180, 320)
     static let interiorArea = Double(360 * 640)
