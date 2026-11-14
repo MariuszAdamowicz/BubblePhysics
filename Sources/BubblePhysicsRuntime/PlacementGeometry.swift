@@ -17,6 +17,9 @@ enum PlacementGeometry {
     static func coincidentCenterTolerance(radius: Float, otherRadius: Float) -> Float {
         max(1e-4 * min(radius, otherRadius), positionTolerance)
     }
+    /// Tolerancja położenia solvera. Stager nie widzi konfiguracji solvera, a `NativePublicWorld` buduje ją z samego
+    /// `timeStep` i tłumienia (`NativePublicWorld.swift:217`), więc rzeczywista wartość świata to domyślne
+    /// `NativeSolverConfiguration.positionTolerance`; odczyt z domyślnej konfiguracji trzyma obie strony zgodne.
     private static let positionTolerance = NativeSolverConfiguration().positionTolerance
 
     /// Pierwsza przyczyna, dla której środek bańki o promieniu `radius` nie może stanąć w `point`, w kolejności

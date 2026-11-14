@@ -211,13 +211,69 @@ final class PlacementValidationTests: XCTestCase {
         let center = try mergeCenter(state, sources: [1, 2], result: 4)
         XCTAssertEqual(center, [-2.5, 0])
         XCTAssertEqual(try mergeCenter(state, sources: [1, 2], result: 4), center, "ten sam układ daje ten sam środek")
-        XCTAssertEqual(try mergeCenter(state, sources: [2, 1], result: 4), [2.5, 0], "kolejność sources wyznacza kandydatów")
+        XCTAssertEqual(try mergeCenter(state, sources: [2, 1], result: 4), center, "kolejność sources w transakcji nie zmienia środka")
 
         let world = try await makeWorld { _ in setup }
         let outcome = await run(world, WorldTransaction().mergeBubbles([id(1), id(2)], result: result(4)))
         XCTAssertNil(outcome.rejection)
         XCTAssertTrue(outcome.frame.events.contains(.didAdd(id(4))))
         XCTAssertNil(world.diagnostics.lastAdvanceIssue)
+    }
+
+    /// Scalenie [1, 2] -> 4 w dwóch osobnych światach (źródła podane w kolejności 1, 2 i 2, 1): środek wyniku w pierwszej
+    /// klatce leży w regionie, poza bryłami, nie pokrywa się z innymi bańkami i jest taki sam w obu światach (G3-AC4).
+    /// `others` to inne bańki z ich promieniami.
+    private func assertMergeInPublicWorld(resultRadius: Float, bodies: [WorldObject], others: [(UInt64, Float)],
+                                          setup: (WorldTransaction) throws -> WorldTransaction,
+                                          beforeMerge: (WorldTransaction) throws -> WorldTransaction = { $0 },
+                                          file: StaticString = #filePath, line: UInt = #line) async throws {
+        var centers: [WorldPoint] = []
+        for sources in [[id(1), id(2)], [id(2), id(1)]] {
+            let world = try await makeWorld(setup)
+            let outcome = await run(world, try beforeMerge(WorldTransaction()).mergeBubbles(sources, result: result(4)))
+            XCTAssertNil(outcome.rejection, file: file, line: line)
+            XCTAssertTrue(outcome.frame.events.contains(.didAdd(id(4))), file: file, line: line)
+            XCTAssertNil(world.diagnostics.lastAdvanceIssue, file: file, line: line)
+            let center = try XCTUnwrap(outcome.frame.objects[id(4)], file: file, line: line).position
+            XCTAssertTrue(try configuration().simulationRegion.contains(center), "w regionie", file: file, line: line)
+            for case .rigidBody(let descriptor) in bodies {
+                XCTAssertFalse(PlacementGeometry.contains(
+                    PlacementGeometry.shape(of: descriptor, at: RuntimeObject(.rigidBody(descriptor))), center),
+                    "poza bryłą", file: file, line: line)
+            }
+            for (other, radius) in others {
+                let position = try XCTUnwrap(outcome.frame.objects[id(other)], file: file, line: line).position
+                XCTAssertGreaterThan(simd_distance(center, position),
+                    PlacementGeometry.coincidentCenterTolerance(radius: resultRadius, otherRadius: radius),
+                    "nie na środku bańki \(other)", file: file, line: line)
+            }
+            centers.append(center)
+        }
+        XCTAssertEqual(centers[0], centers[1], "ten sam układ daje ten sam środek niezależnie od świata i kolejności sources",
+                       file: file, line: line)
+    }
+
+    // P-B-5 (świat publiczny)
+    func testMergeInPublicWorldWithContactInsideThirdBubbleStandsAtAValidPoint() async throws {
+        try await assertMergeInPublicWorld(resultRadius: Float(8).squareRoot(), bodies: [], others: [(3, 2)], setup: {
+            try $0.add(self.bubble(1, at: [-10, 0])).add(self.bubble(2, at: [10, 0])).add(self.bubble(3, at: [0, 0]))
+        })
+    }
+
+    func testMergeInPublicWorldWithContactInsideRigidBodyStandsOutsideTheBody() async throws {
+        let wall = try body(100, rectangle([-1, -50], [1, 50]))
+        try await assertMergeInPublicWorld(resultRadius: Float(8).squareRoot(), bodies: [wall], others: [], setup: {
+            try $0.add(self.bubble(1, at: [-10, 0])).add(self.bubble(2, at: [10, 0])).add(wall)
+        })
+    }
+
+    func testMergeInPublicWorldWithContactOutsideTheRegionStandsInsideTheRegion() async throws {
+        // Punkt styku (103; 0) wypada poza regionem tylko dla pary, w której jedna bańka zawiera drugą, więc źródła
+        // powstają w tej samej transakcji co scalenie, przed jakimkolwiek krokiem solvera.
+        try await assertMergeInPublicWorld(resultRadius: Float(101).squareRoot(), bodies: [], others: [],
+            setup: { $0 }, beforeMerge: {
+                try $0.add(self.bubble(1, at: [98, 0], radius: 10)).add(self.bubble(2, at: [99, 0], radius: 1))
+            })
     }
 
     func testMergeResultDoesNotCoincideWithAnyBubbleOrStandInsideABodyOrOutsideTheRegion() throws {
@@ -275,6 +331,20 @@ final class PlacementValidationTests: XCTestCase {
         XCTAssertNotNil(outcome.frame.objects[id(2)])
         XCTAssertNil(outcome.frame.objects[id(4)])
         XCTAssertNil(outcome.frame.objects[id(100)], "odrzucona transakcja nie zostawia bryły")
+        try await assertNextStepAccepted(world)
+    }
+
+    func testMergeRejectionReportsTheContactPointCauseNotTheLastCandidateCause() async throws {
+        // Punkt styku (-100,5; 0) leży poza regionem, a wszyscy kandydaci w regionie, w tym ostatni punkt spirali,
+        // przykrywa bryła: przyczyna z punktu styku to outsideRegion, z ostatniego kandydata insideRigidBody.
+        // Taki punkt styku daje tylko para, w której jedna bańka zawiera drugą, więc źródła powstają w tej samej
+        // transakcji co scalenie.
+        let world = try await makeWorld()
+        let outcome = await run(world, WorldTransaction()
+            .add(try bubble(1, at: [-95, 0], radius: 8)).add(try bubble(2, at: [-99, 0], radius: 1))
+            .add(try body(100, try rectangle([-100, -100], [100, 100])))
+            .mergeBubbles([id(1), id(2)], result: result(4)))
+        assertRejected(outcome, at: 3, .invalidPlacement(id(4), .outsideRegion))
         try await assertNextStepAccepted(world)
     }
 
@@ -372,6 +442,17 @@ final class PlacementValidationTests: XCTestCase {
         XCTAssertTrue(outcome.frame.events.contains(.didAdd(id(2))))
         XCTAssertTrue(outcome.frame.events.contains(.didAdd(id(3))))
         XCTAssertNil(world.diagnostics.lastAdvanceIssue)
+        // P-B-7: w pierwszej klatce obie części stoją w regionie, poza bryłą i w różnych miejscach.
+        let wall = try RigidBodyDescriptor(id: id(100), shape: try rectangle([3, -50], [60, 50]), position: .zero,
+            motionRole: .static, physicsMaterialID: rigidMaterial, renderMaterialID: style)
+        let first = try XCTUnwrap(outcome.frame.objects[id(2)]).position
+        let second = try XCTUnwrap(outcome.frame.objects[id(3)]).position
+        for part in [first, second] {
+            XCTAssertTrue(try configuration().simulationRegion.contains(part))
+            XCTAssertFalse(PlacementGeometry.contains(
+                PlacementGeometry.shape(of: wall, at: RuntimeObject(.rigidBody(wall))), part), "poza bryłą")
+        }
+        XCTAssertGreaterThan(simd_distance(first, second), 1e-3, "części w różnych miejscach")
     }
 
     // P-B-8
@@ -383,6 +464,17 @@ final class PlacementValidationTests: XCTestCase {
         XCTAssertNotNil(outcome.frame.objects[id(1)], "źródło zostaje")
         XCTAssertNil(outcome.frame.objects[id(2)])
         XCTAssertNil(outcome.frame.objects[id(3)])
+        try await assertNextStepAccepted(world)
+    }
+
+    func testSplitRejectionReportsTheCentroidCauseNotTheLastCandidateCause() async throws {
+        // Centroid pierwszej części (-101,24; 0) leży poza regionem, a wszyscy kandydaci w regionie, w tym ostatni punkt
+        // spirali, są w bryle: przyczyna z centroidu to outsideRegion, z ostatniego kandydata insideRigidBody.
+        let world = try await makeWorld { $0.add(try self.bubble(1, at: [-97, 0], radius: 10)) }
+        let outcome = await run(world, splitTransaction(
+            after: WorldTransaction().add(try body(100, try rectangle([-100, -100], [100, 100])))))
+        assertRejected(outcome, at: 1, .invalidPlacement(id(2), .outsideRegion))
+        XCTAssertNotNil(outcome.frame.objects[id(1)], "źródło zostaje")
         try await assertNextStepAccepted(world)
     }
 }

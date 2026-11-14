@@ -609,9 +609,13 @@ private struct StagingContext {
         func issue(_ point: WorldPoint) -> PlacementIssue? {
             PlacementGeometry.issue(at: point, radius: resultRadius, in: snapshot, excluding: excluded)
         }
-        guard let center = StructuralOperations.resolvedMergeCenter(contact: contact,
-            sources: try sources.map { try bubble($0).0 }, resultRadius: resultRadius, issue: issue) else {
-            throw TransactionRejectionReason.invalidPlacement(result.id, issue(contact) ?? .coincidentCenter)
+        // Kandydaci idą w kolejności ID, jak punkt styku, żeby ten sam układ dawał ten sam środek niezależnie od kolejności
+        // `sources` w operacji (G3-AC4).
+        guard let center = StructuralOperations.resolvedMergeCenter(contact: contact, sources: inputs,
+                                                                    resultRadius: resultRadius, issue: issue) else {
+            // `resolvedMergeCenter` zwraca nil dopiero po odrzuceniu punktu styku, więc przyczyna istnieje.
+            guard let cause = issue(contact) else { throw TransactionRejectionReason.invalidStructuralOperation }
+            throw TransactionRejectionReason.invalidPlacement(result.id, cause)
         }
         if center != contact { descriptor = try resultObject(at: center) }
         for id in sources { try remove(id) }
@@ -662,7 +666,9 @@ private struct StagingContext {
             }
             guard let resolved = StructuralOperations.resolvedSplitCenter(centroid: part.position,
                 sourceCenter: source.position, partRadius: part.targetRadius, issue: issue) else {
-                throw TransactionRejectionReason.invalidPlacement(id, issue(part.position) ?? .coincidentCenter)
+                // `resolvedSplitCenter` zwraca nil dopiero po odrzuceniu centroidu, więc przyczyna istnieje.
+                guard let cause = issue(part.position) else { throw TransactionRejectionReason.invalidStructuralOperation }
+                throw TransactionRejectionReason.invalidPlacement(id, cause)
             }
             return resolved
         }
