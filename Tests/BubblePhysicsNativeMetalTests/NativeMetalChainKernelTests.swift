@@ -416,6 +416,8 @@ final class NativeMetalChainKernelTests: XCTestCase {
         var safety: [UInt32]
         var statistics: [UInt32]
         var active: [UInt32]
+        /// Obie połówki sum korekcji (limit 0,25·r) po przebiegu, bit w bit.
+        var totals: [UInt32]
     }
 
     private func repairPass(device: MTLDevice, fused: Bool, bubbleCount: Int, segmentCount: Int, pass: Int,
@@ -463,18 +465,22 @@ final class NativeMetalChainKernelTests: XCTestCase {
         let safety = try makeBuffer([UInt32](repeating: 0, count: 4), device: device)
         let statistics = try makeBuffer((0..<8).map { UInt32($0 == 4 ? 1 : 0) }, device: device)
         let active = try makeBuffer((0..<10).map { UInt32($0 == pass && activePass ? 1 : 0) }, device: device)
+        // Dwie połówki sum korekcji; niezerowe, żeby budżety baniek były różne i limit pary zadziałał.
+        let totals = try makeBuffer((0..<(2 * bubbleCount)).map { SIMD2<Float>(Float($0 % 5) * 0.001, 0) }, device: device)
         let dispatches = try run(device: device) {
             NativeMetalContainmentRepair.encodePass($0, pipelines: pipelines, bubbles: try! makeBuffer(bubbles, device: device),
                 segments: try! makeBuffer(segments.isEmpty ? [NativeMetalSegment(NativeSolverSegment(id: 1,
                     previousA: .zero, previousB: .zero, currentA: .zero, currentB: .zero))] : segments, device: device),
                 input: input, output: output, control: control, solver: solver, contacts: contacts, changed: changed,
-                safety: safety, statistics: statistics, repairActive: active, pass: pass, bubbleCount: bubbleCount, fused: fused)
+                safety: safety, statistics: statistics, repairActive: active, correctionTotals: totals, pass: pass,
+                bubbleCount: bubbleCount, fused: fused)
         }
         func read(_ buffer: MTLBuffer, _ count: Int) -> [UInt32] {
             Array(UnsafeBufferPointer(start: buffer.contents().bindMemory(to: UInt32.self, capacity: count), count: count))
         }
         return (RepairResult(positions: read(output, bubbleCount * 4), changed: read(changed, bubbleCount),
-                             safety: read(safety, 4), statistics: read(statistics, 8), active: read(active, 10)), dispatches)
+                             safety: read(safety, 4), statistics: read(statistics, 8), active: read(active, 10),
+                             totals: read(totals, bubbleCount * 4)), dispatches)
     }
 
     private static func repairSegment(id: Int, owner: Int, previous: SIMD4<Float>, current: SIMD4<Float>,

@@ -26,7 +26,11 @@ final class NativeMetalSafetyTests: XCTestCase {
         let frame = try await solver.executeFrame(world: world, scenarioStep: 1)
         var tracker = ReferenceContainmentTracker(positionTolerance: world.configuration.positionTolerance)
         tracker.observe(frame.bubbles)
-        XCTAssertEqual(tracker.maximumConsecutiveFrames, 0, "Published centers: \(frame.bubbles.map(\.center))")
+        // Rzut strażnika daje oba środki na tej samej krawędzi. Duża bańka (r = 3) wyczerpała już budżet korekcji 0,25·r
+        // = 0,75 na kontakt z wielokątem, więc ostatnia naprawa zawierania nie ma czym rozsunąć pary: zostaje zawarta
+        // w tej klatce i liczy się w diagnostyce, zamiast odrzucić krok (wcześniej naprawa rozsuwała ją bez limitu).
+        XCTAssertEqual(tracker.maximumConsecutiveFrames, 1, "Published centers: \(frame.bubbles.map(\.center))")
+        XCTAssertEqual(frame.containedBubblePairCount, 1)
         XCTAssertTrue(frame.bubbles.allSatisfy { $0.center.x >= 1 || $0.center.x <= -20 || abs($0.center.y) >= 20 })
         XCTAssertEqual(frame.profile.commandBufferCount, 1)
         XCTAssertFalse(solver.candidateKeys.contains(.bubblePair(1, 2)), "Pair must be created after initial broad phase")
@@ -45,13 +49,33 @@ final class NativeMetalSafetyTests: XCTestCase {
         let frame = try await solver.executeFrame(world: world, scenarioStep: 1)
         var tracker = ReferenceContainmentTracker(positionTolerance: world.configuration.positionTolerance)
         tracker.observe(frame.bubbles)
-        XCTAssertEqual(tracker.maximumConsecutiveFrames, 0)
-        let distance = (frame.bubbles[0].center - frame.bubbles[1].center).length
-        XCTAssertGreaterThanOrEqual(distance, 2 - world.configuration.positionTolerance)
-        XCTAssertLessThan(distance, 2.01, "Safety projection must preserve legal elastic overlap")
+        // Limit korekcji 0,25·r na krok (timeStep 1): jedna klatka rozsuwa je o 0,25 (r = 1) i 0,25/3 (r = 3), więc para
+        // zostaje zawarta i liczy się w diagnostyce; pełne rozsunięcie zajmuje kilka klatek.
+        XCTAssertEqual(tracker.maximumConsecutiveFrames, 1)
+        XCTAssertEqual(frame.containedBubblePairCount, 1)
+        XCTAssertEqual((frame.bubbles[0].center - frame.bubbles[1].center).length, 0.25 + 0.25 / 3, accuracy: 0.001)
         XCTAssertEqual(frame.profile.commandBufferCount, 1)
         XCTAssertGreaterThan(frame.telemetry.cacheInvalidationCount, 0)
         XCTAssertTrue(solver.cachedContacts.filter { $0.key == .bubblePair(1, 2) }.allSatisfy { $0.lambda == 0 })
+        // Kolejne klatki rozdzielają parę do granicy zawierania i nie przesuwają jej dalej: legalne sprężyste nakładanie
+        // zostaje (odległość < 2,01).
+        var next = world
+        var last = frame
+        for step in 2...12 {
+            for (index, bubble) in last.bubbles.enumerated() {
+                var moved = next.bubbles[index]
+                moved.center = bubble.center; moved.previousCenter = bubble.center; moved.velocity = .zero
+                next.updateBubble(moved)
+            }
+            last = try await solver.executeFrame(world: next, scenarioStep: step)
+            XCTAssertLessThanOrEqual(last.bubbles[0].center.y - last.bubbles[1].center.y, 2.01)
+        }
+        var finalTracker = ReferenceContainmentTracker(positionTolerance: world.configuration.positionTolerance)
+        finalTracker.observe(last.bubbles)
+        XCTAssertEqual(finalTracker.maximumConsecutiveFrames, 0, "po kilku klatkach para nie jest już zawarta")
+        let distance = (last.bubbles[0].center - last.bubbles[1].center).length
+        XCTAssertGreaterThanOrEqual(distance, 2 - world.configuration.positionTolerance)
+        XCTAssertLessThan(distance, 2.01, "Safety projection must preserve legal elastic overlap")
     }
 
     // Zawieranie nie zapala już bitu 2 (P-B-9): pary, których nie da się rozdzielić, liczy walidator, a klatka jest przyjęta.

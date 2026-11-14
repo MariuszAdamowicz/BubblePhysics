@@ -71,6 +71,11 @@ final class NativeMetalPersistentState {
     var workingCache: MTLBuffer { publishedIsPing ? cachePong : cachePing }
     var publishedCacheCount = 0
     let scratch: MTLBuffer
+    /// float2 na bańkę: suma korekcji środka wykonanych w kroku (limit 0,25·r). Dwie połówki po `bubbleCapacity`:
+    /// Jacobi pisze do pierwszej, a przebieg naprawy zawierania `p` czyta połówkę `p & 1` i pisze drugą, bez wyścigu.
+    let solverCorrectionTotals: MTLBuffer
+    /// float na bańkę: część żądanych korekcji kontaktów, którą mieści jeszcze budżet bańki.
+    let solverCorrectionScales: MTLBuffer
     let solverPositionsPing: MTLBuffer
     let solverPositionsPong: MTLBuffer
     let diagnosticPostSolverPositions: MTLBuffer?
@@ -180,6 +185,8 @@ final class NativeMetalPersistentState {
         indirectArguments = try buffer("indirectArguments", 5 + sums.count * 2, MemoryLayout<SIMD4<UInt32>>.stride)
         dispatchStatistics = try buffer("dispatchStatistics", 3, MemoryLayout<SIMD4<UInt32>>.stride)
         scratch = try buffer("scratch", bubbleCapacity, MemoryLayout<SIMD4<Float>>.stride)
+        solverCorrectionTotals = try buffer("solver.correctionTotals", bubbleCapacity * 2, MemoryLayout<SIMD2<Float>>.stride)
+        solverCorrectionScales = try buffer("solver.correctionScales", bubbleCapacity, MemoryLayout<Float>.stride)
         solverPositionsPing = try buffer("solver.positions.ping", bubbleCapacity, MemoryLayout<SIMD4<Float>>.stride)
         solverPositionsPong = try buffer("solver.positions.pong", bubbleCapacity, MemoryLayout<SIMD4<Float>>.stride)
         if stageDiagnosticsEnabled {
@@ -420,6 +427,7 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         memset(state.containmentRepairActive.contents(), 0, state.containmentRepairActive.length)
         state.containmentRepairActive.contents().storeBytes(of: UInt32(1), as: UInt32.self)
         memset(state.scratch.contents(), 0, state.scratch.length)
+        memset(state.solverCorrectionTotals.contents(), 0, state.solverCorrectionTotals.length)
         // Wyłącznie zmiany wejścia gry mogą oznaczać teleport; normalna predykcja nie resetuje cache.
         // Poprzedni krok zwykle ma te same obiekty w tej samej kolejności, więc para po indeksie zastępuje słownik;
         // słownik powstaje tylko wtedy, gdy zestaw albo kolejność się zmieniły.
@@ -697,7 +705,8 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         dispatchContacts("nativePrepareSolverContacts", buffers: [state.workingBubbles, state.workingSegments, state.workingCache,
             state.control, state.contactControl, state.contactEndpoints, state.adjacencyCounts], argument: 3)
         dispatch("nativeApplyWarmStart", buffers: [state.workingBubbles, state.workingCache, state.control,
-            state.contactControl, state.adjacency, state.adjacencyCounts, state.solverPositionsPing], threads: count)
+            state.contactControl, state.adjacency, state.adjacencyCounts, state.solverPositionsPing,
+            state.solverCorrectionTotals], threads: count)
         var inputPositions = state.solverPositionsPing
         var outputPositions = state.solverPositionsPong
         func measureResidual() {
@@ -723,9 +732,15 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
             dispatchContacts("nativeUpdateContactMultipliers", buffers: [state.workingBubbles, state.workingSegments,
                 state.workingCache, inputPositions, state.control, state.contactControl, state.solverControl,
                 state.contactEndpoints, state.adjacencyCounts, state.contactCorrections], argument: 3)
+            dispatch("nativeLimitBubbleCorrections", buffers: [state.workingBubbles, state.control, state.contactControl,
+                state.solverControl, state.adjacency, state.adjacencyCounts, state.contactCorrections,
+                state.solverCorrectionTotals, state.solverCorrectionScales], threads: count)
+            dispatchContacts("nativeScaleContactCorrections", buffers: [state.workingCache, state.contactControl,
+                state.solverControl, state.contactEndpoints, state.contactCorrections, state.solverCorrectionScales],
+                argument: 3)
             dispatch("nativeSolveJacobi", buffers: [state.workingBubbles, inputPositions, outputPositions, state.control,
                 state.contactControl, state.solverControl, state.adjacency, state.adjacencyCounts,
-                state.contactCorrections, state.scratch], threads: count)
+                state.contactCorrections, state.scratch, state.solverCorrectionTotals], threads: count)
             swap(&inputPositions, &outputPositions)
             measureResidual()
             if hasRigidBodies {
@@ -767,7 +782,7 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
                 segments: state.workingSegments, input: inputPositions, output: outputPositions, control: state.control,
                 solver: state.solverControl, contacts: state.contactControl, changed: state.guardedBubbles,
                 safety: state.safetyControl, statistics: state.dispatchStatistics, repairActive: state.containmentRepairActive,
-                pass: pass, bubbleCount: count, fused: true)
+                correctionTotals: state.solverCorrectionTotals, pass: pass, bubbleCount: count, fused: true)
             swap(&inputPositions, &outputPositions)
         }
         dispatch("nativeValidateBubbleContainment", buffers: [state.workingBubbles, inputPositions,
@@ -1243,7 +1258,7 @@ enum NativeMetalPipelineCache {
         "nativeRetainContactCache", "nativeCompactContactCache", "nativeScanBlocks", "nativePrepareIndirectArguments",
         "nativeAddScanBlockOffsets", "nativeFinishScan", "nativeScanSingleGroup", "nativeClearAdjacency", "nativeEmitAdjacency", "nativeBuildAdjacency",
         "nativePrepareSolverContacts", "nativeApplyWarmStart", "nativeUpdateContactMultipliers",
-        "nativeSolveJacobi", "nativeMeasureResidual", "nativeReduceSolverResidual",
+        "nativeLimitBubbleCorrections", "nativeScaleContactCorrections", "nativeSolveJacobi", "nativeMeasureResidual", "nativeReduceSolverResidual",
         "nativeCapturePositions",
         "nativeUpdateVelocities", "nativeDampContactNormalMotion", "nativeFinalizeSolverContacts", "nativeFindFastCandidates",
         "nativeResolveCCD", "nativeApplyCenterGuards", "nativeSeparateContainedBubbles", "nativeSeparateAndGuardContainedBubbles",
