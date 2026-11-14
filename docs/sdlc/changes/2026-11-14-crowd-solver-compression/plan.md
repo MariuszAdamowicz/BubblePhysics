@@ -305,7 +305,7 @@ Każde zmienione oczekiwanie istniejącego testu trafia do treści commita z pow
 5. Dodać `resolvedSplitCenter` z prędkościami względem d_com i `structuralShape` z końcowym środkiem, pokrywając [P-B-7](#p-b-7) i [P-B-8](#p-b-8) · verify: `swift test --filter PlacementValidationTests`
 6. Zmienić w istniejących testach stagera, regionu i operacji strukturalnych tylko oczekiwania przy złym punkcie, pokrywając [P-B-31](#p-b-31) · verify: `swift test --filter "TransactionStagerTests|RegionPolicyTests|NativeMetalStructuralOperationTests"`
 7. Dodać do `CHANGELOG.md` sekcję `## 2.2.0 (w przygotowaniu)` z `invalidPlacement`, uwagą o gałęzi `default` w wyczerpującym `switch` i zmianami zachowania z tego wycinka (także `.wrap`) · verify: `grep -q "invalidPlacement" CHANGELOG.md`
-8. Uruchomić cały pakiet. Oczekiwania zmienione przez walidację punktu poza stagerem (np. `BubblePhysicsMetalRenderTests`) zmienić z powodem w commicie, a dla scen `BubblePhysicsMetalRenderBenchmark` zapisać w tym pliku wiersz `Benchmark baniek przyjętych: …` z liczbą przed i po · verify: `swift test && grep -q "^Benchmark baniek przyjętych:" docs/sdlc/changes/2026-11-14-crowd-solver-compression/plan.md`
+8. Uruchomić cały pakiet. Oczekiwania zmienione przez walidację punktu poza stagerem (np. `BubblePhysicsMetalRenderTests`) zmienić z powodem w commicie, a dla scen `BubblePhysicsMetalRenderBenchmark` zapisać w tym pliku wiersz `Benchmark baniek przyjętych: …` z liczbą „przed” zmierzoną na `main` (bez walidacji punktu) i „po” na tym branchu · verify: `swift test && grep -q "^Benchmark baniek przyjętych:" docs/sdlc/changes/2026-11-14-crowd-solver-compression/plan.md`
 
 ## Deviations from Design
 
