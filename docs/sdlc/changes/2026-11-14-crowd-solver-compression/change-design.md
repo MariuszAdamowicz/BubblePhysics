@@ -2,7 +2,7 @@
 
 **Date:** 2026-11-14
 **Artifact:** change-design
-**Status:** Draft
+**Status:** Approved
 **Template version:** default/0.3.2
 **References:** `../2KBubbles-iOS/docs/benchmarks/stage-0-physics-gate.md`, sekcja „Specyfikacja zmiany silnika” (stan 2026-11-14); dane `../2KBubbles-iOS/docs/benchmarks/stage-0/` (`crowd-growth.json`, `crowd-growth-free-spawn.json`, `grab-scan.json`)
 
