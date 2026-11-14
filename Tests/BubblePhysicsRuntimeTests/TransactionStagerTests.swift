@@ -140,7 +140,7 @@ final class TransactionStagerTests: XCTestCase {
     }
 
     func testMergeAndSplitReserveStableResultIDsAndRejectPartialResults() throws {
-        let initial = try TransactionStager.stage(resources().add(.bubble(bubble(1))).add(.bubble(bubble(2))), against: state()).state
+        let initial = try TransactionStager.stage(resources().add(.bubble(bubble(1))).add(.bubble(bubble(2, position: [3, 0]))), against: state()).state
         let result = BubbleResult(id: id(3), physicsMaterialID: materialID, renderMaterialID: styleID)
         let merged = try TransactionStager.stage(WorldTransaction().mergeBubbles([id(1), id(2)], result: result), against: initial)
         XCTAssertEqual(Set(merged.state.objects.keys), [id(3)])
@@ -303,7 +303,7 @@ final class TransactionStagerTests: XCTestCase {
 
     func testMergeResultTakesDrivePolicyFromBubbleResultAndDefaultsToStandard() throws {
         let policy = try BubbleDrivePolicy(maximumSpeed: 3)
-        let initial = try TransactionStager.stage(resources().add(.bubble(bubble(1))).add(.bubble(bubble(2))), against: state()).state
+        let initial = try TransactionStager.stage(resources().add(.bubble(bubble(1))).add(.bubble(bubble(2, position: [3, 0]))), against: state()).state
         let custom = try mergedBubble(against: initial,
             result: BubbleResult(id: id(3), physicsMaterialID: materialID, renderMaterialID: styleID, drivePolicy: policy))
         XCTAssertEqual(custom.drivePolicy, policy)
@@ -327,7 +327,7 @@ final class TransactionStagerTests: XCTestCase {
     }
 
     func testMergeMassOverridesResultMassAndNilKeepsTheSumOfSourceMasses() throws {
-        let initial = try TransactionStager.stage(resources().add(.bubble(bubble(1))).add(.bubble(bubble(2))), against: state()).state
+        let initial = try TransactionStager.stage(resources().add(.bubble(bubble(1))).add(.bubble(bubble(2, position: [3, 0]))), against: state()).state
         let overridden = try mergedBubble(against: initial,
             result: BubbleResult(id: id(3), physicsMaterialID: materialID, renderMaterialID: styleID, mass: 10))
         XCTAssertEqual(overridden.mass, 10)
