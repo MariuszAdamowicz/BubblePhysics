@@ -150,6 +150,9 @@ struct NativeMetalSolverControl: Sendable {
 
 struct NativeMetalSafetyControl: Sendable {
     var counts: SIMD4<UInt32> // kandydaci CCD, korekcje guardów, resetowane rekordy, bity błędów
+    /// Shadery adresują `atomic_uint *safety` jako `safety+0..3` (counts) i `safety+4..7` (diagnostics): para „bańka w bańce”
+    /// to atomic add do `diagnostics.x` (safety+4). Struktury MSL nie ma, więc układ pilnuje stride 32.
+    var diagnostics = SIMD4<UInt32>.zero // liczba par bańka w bańce, rezerwa
 }
 
 struct NativeMetalRenderPacket: Equatable, Sendable {

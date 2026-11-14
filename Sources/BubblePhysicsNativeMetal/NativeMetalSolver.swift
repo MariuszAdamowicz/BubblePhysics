@@ -1079,6 +1079,7 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
             }
         }
         let overflowCounters = state.candidateOverflow.contents().load(as: SIMD4<UInt32>.self)
+        frame.containedBubblePairCount = Int(safetyResult.diagnostics.x)
         frame.contactCandidateOverflowCount = Int(overflowCounters.x)
         frame.maximumContactCandidatesPerObject = Int(overflowCounters.y)
         if snapshot.publicSettings != nil {

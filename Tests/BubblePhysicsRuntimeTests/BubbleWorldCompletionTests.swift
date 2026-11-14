@@ -28,6 +28,20 @@ final class BubbleWorldCompletionTests: XCTestCase {
         XCTAssertEqual(world.diagnostics.maximumContactCandidatesPerObject, 9)
     }
 
+    // P-B-9: licznik par „bańka w bańce” jest wartością ostatniego ukończonego kroku, a nie sumą; odrzucony krok go nie zmienia.
+    func testContainedBubblePairCountIsAssignedPerStepAndKeptByAFailedStep() async throws {
+        let stepper = ScriptedContainmentStepper(counts: [3, 0, 5], failOnCall: 3)
+        let world = try world(stepper: stepper)
+        XCTAssertEqual(world.diagnostics.containedBubblePairCount, 0)
+        for expected in [3, 0, 5] {
+            _ = await world.advance(by: 0.125)
+            XCTAssertEqual(world.diagnostics.containedBubblePairCount, expected)
+        }
+        _ = await world.advance(by: 0.125)
+        XCTAssertEqual(world.diagnostics.lastAdvanceIssue, .stepFailed)
+        XCTAssertEqual(world.diagnostics.containedBubblePairCount, 5, "odrzucony krok zostawia licznik ostatniego ukończonego")
+    }
+
     func testFailedStepDoesNotChangeCandidateOverflowCounter() async throws {
         let world = try world(stepper: ScriptedCandidateStepper(script: [(overflow: 4, maximum: 6)], failOnSecondCall: true))
         _ = await world.advance(by: 0.125)
@@ -588,6 +602,22 @@ private final class ScriptedCandidateStepper: CompleteStepper {
         let entry = script[min(calls, script.count - 1)]
         return CompletedRuntimeStep(state: batch.state, contactCandidateOverflowCount: entry.overflow,
             maximumContactCandidatesPerObject: entry.maximum)
+    }
+}
+
+/// Kolejne kroki zgłaszają liczbę par „bańka w bańce”; krok o numerze `failOnCall` (od 0) jest odrzucany.
+@MainActor
+private final class ScriptedContainmentStepper: CompleteStepper {
+    private let counts: [Int]
+    private let failOnCall: Int
+    private var calls = 0
+    init(counts: [Int], failOnCall: Int) { self.counts = counts; self.failOnCall = failOnCall }
+    func completeStep(_ batch: StagedTransactionBatch, duration: Double, hitTests: [WorldPoint],
+                      commandBuffer: MTLCommandBuffer?,
+                      beforeCommit: ((NativeMetalRenderHandoff?, RuntimeState) throws -> Void)?) async throws -> CompletedRuntimeStep {
+        defer { calls += 1 }
+        if calls == failOnCall { throw ScriptedFailure.failed }
+        return CompletedRuntimeStep(state: batch.state, containedBubblePairCount: counts[min(calls, counts.count - 1)])
     }
 }
 

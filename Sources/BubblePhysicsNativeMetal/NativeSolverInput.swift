@@ -219,6 +219,8 @@ package struct NativeSolverFrame {
     package var contactCandidateOverflowCount = 0
     /// Największa liczba kandydatów na obiekt w tym kroku (etap 2).
     package var maximumContactCandidatesPerObject = 0
+    /// Liczba par baniek, z których mniejsza mieści się cała w kole większej, po tym kroku (walidator zawierania).
+    package var containedBubblePairCount = 0
     /// Wynik dla każdego punktu `NativeSolverInput.hitTests`, w tej samej kolejności; `nil` to puste miejsce.
     package var hitTestResults: [ObjectID?] = []
 }

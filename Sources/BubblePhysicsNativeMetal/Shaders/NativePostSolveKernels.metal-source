@@ -360,7 +360,8 @@ kernel void nativeValidateBubbleContainment(device NativeBubble *bubbles [[buffe
     float smaller = min(bubbles[i].physical.z, bubbles[j].physical.z);
     float larger = max(bubbles[i].physical.z, bubbles[j].physical.z);
     if (!isfinite(distance)) nativeSafetyFailure(safety, 1);
-    else if (distance + smaller < larger - solver.physics.y) nativeSafetyFailure(safety, 2);
+    // Para „bańka w bańce” nie odrzuca kroku: liczy się w safety+4 (diagnostics.x), a gra widzi ją w diagnostyce.
+    else if (distance + smaller < larger - solver.physics.y) atomic_fetch_add_explicit(safety + 4, 1, memory_order_relaxed);
 }
 
 uint nativeSafetyBubbleIndex(long id, device NativeBubble *bubbles, uint count) {

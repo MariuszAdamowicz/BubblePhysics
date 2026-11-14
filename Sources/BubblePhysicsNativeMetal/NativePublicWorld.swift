@@ -57,6 +57,8 @@ package struct NativePublicFrame {
     package var eventOverflow = WorldEventOverflow()
     package var contactCandidateOverflowCount = 0
     package var maximumContactCandidatesPerObject = 0
+    /// Liczba par baniek, z których mniejsza mieści się cała w kole większej, po tym kroku.
+    package var containedBubblePairCount = 0
     /// Wynik dla każdego punktu hit-testu, w kolejności punktów; `nil` oznacza puste miejsce.
     package var hitTestResults: [ObjectID?] = []
     /// Obiekty, które w tym kroku zawinęły się przez region; niezależnie od zainteresowania `didWrap`.
@@ -301,6 +303,7 @@ package final class NativePublicWorld {
             contacts: contacts, events: discreteEvents, eventOverflow: WorldEventOverflow(droppedCount: dropped),
             contactCandidateOverflowCount: frame.contactCandidateOverflowCount,
             maximumContactCandidatesPerObject: frame.maximumContactCandidatesPerObject,
+            containedBubblePairCount: frame.containedBubblePairCount,
             hitTestResults: frame.hitTestResults, wrappedObjectIDs: wrappedIDs)
     }
 

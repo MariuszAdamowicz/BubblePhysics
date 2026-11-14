@@ -148,6 +148,7 @@ package final class NativeCompleteStepper: CompleteStepper {
         return .init(state: state, events: discrete.events, eventOverflow: discrete.overflow,
             driveFeedback: feedback, contactCandidateOverflowCount: frame.contactCandidateOverflowCount,
             maximumContactCandidatesPerObject: frame.maximumContactCandidatesPerObject,
+            containedBubblePairCount: frame.containedBubblePairCount,
             hitTestResults: frame.hitTestResults,
             snappedObjectIDs: batch.appearedObjectIDs.union(frame.wrappedObjectIDs))
     }

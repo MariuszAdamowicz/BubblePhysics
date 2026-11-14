@@ -336,6 +336,8 @@ public final class BubbleWorld {
                 droppedEvents += complete.eventOverflow.droppedCount
                 contactCandidateOverflow += complete.contactCandidateOverflowCount
                 maximumContactCandidatesPerObject = complete.maximumContactCandidatesPerObject
+                // Przypisanie po kroku, jak maksimum kandydatów, nie suma jak przepełnienie.
+                containedBubblePairCount = complete.containedBubblePairCount
                 lastFrame = WorldFrame(stepIndex: clock.completedSteps, simulationTime: clock.simulationTime,
                     transactionReceipts: receipts, events: events,
                     eventOverflow: WorldEventOverflow(droppedCount: droppedEvents), driveFeedback: complete.driveFeedback,

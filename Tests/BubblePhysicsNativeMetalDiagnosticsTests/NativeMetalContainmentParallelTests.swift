@@ -64,14 +64,25 @@ final class NativeMetalContainmentParallelTests: XCTestCase {
         XCTAssertEqual(frame.profile.commandBufferCount, 1)
     }
 
-    // Break caught: pair mapping skips the final partial SIMDgroup or changes
-    // strict nominal-containment/finite semantics. Expected flags are literals.
-    func testParallelValidatorMatchesStrictContainmentBoundary() async throws {
+    // Break caught: pair mapping skips the final partial SIMDgroup or changes strict nominal-containment/finite
+    // semantics. Expected values are literals. Containment no longer lights bit 2: the validator counts pairs in
+    // safety+4 (diagnostics.x), and only a non-finite distance still sets the failure bit 1.
+    func testParallelValidatorCountsStrictContainmentWithoutFailureBit() async throws {
         let fixture = try await ContainmentKernelFixture()
-        for (distance, expected): (Float, UInt32) in [(1.999, 2), (2, 0), (2.001, 0), (.infinity, 1)] {
-            let flags = try await fixture.validate(distance: distance)
-            XCTAssertEqual(flags, expected)
+        for (distance, expectedPairs, expectedFlags): (Float, UInt32, UInt32) in
+            [(1.999, 1, 0), (2, 0, 0), (2.001, 0, 0), (.infinity, 0, 1)] {
+            let result = try await fixture.validate(distance: distance)
+            XCTAssertEqual(result.pairs, expectedPairs, "distance \(distance)")
+            XCTAssertEqual(result.flags, expectedFlags, "distance \(distance)")
         }
+    }
+
+    // Each contained pair adds one: radii 3, 1, 1 at one point give pairs (3,1), (3,1) and no pair of the equal ones.
+    func testParallelValidatorCountsEveryContainedPair() async throws {
+        let fixture = try await ContainmentKernelFixture()
+        let result = try await fixture.validate(positions: [SIMD4<Float>](repeating: .zero, count: 3), bubbleCount: 3)
+        XCTAssertEqual(result.pairs, 2)
+        XCTAssertEqual(result.flags, 0)
     }
 }
 
@@ -129,7 +140,7 @@ private final class ContainmentKernelFixture {
         let pointer = output.contents().bindMemory(to: SIMD4<Float>.self, capacity: count)
         return (Array(UnsafeBufferPointer(start: pointer, count: count)), flags.contents().load(fromByteOffset: 4, as: UInt32.self))
     }
-    func validate(distance: Float) async throws -> UInt32 {
+    func validate(distance: Float) async throws -> (flags: UInt32, pairs: UInt32) {
         let positions = (0..<33).map { i -> SIMD4<Float> in
             if i == 32 { return SIMD4(distance, 0, 0, 0) }
             if i == 31 { return .zero }
@@ -138,10 +149,19 @@ private final class ContainmentKernelFixture {
         var records = try bubbles(33)
         records[0].physical.z = 1
         records[31].physical.z = 3
-        let safety = try buffer([UInt32](repeating: 0, count: 4))
+        return try await validate(records: records, positions: positions)
+    }
+    func validate(positions: [SIMD4<Float>], bubbleCount: Int) async throws -> (flags: UInt32, pairs: UInt32) {
+        try await validate(records: bubbles(bubbleCount), positions: positions)
+    }
+    /// Bufor `safety` ma dwa słowa `uint4` jak `NativeMetalSafetyControl`: bity błędów w `counts.w`, licznik par w `diagnostics.x`.
+    private func validate(records: [NativeMetalBubble], positions: [SIMD4<Float>]) async throws -> (flags: UInt32, pairs: UInt32) {
+        let count = records.count
+        let safety = try buffer([UInt32](repeating: 0, count: 8))
         try await encode("nativeValidateBubbleContainment", buffers: [try buffer(records), try buffer(positions),
-            try buffer([NativeMetalControl(counts: SIMD4(33, 0, 0, 0), physics: .zero, contactDamping: .zero)]),
-            try buffer([NativeMetalSolverControl(counts: .zero, physics: SIMD4(0, 0.00001, 0, 0))]), safety], groups: 33)
-        return safety.contents().load(fromByteOffset: 12, as: UInt32.self)
+            try buffer([NativeMetalControl(counts: SIMD4(UInt32(count), 0, 0, 0), physics: .zero, contactDamping: .zero)]),
+            try buffer([NativeMetalSolverControl(counts: .zero, physics: SIMD4(0, 0.00001, 0, 0))]), safety], groups: count)
+        return (safety.contents().load(fromByteOffset: 12, as: UInt32.self),
+                safety.contents().load(fromByteOffset: 16, as: UInt32.self))
     }
 }

@@ -54,7 +54,8 @@ final class NativeMetalSafetyTests: XCTestCase {
         XCTAssertTrue(solver.cachedContacts.filter { $0.key == .bubblePair(1, 2) }.allSatisfy { $0.lambda == 0 })
     }
 
-    func testImpossibleContainmentRepairRejectsFrameAfterFinalWallGuards() async throws {
+    // Zawieranie nie zapala już bitu 2 (P-B-9): pary, których nie da się rozdzielić, liczy walidator, a klatka jest przyjęta.
+    func testImpossibleContainmentRepairIsCountedAndDoesNotRejectTheFrame() async throws {
         var world = ReferenceWorld(configuration: .init(timeStep: 1, linearDamping: 0, angularDamping: 0),
                                    broadPhase: BruteForceBroadPhase())
         world.addBubble(try .init(id: .init(rawValue: 1), center: .init(x: 0.05, y: 0.05), mass: 3, targetRadius: 3))
@@ -69,14 +70,10 @@ final class NativeMetalSafetyTests: XCTestCase {
         }
         let solver = try NativeMetalSolver(device: XCTUnwrap(MTLCreateSystemDefaultDevice()),
             configuration: .init(contactCompliance: 1e6))
-        let runner = NativeMetalWorldRunner(executor: solver)
-        var cpu = world
-        _ = cpu.step()
-        _ = await runner.step(world: &world, scenarioStep: 1)
-        XCTAssertEqual(runner.telemetry.fallbackReason, "guardFailure")
-        XCTAssertEqual(world.bubbles, cpu.bubbles)
-        XCTAssertNil(solver.publishedFrame)
-        XCTAssertEqual(runner.telemetry.commandBufferCount, 1)
+        let frame = try await solver.executeFrame(world: world, scenarioStep: 1)
+        XCTAssertEqual(frame.containedBubblePairCount, 1)
+        XCTAssertNotNil(solver.publishedFrame)
+        XCTAssertEqual(frame.profile.commandBufferCount, 1)
     }
 
     func testDiagnosticRunnerPreservesSuccessfulGPUFrameTelemetry() async throws {
