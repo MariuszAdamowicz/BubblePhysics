@@ -12,11 +12,7 @@ import simd
 /// go najwyżej raz na publikację, przy pierwszym zapytaniu. Obiekty obejmujące bardzo wiele komórek (duże ściany)
 /// leżą na osobnej liście i są sprawdzane przy każdym zapytaniu.
 package struct QueryIndex {
-    private enum Shape {
-        case circle(center: WorldPoint, radius: Float)
-        case capsule(a: WorldPoint, b: WorldPoint, radius: Float)
-        case polygon([WorldPoint])
-    }
+    private typealias Shape = PlacementGeometry.Shape
 
     private struct Entry {
         let id: ObjectID
@@ -47,19 +43,7 @@ package struct QueryIndex {
                 let radius = max(object.effectiveRadius, 0)
                 built.append(Self.entry(id, bubble.filter, .circle(center: object.position, radius: radius)))
             case .rigidBody(let body):
-                let c = cos(object.rotation), s = sin(object.rotation)
-                func world(_ point: WorldPoint) -> WorldPoint {
-                    WorldPoint(object.position.x + point.x * c - point.y * s, object.position.y + point.x * s + point.y * c)
-                }
-                switch body.shape {
-                case .polygon(let geometry):
-                    built.append(Self.entry(id, body.filter, .polygon(geometry.vertices.map(world))))
-                case .circle(let radius):
-                    built.append(Self.entry(id, body.filter, .circle(center: object.position, radius: radius)))
-                case .capsule(let halfLength, let radius):
-                    built.append(Self.entry(id, body.filter,
-                        .capsule(a: world([-halfLength, 0]), b: world([halfLength, 0]), radius: radius)))
-                }
+                built.append(Self.entry(id, body.filter, PlacementGeometry.shape(of: body, at: object)))
             case .sensor, .forceField: continue
             }
         }
@@ -129,7 +113,7 @@ package struct QueryIndex {
         guard point.x.isFinite, point.y.isFinite else { return [] }
         return candidates(low: point, high: point).compactMap { index in
             let entry = entries[Int(index)]
-            guard accepts(entry, filter), Self.contains(entry.shape, point) else { return nil }
+            guard accepts(entry, filter), PlacementGeometry.contains(entry.shape, point) else { return nil }
             return entry.id
         }
     }
@@ -165,7 +149,7 @@ package struct QueryIndex {
             let entry = entries[Int(index)]
             guard accepts(entry, filter), Self.segmentMayTouch(start, direction, entry.low, entry.high) else { continue }
             let hit: (fraction: Float, normal: WorldPoint)?
-            if Self.contains(entry.shape, start) {
+            if PlacementGeometry.contains(entry.shape, start) {
                 let length = simd_length(direction)
                 hit = (0, length > 0 ? -direction / length : .zero)
             } else {
@@ -268,36 +252,6 @@ package struct QueryIndex {
 
     // MARK: geometria
 
-    private static func distanceToSegment(_ p: WorldPoint, _ a: WorldPoint, _ b: WorldPoint) -> Float {
-        let edge = b - a
-        let squared = simd_dot(edge, edge)
-        let t = squared > 0 ? max(0, min(1, simd_dot(p - a, edge) / squared)) : 0
-        return simd_length(p - (a + edge * t))
-    }
-
-    private static func contains(_ shape: Shape, _ point: WorldPoint) -> Bool {
-        switch shape {
-        case .circle(let center, let radius):
-            return simd_length_squared(point - center) <= radius * radius
-        case .capsule(let a, let b, let radius):
-            return distanceToSegment(point, a, b) <= radius
-        case .polygon(let vertices):
-            return polygonContains(vertices, point)
-        }
-    }
-
-    /// Parzystość przecięć; punkt na krawędzi liczy się jak wnętrze tylko wtedy, gdy parzystość tak wyjdzie.
-    private static func polygonContains(_ vertices: [WorldPoint], _ p: WorldPoint) -> Bool {
-        var inside = false
-        var j = vertices.count - 1
-        for i in vertices.indices {
-            let a = vertices[i], b = vertices[j]
-            if (a.y > p.y) != (b.y > p.y), p.x <= (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x { inside.toggle() }
-            j = i
-        }
-        return inside
-    }
-
     private static func rectangleContains(_ low: WorldPoint, _ high: WorldPoint, _ p: WorldPoint) -> Bool {
         p.x >= low.x && p.x <= high.x && p.y >= low.y && p.y <= high.y
     }
@@ -321,8 +275,8 @@ package struct QueryIndex {
 
     private static func segmentDistance(_ a: WorldPoint, _ b: WorldPoint, _ c: WorldPoint, _ d: WorldPoint) -> Float {
         if segmentsIntersect(a, b, c, d) { return 0 }
-        return min(distanceToSegment(a, c, d), distanceToSegment(b, c, d),
-                   distanceToSegment(c, a, b), distanceToSegment(d, a, b))
+        return min(PlacementGeometry.distanceToSegment(a, c, d), PlacementGeometry.distanceToSegment(b, c, d),
+                   PlacementGeometry.distanceToSegment(c, a, b), PlacementGeometry.distanceToSegment(d, a, b))
     }
 
     private static func intersects(_ shape: Shape, low: WorldPoint, high: WorldPoint) -> Bool {
@@ -336,7 +290,7 @@ package struct QueryIndex {
             return false
         case .polygon(let vertices):
             if vertices.contains(where: { rectangleContains(low, high, $0) }) { return true }
-            if corners.contains(where: { polygonContains(vertices, $0) }) { return true }
+            if corners.contains(where: { PlacementGeometry.polygonContains(vertices, $0) }) { return true }
             for i in vertices.indices {
                 let a = vertices[i], b = vertices[(i + 1) % vertices.count]
                 for k in corners.indices where segmentsIntersect(a, b, corners[k], corners[(k + 1) % 4]) { return true }
@@ -351,10 +305,10 @@ package struct QueryIndex {
             let reach = radius + otherRadius
             return simd_length_squared(center - other) <= reach * reach
         case .capsule(let a, let b, let capsuleRadius):
-            return distanceToSegment(center, a, b) <= radius + capsuleRadius
+            return PlacementGeometry.distanceToSegment(center, a, b) <= radius + capsuleRadius
         case .polygon(let vertices):
-            if polygonContains(vertices, center) { return true }
-            for i in vertices.indices where distanceToSegment(center, vertices[i], vertices[(i + 1) % vertices.count]) <= radius {
+            if PlacementGeometry.polygonContains(vertices, center) { return true }
+            for i in vertices.indices where PlacementGeometry.distanceToSegment(center, vertices[i], vertices[(i + 1) % vertices.count]) <= radius {
                 return true
             }
             return false
