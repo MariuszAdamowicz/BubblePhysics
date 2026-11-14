@@ -250,7 +250,6 @@ flowchart TD
 
 ## Key facts & assumptions
 
-
 - **Najważniejsza reguła:** krok symulacji z bańkami w poprawnych punktach nigdy nie jest odrzucany z powodu baniek. Odrzucenie przez strażnika oznacza wyłącznie środek, który przeszedł przez ścianę albo bryłę.
 - Gwarancje G1 sprawdzamy przy `maximumLinearSpeed` = 600. Domyślnie limitu nie ma (`nil`). Duże skoki z prędkości obsługuje wtedy rzut na krawędź przekroczoną w ruchu względnym, ale bez limitu brak odrzuceń jest założeniem, a nie sprawdzonym kryterium. Dlatego przewodnik integracji zaleca limit (G6-AC1).
 - Ściany planszy 2KBubbles to bryły sztywne (`BoardWorld.swift:113-120` w 2KBubbles), więc „poza planszą” w grze to wnętrze bryły albo punkt poza `simulationRegion`.
