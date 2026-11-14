@@ -42,7 +42,7 @@ final class DecalStagingTests: XCTestCase {
         try .image(known, region: TextureRegion(min: [0.25, 0.25], max: [0.75, 0.5]), scale: 2)
     }
     private func bubble(_ value: UInt64, decal: Decal? = nil) throws -> WorldObject {
-        .bubble(try BubbleDescriptor(id: id(value), position: .zero, targetRadius: 2, mass: 2,
+        .bubble(try BubbleDescriptor(id: id(value), position: [Float(value) * 5, 0], targetRadius: 2, mass: 2,
             physicsMaterialID: bubbleMaterial, renderMaterialID: look, decal: decal))
     }
     private func box(_ value: UInt64, decal: Decal? = nil) throws -> WorldObject {

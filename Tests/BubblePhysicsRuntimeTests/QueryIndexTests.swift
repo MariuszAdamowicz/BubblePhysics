@@ -136,7 +136,7 @@ final class QueryIndexTests: XCTestCase {
 
     func testFilterNarrowsEveryQueryAndNilReturnsEverything() throws {
         // Filtr zapytania działa jak filtr obiektu: wynik to obiekty, z którymi taki obiekt by kolidował.
-        let index = try scene(extra: [bubble(8, at: [0, 0], radius: 5, filter: CollisionFilter(category: 2, mask: 0b1))])
+        let index = try scene(extra: [bubble(8, at: [0.01, 0], radius: 5, filter: CollisionFilter(category: 2, mask: 0b1))])
         XCTAssertEqual(index.objects(at: [0, 0]), [id(1), id(8)], "bez filtra: wszystko")
         XCTAssertEqual(index.objects(at: [0, 0], filter: .default), [id(1), id(8)])
         let probe = CollisionFilter(category: 1, mask: 2)
@@ -150,7 +150,7 @@ final class QueryIndexTests: XCTestCase {
         XCTAssertEqual(index.objects(inCircle: [0, 0], radius: 1, filter: rejected), [])
         XCTAssertEqual(index.raycast(from: [-20, 0], to: [20, 0], filter: probe)?.objectID, id(8))
         XCTAssertNil(index.raycast(from: [-20, 0], to: [20, 0], filter: rejected))
-        XCTAssertEqual(index.raycast(from: [-20, 0], to: [20, 0])?.objectID, id(1), "remis wygrywa mniejszy ObjectID")
+        XCTAssertEqual(index.raycast(from: [-20, 0], to: [20, 0])?.objectID, id(1), "obiekt 1 jest trafiony pierwszy, bo środek obiektu 8 leży o 0,01 dalej")
     }
 
     func testSensorsAndForceFieldsAreNotQueryable() throws {

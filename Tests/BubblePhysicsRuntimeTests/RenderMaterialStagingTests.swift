@@ -23,7 +23,7 @@ final class RenderMaterialStagingTests: XCTestCase {
             .updateRenderMaterial(look, material: try RenderMaterial())
     }
     private func bubble(_ value: UInt64, layer: Int32 = 0, material: RenderMaterialID? = nil) throws -> WorldObject {
-        .bubble(try BubbleDescriptor(id: id(value), position: .zero, targetRadius: 2, mass: 2,
+        .bubble(try BubbleDescriptor(id: id(value), position: [Float(value) * 5, 0], targetRadius: 2, mass: 2,
             physicsMaterialID: bubbleMaterial, renderMaterialID: material ?? look, layer: layer))
     }
     private func box(_ value: UInt64, layer: Int32 = 0) throws -> WorldObject {

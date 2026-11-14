@@ -100,7 +100,7 @@ final class HitTestTests: XCTestCase {
         let world = try makeWorld()
         try await settle(world, WorldTransaction()
             .add(B.bubble(11, at: [100, 100], radius: 10, role: .static))
-            .add(B.bubble(9, at: [100, 100], radius: 10, role: .static))
+            .add(B.bubble(9, at: [100.5, 100], radius: 10, role: .static))
             .add(B.bubble(5, at: [300, 100], radius: 10, role: .static))
             .add(B.box(8, at: [300, 100], half: [6, 6]))
             .add(B.bubble(3, at: [500, 100], radius: 10, role: .static))
@@ -114,7 +114,7 @@ final class HitTestTests: XCTestCase {
         let world = try makeWorld()
         try await settle(world, WorldTransaction()
             .add(B.bubble(11, at: [100, 100], radius: 10, role: .static))
-            .add(B.bubble(9, at: [100, 100], radius: 10, role: .static)))
+            .add(B.bubble(9, at: [100.5, 100], radius: 10, role: .static)))
         let results = await hitTests(world, [[100, 100]]) { world.submit(WorldTransaction().remove(self.id(11))) }
         XCTAssertEqual(results, [id(9)])
     }
@@ -232,7 +232,7 @@ final class HitTestTests: XCTestCase {
         let world = try makeWorld()
         try await settle(world, WorldTransaction()
             .add(B.bubble(11, at: [100, 100], radius: 10, role: .static, layer: 0))
-            .add(B.bubble(3, at: [100, 100], radius: 10, role: .static, layer: 2))
+            .add(B.bubble(3, at: [100.5, 100], radius: 10, role: .static, layer: 2))
             .add(B.box(20, at: [300, 100], half: [6, 6], layer: -1))
             .add(B.circle(4, at: [300, 100], radius: 6, role: .static, layer: 5))
             .add(B.bubble(5, at: [500, 100], radius: 10, role: .static, layer: 1))
@@ -246,7 +246,7 @@ final class HitTestTests: XCTestCase {
         let world = try makeWorld()
         try await settle(world, WorldTransaction()
             .add(B.bubble(11, at: [100, 100], radius: 10, role: .static))
-            .add(B.bubble(9, at: [100, 100], radius: 10, role: .static)))
+            .add(B.bubble(9, at: [100.5, 100], radius: 10, role: .static)))
         var results = await hitTests(world, [[100, 100]])
         XCTAssertEqual(results, [id(11)])
         results = await hitTests(world, [[100, 100]]) { world.submit(WorldTransaction().setLayer(self.id(9), layer: 1)) }
