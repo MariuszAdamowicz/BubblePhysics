@@ -8,7 +8,7 @@
 
 **Plugin version:** 0.7.10
 **Agent Sessions:** claude-code: 65849c84-3e5c-4a2f-8227-dee99104ae9e
-**Self-review:** pętla 1: CAP_REACHED — round-2 findings fixed, not re-reviewed (uwagi rundy 2: wyjątki od zachowania v2.1.0 dla walidacji punktu i scalenia oraz `.wrap`; wyłączenie z testu wspólnego środka obiektów usuwanych przez operację; ściany sceny tłoku i założenie dla kontaktu twardego; G2-AC2 bez bezwzględnego limitu; zakres ρ; nadpisanie przy materiale sztywnym; próg CD-D-7 sięgający do bufora GPU); pętla 2 (po uwagach właściciela): CAP_REACHED — round-2 findings fixed, not re-reviewed (uwagi rundy 2: pole `response.z` zajęte, więc ρ w nowym polu `rho` cache kontaktu; sprawdzenie skończoności nie obejmowało `startTransition` promienia i `updatePhysicsMaterial`; przykład G3-AC8 nie przepełniał Float; dwie normalizacje progu w G4-AC8; brak konstrukcji przypadku bez kandydata dla podziału; dwuznaczne „sztywna” w G4-AC4)
+**Self-review:** pętla 1: CAP_REACHED — round-2 findings fixed, not re-reviewed (uwagi rundy 2: wyjątki od zachowania v2.1.0 dla walidacji punktu i scalenia oraz `.wrap`; wyłączenie z testu wspólnego środka obiektów usuwanych przez operację; ściany sceny tłoku i założenie dla kontaktu twardego; G2-AC2 bez bezwzględnego limitu; zakres ρ; nadpisanie przy materiale sztywnym; próg CD-D-7 sięgający do bufora GPU); pętla 2 (po uwagach właściciela): CAP_REACHED — round-2 findings fixed, not re-reviewed (uwagi rundy 2: pole `response.z` zajęte, więc ρ w nowym polu `rho` cache kontaktu; sprawdzenie skończoności nie obejmowało `startTransition` promienia i `updatePhysicsMaterial`; przykład G3-AC8 nie przepełniał Float; dwie normalizacje progu w G4-AC8; brak konstrukcji przypadku bez kandydata dla podziału; dwuznaczne „sztywna” w G4-AC4); pętla 3 (po drugich uwagach właściciela): CAP_REACHED — round-2 findings fixed, not re-reviewed (uwagi rundy 2: okno uspokojenia w G4-AC1–G4-AC3 i G4-AC8 obejmowało cały przebieg; c₀ = 0 przy skrajnym wykładniku dawało NaN, a wartości domyślne `.hard` nie były podane; scena G5-AC1 nie gwarantowała odrzucenia po CD-D-17; brak kolejności przyczyn `PlacementIssue`)
 
 ---
 
@@ -98,17 +98,17 @@ Punkt, w którym bańki nie da się poprawnie postawić, wraca do gry jako odrzu
 
 **G4: Podatność kontaktu opisana w materiale w dwóch wymiarach**
 Materiał bańki opisuje podatność kontaktu w dwóch wymiarach: jak podstawowa podatność zmienia się z promieniem nominalnym bańki i jak zmienia się sztywność wraz ze ściśnięciem (opis znormalizowany). Gra może nadpisać podstawową podatność dla jednej bańki. Podatność 0 zachowuje zachowanie v2.1.0.
-- [ ] G4-AC1 — Dwie bańki r = 20 i r = 40 z tym samym materiałem (c₀ > 0, wykładnik promienia s = 2, wykładnik ściśnięcia k = 0) dociskamy osobno do ściany tą samą stałą siłą (`MotorDrive`). Po uspokojeniu (1 s) względne wgniecenie δ / r jest większe dla bańki r = 40. δ = r − d, gdzie d to odległość środka bańki od płaszczyzny ściany z `WorldFrame`. To miara liniowa względem siły, niezależna od definicji promienia efektywnego. · `verify: test publicznego BubbleWorld`
+- [ ] G4-AC1 — Dwie bańki r = 20 i r = 40 z tym samym materiałem (c₀ > 0, wykładnik promienia s = 2, wykładnik ściśnięcia k = 0) dociskamy osobno do ściany tą samą stałą siłą (`MotorDrive`). Po 2 s symulacji względne wgniecenie δ / r jest większe dla bańki r = 40. δ = r − d, gdzie d to odległość środka bańki od płaszczyzny ściany z `WorldFrame`. To miara liniowa względem siły, niezależna od definicji promienia efektywnego. · `verify: test publicznego BubbleWorld`
 - [ ] G4-AC2 — Ta sama scena z s = 0 daje odwrotną kolejność: większe δ / r ma bańka r = 20. Przy tej samej sile względne wgniecenie rośnie jak r^(s−1), więc s = 1 daje równe względne wgniecenie. · `verify: ten sam test, drugi przypadek`
 - [ ] G4-AC3 — Przy wykładniku ściśnięcia > 0 podwojenie siły docisku zwiększa δ / r (z G4-AC1) mniej niż dwukrotnie. Przy wykładniku 0 zwiększa je dwukrotnie (± 20%). · `verify: test publicznego BubbleWorld, dwie siły na bańkę`
 - [ ] G4-AC4 — Bańkę z materiałem bańki (`kind: .bubble`) o podatności c₀ = 0 dociskamy stałą siłą do bańki miękkiej leżącej przy ścianie, a pierwsza bańka nie dotyka niczego innego. Po uspokojeniu bańka o podatności 0 ma promień efektywny równy docelowemu (± 1%), a ściśnięcie bierze miękka: odległość środków jest mniejsza od sumy promieni docelowych, a miękka ma δ > 0 względem ściany. · `verify: test publicznego BubbleWorld`
 - [ ] G4-AC5 — `contactCompliance` ustawione w `BubbleDescriptor`, a także w `BubbleResult` dla wyniku scalenia i dla obu części podziału, nadpisuje podstawową podatność materiału tylko tej bańki. Dwie bańki z tym samym materiałem i różnym nadpisaniem uginają się różnie w scenie G4-AC1, a bańka bez nadpisania zachowuje się jak bez niego. · `verify: test publicznego BubbleWorld`
 - [ ] G4-AC6 — Przy materiałach domyślnych (c₀ = 0) istniejące testy kroku, konturu i renderu przechodzą bez zmian oczekiwań. Wyjątkiem są testy, które celowo sprawdzały odrzucenie za bańkę w bańce albo natychmiastowe rozdzielenie zawierania (te zmieniają się zgodnie z G2). Zachowanie v2.1.0 może się zmienić tylko w pięciu przypadkach: w scenach, w których v2.1.0 odrzucał krok; gdy korekcja na krok przekraczała limit z CD-D-9; gdy `add` albo `replace` podaje zły punkt (G3, dziś przyjmowany); gdy punkt styku scalenia albo centroid części podziału jest zły (CD-D-6, dziś wynik stawał w tym punkcie); gdy środek wszedł w bryłę przy narożniku (CD-D-17). · `verify: swift test na całym pakiecie; plan inwentaryzuje testy oczekujące odrzucenia za zawieranie, a opis PR wymienia każde zmienione oczekiwanie`
 - [ ] G4-AC7 — Przy tworzeniu materiału `ModelValidationError.valueOutOfRange` rzucają: podatność ujemna, NaN albo nieskończona, wykładnik NaN albo nieskończony, promień odniesienia ≤ 0, NaN albo nieskończony oraz podatność > 0 w materiale `kind: .rigid`. Bańka z materiałem `.rigid` jest już dziś odrzucana (`incompatiblePhysicsMaterial`, `TransactionStager.swift:482`), więc nadpisanie na bańce nie spotyka materiału sztywnego. Ujemne, NaN albo nieskończone `contactCompliance` rzuca przy tworzeniu `BubbleDescriptor`. W `BubbleResult` (inicjalizator nie rzuca) odrzuca transakcję zdarzeniem `transactionRejected` z `.invalidValue(.valueOutOfRange("contactCompliance"))`. · `verify: testy jednostkowe modelu i test transakcji scalenia`
-- [ ] G4-AC8 — W scenach G4-AC1–G4-AC3 δ każdej bańki w ostatniej sekundzie przed pomiarem waha się o mniej niż 0,02 · r (różnica maksimum i minimum δ). Bańka jest więc uspokojona, a nie drga przez sprzężenie ρ^k. · `verify: asercja w tych samych testach`
+- [ ] G4-AC8 — W scenach G4-AC1–G4-AC3 δ każdej bańki w oknie od 1 s do 2 s symulacji (pomiar w G4-AC1–G4-AC3 jest po 2 s) waha się o mniej niż 0,02 · r (różnica maksimum i minimum δ). Bańka jest więc uspokojona, a nie drga przez sprzężenie ρ^k. · `verify: asercja w tych samych testach`
 
 **G5: Przyczyna odrzucenia i zawieranie są publicznie widoczne**
-- [ ] G5-AC1 — Gdy krok zostaje odrzucony, bo środek bańki w trakcie symulacji przeszedł przez ścianę albo wszedł we wnętrze bryły, `lastRejectionReason == .solverGuard` i `lastSolverGuardCause == .centerCrossing`. · `verify: test publicznego BubbleWorld z bryłą kinematyczną przesuniętą jednym krokiem na środek bańki przyciśniętej do ściany`
+- [ ] G5-AC1 — Gdy krok zostaje odrzucony, bo środek bańki w trakcie symulacji przeszedł przez ścianę albo wszedł we wnętrze bryły, `lastRejectionReason == .solverGuard` i `lastSolverGuardCause == .centerCrossing`. · `verify: test publicznego BubbleWorld z bryłą kinematyczną przesuniętą jednym krokiem tak, że w położeniu końcowym nachodzi na ścianę i przykrywa środek bańki przyciśniętej do tej ściany, więc żaden z rzutów strażnika nie wyprowadza środka do wolnego miejsca`
 - [ ] G5-AC2 — `lastSolverGuardCause` jest `nil`, gdy żaden krok nie został jeszcze odrzucony albo ostatnie odrzucenie miało inny powód niż `.solverGuard`. · `verify: test publicznego BubbleWorld`
 - [ ] G5-AC3 — `containedBubblePairCount` podaje liczbę par baniek, z których mniejsza mieści się cała w kole większej, po ostatnim ukończonym kroku. Na pustej planszy wynosi 0. · `verify: G2-AC1 i test pustej planszy`
 
@@ -129,10 +129,10 @@ Materiał bańki opisuje podatność kontaktu w dwóch wymiarach: jak podstawowa
 
 Zmiana ma cztery części, od wejścia do wyjścia kroku.
 
-**1. Walidacja punktu w transakcji (G3).** `TransactionStager` (`Sources/BubblePhysicsRuntime/TransactionStager.swift`) przy `add`, `replace`, `mergeBubbles` i `splitBubble` sprawdza środek nowej bańki względem stanu po wcześniejszych operacjach tej samej transakcji. Obiekty usuwane przez tę samą operację (bańka zastępowana przez `replace`, źródła `mergeBubbles`, źródło `splitBubble`) są z testu wyłączone:
-- odległość od środka każdej innej bańki poniżej progu `coincidentCenterTolerance` (CD-D-7) daje `.coincidentCenter`;
-- punkt we wnętrzu wielokąta, koła lub kapsuły bryły sztywnej daje `.insideRigidBody`;
-- punkt poza `simulationRegion` daje `.outsideRegion`, niezależnie od `regionExitPolicy` (CD-D-14).
+**1. Walidacja punktu w transakcji (G3).** `TransactionStager` (`Sources/BubblePhysicsRuntime/TransactionStager.swift`) przy `add`, `replace`, `mergeBubbles` i `splitBubble` sprawdza środek nowej bańki względem stanu po wcześniejszych operacjach tej samej transakcji. Obiekty usuwane przez tę samą operację (bańka zastępowana przez `replace`, źródła `mergeBubbles`, źródło `splitBubble`) są z testu wyłączone. Warunki są sprawdzane w kolejności poniżej, a pierwszy niespełniony wyznacza przyczynę:
+1. punkt poza `simulationRegion` daje `.outsideRegion`, niezależnie od `regionExitPolicy` (CD-D-14);
+2. punkt we wnętrzu wielokąta, koła lub kapsuły bryły sztywnej daje `.insideRigidBody`;
+3. odległość od środka każdej innej bańki poniżej progu `coincidentCenterTolerance` (CD-D-7) daje `.coincidentCenter`.
 
 Przy `add` i `replace` błąd odrzuca całą transakcję istniejącą drogą `TransactionRejection` z nowym przypadkiem `invalidPlacement(ObjectID, PlacementIssue)`. Przy `mergeBubbles` silnik nie odrzuca transakcji. `StructuralOperations.mergeCenter` (`Sources/BubblePhysicsRuntime/StructuralOperations.swift:10`) zwraca punkt styku, a nowa funkcja `StructuralOperations.resolvedMergeCenter` sprawdza go tym samym testem i przy błędzie próbuje deterministycznie kolejnych kandydatów (CD-D-6). Kolejność kandydatów dla N źródeł:
 1. dla każdego źródła w kolejności `sources`: punkty P + t · (S_i − P) dla t = 0,25, 0,5, 0,75, gdzie P to punkt styku, a S_i to środek źródła;
@@ -147,9 +147,11 @@ Przy `add`, `replace`, scaleniu i podziale stager liczy najgorszy przypadek poda
 
 **2. Podatność kontaktu (G1, G4).** `PhysicsMaterial` dostaje pole `contactCompliance: BubbleContactCompliance` z czterema wartościami:
 - `base` c₀ ≥ 0, domyślnie 0;
-- `referenceRadius` r_ref > 0;
-- `radiusExponent` s;
-- `compressionExponent` k.
+- `referenceRadius` r_ref > 0, domyślnie 1;
+- `radiusExponent` s, domyślnie 0;
+- `compressionExponent` k, domyślnie 0.
+
+Wartość `.hard` to właśnie te wartości domyślne. Gdy c₀ (po ewentualnym nadpisaniu na bańce) wynosi 0, c = 0 bez liczenia potęg, zarówno w stagerze, jak i na hoście i GPU. Skrajny wykładnik przy c₀ = 0 nie daje więc NaN z 0 · ∞ i nie powoduje odrzucenia.
 
 `BubbleDescriptor` i `BubbleResult` dostają `contactCompliance: Float?`, które zastępuje c₀ jednej bańki. Podatność bańki w kroku to:
 
