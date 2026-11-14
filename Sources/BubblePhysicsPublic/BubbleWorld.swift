@@ -31,6 +31,8 @@ public final class BubbleWorld {
     /// Stan końcowy „zawiódł”: ustawiony raz, nigdy nie czyszczony.
     private var failureReason: WorldFailureReason?
     private var lastRejectionReason: WorldRejectionReason?
+    private var lastSolverGuardCause: SolverGuardCause?
+    private var containedBubblePairCount = 0
     private var didRenderLastAdvance = false
     /// Obiekty ostatniego opublikowanego kroku, które rysują się bez interpolacji.
     private var snappedObjects: Set<ObjectID> = []
@@ -111,6 +113,7 @@ public final class BubbleWorld {
             contactCandidateOverflow: contactCandidateOverflow,
             maximumContactCandidatesPerObject: maximumContactCandidatesPerObject,
             failureReason: failureReason, lastRejectionReason: lastRejectionReason,
+            lastSolverGuardCause: lastSolverGuardCause, containedBubblePairCount: containedBubblePairCount,
             didRenderLastAdvance: didRenderLastAdvance)
     }
 
