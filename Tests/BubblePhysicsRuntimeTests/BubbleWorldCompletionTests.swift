@@ -474,10 +474,35 @@ final class BubbleWorldCompletionTests: XCTestCase {
         XCTAssertEqual(retry.transactionReceipts.map(\.token), [token])
         XCTAssertEqual(retry.stepIndex, 1)
     }
+
+    // P-B-15, P-B-16, P-B-36: przyczyna z bitów strażnika trafia do diagnostyki, a każde inne odrzucenie ją czyści.
+    func testGuardCauseFromTheSafetyFailureReachesDiagnosticsAndAnyOtherRejectionClearsIt() async throws {
+        let stepper = ScriptedStepper([
+            .fail(safety(.guardFailure, cause: .centerCrossing)), .fail(safety(.guardFailure, cause: .rigidRotationBudget)),
+            .fail(safety(.guardFailure)), .fail(safety(.guardFailure, cause: .centerCrossing)),
+            .fail(safety(.invalidFrame)), .fail(safety(.guardFailure, cause: .centerCrossing)), .complete])
+        let world = try world(stepper: stepper)
+        XCTAssertNil(world.diagnostics.lastSolverGuardCause, "przed jakimkolwiek odrzuceniem")
+        let expected: [(WorldRejectionReason, SolverGuardCause?)] = [
+            (.solverGuard, .centerCrossing), (.solverGuard, .rigidRotationBudget), (.solverGuard, nil),
+            (.solverGuard, .centerCrossing), (.invalidFrame, nil), (.solverGuard, .centerCrossing)]
+        for (index, (reason, cause)) in expected.enumerated() {
+            _ = await world.advance(by: 0.125)
+            XCTAssertEqual(world.diagnostics.lastAdvanceIssue, .stepFailed, "krok \(index)")
+            XCTAssertEqual(world.diagnostics.lastRejectionReason, reason, "krok \(index)")
+            XCTAssertEqual(world.diagnostics.lastSolverGuardCause, cause, "krok \(index)")
+        }
+        // Udany krok niczego nie odrzuca, więc powód i przyczyna ostatniego odrzucenia zostają razem.
+        _ = await world.advance(by: 0.125)
+        XCTAssertNil(world.diagnostics.lastAdvanceIssue)
+        XCTAssertEqual(world.diagnostics.lastRejectionReason, .solverGuard)
+        XCTAssertEqual(world.diagnostics.lastSolverGuardCause, .centerCrossing)
+    }
 }
 
-private func safety(_ reason: NativeMetalWorldError) -> NativeMetalSafetyFailure {
-    NativeMetalSafetyFailure(reason: reason, telemetry: NativeMetalFrameTelemetry(), profile: NativeMetalFrameProfile())
+private func safety(_ reason: NativeMetalWorldError, cause: NativeMetalGuardCause? = nil) -> NativeMetalSafetyFailure {
+    NativeMetalSafetyFailure(reason: reason, telemetry: NativeMetalFrameTelemetry(), profile: NativeMetalFrameProfile(),
+                             guardCause: cause)
 }
 
 /// Wyłącznie zewnętrzna granica ukończenia kroku jest kontrolowana przez test.

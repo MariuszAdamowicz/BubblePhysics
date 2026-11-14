@@ -1,4 +1,5 @@
-// ABI: cztery atomiki uint, wyłącznie liczniki i bity statusu.
+// ABI: cztery atomiki uint, wyłącznie liczniki i bity statusu. Bit 2 to odrzucenie przez strażnika; razem z nim bit 8
+// (centerCrossing) albo bit 16 (rigidRotationBudget) podaje przyczynę.
 // Każdy wątek bańki zapisuje tylko własną pozycję oraz rząd kandydatów.
 void nativeSafetyEvent(device atomic_uint *safety, uint slot) {
     atomic_fetch_add_explicit(safety + slot, 1, memory_order_relaxed);
@@ -193,16 +194,16 @@ void nativeGuardCenter(device NativeBubble *bubbles, device NativeSegment *segme
         if (nativeFastCandidate(bubbles[i], s, control, contacts) || nativePossibleCenterCrossing(start, end, s)) {
             if (!nativeCenterPathFinite(start, end, s, statistics)) nativeSafetyFailure(safety, 1);
             else if (nativeForbiddenCenterCrossing(start, end, s, segments, control.counts.y, statistics, true))
-                nativeSafetyFailure(safety, 2);
+                nativeSafetyFailure(safety, 2 | 8);
         }
         if (s.flags.z && dot(end - s.current.xy, nativeSegmentNormal(s.current)) * s.collision.x < 0)
-            nativeSafetyFailure(safety, 2);
+            nativeSafetyFailure(safety, 2 | 8);
         if (s.flags.y) {
             if (testedOwner != s.identity.y) {
                 testedOwner = s.identity.y;
                 testedInside = nativeInsideOwner(end, segments, control.counts.y, s.identity.y, false);
             }
-            if (testedInside) nativeSafetyFailure(safety, 2);
+            if (testedInside) nativeSafetyFailure(safety, 2 | 8);
         }
     }
 }
@@ -467,7 +468,7 @@ kernel void nativeRigidPredict(device NativeRigidBody *bodies [[buffer(0)]],
     // Konserwatywny sweep wierzchołków zatrzymuje bryłę przed cienką ścianą.
     // Próbkowanie obrotu obejmuje łuk; przekroczenie budżetu odrzuca klatkę.
     uint steps=max(1u,uint(ceil(abs(b.pose.z-start.z)/0.05f)));
-    if(steps>128){nativeSafetyFailure(safety,2);bodies[index]=b;return;}
+    if(steps>128){nativeSafetyFailure(safety,2|16);bodies[index]=b;return;}
     bool crossed=false;float2 contactPoint=0,contactNormal=0;long contactOwner=0;
     float3 stopPose=start;
     for(uint sample=0;sample<steps && !crossed;++sample){

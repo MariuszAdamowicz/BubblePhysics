@@ -714,7 +714,7 @@ kernel void nativeRigidContacts(device NativeRigidBody *bodies [[buffer(0)]],
                         float2 q=nativeRigidVertex(poseAt,vertices,(i+1)%b.ranges.y);
                         possible=distance(centerAt,nativeClosestPoint(centerAt,float4(p,q)))<=a.physical.z+margin;
                     }
-                    if(possible){atomic_fetch_or_explicit(safety+3,2u,memory_order_relaxed);break;}
+                    if(possible){atomic_fetch_or_explicit(safety+3,10u,memory_order_relaxed);break;}
                 }
             }
         }

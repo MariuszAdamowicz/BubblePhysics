@@ -385,9 +385,11 @@ public final class BubbleWorld {
         case .frameRejected:
             lastAdvanceIssue = .frameRejected
             lastRejectionReason = .frameEncoding
-        case .stepRejected(let reason):
+            lastSolverGuardCause = nil
+        case .stepRejected(let reason, let cause):
             lastAdvanceIssue = .stepFailed
             lastRejectionReason = reason
+            lastSolverGuardCause = cause
         case .failed(let reason):
             failureReason = reason
             pending.removeAll()
@@ -398,7 +400,8 @@ public final class BubbleWorld {
 
     private enum StepOutcome {
         case cancelled, frameRejected
-        case stepRejected(WorldRejectionReason)
+        /// Przyczyna jest tylko przy `.solverGuard`.
+        case stepRejected(WorldRejectionReason, SolverGuardCause?)
         case failed(WorldFailureReason)
     }
 
@@ -408,25 +411,34 @@ public final class BubbleWorld {
         if error is CancellationError { return .cancelled }
         if error is GameRenderError { return .frameRejected }
         if error is WorldRenderCommandError { return .failed(.commandExecutionFailed) }
-        if let failure = error as? NativeMetalSafetyFailure { return outcome(of: failure.reason) }
+        if let failure = error as? NativeMetalSafetyFailure {
+            let outcome = outcome(of: failure.reason)
+            guard case .stepRejected(.solverGuard, _) = outcome else { return outcome }
+            let cause: SolverGuardCause? = switch failure.guardCause {
+            case .centerCrossing: .centerCrossing
+            case .rigidRotationBudget: .rigidRotationBudget
+            case nil: nil
+            }
+            return .stepRejected(.solverGuard, cause)
+        }
         if let reason = error as? NativeMetalWorldError { return outcome(of: reason) }
         if let solver = error as? NativeMetalSolverError {
             switch solver {
             case .commandFailed: return .failed(.commandExecutionFailed)
-            case .invalidSnapshot: return .stepRejected(.invalidSnapshot)
-            default: return .stepRejected(.unexpected)
+            case .invalidSnapshot: return .stepRejected(.invalidSnapshot, nil)
+            default: return .stepRejected(.unexpected, nil)
             }
         }
-        return .stepRejected(.unexpected)
+        return .stepRejected(.unexpected, nil)
     }
 
     private static func outcome(of reason: NativeMetalWorldError) -> StepOutcome {
         switch reason {
         case .nonFinite: return .failed(.nonFiniteValues)
-        case .guardFailure: return .stepRejected(.solverGuard)
-        case .invalidFrame: return .stepRejected(.invalidFrame)
-        case .frameInFlight: return .stepRejected(.frameInFlight)
-        case .unavailable: return .stepRejected(.unexpected)
+        case .guardFailure: return .stepRejected(.solverGuard, nil)
+        case .invalidFrame: return .stepRejected(.invalidFrame, nil)
+        case .frameInFlight: return .stepRejected(.frameInFlight, nil)
+        case .unavailable: return .stepRejected(.unexpected, nil)
         }
     }
 }

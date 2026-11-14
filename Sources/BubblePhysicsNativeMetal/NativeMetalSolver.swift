@@ -943,11 +943,16 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
             gpuMilliseconds: timing.gpuMilliseconds, solverIterationCount: configuration.solverIterationCount,
             ccdCandidateCount: Int(safetyResult.counts.x), guardCorrectionCount: Int(safetyResult.counts.y),
             cacheInvalidationCount: Int(safetyResult.counts.z))
-        func rejectSafety(_ reason: NativeMetalWorldError) -> NativeMetalSafetyFailure {
-            .init(reason: reason, telemetry: diagnostics, profile: profile)
+        func rejectSafety(_ reason: NativeMetalWorldError, guardCause: NativeMetalGuardCause? = nil) -> NativeMetalSafetyFailure {
+            .init(reason: reason, telemetry: diagnostics, profile: profile, guardCause: guardCause)
         }
         guard safetyResult.counts.w & 1 == 0 else { throw rejectSafety(.nonFinite) }
-        guard safetyResult.counts.w & 2 == 0 else { throw rejectSafety(.guardFailure) }
+        guard safetyResult.counts.w & 2 == 0 else {
+            // Bity przyczyny zapalają się zawsze razem z bitem 2; oba w jednej klatce: wygrywa centerCrossing.
+            let cause: NativeMetalGuardCause? = safetyResult.counts.w & 8 != 0 ? .centerCrossing
+                : (safetyResult.counts.w & 16 != 0 ? .rigidRotationBudget : nil)
+            throw rejectSafety(.guardFailure, guardCause: cause)
+        }
         guard safetyResult.counts.w & 4 == 0 else { throw rejectSafety(.invalidFrame) }
         if let postSolver = state.diagnosticPostSolverPositions,
            let postGuard = state.diagnosticPostGuardPositions {
