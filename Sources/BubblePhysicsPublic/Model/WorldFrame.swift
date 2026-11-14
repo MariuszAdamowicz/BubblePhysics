@@ -3,6 +3,17 @@ public struct TransactionToken: RawRepresentable, Hashable, Sendable {
     public init(rawValue: UInt64) { self.rawValue = rawValue }
 }
 
+/// Przyczyna, dla której środek bańki nie może stanąć w podanym punkcie. Przy kilku naraz
+/// wygrywa pierwsza w kolejności: `.outsideRegion`, `.insideRigidBody`, `.coincidentCenter`.
+public enum PlacementIssue: Equatable, Sendable {
+    /// Środek leży poza `simulationRegion`, niezależnie od `regionExitPolicy`.
+    case outsideRegion
+    /// Środek leży we wnętrzu wielokąta, koła albo kapsuły bryły sztywnej.
+    case insideRigidBody
+    /// Środek leży bliżej środka innej bańki niż tolerancja wspólnego środka.
+    case coincidentCenter
+}
+
 public enum TransactionRejectionReason: Error, Equatable, Sendable {
     case objectNotFound(ObjectID)
     case duplicateObjectID(ObjectID)
@@ -34,6 +45,9 @@ public enum TransactionRejectionReason: Error, Equatable, Sendable {
     case invalidValue(ModelValidationError)
     case incompatibleTransitionValue
     case invalidStructuralOperation
+    /// Zły punkt bańki: `add` i `replace` ze środkiem, w którym bańki nie da się poprawnie postawić, oraz
+    /// `mergeBubbles` i `splitBubble`, dla których silnik nie znalazł poprawnego punktu wyniku (ID wyniku albo części).
+    case invalidPlacement(ObjectID, PlacementIssue)
 }
 
 public struct TransactionRejection: Error, Equatable, Sendable {

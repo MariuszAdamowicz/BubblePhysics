@@ -1,4 +1,5 @@
 import BubblePhysicsModel
+import BubblePhysicsNativeMetal
 import simd
 
 /// Geometria punktu na CPU: kształty brył sztywnych i test, czy punkt leży w ich wnętrzu.
@@ -8,6 +9,36 @@ enum PlacementGeometry {
         case circle(center: WorldPoint, radius: Float)
         case capsule(a: WorldPoint, b: WorldPoint, radius: Float)
         case polygon([WorldPoint])
+    }
+
+    /// Najmniejsza odległość środków dwóch baniek, poniżej której środki uchodzą za wspólny (CD-D-7): względna do
+    /// mniejszego promienia, ale nie mniejsza niż tolerancja położenia solvera, żeby punkty różne o 1 ULP
+    /// (których naprawa nie rozsunie stabilnie) też były odrzucane.
+    static func coincidentCenterTolerance(radius: Float, otherRadius: Float) -> Float {
+        max(1e-4 * min(radius, otherRadius), positionTolerance)
+    }
+    private static let positionTolerance = NativeSolverConfiguration().positionTolerance
+
+    /// Pierwsza przyczyna, dla której środek bańki o promieniu `radius` nie może stanąć w `point`, w kolejności
+    /// region, bryła, wspólny środek; `nil`, gdy punkt jest poprawny. Obiekty z `excluding` są z testu wyłączone.
+    static func issue(at point: WorldPoint, radius: Float, in state: RuntimeState,
+                      excluding: Set<ObjectID>) -> PlacementIssue? {
+        // Region obowiązuje niezależnie od `regionExitPolicy`: `.wrap` przenosi bańkę, która wyszła w kroku,
+        // a nie dopuszcza postawienia jej poza regionem.
+        guard state.configuration.simulationRegion.contains(point) else { return .outsideRegion }
+        for (id, object) in state.objects where !excluding.contains(id) {
+            if case .rigidBody(let body) = object.descriptor, contains(shape(of: body, at: object), point) {
+                return .insideRigidBody
+            }
+        }
+        for (id, object) in state.objects where !excluding.contains(id) {
+            guard case .bubble = object.descriptor else { continue }
+            if simd_length(point - object.position)
+                < coincidentCenterTolerance(radius: radius, otherRadius: object.targetRadius) {
+                return .coincidentCenter
+            }
+        }
+        return nil
     }
 
     /// Kształt bryły sztywnej w świecie, z jej położenia i obrotu w `object`.

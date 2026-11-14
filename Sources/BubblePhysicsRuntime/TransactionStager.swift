@@ -220,7 +220,10 @@ private struct StagingContext {
 
     mutating func apply(_ operation: WorldOperation) throws {
         switch operation {
-        case .add(let descriptor): try add(descriptor)
+        case .add(let descriptor):
+            try add(descriptor)
+            // Poza `add(_:)`: podział i scalenie dodają wynik w środku źródła, zanim silnik poprawi jego punkt.
+            if let added = state.objects[descriptor.id] { try validatePlacement(added, excluding: [descriptor.id]) }
         case .remove(let id): try remove(id)
         case .replace(let id, let descriptor):
             let previous = try object(id)
@@ -228,6 +231,7 @@ private struct StagingContext {
             let replacement = RuntimeObject(descriptor)
             discardObjectTransitions(id)
             try validate(replacement)
+            try validatePlacement(replacement, excluding: [id])
             state.objects[id] = replacement
             try validateJoints(attachedTo: id)
             replaced.append(id)
@@ -404,6 +408,14 @@ private struct StagingContext {
         state.objects[descriptor.id] = existing
         created.append(descriptor.id)
         if existing.interests.contains(.didAdd) { events.append(.didAdd(descriptor.id)) }
+    }
+    /// Punkt bańki (region, bryła, wspólny środek) względem stanu po wcześniejszych operacjach tej transakcji.
+    func validatePlacement(_ object: RuntimeObject, excluding: Set<ObjectID>) throws {
+        guard case .bubble(let bubble) = object.descriptor else { return }
+        if let issue = PlacementGeometry.issue(at: object.position, radius: object.targetRadius, in: state,
+                                               excluding: excluding) {
+            throw TransactionRejectionReason.invalidPlacement(bubble.id, issue)
+        }
     }
     mutating func remove(_ id: ObjectID) throws {
         let existing = try object(id)
@@ -582,12 +594,26 @@ private struct StagingContext {
         }
         // Wyłącznie logiczna rezerwacja wyniku. Kontur, kontakt i stan solvera obsługuje backend.
         let inputs = try sources.sorted { $0.rawValue < $1.rawValue }.map { try bubble($0).0 }
-        let center = StructuralOperations.mergeCenter(inputs)
+        let contact = StructuralOperations.mergeCenter(inputs)
+        let resultRadius = Float(sqrt(radiusSquared))
         // Prędkość liniowa i kątowa wyniku pochodzą z mas źródeł także wtedy, gdy `result.mass` nadpisuje masę wyniku.
-        let descriptor = try resultDescriptor(result,
-            position: center,
-            velocity: WorldPoint(Float(momentum.x / mass), Float(momentum.y / mass)),
-            radius: Float(sqrt(radiusSquared)), mass: result.mass ?? Float(mass))
+        func resultObject(at position: WorldPoint) throws -> WorldObject {
+            try resultDescriptor(result, position: position,
+                velocity: WorldPoint(Float(momentum.x / mass), Float(momentum.y / mass)),
+                radius: resultRadius, mass: result.mass ?? Float(mass))
+        }
+        var descriptor = try resultObject(at: contact)
+        // Punkt wyniku poprawia silnik, bo wybiera go silnik, a nie gra: wynik nie może stanąć w bryle, poza regionem
+        // ani na środku innej bańki. Źródła znikają razem ze scaleniem, więc są z testu wyłączone.
+        let snapshot = state, excluded = Set(sources)
+        func issue(_ point: WorldPoint) -> PlacementIssue? {
+            PlacementGeometry.issue(at: point, radius: resultRadius, in: snapshot, excluding: excluded)
+        }
+        guard let center = StructuralOperations.resolvedMergeCenter(contact: contact,
+            sources: try sources.map { try bubble($0).0 }, resultRadius: resultRadius, issue: issue) else {
+            throw TransactionRejectionReason.invalidPlacement(result.id, issue(contact) ?? .coincidentCenter)
+        }
+        if center != contact { descriptor = try resultObject(at: center) }
         for id in sources { try remove(id) }
         try add(descriptor)
         if var merged = state.objects[result.id] {
@@ -618,8 +644,33 @@ private struct StagingContext {
         }
         if var a = state.objects[first.result.id], var b = state.objects[second.result.id] {
             try StructuralOperations.initializeSplit(&a, &b, source: existing, shares: shares)
+            try resolveSplitCenters(&a, &b, source: existing)
             try validate(a); try validate(b)
             state.objects[first.result.id] = a; state.objects[second.result.id] = b
+        }
+    }
+    /// Centroidy części poprawia silnik tak samo jak punkt scalenia: część nie może stanąć w bryle, poza regionem ani na
+    /// środku innej bańki. Najpierw pierwsza część (obie części stoją jeszcze w stanie, więc są z jej testu wyłączone),
+    /// potem druga, która nie może pokryć się z już poprawionym środkiem pierwszej. Źródło zniknęło przed podziałem.
+    func resolveSplitCenters(_ first: inout RuntimeObject, _ second: inout RuntimeObject, source: RuntimeObject) throws {
+        let centroids = (first.position, second.position)
+        var snapshot = state
+        func center(of part: RuntimeObject, excluding: Set<ObjectID>) throws -> WorldPoint {
+            let id = part.descriptor.id
+            func issue(_ point: WorldPoint) -> PlacementIssue? {
+                PlacementGeometry.issue(at: point, radius: part.targetRadius, in: snapshot, excluding: excluding)
+            }
+            guard let resolved = StructuralOperations.resolvedSplitCenter(centroid: part.position,
+                sourceCenter: source.position, partRadius: part.targetRadius, issue: issue) else {
+                throw TransactionRejectionReason.invalidPlacement(id, issue(part.position) ?? .coincidentCenter)
+            }
+            return resolved
+        }
+        first.position = try center(of: first, excluding: [first.descriptor.id, second.descriptor.id])
+        snapshot.objects[first.descriptor.id] = first
+        second.position = try center(of: second, excluding: [second.descriptor.id])
+        if first.position != centroids.0 || second.position != centroids.1 {
+            try StructuralOperations.relocateSplitParts(&first, &second, source: source)
         }
     }
 }
