@@ -300,13 +300,46 @@ Wycinek 1 działa tylko na CPU i daje grze odrzucanie złych punktów, zanim pow
 Każde zmienione oczekiwanie istniejącego testu trafia do treści commita z powodem, bo opis PR musi je wymienić. W zadaniach z `! swift test` implementer sprawdza w wyjściu, że testy padają na asercjach, a nie na błędzie urządzenia Metal czy crashu. Wszystkie komendy `verify:` uruchamia się z korzenia repozytorium.
 
 1. Dodać `PlacementIssue` i `invalidPlacement` do modelu oraz napisać `PlacementValidationTests` dla [P-B-1](#p-b-1)–[P-B-8](#p-b-8), z metodami `testAdd…`, `testReplace…`, `testValid…`, `testMerge…` i `testSplit…` · verify: `swift build --build-tests && ! swift test --filter PlacementValidationTests`
+    ```text
+    $ swift build --build-tests && ! swift test --filter PlacementValidationTests
+    (faza czerwona przy commicie 4cbdb39: testy padały na asercjach, bez błędu Metal ani crasha)
+    przy weryfikacji końcowej na 5e1bfa9: exit 1, bo PlacementValidationTests przechodzi (26 testów, 0 porażek), czyli zgodnie z oczekiwaniem po implementacji
+    ```
 2. Wydzielić `Shape`/`contains` z `QueryIndex` do `PlacementGeometry.swift` bez zmiany logiki · verify: `test -f Sources/BubblePhysicsRuntime/PlacementGeometry.swift && swift test --filter QueryIndexTests`
+    ```text
+    $ test -f Sources/BubblePhysicsRuntime/PlacementGeometry.swift && swift test --filter QueryIndexTests
+    Executed 15 tests, with 0 failures (0 unexpected) in 0.035 (0.038) seconds
+    ```
 3. Dodać `validatePlacement` w `apply` przy `.add` i `.replace`, z wyłączeniem bańki zastępowanej, pokrywając [P-B-1](#p-b-1)–[P-B-4](#p-b-4) · verify: `swift test --filter "PlacementValidationTests.testAdd|PlacementValidationTests.testReplace|PlacementValidationTests.testValid"`
+    ```text
+    $ swift test --filter "PlacementValidationTests.testAdd|PlacementValidationTests.testReplace|PlacementValidationTests.testValid"
+    Executed 10 tests, with 0 failures (0 unexpected) in 0.300 (0.302) seconds
+    ```
 4. Dodać `resolvedMergeCenter` z listą kandydatów i odrzuceniem na końcu listy, pokrywając [P-B-5](#p-b-5) i [P-B-6](#p-b-6) · verify: `swift test --filter PlacementValidationTests.testMerge`
+    ```text
+    $ swift test --filter PlacementValidationTests.testMerge
+    Executed 9 tests, with 0 failures (0 unexpected) in 0.297 (0.299) seconds
+    ```
 5. Dodać `resolvedSplitCenter` z prędkościami względem d_com i `structuralShape` z końcowym środkiem, pokrywając [P-B-7](#p-b-7) i [P-B-8](#p-b-8) · verify: `swift test --filter PlacementValidationTests`
+    ```text
+    $ swift test --filter PlacementValidationTests
+    Executed 26 tests, with 0 failures (0 unexpected) in 0.619 (0.623) seconds
+    ```
 6. Zmienić w istniejących testach stagera, regionu i operacji strukturalnych tylko oczekiwania przy złym punkcie, pokrywając [P-B-31](#p-b-31) · verify: `swift test --filter "TransactionStagerTests|RegionPolicyTests|NativeMetalStructuralOperationTests"`
+    ```text
+    $ swift test --filter "TransactionStagerTests|RegionPolicyTests|NativeMetalStructuralOperationTests"
+    Executed 48 tests, with 0 failures (0 unexpected) in 0.677 (0.683) seconds
+    ```
 7. Dodać do `CHANGELOG.md` sekcję `## 2.2.0 (w przygotowaniu)` z `invalidPlacement`, uwagą o gałęzi `default` w wyczerpującym `switch` i zmianami zachowania z tego wycinka (także `.wrap`) · verify: `grep -q "invalidPlacement" CHANGELOG.md`
+    ```text
+    $ grep -q "invalidPlacement" CHANGELOG.md   → exit 0
+    9:- `TransactionRejectionReason.invalidPlacement(ObjectID, PlacementIssue)`: transakcja odrzucona z powodu złego punktu bańki. …
+    ```
 8. Uruchomić cały pakiet. Oczekiwania zmienione przez walidację punktu poza stagerem (np. `BubblePhysicsMetalRenderTests`) zmienić z powodem w commicie, a dla scen `BubblePhysicsMetalRenderBenchmark` zapisać w tym pliku wiersz `Benchmark baniek przyjętych: …` z liczbą „przed” zmierzoną na `main` (bez walidacji punktu) i „po” na tym branchu · verify: `swift test && grep -q "^Benchmark baniek przyjętych:" docs/sdlc/changes/2026-11-14-crowd-solver-compression/plan.md`
+    ```text
+    $ swift test && grep -q "^Benchmark baniek przyjętych:" docs/sdlc/changes/2026-11-14-crowd-solver-compression/plan.md   → exit 0
+    Executed 1345 tests, with 1 test skipped and 0 failures (0 unexpected) in 474.523 (474.654) seconds
+    ```
 
 Benchmark baniek przyjętych: przed (main afe237a) i po (feature/crowd-solver-compression) bez różnic, w pierwszej klatce po transakcji początkowej: stress-300 300 → 300, mixed 200 → 200, decals 300 → 300, acceptance 300 → 300, stress-600 600 → 600, capacity-300 300 → 300, capacity-600 600 → 600; żadnej transakcji odrzuconej.
 
@@ -328,4 +361,7 @@ Benchmark baniek przyjętych: przed (main afe237a) i po (feature/crowd-solver-co
 
 | # | Slice | Task | Type (change/gap) | Description | Status | Date |
 |---|-------|------|-------------------|-------------|--------|------|
-|   |       |      |                   |             |        |      |
+| 1 | 1 | 4, 5 | change | R2 mówi, że kandydatów scalenia i podziału sprawdza `validatePlacement` „bez źródeł”. Zbudowano to inaczej: `merge` i `split` wołają wprost `PlacementGeometry.issue(at:radius:in:excluding:)` w domknięciu przekazanym do `resolvedMergeCenter` i `resolvedSplitCenter`, które zwracają `WorldPoint?`. Test jest ten sam (region → bryła → wspólny środek), a stager rzuca `invalidPlacement` z przyczyną punktu styku albo centroidu. | pending | 2026-11-14 |
+| 2 | 1 | 2, 4, 5 | gap | R2 nie pokazuje części widocznych w module, które dodano. W `StructuralOperations` doszły `mergeCandidates`, `spiral` i `relocateSplitParts`, a ta ostatnia przelicza prędkości względem d_com i działa tylko przy przesuniętej części. W `PlacementGeometry` doszły `issue(at:radius:in:excluding:)`, `coincidentCenterTolerance` i `shape(of:at:)`, ta ostatnia dla `QueryIndex`. Próg wspólnego środka zgodny z CD-D-7: max(1e-4·r mniejszej, `NativeSolverConfiguration().positionTolerance`). Świat buduje konfigurację solvera tylko z kroku i tłumienia, więc to ta sama wartość. | pending | 2026-11-14 |
+| 3 | 1 | 5 | gap | Plan mówi „`structuralShape` z końcowym środkiem” (R2), a kod ustawia `structuralShape.origin` na końcowy środek przesuniętej części. Jądro `nativeSeedStructuralContours` liczy segment względem `origin`, więc segment koła zostaje w starym miejscu i nie jedzie z częścią. Przy dalekim kandydacie pierwszy kontur może być jednostronny. To samo dotyczy scalenia ze spiralą poza sumą źródeł. Otwarta decyzja: kontur zostaje w miejscu (ciągłość wizualna) czy jedzie z częścią (wtedy nie nadpisywać `origin`). | pending | 2026-11-14 |
+| 4 | 1 | 4 | change | Poprawka wymuszona przeglądem końcowym (5e1bfa9). Kandydaci scalenia i rozstrzygnięcie remisu mas brali `sources` w kolejności gry, więc `[1,2]` i `[2,1]` dawały różne środki wyniku, wbrew G3-AC4. Teraz biorą źródła posortowane po ID. Ta sama poprawka przywróciła test reguły remisu w raycaście `QueryIndex`, utracony w zadaniu 8. Dodała też testy publicznego świata dla pozycji wyniku scalenia i części podziału w pierwszej klatce oraz dla przyczyny punktu styku lub centroidu. | pending | 2026-11-14 |
