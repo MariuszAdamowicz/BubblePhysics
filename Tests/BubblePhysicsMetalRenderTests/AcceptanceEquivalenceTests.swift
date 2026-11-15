@@ -21,8 +21,13 @@ final class AcceptanceEquivalenceTests: XCTestCase {
     /// optymalizacji ścieżki CPU etapu 8.
     private static let referenceCommit = "c614fe0"
     /// Wzorzec zapisany przed zadaniem 84 (bez żadnej optymalizacji ścieżki CPU etapu 8).
+    /// Bez limitu λ pary (`pairCorrectionLimit = false`, CD-D-20): wzorzec bez zmian, ten sam co w v2.1.0.
     private static let referenceObjectHash: UInt64 = 0x62aa8c214dcaec24
     private static let referenceContourHash: UInt64 = 0xbc19bd9b8aa48c7d
+    /// Z limitem λ pary (CD-D-9, domyślnie): limit zmienia przesunięcia w gęstej scenie, więc stan i kontury po 120
+    /// krokach mają nowe hashe (Apple M1 Pro, ta sama scena i kroki co wzorzec).
+    private static let pairLimitObjectHash: UInt64 = 0x4e78b25ccda3ae78
+    private static let pairLimitContourHash: UInt64 = 0xf3be8eabdb1ca5fb
 
     private struct Published {
         let frame: WorldFrame
@@ -33,10 +38,11 @@ final class AcceptanceEquivalenceTests: XCTestCase {
 
     /// Te same kroki co benchmark: transakcja kroku (indeks od 0), `advance` o 1/60 s, bez renderu.
     /// `viaCommandBuffer` idzie ścieżką benchmarku, `advance(by:commandBuffer:encodeRender:)` z pustym `encodeRender`.
-    private func run(steps: Int, device: MTLDevice, viaCommandBuffer: Bool = false) async throws -> Published {
+    private func run(steps: Int, device: MTLDevice, viaCommandBuffer: Bool = false,
+                     pairCorrectionLimit: Bool = true) async throws -> Published {
         let scene = Scene.acceptance
         let world = try BubbleWorld.makeBenchmarkWorld(configuration: try scene.configuration(), device: device,
-            solverIterationLimit: 4)
+            solverIterationLimit: 4, pairCorrectionLimit: pairCorrectionLimit)
         world.submit(try scene.initialTransaction(assets: try XCTUnwrap(world.assets)))
         let queue = try XCTUnwrap(device.makeCommandQueue())
         var frame = WorldFrame(transactionReceipts: [], events: [])
@@ -56,19 +62,22 @@ final class AcceptanceEquivalenceTests: XCTestCase {
             contourHash: PublishedStateHash.contours(contours), contourCount: contours.count)
     }
 
-    private func assertMatchesReference(viaCommandBuffer: Bool) async throws {
+    private func assertMatchesReference(viaCommandBuffer: Bool, pairCorrectionLimit: Bool = true) async throws {
         let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
         try XCTSkipUnless(device.name == Self.referenceDeviceName,
             "wzorzec pochodzi z \(Self.referenceDeviceName), a to jest \(device.name)")
-        let published = try await run(steps: Self.referenceSteps, device: device, viaCommandBuffer: viaCommandBuffer)
+        let published = try await run(steps: Self.referenceSteps, device: device, viaCommandBuffer: viaCommandBuffer,
+                                      pairCorrectionLimit: pairCorrectionLimit)
+        let objectHash = pairCorrectionLimit ? Self.pairLimitObjectHash : Self.referenceObjectHash
+        let contourHash = pairCorrectionLimit ? Self.pairLimitContourHash : Self.referenceContourHash
         let origin = "wzorzec: \(Self.referenceDeviceName), \(Self.referenceSteps) kroków, commit \(Self.referenceCommit)"
         XCTAssertEqual(published.frame.stepIndex, UInt64(Self.referenceSteps))
         // 300 baniek, 4 ściany i trójkąt kinematyczny.
         XCTAssertEqual(published.frame.objects.count, 305)
         XCTAssertEqual(published.contourCount, 300)
-        XCTAssertEqual(String(published.objectHash, radix: 16), String(Self.referenceObjectHash, radix: 16),
+        XCTAssertEqual(String(published.objectHash, radix: 16), String(objectHash, radix: 16),
             "stan obiektów (frame.objects) sceny akceptacyjnej różni się od wzorca sprzed optymalizacji (\(origin))")
-        XCTAssertEqual(String(published.contourHash, radix: 16), String(Self.referenceContourHash, radix: 16),
+        XCTAssertEqual(String(published.contourHash, radix: 16), String(contourHash, radix: 16),
             "kontury baniek sceny akceptacyjnej różnią się od wzorca sprzed optymalizacji (\(origin))")
     }
 
@@ -79,6 +88,15 @@ final class AcceptanceEquivalenceTests: XCTestCase {
     /// Ścieżka z buforem aplikacji (ta, którą idzie benchmark i przyszłe optymalizacje) daje te same bity co `advance(by:)`.
     func testAcceptanceSceneThroughTheCommandBufferPathEqualsTheSameReferencePattern() async throws {
         try await assertMatchesReference(viaCommandBuffer: true)
+    }
+
+    /// Bliźniak (CD-D-20): z wyłączonym limitem λ pary scena daje bity wzorca z v2.1.0.
+    func testAcceptanceSceneStateAfter120StepsEqualsTheReferencePatternWithoutPairCorrectionLimit() async throws {
+        try await assertMatchesReference(viaCommandBuffer: false, pairCorrectionLimit: false)
+    }
+
+    func testAcceptanceSceneThroughTheCommandBufferPathEqualsTheSameReferencePatternWithoutPairCorrectionLimit() async throws {
+        try await assertMatchesReference(viaCommandBuffer: true, pairCorrectionLimit: false)
     }
 
     /// Sam wzorzec nic nie znaczy, gdy hash jest stały albo przebieg nie jest powtarzalny: scena się rusza,
