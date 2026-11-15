@@ -11,8 +11,7 @@
 **Status:** Approved
 **Template version:** default/0.3.3
 **Plugin version:** 0.7.10
-**Agent Sessions:** claude-code: ef9afe81-5293-4d9d-99d5-ada5d3e46e43, e19c7740-a3a8-4ca5-8140-6dad21b637f7, cf667a2a-34f1-4d88-ab50-9bfc3c56bd23, 2e38e424-233b-44f6-8878-e078a693a316, 70ddadc2-21db-41ec-9a8f-e56fb0dcf8af
-**Agent Sessions:** claude-code: a0d1d82b-d9bf-4160-96b9-616ae3c91bb1
+**Agent Sessions:** claude-code: ef9afe81-5293-4d9d-99d5-ada5d3e46e43, e19c7740-a3a8-4ca5-8140-6dad21b637f7, cf667a2a-34f1-4d88-ab50-9bfc3c56bd23, 2e38e424-233b-44f6-8878-e078a693a316, 70ddadc2-21db-41ec-9a8f-e56fb0dcf8af, a0d1d82b-d9bf-4160-96b9-616ae3c91bb1, 9138f45a-d8ff-402a-b3f2-6fbdc869d8e2
 
 ---
 
@@ -157,10 +156,10 @@ Krok GPU. Kolejność jąder w `NativeMetalSolver.executeSnapshot` (`NativeMetal
                                          # ściana, odcinek: r/(invMass·degree) bez zmian
   nativeApplyWarmStart                   # bez zmian względem main
   pętla × solverIterationCount:
-    nativeUpdateContactMultipliers       # + α = solver.physics.x + (c_a + c_b)/dt² (bańka–bryła: c_a)
+    nativeUpdateContactMultipliers       # + α = solver.physics.x + (c_a + c_b)/dt² (bańka–odcinek, czyli ściana i bryła statyczna: c_a)
                                          # + po next = max(0, λ + δ/degree): bańka–bańka next = min(next, nativePairLambdaLimit)
     nativeSolveJacobi                    # bez zmian względem main: korekcja = przyrost λ po przycięciu, ten sam dla obu końców
-    nativeRigidContacts, nativeRigidApplyBodies, … nativeRigidApplyBubbles   # gdy są bryły
+    nativeRigidContacts, nativeRigidApplyBodies, … nativeRigidApplyBubbles   # gdy są bryły; kontakt bańki z bryłą niestatyczną zostaje twardy (bryły niestatyczne nie tworzą odcinków)
       └── próbkowanie łuku obrotu        # XPBD:783-799: + bit 8 (centerCrossing) obok bitu 2
     measureResidual → nativeMeasureResidual   # + to samo α
   nativeFindFastCandidates, nativeResolveCCD, nativeApplyCenterGuards
@@ -281,10 +280,10 @@ Podatność kontaktu. Sceny docisku do ściany używają `MotorDrive`, a δ = r 
 | <a id="p-b-24"></a>P-B-24 | w scenach [P-B-21](#p-b-21)–[P-B-23](#p-b-23), okno od 1 s do 2 s | max δ − min δ < 0,02·r | [G4-AC8](change-design.md#g4-ac8) |
 | <a id="p-b-25"></a>P-B-25 | bańka c₀ = 0 dociskana do miękkiej przy ścianie | twarda ma promień efektywny = docelowy (± 1%); miękka ma δ > 0 | [G4-AC4](change-design.md#g4-ac4) |
 | <a id="p-b-26"></a>P-B-26 | nadpisanie c₀ w `BubbleDescriptor` oraz w `BubbleResult` scalenia i obu części podziału | ugina się tylko ta bańka; bez nadpisania jak materiał | [G4-AC5](change-design.md#g4-ac5) |
-| <a id="p-b-27"></a>P-B-27 | scena tłoku B = 2,5 z materiałem miękkim (c₀ > 0, s = 1, k = 1) | jak [P-B-13](#p-b-13) | [G1-AC1](change-design.md#g1-ac1), [G1-AC2](change-design.md#g1-ac2), [G2-AC5](change-design.md#g2-ac5) |
+| <a id="p-b-27"></a>P-B-27 | scena tłoku B = 2,5 z materiałem miękkim (c₀ > 0, s = 1, k = 1) | jak [P-B-13](#p-b-13); do tego średnie nakładanie par baniek z ostatniej sekundy większe niż w przebiegu z c₀ = 0 i tym samym ziarnem, więc materiał naprawdę działa | [G1-AC1](change-design.md#g1-ac1), [G1-AC2](change-design.md#g1-ac2), [G2-AC5](change-design.md#g2-ac5) |
 | <a id="p-b-28"></a>P-B-28 | scena tłoku, materiał miękki, to samo ziarno, B = 1,5 i B = 2,5 | średni stosunek promienia efektywnego do docelowego z ostatniej sekundy mniejszy przy 2,5 | [G1-AC3](change-design.md#g1-ac3) |
-| <a id="p-b-29"></a>P-B-29 | narożnik z [P-B-14](#p-b-14) z materiałem miękkim | brak odrzucenia; środek w ramie | [G1-AC4](change-design.md#g1-ac4) |
-| <a id="p-b-30"></a>P-B-30 | para z [P-B-11](#p-b-11) z materiałem miękkim | odległość ≥ 20 po ≤ 2 s bez odrzucenia | [G2-AC3](change-design.md#g2-ac3) |
+| <a id="p-b-29"></a>P-B-29 | narożnik z [P-B-14](#p-b-14) z materiałem miękkim | brak odrzucenia; środek w ramie; wgniecenie δ pchanej bańki względem ściany na końcu większe niż w przebiegu z c₀ = 0 | [G1-AC4](change-design.md#g1-ac4) |
+| <a id="p-b-30"></a>P-B-30 | para z [P-B-11](#p-b-11) z materiałem miękkim | odległość ≥ 20 po ≤ 2 s bez odrzucenia; po pierwszym kroku odległość środków mniejsza niż przy c₀ = 0 | [G2-AC3](change-design.md#g2-ac3) |
 
 Regresja i wydanie:
 
@@ -472,9 +471,9 @@ Strażnik wydajności wycinka 2: `swift run -c release BubblePhysicsPerfGuard` n
 
 Każde zmienione oczekiwanie istniejącego testu trafia do treści commita z powodem, bo opis PR musi je wymienić. W zadaniach z `! swift test` implementer sprawdza w wyjściu, że testy padają na asercjach, a nie na błędzie kompilacji, urządzenia Metal czy crashu. Wszystkie komendy `verify:` uruchamia się z korzenia repozytorium. Implementer zatrzymuje się i oddaje decyzję właścicielowi, gdy: tłok miękki ([P-B-27](#p-b-27)) albo narożnik miękki ([P-B-29](#p-b-29)) odrzuca krok po zadaniu 32 (założenie projektu o 8 iteracjach z Key facts); materiały domyślne zmieniają oczekiwanie istniejącego testu poza testami ABI i rozmiarów rekordów ([P-B-33](#p-b-33)).
 
-25. Zmierzyć `swift run -c release BubblePhysicsPerfGuard` w tymczasowym `git worktree` poza repozytorium na `main` (afe237a), 24dcc3b (bez naprawy zawierania), dd50455 (limit pary) i ff7ccfa (rzut strażnika), usunąć worktree i zapisać pod tym wycinkiem wiersz `Przyczyna spowolnienia strażnika wydajności: …` z p95 stress-300 i acceptance dla każdego commitu · verify: `grep -q "^Przyczyna spowolnienia strażnika wydajności:" docs/sdlc/changes/2026-11-14-crowd-solver-compression/plan.md && test -z "$(git worktree list | sed 1d)"`
+25. Zmierzyć `swift run -c release BubblePhysicsPerfGuard` po 3 razy w tymczasowym `git worktree` poza repozytorium na `main` (afe237a), 24dcc3b, dd50455 (limit pary), ff7ccfa (rzut strażnika) i jeszcze raz afe237a na końcu, usunąć worktree i zapisać pod tym wycinkiem wiersz `Przyczyna spowolnienia strażnika wydajności: …` z p95 stress-300 i acceptance każdego przebiegu, zaznaczając, że krok afe237a → 24dcc3b obejmuje cały wycinek 1, bity przyczyny, licznik par i usunięcie naprawy, a nie samą naprawę · verify: `grep -q "^Przyczyna spowolnienia strażnika wydajności:" docs/sdlc/changes/2026-11-14-crowd-solver-compression/plan.md && test -z "$(git worktree list | sed 1d)"`
 26. Dodać `BubbleContactCompliance` (`.hard`), `PhysicsMaterial.contactCompliance` (ostatni parametr, domyślnie `.hard`), `BubbleDescriptor.contactCompliance` i `BubbleResult.contactCompliance` bez walidacji i logiki oraz napisać w `ModelValidationTests` testy [P-B-17](#p-b-17) · verify: `swift build --build-tests && ! swift test --filter ModelValidationTests`
-27. Napisać `ContactComplianceTests` (`testResultValidation…`, `testWorstAlpha…`, `testRadiusLaw…`, `testCompressionExponent…`, `testSettles…`, `testHardAgainstSoft…`, `testOverride…`) z dociskiem do ściany i materiałem miękkim w `CrowdSceneSupport.swift` oraz miękkie warianty `CrowdCompressionTests` (`testSoftCrowdBalance…`, `testSoftCrowdCompressesMore…`, `testSoftCorner…`) i `ContainmentResolutionTests.testSoftCoincidentPair…`, pokrywając [P-B-18](#p-b-18)–[P-B-30](#p-b-30) · verify: `swift build --build-tests && ! swift test --filter "ContactComplianceTests|CrowdCompressionTests.testSoft|ContainmentResolutionTests.testSoft"`
+27. Napisać `ContactComplianceTests` (`testResultValidation…`, `testWorstAlpha…`, `testRadiusLaw…`, `testCompressionExponent…`, `testSettles…`, `testHardAgainstSoft…`, `testOverride…`) z dociskiem do ściany i materiałem miękkim w `CrowdSceneSupport.swift` oraz miękkie warianty `CrowdCompressionTests` (`testSoftCrowdBalance…`, `testSoftCrowdCompressesMore…`, `testSoftCorner…`) i `ContainmentResolutionTests.testSoftCoincidentPair…`, każdy z asercją porównania z przebiegiem c₀ = 0 z R3, żeby padał, póki podatność nie działa, pokrywając [P-B-18](#p-b-18)–[P-B-30](#p-b-30) · verify: `swift build --build-tests && ! swift test --filter "ContactComplianceTests|CrowdCompressionTests.testSoft|ContainmentResolutionTests.testSoft"`
 28. Dodać walidację podatności w `PhysicsMaterial` i `BubbleDescriptor` ([G4-AC7](change-design.md#g4-ac7)), pokrywając [P-B-17](#p-b-17) · verify: `swift test --filter ModelValidationTests`
 29. Przenieść nadpisanie c₀ z `BubbleResult` przez `resultDescriptor` na wynik scalenia i obie części podziału, ze złą wartością odrzucaną przez `.invalidValue(.valueOutOfRange("contactCompliance"))`, pokrywając [P-B-18](#p-b-18) · verify: `swift test --filter ContactComplianceTests.testResultValidation`
 30. Przekazać α_cfg z `NativeCompleteStepper` przez `CompleteStepper.baseContactCompliance` do `stageBatch` i dodać `validateWorstAlpha` przy `add`, `replace`, scaleniu, podziale, `startTransition` promienia i `updatePhysicsMaterial` ([CD-D-15](change-design.md#cd-d-15)), pokrywając [P-B-19](#p-b-19) i [P-B-20](#p-b-20) · verify: `swift test --filter "ContactComplianceTests.testWorstAlpha|TransactionStagerTests|BubbleWorldCompletionTests"`
@@ -493,6 +492,7 @@ Każde zmienione oczekiwanie istniejącego testu trafia do treści commita z pow
 | [CD-D-10](change-design.md#cd-d-10) | change | approved | yes, [CD-D-18](change-design.md#cd-d-18), [G5-AC4](change-design.md#g5-ac4), §4 Architecture, Components i Key facts edited 2026-11-14 | Rekonesans znalazł drugie źródło bitu 2: `nativeRigidPredict` przy przekroczonym budżecie próbek obrotu (Post:470). Właściciel wybrał nowy przypadek `SolverGuardCause.rigidRotationBudget` zamiast przyczyny `nil`, więc plan dodaje [P-B-36](#p-b-36). |
 | [G5-AC1](change-design.md#g5-ac1) | change | approved | yes, Summary, G5-AC1, §4 Architecture i Key facts edited 2026-11-14 | Przegląd planu wycinka 2 znalazł trzecie źródło odrzucenia przez strażnika: próbkowanie łuku obrotu bryły w `nativeRigidContacts` (`NativeXPBDKernels.metal-source:717`). Właściciel przypisał mu `.centerCrossing`, bo środek mógł wejść do wnętrza bryły, więc plan dodaje [P-B-37](#p-b-37). |
 | [G5-AC1](change-design.md#g5-ac1) | change | approved | yes, G5-AC1 `verify:` edited 2026-11-15 | Weryfikacja kryterium mówi o bryle kinematycznej, a w świecie publicznym strażnik widzi tylko statyczne wielokąty (odstępstwo 5). Scena [P-B-15](#p-b-15) używa bryły statycznej dodanej jedną transakcją nad przyciśniętą bańką. Treść kryterium zostaje, zmienia się scena weryfikacji. Właściciel zatwierdził scenę i edycję projektu 2026-11-15. |
+| [CD-D-11](change-design.md#cd-d-11) | change | approved | yes, §2 Architecture edited 2026-11-15 | Projekt §2 mówi „para bańka–bryła: α = α_cfg + c_a/dt²” bez rozróżnienia brył. W kodzie mnożniki (`nativeUpdateContactMultipliers`) obsługują tylko odcinki, a te mają wyłącznie ściany i bryły statyczne. Kontakt z bryłą niestatyczną idzie przez `nativeRigidContacts` (odstępstwo 5). Plan daje podatność c_a kontaktowi z odcinkiem, a kontakt z bryłą niestatyczną zostawia twardy. Kryteria G1–G4 używają tylko ścian statycznych. |
 
 ## Replan log
 

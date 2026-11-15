@@ -171,6 +171,8 @@ W `nativeUpdateContactMultipliers` (`Sources/BubblePhysicsNativeMetal/Shaders/Na
 - para bańka–bańka: α = α_cfg + (c_a(ρ_a) + c_b(ρ_b)) / dt²;
 - para bańka–bryła: α = α_cfg + c_a(ρ_a) / dt².
 
+Mnożniki obsługują kontakt bańki z odcinkiem, czyli ze ścianą i bryłą statyczną, i tylko tam działa podatność bańki. Kontakt z bryłą niestatyczną idzie przez `nativeRigidContacts` i zostaje twardy (doprecyzowanie właściciela, 2026-11-15).
+
 `nativeMeasureResidual` (`:439-459`) używa tego samego α. Przy c₀ = 0 po obu stronach α = α_cfg, czyli to samo co dziś. Pole konfiguracji dalej działa w harnessie benchmarków (CD-D-5).
 
 Dodatkowo każdy kontakt bańka–bańka ma limit pary (CD-D-9). Jego mnożnik λ (`NativeContactCache.response.x`) jest wspólny dla warm startu i wszystkich iteracji Jacobiego w kroku i jest przycinany do
