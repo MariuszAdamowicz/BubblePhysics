@@ -633,7 +633,13 @@ kernel void nativeAccumulateContactPressure(device NativeBubble *bubbles [[buffe
         if (contact.metadata.z != contacts.limits.x) continue;
         float2 toward = edge.z == 0 ? bubbles[edge.y].position.xy - bubble.position.xy : -contact.geometry.xy;
         float towardLength = length(toward);
-        if (towardLength > FLT_EPSILON) {
+        // Każda para idzie jedną drogą konturu (CD-D-12): para miękka (podatność choć jednego końca > 0) dzieli wgniecenie wg c_a : c_b,
+        // a para twarda i kontakt twardej bańki ze ścianą liczą nacisk z λ i cięciwę radykalną jak w v2.1.0.
+        // ρ_self i ρ_other to wygładzone ρ tej bańki i jej partnera w rekordzie cache (edge.w = ta bańka jest końcem a).
+        float complianceSelf = nativeContactCompliance(bubble, edge.w ? contact.rho.x : contact.rho.y);
+        float complianceOther = edge.z == 0 ? nativeContactCompliance(bubbles[edge.y], edge.w ? contact.rho.y : contact.rho.x) : 0;
+        bool softPair = complianceSelf + complianceOther > 0;
+        if (towardLength > FLT_EPSILON && !softPair) {
             float alignment = max(0.0f, dot(direction, toward / towardLength));
             // Zakończona lambda reprezentuje lokalną kompresję także po rozdzieleniu
             // środków przez twardy PBD. Safety reset zeruje ją przed tym etapem.
@@ -648,9 +654,11 @@ kernel void nativeAccumulateContactPressure(device NativeBubble *bubbles [[buffe
         float radius = bubble.physical.z, otherRadius = other.physical.z;
         if (distance <= FLT_EPSILON || distance >= radius + otherRadius + contacts.thresholds.z) continue;
         float2 normal = delta / distance;
-        // Wspólna skończona cięciwa obu naturalnych kół.
-        float planeDistance = clamp((distance * distance + radius * radius - otherRadius * otherRadius)
-            / (2 * distance), 0.0f, radius);
+        // Wspólna skończona cięciwa obu naturalnych kół. Para miękka ścina bańkę na głębokość nakładanie · c_a / (c_a + c_b)
+        // od jej brzegu, więc bańka o c = 0 w takiej parze nie dostaje wgniecenia.
+        float planeDistance = softPair
+            ? clamp(radius - max(0.0f, radius + otherRadius - distance) * complianceSelf / (complianceSelf + complianceOther), 0.0f, radius)
+            : clamp((distance * distance + radius * radius - otherRadius * otherRadius) / (2 * distance), 0.0f, radius);
         float halfLength = sqrt(max(0.0f, radius * radius - planeDistance * planeDistance));
         float2 tangent = float2(-normal.y, normal.x);
         float2 point = bubble.position.xy + normal * planeDistance;
@@ -682,7 +690,9 @@ kernel void nativeAccumulateContactPressure(device NativeBubble *bubbles [[buffe
     if (bubble.publicFlags.x) {
         float softness = bubble.material.y * (1 - bubble.material.z);
         value = float4(max(max(deficit, directionalPressure * softness), recovered), deficit, 0, 0);
-        if (softness == 0 && bubble.material.z == 0) value.xy = 0;
+        // Bańka z podatnością kontaktu omija bramkę deformowalności: bez niej materiał z domyślnym `deformability` = 0 nie miałby
+        // konturu, a ρ zostałoby 1. Bramka `material.z >= 1` zostaje.
+        if (softness == 0 && bubble.material.z == 0 && bubble.contact.x <= 0) value.xy = 0;
         if (bubble.material.z >= 1) value.xy = 0;
     }
     if (!all(isfinite(value))) nativeSafetyFailure(safety, 1);

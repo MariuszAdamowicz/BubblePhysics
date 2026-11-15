@@ -399,6 +399,43 @@ final class ContactComplianceTests: XCTestCase {
         XCTAssertLessThan(distance, 40 - 0.5, "odległość środków mniejsza od sumy promieni docelowych, jest \(distance)")
     }
 
+    /// Promień efektywny bańki 1 i 2 po `steps` krokach sceny, w której bańka 2 (materiał `second`) pcha bańkę 1 (materiał `first`) w ścianę.
+    private func pushedAgainstWall(first: PhysicsMaterial, second: PhysicsMaterial) async throws -> (first: ObjectState, second: ObjectState) {
+        let world = try await CrowdScene.makeWorld(bubble: first) { setup in
+            setup.updatePhysicsMaterial(CrowdScene.secondBubbleMaterial, material: second)
+                .add(try CrowdScene.bubble(1, at: [-160, 0], radius: 20))
+                .add(try CrowdScene.bubble(2, at: [-120, 0], radius: 20, material: CrowdScene.secondBubbleMaterial))
+                .setMotorDrive(self.id(2), drive: try MotorDrive(force: [-self.force, 0]))
+        }
+        var frame = await world.advance(by: step)
+        for _ in 0..<steps { frame = await world.advance(by: step) }
+        XCTAssertNil(world.diagnostics.lastAdvanceIssue)
+        return (try XCTUnwrap(frame.objects[id(1)]), try XCTUnwrap(frame.objects[id(2)]))
+    }
+
+    // P-B-25 (G4-AC4) dla konturu: materiał z domyślnym `deformability` = 0 omija bramkę deformowalności tylko przy c > 0, więc miękka
+    // bańka przy ścianie ma kontur ścięty ścianą (promień efektywny < docelowy), a twarda o tym samym `deformability` go nie ma.
+    func testHardAgainstSoftContourCutsOnlyTheSoftBubbleAtTheWall() async throws {
+        let soft = try CrowdScene.softBubblePhysics(base: base), hard = try CrowdScene.softBubblePhysics(base: 0)
+        let softPressed = try await pushedAgainstWall(first: soft, second: hard)
+        let hardPressed = try await pushedAgainstWall(first: hard, second: hard)
+        let softRadius = CrowdScene.effectiveRadius(of: softPressed.first)
+        XCTAssertLessThan(softRadius, 20 - 0.3, "miękka bańka przy ścianie ma kontur ścięty ścianą, promień efektywny \(softRadius)")
+        XCTAssertEqual(CrowdScene.effectiveRadius(of: hardPressed.first), 20, accuracy: 0.01,
+                       "twarda bańka z `deformability` = 0 nie ma konturu także przy tej samej scenie")
+        XCTAssertEqual(CrowdScene.effectiveRadius(of: softPressed.second), 20, accuracy: 0.2, "twarda pchająca bez wgniecenia")
+    }
+
+    // CD-D-12: w parze miękkiej bańka o c = 0 nie dostaje wgniecenia, nawet gdy jej materiał jest deformowalny (`deformability` > 0).
+    func testHardDeformableBubbleGetsNoDentFromASoftPair() async throws {
+        let soft = try CrowdScene.softBubblePhysics(base: 4 * base)
+        let hardDeformable = try PhysicsMaterial(kind: .bubble, deformability: 0.5, maximumLinearSpeed: 600)
+        let pressed = try await pushedAgainstWall(first: soft, second: hardDeformable)
+        XCTAssertEqual(CrowdScene.effectiveRadius(of: pressed.second), 20, accuracy: 0.2,
+                       "twarda deformowalna bańka w parze miękkiej zachowuje promień, jest \(CrowdScene.effectiveRadius(of: pressed.second))")
+        XCTAssertLessThan(simd.distance(pressed.first.position, pressed.second.position), 40 - 0.3, "miękka ustępuje")
+    }
+
     private func finalDepths(_ values: [UInt64: [Float]], _ ids: [UInt64]) throws -> [Float] {
         try ids.map { try finalDepth(values, $0) }
     }
