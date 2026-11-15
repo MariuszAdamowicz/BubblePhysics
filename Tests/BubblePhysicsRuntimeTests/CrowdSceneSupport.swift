@@ -28,7 +28,7 @@ enum CrowdScene {
         return try WorldRectangle(min: -outer, max: outer)
     }
 
-    static func configuration(step: TimeInterval = CrowdScene.step) throws -> WorldConfiguration {
+    static func configuration() throws -> WorldConfiguration {
         try WorldConfiguration(simulationRegion: region(), fixedTimeStep: step, eventBufferCapacity: 4096)
     }
 
@@ -65,11 +65,6 @@ enum CrowdScene {
         .bubble(try BubbleDescriptor(id: id(value), position: position, velocity: velocity, targetRadius: radius,
                                      mass: mass ?? radius * radius / 400, physicsMaterialID: bubbleMaterial,
                                      renderMaterialID: style, eventInterest: interest))
-    }
-
-    /// Docisk: stała siła przez `MotorDrive`; po transakcji bańka ma rolę `motorDriven`.
-    static func press(_ value: UInt64, force: WorldPoint) throws -> WorldTransaction {
-        WorldTransaction().setMotorDrive(id(value), drive: try MotorDrive(force: force))
     }
 
     /// Świat z ramą ścian i zasobami, po jednym kroku przyjmującym przygotowanie sceny.
@@ -117,19 +112,16 @@ enum CrowdScene {
         var failureReason: WorldFailureReason?
         var exitEvents = 0
         var vanishedBubbles = 0
-        var placementRejections = 0
         /// Środki poza ramą (klatka, bańka, położenie).
         var outsideFrame: [(step: Int, id: ObjectID, position: WorldPoint)] = []
         var minimumContainedPairs = Int.max
-        var maximumContainedPairs = 0
         var wasContainedCountFinite = true
     }
 
     /// Stawia bańki co 0,25 s w losowym punkcie wnętrza (radius z [12, 48], rośnie od 10% do pełnego w 1 s), aż bilans pól
     /// B dojdzie do `balance`, i robi jeszcze `extraSteps` kroków. Przerywa przy pierwszym odrzuconym kroku,
     /// bo odrzucony krok blokuje kolejkę i dalsze kroki nic nie wnoszą.
-    static func runCrowd(world: BubbleWorld, balance target: Double, seed: UInt64 = 2_500, extraSteps: Int = 600, maximumSteps: Int = 8_000,
-                         pressingForceFor: ((WorldPoint) -> WorldPoint)? = nil) async throws -> CrowdReport {
+    static func runCrowd(world: BubbleWorld, balance target: Double, seed: UInt64 = 2_500, extraSteps: Int = 600, maximumSteps: Int = 8_000) async throws -> CrowdReport {
         var generator = SeededGenerator(seed: seed)
         var report = CrowdReport()
         var areas = 0.0
@@ -150,10 +142,9 @@ enum CrowdScene {
                 let point = WorldPoint(Float.random(in: -limit.x...limit.x, using: &generator),
                                        Float.random(in: -limit.y...limit.y, using: &generator))
                 let identifier = nextID
-                var staged = started.add(try bubble(identifier, at: point, radius: initial, mass: radius * radius / 400))
+                let staged = started.add(try bubble(identifier, at: point, radius: initial, mass: radius * radius / 400))
                     .startTransition(ParameterTransition(target: .bubbleRadius(id(identifier)), value: .scalar(radius),
                                                          duration: 1))
-                if let pressingForceFor { staged = staged.setMotorDrive(id(identifier), drive: try MotorDrive(force: pressingForceFor(point))) }
                 pendingAdd = (world.submit(staged), identifier, radius)
             }
             let frame = await world.advance(by: step)
@@ -168,8 +159,7 @@ enum CrowdScene {
             }
             if let pending = pendingAdd {
                 for case .transactionRejected(let token, let rejection) in frame.events where token == pending.token {
-                    if case .invalidPlacement = rejection.reason { report.placementRejections += 1 }
-                    else { XCTFail("nieoczekiwane odrzucenie transakcji: \(rejection)") }
+                    if case .invalidPlacement = rejection.reason {} else { XCTFail("nieoczekiwane odrzucenie transakcji: \(rejection)") }
                     // Punkt odrzucony przez `invalidPlacement` losujemy ponownie od razu, w następnym kroku.
                     pendingAdd = nil; stepsToNextAdd = 0
                 }
@@ -188,7 +178,6 @@ enum CrowdScene {
                 if !isInsideFrame(state.position) { report.outsideFrame.append((report.steps, identifier, state.position)) }
             }
             report.minimumContainedPairs = min(report.minimumContainedPairs, diagnostics.containedBubblePairCount)
-            report.maximumContainedPairs = max(report.maximumContainedPairs, diagnostics.containedBubblePairCount)
             if diagnostics.containedBubblePairCount < 0 { report.wasContainedCountFinite = false }
             if let after = stepsAfterLastAdd {
                 if after >= extraSteps { break }

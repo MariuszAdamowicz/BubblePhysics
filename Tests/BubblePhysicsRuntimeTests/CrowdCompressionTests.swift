@@ -39,8 +39,10 @@ final class CrowdCompressionTests: XCTestCase {
             }
             return setup
         }
+        var lastFrame: WorldFrame?
         for index in 0..<300 {
             let frame = await world.advance(by: CrowdScene.step)
+            lastFrame = frame
             let diagnostics = world.diagnostics
             XCTAssertNil(diagnostics.lastAdvanceIssue,
                          "krok \(index) odrzucony: \(String(describing: diagnostics.lastRejectionReason))")
@@ -51,5 +53,11 @@ final class CrowdCompressionTests: XCTestCase {
                 XCTAssertTrue(CrowdScene.isInsideFrame(state.position), "krok \(index), bańka \(identifier): \(state.position)")
             }
         }
+        // Napęd naprawdę dociska bańkę 1 do narożnika: jej środek leży blisko punktu (180, 320), a nie w miejscu startu (140, 280).
+        // Bańka r = 20 oparta o obie ściany ma środek w odległości r·√2 od narożnika, start jest o 40·√2 od niego.
+        let corner = CrowdScene.interiorHalfSize
+        let pressed = try XCTUnwrap(lastFrame?.objects[CrowdScene.id(1)]).position
+        let distance = simd_length(pressed - corner)
+        XCTAssertLessThan(distance, 20 * Float(2).squareRoot() + 1, "bańka 1 nie dotarła do narożnika: \(pressed)")
     }
 }

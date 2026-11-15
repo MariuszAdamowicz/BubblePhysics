@@ -6,7 +6,7 @@ import BubblePhysicsReference
 
 @MainActor
 final class NativeMetalSafetyTests: XCTestCase {
-    func testMovingPolygonGuardCannotPublishNewBubbleContainment() async throws {
+    func testMovingPolygonGuardPublishesContainedPairCountedWithoutRejection() async throws {
         // Without the final all-pairs guard both centers end up projected onto the same polygon edge, even though
         // the incoming pair is distant.
         var world = ReferenceWorld(configuration: .init(timeStep: 1, linearDamping: 0, angularDamping: 0),
@@ -40,7 +40,7 @@ final class NativeMetalSafetyTests: XCTestCase {
 
     // CD-D-19: pary nie rozdziela już naprawa w jednym kroku, tylko solver kontaktów w kilku krokach, bez odrzucenia kroku.
     // Każda klatka jest przyjęta (`executeFrame` rzuca przy odrzuceniu), a para kończy rozdzielona i nie jest już liczona.
-    func testCoincidentDifferentRadiiSeparateWithoutMakingElasticOverlapRigid() async throws {
+    func testCoincidentDifferentRadiiSeparateOverSeveralAcceptedFrames() async throws {
         var world = ReferenceWorld(configuration: .init(timeStep: 1, linearDamping: 0, angularDamping: 0),
                                    broadPhase: BruteForceBroadPhase())
         world.addBubble(try .init(id: .init(rawValue: 1), center: .zero, mass: 3, targetRadius: 3))
@@ -68,7 +68,7 @@ final class NativeMetalSafetyTests: XCTestCase {
     }
 
     // Zawieranie nie zapala już bitu 2 (P-B-9): pary, których nie da się rozdzielić, liczy walidator, a klatka jest przyjęta.
-    func testImpossibleContainmentRepairIsCountedAndDoesNotRejectTheFrame() async throws {
+    func testUnresolvableContainmentIsCountedAndDoesNotRejectTheFrame() async throws {
         var world = ReferenceWorld(configuration: .init(timeStep: 1, linearDamping: 0, angularDamping: 0),
                                    broadPhase: BruteForceBroadPhase())
         world.addBubble(try .init(id: .init(rawValue: 1), center: .init(x: 0.05, y: 0.05), mass: 3, targetRadius: 3))

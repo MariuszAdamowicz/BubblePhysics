@@ -215,6 +215,23 @@ final class NativeMetalXPBDTests: XCTestCase {
         assertFinite(frame)
     }
 
+    // Bliźniak (CD-D-20): bez limitu pary warm-start ogranicza dopiero dawny próg r / (invMass · stopień).
+    func testWarmStartBoundsAnOversizedMatchedMultiplierByBubbleRadiusWithoutPairCorrectionLimit() async throws {
+        let solver = try makeSolver(iterations: 1, pairCorrectionLimit: false)
+        let world = try makeWorld(centers: [0, 1.5])
+        _ = try await solver.executeFrame(snapshot: .init(world: world), scenarioStep: 1)
+        let state = try XCTUnwrap(solver.persistentState)
+        state.contactCache.contents().bindMemory(to: NativeContactCacheRecord.self, capacity: state.contactCapacity)[0].lambda = 100_000_000
+        let frame = try await solver.executeFrame(snapshot: .init(world: world), scenarioStep: 2)
+        // Każda bańka ma promień 1: warm-start przesuwa co najwyżej o promień,
+        // więc rezyduum przed pierwszą iteracją nie przekracza 1.5.
+        XCTAssertLessThanOrEqual(frame.report.solver.initialResidualNorm, 1.50001)
+        XCTAssertEqual(frame.bubbles[0].center.x, -0.25, accuracy: 0.00001)
+        XCTAssertEqual(frame.bubbles[1].center.x, 1.75, accuracy: 0.00001)
+        XCTAssertEqual(frame.telemetry.cacheHitCount, 1)
+        assertFinite(frame)
+    }
+
     func testRejectedSolvedFramePreservesPublishedPositionsAndMultipliersForBothBufferParities() async throws {
         for budget in [3, 4] {
             let executor = XPBDRejectingExecutor()

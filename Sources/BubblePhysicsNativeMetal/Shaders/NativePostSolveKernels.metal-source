@@ -238,6 +238,7 @@ void nativeGuardCenter(device NativeBubble *bubbles, device NativeSegment *segme
         projected = bestPoint;
         moved = true;
     }
+    // `guardCorrectionCount` rośnie tu raz na cały ciąg rzutów środka (do 1 + 4 rzutów), a nie raz na każdy rzutowany wielokąt.
     if (moved) { end = projected; changed[i] = 1; nativeSafetyEvent(safety, 1); }
     positions[i].xy = end;
     // Walidacja po WSZYSTKICH korekcjach: ostatnia przeszkoda może zepsuć
