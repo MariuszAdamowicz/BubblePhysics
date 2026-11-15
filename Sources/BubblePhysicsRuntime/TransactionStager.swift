@@ -579,7 +579,9 @@ private struct StagingContext {
             regionExitPolicy: result.regionExitPolicy, physicsMaterialID: result.physicsMaterialID,
             renderMaterialID: result.renderMaterialID, mergeGroups: result.mergeGroups,
             eventInterest: result.eventInterest, drivePolicy: result.drivePolicy,
-            filter: result.filter, layer: result.layer, decal: result.decal))
+            filter: result.filter, layer: result.layer, decal: result.decal,
+            // Zła wartość rzuca `valueOutOfRange("contactCompliance")` z `BubbleDescriptor`, a `stage` zamienia ją na `.invalidValue`.
+            contactCompliance: result.contactCompliance))
     }
     mutating func merge(_ sources: [ObjectID], result: BubbleResult) throws {
         guard sources.count >= 2, Set(sources).count == sources.count else { throw TransactionRejectionReason.invalidStructuralOperation }

@@ -1,4 +1,5 @@
 import BubblePhysics
+@testable import BubblePhysicsRuntime
 import simd
 import XCTest
 
@@ -126,6 +127,31 @@ final class ContactComplianceTests: XCTestCase {
             first: BubbleSplitPart(result: result(103, override: 0), share: 0.5),
             second: BubbleSplitPart(result: result(104, override: 2e-3), share: 0.5)))
         assertAccepted(split, "podział z poprawnymi nadpisaniami")
+    }
+
+    /// Nadpisanie z `BubbleResult` trafia do deskryptora wyniku scalenia i obu części podziału (stager, CPU); bez nadpisania zostaje `nil`.
+    func testResultOverrideLandsInTheDescriptorOfMergeAndSplitResults() throws {
+        func override(of state: RuntimeState, _ value: UInt64) throws -> Float? {
+            guard case .bubble(let descriptor) = try XCTUnwrap(state.objects[id(value)]).descriptor else { XCTFail("nie bańka"); return nil }
+            return descriptor.contactCompliance
+        }
+        let (softMaterial, hardMaterial) = try defaultMaterials()
+        var state = RuntimeState(configuration: try WorldConfiguration(
+            simulationRegion: WorldRectangle(min: [-300, -300], max: [300, 300]), fixedTimeStep: step))
+        state = try TransactionStager.stage(WorldTransaction().updatePhysicsMaterial(soft, material: softMaterial)
+            .updatePhysicsMaterial(hard, material: hardMaterial).updateRenderMaterial(style, material: try RenderMaterial())
+            .add(bubble(1, at: [-10, 0], radius: 5)).add(bubble(2, at: [10, 0], radius: 5)).add(bubble(3, at: [100, 100], radius: 10)),
+            against: state).state
+        let merged = try TransactionStager.stage(WorldTransaction().mergeBubbles([id(1), id(2)], result: result(100, override: 3e-3)),
+                                                 against: state).state
+        XCTAssertEqual(try override(of: merged, 100), 3e-3)
+        let split = try TransactionStager.stage(WorldTransaction().splitBubble(id(3),
+            first: BubbleSplitPart(result: result(101, override: 0), share: 0.5),
+            second: BubbleSplitPart(result: result(102), share: 0.5)), against: state).state
+        XCTAssertEqual(try override(of: split, 101), 0)
+        XCTAssertNil(try override(of: split, 102))
+        let plain = try TransactionStager.stage(WorldTransaction().mergeBubbles([id(1), id(2)], result: result(100)), against: state).state
+        XCTAssertNil(try override(of: plain, 100))
     }
 
     // MARK: najgorsza α (P-B-19, P-B-20)
