@@ -2,7 +2,7 @@ import Foundation
 import XCTest
 
 /// P-B-10 (G1-AC1): `docs/migration/v1-api-diff.txt` to wynik `swift-api-digester -diagnose-sdk` między `v1.0.0` a HEAD,
-/// a `docs/MIGRATION-v2.md` ma zamiennik każdego symbolu z tego diffu. README podaje bieżącą wersję 2.1.0 i odsyła
+/// a `docs/MIGRATION-v2.md` ma zamiennik każdego symbolu z tego diffu. README podaje bieżącą wersję 2.2.0 i odsyła
 /// do `CHANGELOG.md`, a dalej wspomina 2.0.0 jako wersję migracji i odsyła do obu przewodników.
 /// Korzeń repozytorium wynika z `#filePath`, jak w `PackageGraphTests`.
 final class MigrationGuideTests: XCTestCase {
