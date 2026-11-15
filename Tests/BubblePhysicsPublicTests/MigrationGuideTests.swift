@@ -104,7 +104,7 @@ final class MigrationGuideTests: XCTestCase {
 
     func testReadmeStatesCurrentVersionAndLinksTheChangelogAndBothGuides() throws {
         let readme = try read("README.md")
-        XCTAssertTrue(readme.contains("2.1.0"), "README podaje bieżącą wersję 2.1.0")
+        XCTAssertTrue(readme.contains("2.2.0"), "README podaje bieżącą wersję 2.2.0")
         XCTAssertTrue(readme.contains("(CHANGELOG.md)"), "README odsyła do changeloga")
         XCTAssertTrue(readme.contains("2.0.0"), "README wspomina 2.0.0 jako wersję migracji z 1.x")
         XCTAssertTrue(readme.contains("(docs/MIGRATION-v2.md)"), "README odsyła do dokumentu migracji")
