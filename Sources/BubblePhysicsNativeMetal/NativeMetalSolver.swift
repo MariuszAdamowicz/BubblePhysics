@@ -684,6 +684,10 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         dispatchContacts("nativeCompactContactCache", buffers: [state.mergedCache, state.workingCache, state.contactControl,
             state.scanValues, state.scanOffsets, state.dispatchStatistics], argument: 2)
         prepareIndirectArguments()
+        // Wygładzone ρ obu końców każdego kontaktu z konturu poprzedniej klatki (CD-D-16), przed solverem, który liczy z niego α.
+        dispatchContacts("nativeUpdateContactRho", buffers: [state.workingBubbles, state.workingCache, state.control,
+            state.contactControl, state.contourControl, state.publishedBubbles, state.publishedDeformation,
+            state.publishedContourCounts], argument: 3)
         dispatch("nativeClearAdjacency", buffers: [state.control, state.adjacencyCounts], threads: count)
         dispatchContacts("nativeEmitAdjacency", buffers: [state.workingBubbles, state.workingSegments, state.workingCache,
             state.control, state.contactControl, state.adjacency, state.contactEndpoints, state.dispatchStatistics,
@@ -1226,7 +1230,7 @@ enum NativeMetalPipelineCache {
     static let stageNames: [String] = ["nativePrepareGrid", "nativeBuildGrid", "nativeSortGrid", "nativeSortGridChunk", "nativeEmitCandidates",
         "nativePrepareCandidateCounts", "nativeCompactCandidates", "nativeBuildContacts",
         "nativePrepareContactFlags", "nativeCompactActiveContacts", "nativeMatchContactCache",
-        "nativeRetainContactCache", "nativeCompactContactCache", "nativeScanBlocks", "nativePrepareIndirectArguments",
+        "nativeRetainContactCache", "nativeCompactContactCache", "nativeUpdateContactRho", "nativeScanBlocks", "nativePrepareIndirectArguments",
         "nativeAddScanBlockOffsets", "nativeFinishScan", "nativeScanSingleGroup", "nativeClearAdjacency", "nativeEmitAdjacency", "nativeBuildAdjacency",
         "nativePrepareSolverContacts", "nativeApplyWarmStart", "nativeUpdateContactMultipliers",
         "nativeSolveJacobi", "nativeMeasureResidual", "nativeReduceSolverResidual",
