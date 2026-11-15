@@ -79,10 +79,10 @@ Zmiana idzie przez cały krok, od transakcji po kontur. Na CPU dochodzi walidacj
     BubblePhysicsRuntime/
 +     PlacementGeometry.swift      # NOWY: test punktu (region, koło/kapsuła/wielokąt bryły, wspólny środek), wydzielony z QueryIndex (slice 1)
 +     QueryIndex.swift             # Shape/contains przeniesione do PlacementGeometry (bez zmiany logiki) (slice 1)
-+     TransactionStager.swift      # validatePlacement przy add/replace/merge/split; sprawdzenie α przy 6 operacjach (slice 1; α: slice 3)
-+     StructuralOperations.swift   # resolvedMergeCenter, resolvedSplitCenter, prędkości podziału względem d_com, nadpisanie c₀ na wyniku (slice 1; nadpisanie: slice 3)
++     TransactionStager.swift      # validatePlacement przy add/replace/merge/split; sprawdzenie α przy 6 operacjach; resultDescriptor (:575) przenosi nadpisanie c₀ z BubbleResult (slice 1; α, nadpisanie: slice 3)
++     StructuralOperations.swift   # resolvedMergeCenter, resolvedSplitCenter, prędkości podziału względem d_com (slice 1)
 +     CompleteStep.swift           # CompletedRuntimeStep.containedBubblePairCount; CompleteStepper.baseContactCompliance (domyślnie 0) (slice 2; baseContactCompliance: slice 3)
-+     NativeCompleteStepper.swift  # zapamiętuje configuration.contactCompliance z init; przekazuje licznik z ramki (slice 2; contactCompliance: slice 3)
++     NativeCompleteStepper.swift  # przekazuje licznik z ramki; nowe pole z configuration.contactCompliance z init (:14), dziś konfiguracji nie przechowuje (slice 2; contactCompliance: slice 3)
     BubblePhysicsNativeMetalDiagnostics/
 +     NativeMetalWorldRunner.swift # containedBubblePairCount w NativeMetalWorldFrame (slice 2)
 +     ReferenceSolverInputAdapter.swift # containedBubblePairCount w adapterze referencyjnym (slice 2)
@@ -95,12 +95,12 @@ Zmiana idzie przez cały krok, od transakcji po kontur. Na CPU dochodzi walidacj
 +     NativeMetalChainKernels.swift# - enum NativeMetalContainmentRepair; reszta pliku (GridSort, Scan, ContourSmoothing…) zostaje (slice 2)
       Shaders/
 +       NativeGeometryKernels      # NativeBubble.contact, NativeContactCache.rho (start 1,1), nativeContactCompliance(bubble, ρ) (slice 3)
-+       NativeXPBDKernels          # NOWA nativePairLambdaLimit; limit λ pary w nativePrepareSolverContacts i nativeUpdateContactMultipliers; α pary w nativeUpdateContactMultipliers i nativeMeasureResidual; ρ niesione w nativeMatchContactCache; bit 8 w nativeRigidContacts (limit, bit 8: slice 2; α, ρ: slice 3)
-+       NativePostSolveKernels     # nativeUpdateContactRho; nativeGuardCenter (rzut, bit 8); nativeRigidPredict (bit 16); - naprawa zawierania (:221-361); licznik; kontur na parę (omija bramkę deformowalności) (strażnik, usunięcie naprawy, licznik: slice 2; ρ, kontur: slice 3)
++       NativeXPBDKernels          # NOWA nativePairLambdaLimit (:333); limit λ pary w nativePrepareSolverContacts i nativeUpdateContactMultipliers; α pary w nativeUpdateContactMultipliers (:422) i nativeMeasureResidual (:467); ρ niesione przy trafieniu w nativeMatchContactCache (:204; retain i compact kopiują cały rekord); bit 8 w nativeRigidContacts (limit, bit 8: slice 2; α, ρ: slice 3)
++       NativePostSolveKernels     # nativeUpdateContactRho; nativeGuardCenter (rzut, bit 8); nativeRigidPredict (bit 16); - naprawa zawierania; licznik; kontur na parę w nativeAccumulateContactPressure (:605-690, cięciwa :650-658, omija bramkę deformowalności :685); nativeCheckFinite + isfinite(rho) (:346) (strażnik, usunięcie naprawy, licznik: slice 2; ρ, kontur, rho w nativeCheckFinite: slice 3)
 +       NativeRenderKernels        # RenderBubble.contact (trzecie lustro NativeBubble, brak w Components projektu) (slice 3)
   Tests/
 +   BubblePhysicsRuntimeTests/PlacementValidationTests.swift   # NOWY: walidacja i poprawa punktu (slice 1)
-+   BubblePhysicsRuntimeTests/CrowdSceneSupport.swift          # NOWY: scena tłoku, rama 4 ścian, docisk do ściany (slice 2)
++   BubblePhysicsRuntimeTests/CrowdSceneSupport.swift          # NOWY: scena tłoku, rama 4 ścian (slice 2); materiał miękki i docisk do ściany przez MotorDrive (slice 3)
 +   BubblePhysicsRuntimeTests/ContainmentResolutionTests.swift # NOWY: bańka w bańce, prawie wspólny środek, scalenie w zajętym miejscu, stos dwóch baniek pod grawitacją (slice 2; miękkie: slice 3)
 +   BubblePhysicsNativeMetalTests/NativeMetalChainKernelTests.swift  # - blok naprawy zawierania (repairPass, repairSegment, test fuzji); reszta zostaje (slice 2)
 +   BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalContainmentParallelTests.swift # - testy naprawy i fixture separate; testy walidatora zostają (slice 2)
@@ -109,7 +109,8 @@ Zmiana idzie przez cały krok, od transakcji po kontur. Na CPU dochodzi walidacj
 +   BubblePhysicsRuntimeTests/SolverGuardCauseTests.swift      # NOWY: przyczyna odrzucenia przez strażnika (slice 2)
 +   BubblePhysicsRuntimeTests/ContactComplianceTests.swift     # NOWY: docisk do ściany, nadpisania, skończoność α (slice 3)
 +   BubblePhysicsPublicTests/ModelValidationTests.swift        # walidacja podatności w materiale i deskryptorze (slice 3)
-+   BubblePhysicsNativeMetalTests/NativeMetalShaderABITests.swift  # pola contact, rho (slice 3); safety nie ma struktury MSL, więc sondy nie ma
++   BubblePhysicsNativeMetalTests/NativeMetalShaderABITests.swift  # pola contact, rho w sondach bubble, cache i render (slice 3); safety nie ma struktury MSL, więc sondy nie ma
++   BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalSolverLifecycleTests.swift # rozmiary na sztywno (:241-250): bańka 176 → 192, cache 64 → 80 (slice 3)
 +   (oczekiwania zmienione wg inwentarza w R3)   # (slice 1 i slice 2)
 + CHANGELOG.md, README.md:5, docs/integration-guide.md         # CHANGELOG: wpisy w każdym wycinku; wersja, README, przewodnik: slice 4
 ```
@@ -119,17 +120,19 @@ Transakcja. Walidacja punktu nie siedzi w `add(_:)`, bo podział dodaje części
 Drzewo pokazuje stager zbudowany w wycinku 1 (odstępstwa 1 i 2 z `## Implementation deviations`) i to, co dokłada wycinek 3:
 
 ```text
-BubbleWorld.advanceImpl                          BubbleWorld.swift:254
-└── TransactionStager.stageBatch(…, + baseContactCompliance: stepper.baseContactCompliance)   TransactionStager.swift:178, wołane z BubbleWorld.swift:296
+BubbleWorld.advanceImpl                          BubbleWorld.swift:260
+└── TransactionStager.stageBatch(…, + baseContactCompliance: stepper.baseContactCompliance)   TransactionStager.swift:178, wołane z BubbleWorld.swift:302
     └── StagingContext.apply(op)                 :221
         ├── .add :223 → add(_:) :404 → validate(RuntimeObject) :491; .replace :228 → validate(RuntimeObject) :491
         │   ├── validatePlacement :413 → PlacementGeometry.issue :415   # (slice 1) w apply :226 i :234; region → bryła → wspólny środek; replace wyklucza zastępowaną
         │   └── + validateWorstAlpha(object)                   # (slice 3) α_cfg + 2·c_worst/dt² skończona
         ├── .mergeBubbles :356 → merge :584
         │   ├── StructuralOperations.resolvedMergeCenter :51   # (slice 1) mergeCandidates :27, spiral :39; test w domknięciu PlacementGeometry.issue (:610)
-        │   ├── initializeMerge :57 (+ nadpisanie c₀ z BubbleResult, slice 3)
+        │   ├── resultDescriptor :575 (+ nadpisanie c₀ z BubbleResult; złe → .invalidValue, slice 3)
+        │   ├── initializeMerge :57
         │   └── + validateWorstAlpha(result)                   # (slice 3)
         ├── .splitBubble :357 → split :628
+        │   ├── resultDescriptor :575 dla obu części (+ nadpisanie c₀, slice 3)
         │   ├── initializeSplit :69                            # centroidy
         │   ├── resolvedSplitCenter :113 (first, potem second)  # (slice 1) domknięcie PlacementGeometry.issue (:665)
         │   ├── relocateSplitParts :125                        # (slice 1) prędkości i ω względem d_com
@@ -145,6 +148,9 @@ Krok GPU. Kolejność jąder w `NativeMetalSolver.executeSnapshot` (`NativeMetal
   nativeMatchContactCache                # + przy trafieniu kopiuje rho z poprzedniego rekordu
   nativeRetainContactCache, nativeCompactContactCache
 + nativeUpdateContactRho                 # ρ_konturu = 1 − publishedDeformation.x w kierunku normalnej; ρ += 0,25·(ρ_konturu − ρ)
+                                         #   kontur poprzedniej klatki: indeks starej bańki przez nativeSafetyBubbleIndex(identity, previousBubbles, …)
+                                         #   i próbki wg publishedContourCounts, jak w nativeAccumulateContactPressure (Post:666-676);
+                                         #   bańka bez konturu z poprzedniej klatki (nowa, wynik scalenia lub podziału): ρ_konturu = 1
   nativeClearAdjacency … nativeBuildAdjacency
   nativePrepareSolverContacts            # przycina λ z cache przed warm startem (XPBD na main :333-350)
                                          # bańka–bańka: - r/(invMass·degree)   + nativePairLambdaLimit (gdy control.contactDamping.y ≠ 0)
@@ -164,11 +170,13 @@ Krok GPU. Kolejność jąder w `NativeMetalSolver.executeSnapshot` (`NativeMetal
 - NativeMetalContainmentRepair.encodePass × 8   # nativeSeparateContainedBubbles, fuzja nativeSeparateAndGuardContainedBubbles,
 -                                        #   nativeReapplyCenterGuards, pomocnicza nativeContainmentCorrection (CD-D-19)
   nativeValidateBubbleContainment        # - bit 2; + atomic add do safety+4 (diagnostics.x)
-  … nativeCheckFinite
+  … nativeCheckFinite                    # + isfinite(rho) obok geometry i response
   nativeAccumulateContactPressure        # + para miękka: cięciwa na głębokości nakładanie·c_a/(c_a+c_b); twarda bez zmian
+                                         # + bańka z contact.x > 0 omija bramkę deformowalności (Post:685), więc ściana tnie jej kontur
+                                         #   istniejącym ograniczeniem promieniem odcinka (Post:625-627): całe nakładanie z przeszkodą
 ```
 
-Para miękka omija bramkę deformowalności na końcu jądra (`if (softness == 0 && bubble.material.z == 0) value.xy = 0`, Post:745). Inaczej materiał z domyślnym `deformability` = 0 nie miałby konturu i ρ zostałoby 1. Miękkość pary niesie podatność ([CD-D-8](change-design.md#cd-d-8)). Bramka `material.z >= 1` zostaje.
+Bańka miękka (c > 0) omija bramkę deformowalności na końcu jądra (`if (softness == 0 && bubble.material.z == 0) value.xy = 0`, Post:685). Inaczej materiał z domyślnym `deformability` = 0 nie miałby konturu i ρ zostałoby 1. Miękkość pary niesie podatność ([CD-D-8](change-design.md#cd-d-8)). Bramka `material.z >= 1` zostaje.
 
 `nativePairLambdaLimit(a, b, n, dt)` = ((max(0, v_a·n) + max(0, −v_b·n))·dt + 0,25·min(r_a, r_b)) / max(invMass_a, invMass_b) ([CD-D-9](change-design.md#cd-d-9)), z v = `motion.xy` i dt = `control.physics.x`. Wzorem jest prototyp `wip/prototype-pair-limit-approach.diff`. Jego `if false` i `0..<0` nie trafiają do kodu: jądra i przebiegi się usuwa. λ jest jedno dla obu końców, więc pęd pary jest zachowany bez jąder skalowania i bez bufora sum ([P-B-38](#p-b-38)). Kod budżetu na bańkę z commitów a9c8752 i 97a00f0 (bufory `solverCorrectionTotals`, `solverCorrectionScales`, jądra `nativeLimitBubbleCorrections`, `nativeScaleContactCorrections`, `nativeNetScale`) wraca do stanu z `main`, razem z oczekiwaniami testów zmienionymi w tych commitach. Prędkość, którą bańka w spoczynku gromadzi w stronę kontaktu, zostaje bez zmian (Non-goals projektu). Limit ją przepuszcza i dzięki temu stos pod grawitacją się trzyma ([P-B-39](#p-b-39)).
 
@@ -197,12 +205,11 @@ NativeMetalSolver: odczyt safetyControl          NativeMetalSolver.swift (counts
         → WorldDiagnostics.containedBubblePairCount
 ```
 
-Drugie spojrzenie należy się `nativeGuardCenter`. To funkcja, a nie jądro. Dziś wołają ją trzy miejsca: `nativeApplyCenterGuards` (Post:218), fuzja naprawy zawierania (Post:348) i `nativeReapplyCenterGuards` (Post:360). Po usunięciu naprawy zostaje tylko pierwsze, więc rzut na przekroczoną krawędź zmienia się w jednym miejscu wywołania. `stageNames` (`NativeMetalSolver.swift:1255-1274`) musi zgadzać się z shaderem, bo pipeline'y powstają z tej listy (:1286-1290), więc nazwy usuwa się razem z jądrami. Komentarze przy `nativeValidateBubbleContainment` (Post:370-371) i przy `stageNames` (:1252-1254) też się poprawia. Bit 2 zapalają cztery miejsca: walidacja w `nativeGuardCenter`, `nativeRigidPredict` (Post:491), próbkowanie łuku obrotu w `nativeRigidContacts` (XPBD:783-799) i walidator zawierania, który bit 2 traci (zadanie 12). Pierwsze i trzecie miejsce dokładają bit 8, a drugie bit 16, więc nowe bity zapalają się zawsze razem z bitem 2. Host odrzuca więc krok tą samą gałęzią `counts.w & 2` (`NativeMetalSolver.swift:950`) i tylko odczytuje z bitów przyczynę.
+Drugie spojrzenie należy się `nativeGuardCenter`. To funkcja, a nie jądro. Dziś wołają ją trzy miejsca: `nativeApplyCenterGuards` (Post:218), fuzja naprawy zawierania (Post:348) i `nativeReapplyCenterGuards` (Post:360). Po usunięciu naprawy zostaje tylko pierwsze, więc rzut na przekroczoną krawędź zmienia się w jednym miejscu wywołania. `stageNames` (`NativeMetalSolver.swift:1226-1240`) musi zgadzać się z shaderem, bo pipeline'y powstają z tej listy (:1257-1260), więc nazwy usuwa się razem z jądrami. Komentarze przy `nativeValidateBubbleContainment` (Post:370-371) i przy `stageNames` (:1252-1254) też się poprawia. Bit 2 zapalają cztery miejsca: walidacja w `nativeGuardCenter`, `nativeRigidPredict` (Post:491), próbkowanie łuku obrotu w `nativeRigidContacts` (XPBD:783-799) i walidator zawierania, który bit 2 traci (zadanie 12). Pierwsze i trzecie miejsce dokładają bit 8, a drugie bit 16, więc nowe bity zapalają się zawsze razem z bitem 2. Host odrzuca więc krok tą samą gałęzią `counts.w & 2` (`NativeMetalSolver.swift:950`) i tylko odczytuje z bitów przyczynę.
 
 Bit 2 zapala też `nativeRigidPredict`, gdy obrót bryły w kroku wymaga ponad 128 próbek (Post:491). Tam razem z bitem 2 zapala się bit 16, czyli `.rigidRotationBudget` ([CD-D-18](change-design.md#cd-d-18)). Próbkowanie łuku obrotu w `nativeRigidContacts` (XPBD:783-799) zapala razem z bitem 2 bit 8, czyli `.centerCrossing` ([P-B-37](#p-b-37)).
 
-Fakty niepotwierdzone przy rekonesansie:
-- Czy `nativeRetainContactCache` i `nativeCompactContactCache` kopiują cały rekord, a więc i `rho`. Pierwsze zadanie z ρ to sprawdza.
+Fakt niepotwierdzony przy rekonesansie:
 - Czy przy 8 iteracjach Jacobiego tłok z podatnością dochodzi do stanu bez odrzuceń. To założenie projektu (Key facts). Jeśli test pokaże inaczej, wraca do właściciela.
 
 ### R3 — Behaviour
@@ -264,7 +271,7 @@ Podatność kontaktu. Sceny docisku do ściany używają `MotorDrive`, a δ = r 
 
 | P-B-ID | Situation | Result | Proves |
 |---|---|---|---|
-| <a id="p-b-17"></a>P-B-17 | materiał z ujemną, NaN lub nieskończoną podatnością, złym wykładnikiem, r_ref ≤ 0, podatnością > 0 przy `.rigid`; złe nadpisanie w `BubbleDescriptor` | `ModelValidationError.valueOutOfRange` przy tworzeniu | [G4-AC7](change-design.md#g4-ac7) |
+| <a id="p-b-17"></a>P-B-17 | materiał z ujemną, NaN lub nieskończoną podatnością, złym wykładnikiem, r_ref ≤ 0, NaN lub nieskończonym, podatnością > 0 przy `.rigid`; złe nadpisanie w `BubbleDescriptor` | `ModelValidationError.valueOutOfRange` przy tworzeniu | [G4-AC7](change-design.md#g4-ac7) |
 | <a id="p-b-18"></a>P-B-18 | złe nadpisanie w `BubbleResult` scalenia | `.invalidValue(.valueOutOfRange("contactCompliance"))` | [G4-AC7](change-design.md#g4-ac7) |
 | <a id="p-b-19"></a>P-B-19 | `add`, `replace`, scalenie, podział z c₀ = 1, s = 70, r/r_ref = 4 | `.invalidValue(.valueOutOfRange("contactCompliance"))`; następny krok przyjęty; c₀ = 0 przy tym samym s przechodzi | [G3-AC8](change-design.md#g3-ac8) |
 | <a id="p-b-20"></a>P-B-20 | `startTransition` promienia i `updatePhysicsMaterial`, po których α przepełnia Float | odrzucone; promień i materiał bez zmian | [G3-AC9](change-design.md#g3-ac9) |
@@ -306,7 +313,7 @@ Gałąź `default` w wyczerpującym `switch` po `TransactionRejectionReason` nie
 | integracja: publiczny `BubbleWorld` na urządzeniu Metal | transakcje, scenariusze fizyczne i diagnostyka od wejścia gry do `WorldFrame` | [P-B-1](#p-b-1)–[P-B-16](#p-b-16), [P-B-36](#p-b-36)–[P-B-39](#p-b-39), [P-B-18](#p-b-18)–[P-B-30](#p-b-30) |
 | integracja: harness `NativeMetal` (`executeFrame`, odcinki `previous` → `current`) | rzut strażnika w jednym kroku, niewidoczny dla publicznego świata, bo strażnik widzi tam tylko statyczne wielokąty | [P-B-40](#p-b-40), [P-B-41](#p-b-41) |
 | regresja: cały pakiet z bliźniakami (`pairCorrectionLimit = false`) | domyślne materiały zachowują v2.1.0 poza inwentarzem, a zmiana przez limit pary znika po jego wyłączeniu | [P-B-31](#p-b-31)–[P-B-33](#p-b-33) |
-| kontrola statyczna: test ABI | układ `NativeBubble`, `NativeContactCache`, `RenderBubble` zgodny ze Swift | [P-B-33](#p-b-33) |
+| kontrola statyczna: test ABI i rozmiary rekordów w `NativeMetalSolverLifecycleTests` | układ `NativeBubble`, `NativeContactCache`, `RenderBubble` zgodny ze Swift | [P-B-33](#p-b-33) |
 | strażnik wydajności i przegląd wydania | progi 2.1.0, pliki wydania i tag | [P-B-34](#p-b-34), [P-B-35](#p-b-35) |
 
 Wszystkie komendy `verify:` uruchamia się z korzenia repozytorium.
@@ -321,7 +328,7 @@ Wszystkie komendy `verify:` uruchamia się z korzenia repozytorium.
 |-------|------|----------|-------|------------|--------|
 | 1 | Zły punkt odrzuca transakcję | gra dostaje `invalidPlacement` z przyczyną dla złego punktu `add` i `replace`, a scalenie i podział same poprawiają punkt wyniku ([G3-AC1](change-design.md#g3-ac1)–[G3-AC7](change-design.md#g3-ac7)) | `WorldFrame.swift`, `PlacementGeometry.swift`, `QueryIndex.swift`, `TransactionStager.swift`, `StructuralOperations.swift`, `PlacementValidationTests`, wpis w CHANGELOG | [P-B-1](#p-b-1)–[P-B-8](#p-b-8), [P-B-31](#p-b-31) | done |
 | 2 | Tłok i bańka w bańce bez odrzucenia kroku | bańka w bańce, prawie wspólny środek i tłok przy kontakcie twardym nie odrzucają kroku, a stos baniek pod grawitacją się trzyma; gra widzi przyczynę odrzucenia i licznik par ([G1](change-design.md#g1-ac1) dla c₀ = 0, [G2](change-design.md#g2-ac1), [G5](change-design.md#g5-ac1)). Kolejność: licznik równy 1 w pierwszej klatce ([P-B-9](#p-b-9)) sprawdza dopiero zadanie z limitem pary, bo naprawa i Jacobi bez limitu rozdzielają parę w jednym kroku przed walidacją. | `Diagnostics.swift`, `BubbleWorld.swift` (+ `makeBenchmarkWorld`), `CompleteStep.swift`, `NativeCompleteStepper.swift`, `NativeMetalBackend.swift` (przełącznik), `NativeSolverInput.swift`, `NativePublicWorld.swift` (licznik), `NativeMetalBufferLayout.swift` (diagnostics), `NativeMetalSolver.swift`, `NativeMetalChainKernels.swift` (usunięcie), `NativeXPBDKernels` (limit pary), `NativePostSolveKernels` (strażnik, usunięcie naprawy, licznik), testy tłoku, zawierania, stosu i przyczyny, inwentarz z bliźniakami, wpis w CHANGELOG | [P-B-9](#p-b-9)–[P-B-16](#p-b-16), [P-B-32](#p-b-32), [P-B-36](#p-b-36)–[P-B-41](#p-b-41) | done |
-| 3 | Miękki kontakt z materiału | podatność kontaktu w materiale z nadpisaniem na bańce, ugięcie zgodne z prawem Laplace'a i tłok ściskający kontury ([G4](change-design.md#g4-ac1), [G3-AC8](change-design.md#g3-ac8), [G3-AC9](change-design.md#g3-ac9), warianty miękkie G1 i G2). Kolejność: przypadek k > 0 z [P-B-23](#p-b-23) i [P-B-24](#p-b-24) sprawdza zadanie z konturem pary miękkiej, a nie zadanie z α pary, bo bez konturu ρ = 1. | `Resources.swift`, `Objects.swift`, `WorldTransaction.swift`, α w stagerze, `contact` i `rho` w buforach i shaderach, `NativeRenderKernels`, `ContactComplianceTests`, `ModelValidationTests`, przypadki miękkie, wpis w CHANGELOG | [P-B-17](#p-b-17)–[P-B-30](#p-b-30), [P-B-33](#p-b-33) | unplanned |
+| 3 | Miękki kontakt z materiału | podatność kontaktu w materiale z nadpisaniem na bańce, ugięcie zgodne z prawem Laplace'a i tłok ściskający kontury ([G4](change-design.md#g4-ac1), [G3-AC8](change-design.md#g3-ac8), [G3-AC9](change-design.md#g3-ac9), warianty miękkie G1 i G2). Kolejność: przypadek k > 0 z [P-B-23](#p-b-23) i [P-B-24](#p-b-24) sprawdza zadanie z jądrem ρ, po zadaniu z konturem bańki miękkiej, bo bez konturu ρ = 1. | `Resources.swift`, `Objects.swift`, `WorldTransaction.swift`, `TransactionStager.swift` (α, nadpisanie), `BubbleWorld.swift`, `CompleteStep.swift`, `NativeCompleteStepper.swift` (α_cfg), `NativePublicWorld.swift`, `NativeMetalBufferLayout.swift` (contact, rho), `NativeMetalSolver.swift` (ρ), `NativeGeometryKernels`, `NativeXPBDKernels`, `NativePostSolveKernels`, `NativeRenderKernels`, `ContactComplianceTests`, `ModelValidationTests`, `CrowdSceneSupport.swift`, przypadki miękkie w `CrowdCompressionTests` i `ContainmentResolutionTests`, `NativeMetalShaderABITests`, `NativeMetalSolverLifecycleTests`, wpis w CHANGELOG | [P-B-17](#p-b-17)–[P-B-30](#p-b-30), [P-B-33](#p-b-33) | unplanned |
 | 4 | Wydanie 2.2.0 | gra może podbić silnik do tagu `v2.2.0` z opisem w CHANGELOG, README i przewodniku integracji, w tym z opisem prędkości w stronę kontaktu, którą bańka w spoczynku gromadzi do nasycenia ([G6](change-design.md#g6-ac1)). Strażnik wydajności musi mierzyć to samo obciążenie co w 2.1.0, czyli tyle samo przyjętych baniek w scenach benchmarku (liczby z zadania 8 wycinka 1). | `CHANGELOG.md` (wersja), `README.md:5`, `docs/integration-guide.md`, strażnik wydajności, tag | [P-B-34](#p-b-34), [P-B-35](#p-b-35) | unplanned |
 
 Wycinek 1 działa tylko na CPU i daje grze odrzucanie złych punktów, zanim powstanie cokolwiek w GPU. Brakuje w nim jeszcze kroku bez odrzuceń w tłoku. Wycinek 2 usuwa odrzucenia przy domyślnym, twardym kontakcie i sprawdza założenie projektu o tłoku twardym, zanim dojdzie miękki kontakt. Brakuje w nim jeszcze płynnego ściśnięcia. Wycinek 3 daje miękkość, ale bez tagu gra nie może go jeszcze użyć. Wycinek 4 wydaje całość po przejściu strażnika wydajności.
@@ -459,6 +466,26 @@ Inwentarz wycinka 2: każde zmienione oczekiwanie istniejącego testu, z powodem
 
 Strażnik wydajności wycinka 2: `swift run -c release BubblePhysicsPerfGuard` na 62e8fc4 (Apple M1 Pro, informacyjnie, exit 1): FAIL stress-300 p95 2,1939 ms przy punkcie odniesienia 1,9634 ms i limicie 2,1598 ms (+11,7%); PASS mixed 4,1653 ms (+9,8%, limit 4,1736 ms); PASS decals 2,3468 ms (+7,8%); FAIL acceptance 3,6013 ms przy punkcie odniesienia 2,4590 ms i limicie 2,7049 ms (+46,5%); skalowanie 600/300 1,49 (limit 2,50) PASS. Etapy acceptance: host_waiting 2,63 ms, gpu 2,29 ms, gpu_physics 1,23 ms. Porażki nie blokują wycinka 2, ale wracają do właściciela przed wycinkiem 3. Przyczyny nie rozdzielono (limit λ pary, nowy rzut strażnika albo szum maszyny); `docs/benchmarks/perf-guard.json` bez zmian.
 
+## Slice 3: Miękki kontakt z materiału
+
+**Delivers:** materiał bańki opisuje podatność kontaktu (c₀, r_ref, s, k) z nadpisaniem c₀ na bańce i wyniku scalenia lub podziału, α pary i kontur pary miękkiej działają na GPU z wygładzonym ρ, stager odrzuca podatność przepełniającą Float, a tłok z materiałem miękkim ściska kontury bez odrzucenia kroku.
+
+Każde zmienione oczekiwanie istniejącego testu trafia do treści commita z powodem, bo opis PR musi je wymienić. W zadaniach z `! swift test` implementer sprawdza w wyjściu, że testy padają na asercjach, a nie na błędzie kompilacji, urządzenia Metal czy crashu. Wszystkie komendy `verify:` uruchamia się z korzenia repozytorium. Implementer zatrzymuje się i oddaje decyzję właścicielowi, gdy: tłok miękki ([P-B-27](#p-b-27)) albo narożnik miękki ([P-B-29](#p-b-29)) odrzuca krok po zadaniu 32 (założenie projektu o 8 iteracjach z Key facts); materiały domyślne zmieniają oczekiwanie istniejącego testu poza testami ABI i rozmiarów rekordów ([P-B-33](#p-b-33)).
+
+25. Zmierzyć `swift run -c release BubblePhysicsPerfGuard` w tymczasowym `git worktree` poza repozytorium na `main` (afe237a), 24dcc3b (bez naprawy zawierania), dd50455 (limit pary) i ff7ccfa (rzut strażnika), usunąć worktree i zapisać pod tym wycinkiem wiersz `Przyczyna spowolnienia strażnika wydajności: …` z p95 stress-300 i acceptance dla każdego commitu · verify: `grep -q "^Przyczyna spowolnienia strażnika wydajności:" docs/sdlc/changes/2026-11-14-crowd-solver-compression/plan.md && test -z "$(git worktree list | sed 1d)"`
+26. Dodać `BubbleContactCompliance` (`.hard`), `PhysicsMaterial.contactCompliance` (ostatni parametr, domyślnie `.hard`), `BubbleDescriptor.contactCompliance` i `BubbleResult.contactCompliance` bez walidacji i logiki oraz napisać w `ModelValidationTests` testy [P-B-17](#p-b-17) · verify: `swift build --build-tests && ! swift test --filter ModelValidationTests`
+27. Napisać `ContactComplianceTests` (`testResultValidation…`, `testWorstAlpha…`, `testRadiusLaw…`, `testCompressionExponent…`, `testSettles…`, `testHardAgainstSoft…`, `testOverride…`) z dociskiem do ściany i materiałem miękkim w `CrowdSceneSupport.swift` oraz miękkie warianty `CrowdCompressionTests` (`testSoftCrowdBalance…`, `testSoftCrowdCompressesMore…`, `testSoftCorner…`) i `ContainmentResolutionTests.testSoftCoincidentPair…`, pokrywając [P-B-18](#p-b-18)–[P-B-30](#p-b-30) · verify: `swift build --build-tests && ! swift test --filter "ContactComplianceTests|CrowdCompressionTests.testSoft|ContainmentResolutionTests.testSoft"`
+28. Dodać walidację podatności w `PhysicsMaterial` i `BubbleDescriptor` ([G4-AC7](change-design.md#g4-ac7)), pokrywając [P-B-17](#p-b-17) · verify: `swift test --filter ModelValidationTests`
+29. Przenieść nadpisanie c₀ z `BubbleResult` przez `resultDescriptor` na wynik scalenia i obie części podziału, ze złą wartością odrzucaną przez `.invalidValue(.valueOutOfRange("contactCompliance"))`, pokrywając [P-B-18](#p-b-18) · verify: `swift test --filter ContactComplianceTests.testResultValidation`
+30. Przekazać α_cfg z `NativeCompleteStepper` przez `CompleteStepper.baseContactCompliance` do `stageBatch` i dodać `validateWorstAlpha` przy `add`, `replace`, scaleniu, podziale, `startTransition` promienia i `updatePhysicsMaterial` ([CD-D-15](change-design.md#cd-d-15)), pokrywając [P-B-19](#p-b-19) i [P-B-20](#p-b-20) · verify: `swift test --filter "ContactComplianceTests.testWorstAlpha|TransactionStagerTests|BubbleWorldCompletionTests"`
+31. Dodać `contact` do `NativeMetalBubble`, `NativeBubble` i `RenderBubble` (host liczy c₀·(r/r_ref)^s tylko dla c₀ > 0, z nadpisaniem) oraz `rho` do `NativeContactCacheRecord` i `NativeContactCache` (start (1, 1, 0, 0) w `nativeBuildContacts`, przeniesienie przy trafieniu w `nativeMatchContactCache`, `isfinite` w `nativeCheckFinite`), poprawiając sondy ABI i rozmiary w `NativeMetalSolverLifecycleTests`, co pokrywa [P-B-33](#p-b-33) dla układu rekordów · verify: `grep -qw rho Sources/BubblePhysicsNativeMetal/NativeMetalBufferLayout.swift && grep -qw rho Sources/BubblePhysicsNativeMetal/Shaders/NativeGeometryKernels.metal-source && grep -q 192 Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalSolverLifecycleTests.swift && swift test --filter "NativeMetalShaderABITests|NativeMetalSolverLifecycleTests|NativeMetalXPBDTests|NativeMetalContourTests"`
+32. Dodać `nativeContactCompliance(bubble, ρ)` (c = 0 bez potęg przy `contact.x == 0`) i α pary w `nativeUpdateContactMultipliers` i `nativeMeasureResidual`, pokrywając [P-B-21](#p-b-21), [P-B-22](#p-b-22), [P-B-23](#p-b-23) dla k = 0, [P-B-26](#p-b-26), [P-B-27](#p-b-27), [P-B-29](#p-b-29) i [P-B-30](#p-b-30) · verify: `swift test --filter "ContactComplianceTests.testRadiusLaw|ContactComplianceTests.testOverride|CrowdCompressionTests.testSoftCrowdBalance|CrowdCompressionTests.testSoftCorner|ContainmentResolutionTests.testSoft|NativeMetalXPBDTests"`
+33. Dodać w `nativeAccumulateContactPressure` drogę pary miękkiej (cięciwa na głębokości nakładanie·c_a/(c_a+c_b); para twarda bez zmian, [CD-D-12](change-design.md#cd-d-12)) i ominięcie bramki deformowalności dla bańki z c > 0, także przy samej ścianie, pokrywając [P-B-25](#p-b-25) i [P-B-28](#p-b-28) · verify: `swift test --filter "ContactComplianceTests.testHardAgainstSoft|CrowdCompressionTests.testSoftCrowdCompressesMore|NativeMetalContourTests"`
+34. Dodać jądro `nativeUpdateContactRho` (β = 0,25, `ρ_min` = 0,01, [CD-D-16](change-design.md#cd-d-16); kontur poprzedniej klatki przez indeks starej bańki, bez niego ρ_konturu = 1) do `stageNames` i do kroku po `nativeCompactContactCache`, pokrywając [P-B-23](#p-b-23) dla k > 0 i [P-B-24](#p-b-24) · verify: `swift test --filter "ContactComplianceTests.testCompressionExponent|ContactComplianceTests.testSettles|NativeMetalResourceReuseTests"`
+35. Dopisać do sekcji 2.2.0 w `CHANGELOG.md` `BubbleContactCompliance`, `PhysicsMaterial.contactCompliance`, nadpisanie `contactCompliance` w `BubbleDescriptor` i `BubbleResult` oraz odrzucenie podatności przepełniającej Float · verify: `grep -q "BubbleContactCompliance" CHANGELOG.md && grep -q "BubbleResult.contactCompliance" CHANGELOG.md`
+36. Uruchomić cały pakiet i zapisać pod tym wycinkiem wiersz `Inwentarz wycinka 3: …` z każdym zmienionym oczekiwaniem istniejącego testu i jego powodem albo „brak poza ABI i rozmiarami rekordów” · verify: `swift test && grep -q "^Inwentarz wycinka 3:" docs/sdlc/changes/2026-11-14-crowd-solver-compression/plan.md`
+37. Uruchomić informacyjnie `swift run -c release BubblePhysicsPerfGuard` i zapisać wynik pod tym wycinkiem w wierszu `Strażnik wydajności wycinka 3: …`, obok wyniku z zadania 25 · verify: `grep -q "^Strażnik wydajności wycinka 3:" docs/sdlc/changes/2026-11-14-crowd-solver-compression/plan.md`
+
 ## Deviations from Design
 
 | ID | Type | Status | Design updated? | Note |
@@ -493,6 +520,14 @@ Strażnik wydajności wycinka 2: `swift run -c release BubblePhysicsPerfGuard` n
 | 2 | Odwołania: strażnik Post:138-208, wywołania :217/:328/:340, bit 16 Post:470, łuk XPBD:717 | Post:139-209, wywołania :218/:348/:360, bit 16 Post:491, łuk XPBD:783-799 | R2: odwołania | 2026-11-15 |
 | 2 | Odstępstwa 5–8 czekają na decyzję | Właściciel zatwierdził 2026-11-15 | R2 (części z odstępstwa 6), R3 ([P-B-14](#p-b-14), [P-B-15](#p-b-15)); wiersz [G5-AC1](change-design.md#g5-ac1) w Deviations from Design | 2026-11-15 |
 | 2 | Wycinek 2 kończy się zadaniem 17 | Wycinek był w toku, zablokowany; zbudowano zadania 9–14 | Wyjątek od reguły przeplanowania (wycinek w toku, za zgodą właściciela): sekcja wycinka 2 przepisana w miejscu, zadania 15–24 | 2026-11-15 |
+| 3 | Strażnik wydajności wycinka 2 informacyjny, porażka wraca do właściciela przed wycinkiem 3 | FAIL: acceptance +46,5%, stress-300 +11,7%, przyczyna nierozdzielona; właściciel wybrał 2026-11-15 pomiar teraz, naprawę po decyzji przed wycinkiem 4 | Zadania 25 (pomiar na commitach afe237a, 24dcc3b, dd50455, ff7ccfa) i 37 (pomiar po wycinku 3) | 2026-11-15 |
+| 3 | Nadpisanie c₀ z `BubbleResult` w `initializeMerge` (`StructuralOperations.swift`) | Pola `BubbleResult` przepisuje `StagingContext.resultDescriptor` (`TransactionStager.swift:575`) | R2: nadpisanie w `resultDescriptor` dla scalenia i obu części podziału; `StructuralOperations.swift` poza wycinkiem 3; zadanie 29 | 2026-11-15 |
+| 3 | Niepotwierdzone: czy retain i compact cache kopiują cały rekord | Kopiują cały rekord (XPBD:221/228, :240); trafienie w `nativeMatchContactCache` przenosi pola po kolei (XPBD:204) | R2: fakt wykreślony; przeniesienie `rho` przy trafieniu zostaje; zadanie 31 | 2026-11-15 |
+| 3 | Rozmiary rekordów sprawdza test ABI | `NativeMetalSolverLifecycleTests.swift:241-250` ma rozmiary 176 i 64 na sztywno | R2 i strategia testów: plik dodany (192 i 80); zadanie 31 | 2026-11-15 |
+| 3 | `nativeCheckFinite` bez zmian | Sprawdza `geometry` i `response` cache (Post:346-349), nowe `rho` nie byłoby sprawdzane | R2: `isfinite(rho)`, zgodnie z Error handling projektu; zadanie 31 | 2026-11-15 |
+| 3 | Pomocnik docisku do ściany w `CrowdSceneSupport.swift` z wycinka 2 | Usunięty w przeglądzie wycinka 2 (odstępstwo 14); wzorzec `MotorDrive` w `CrowdCompressionTests.swift:32` | R2: docisk i materiał miękki w wycinku 3; zadanie 27 | 2026-11-15 |
+| 3 | `NativeCompleteStepper` zapamiętuje `contactCompliance` | Nie przechowuje konfiguracji (`init` :14) | R2: opis poprawiony, nowe pole w wycinku 3; zadanie 30 | 2026-11-15 |
+| 3 | Odwołania: `advanceImpl` :254, `stageBatch` z :296, bramka Post:745, `stageNames` :1255-1274 | :260, :302, Post:685, :1226-1240; kontur Post:605-690, α XPBD:422 i :467 | R2: odwołania | 2026-11-15 |
 
 ## Implementation deviations
 
