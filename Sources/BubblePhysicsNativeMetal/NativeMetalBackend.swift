@@ -5,6 +5,9 @@ public struct NativeMetalConfiguration: Equatable, Sendable {
     public var cacheExpiryFrames: Int
     public var teleportDistanceMultiplier: Float
     public var ccdVelocityMultiplier: Float
+    /// Limit λ pary bańka–bańka (CD-D-9). Przełącznik wyłącznie dla testów bliźniaczych z dawnym oczekiwaniem
+    /// (CD-D-20): poza publicznym `init`, więc gra go nie widzi; `sanitized` go zachowuje.
+    package var pairCorrectionLimit = true
 
     public init(solverIterationCount: Int = 8, cacheExpiryFrames: Int = 30,
                 teleportDistanceMultiplier: Float = 2, ccdVelocityMultiplier: Float = 1,

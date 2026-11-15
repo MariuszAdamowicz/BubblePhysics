@@ -69,10 +69,13 @@ public final class BubbleWorld {
 
     /// Konstruktor wyłącznie dla diagnostycznego harnessu; limit nie jest parametrem API gry.
     package static func makeBenchmarkWorld(configuration: WorldConfiguration, device: MTLDevice,
-                                           solverIterationLimit: Int) throws -> BubbleWorld {
-        try BubbleWorld(configuration: configuration, stepper: NativeCompleteStepper(device: device,
-            configuration: NativeMetalConfiguration(solverIterationCount: solverIterationLimit)),
-            assets: AssetRegistry(device: device))
+                                           solverIterationLimit: Int,
+                                           pairCorrectionLimit: Bool = true) throws -> BubbleWorld {
+        var solver = NativeMetalConfiguration(solverIterationCount: solverIterationLimit)
+        // Bliźniacze testy z dawnym oczekiwaniem wyłączają limit λ pary (CD-D-20).
+        solver.pairCorrectionLimit = pairCorrectionLimit
+        return try BubbleWorld(configuration: configuration, stepper: NativeCompleteStepper(device: device,
+            configuration: solver), assets: AssetRegistry(device: device))
     }
 
     package var benchmarkTelemetry: NativeMetalFrameTelemetry? {

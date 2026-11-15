@@ -400,7 +400,7 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         var parameters = NativeMetalControl(counts: SIMD4(UInt32(count), UInt32(segmentCount), UInt32(truncatingIfNeeded: scenarioStep), 0),
             physics: SIMD4(snapshot.configuration.timeStep, snapshot.configuration.linearDamping,
                            snapshot.configuration.angularDamping, snapshot.configuration.contactStiffness),
-            contactDamping: SIMD4(snapshot.configuration.contactDamping, 0, 0, 0))
+            contactDamping: SIMD4(snapshot.configuration.contactDamping, configuration.pairCorrectionLimit ? 1 : 0, 0, 0))
         if let region = snapshot.publicSettings?.region {
             parameters.region = SIMD4(region.min.x, region.min.y, region.max.x, region.max.y)
         }

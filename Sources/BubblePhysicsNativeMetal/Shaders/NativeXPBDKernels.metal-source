@@ -330,6 +330,14 @@ kernel void nativeBuildAdjacency(constant NativeControl &control [[buffer(0)]],
     atomic_fetch_max_explicit(overflow + 1, demanded, memory_order_relaxed);
 }
 
+// Limit λ pary bańka–bańka (CD-D-9): ruch pary w stronę kontaktu w kroku plus 0,25·min r, przez większą odwrotność masy.
+// Jedno λ dla obu końców, więc pęd pary jest zachowany. Ściany i odcinki są poza limitem.
+float nativePairLambdaLimit(NativeBubble a, NativeBubble b, float2 normal, float dt) {
+    float approach = (max(0.0f, dot(a.motion.xy, normal)) + max(0.0f, -dot(b.motion.xy, normal))) * dt;
+    float slack = 0.25f * min(a.physical.z, b.physical.z);
+    return (approach + slack) / max(a.physical.y, b.physical.y);
+}
+
 kernel void nativePrepareSolverContacts(device NativeBubble *bubbles [[buffer(0)]],
     device NativeSegment *segments [[buffer(1)]], device NativeContactCache *cache [[buffer(2)]],
     constant NativeControl &control [[buffer(3)]], device NativeContactControl &contacts [[buffer(4)]],
@@ -342,8 +350,12 @@ kernel void nativePrepareSolverContacts(device NativeBubble *bubbles [[buffer(0)
         // Jedna wspólna lambda obu końców: suma długości warm korekcji każdej bańki
         // nie może przekroczyć jej promienia, niezależnie od liczby kontaktów.
         float maximum = bubbles[a].physical.z / (bubbles[a].physical.y * max(1u, degrees[a]));
-        if (record.metadata.x == 0)
-            maximum = min(maximum, bubbles[b].physical.z / (bubbles[b].physical.y * max(1u, degrees[b])));
+        if (record.metadata.x == 0) {
+            if (control.contactDamping.y != 0)
+                maximum = nativePairLambdaLimit(bubbles[a], bubbles[b], record.geometry.xy, control.physics.x);
+            else
+                maximum = min(maximum, bubbles[b].physical.z / (bubbles[b].physical.y * max(1u, degrees[b])));
+        }
         record.response.x = min(record.response.x, maximum);
         cache[index] = record;
     }
@@ -413,6 +425,8 @@ kernel void nativeUpdateContactMultipliers(device NativeBubble *bubbles [[buffer
     uint degree = edge.z == 0 ? max(degrees[edge.x], degrees[edge.y]) : degrees[edge.x];
     // Wspólna relaksacja obu końców utrzymuje równe/opposite impulsy i stabilizuje gęste grafy.
     float next = max(0.0f, record.response.x + delta / max(1u, degree));
+    if (edge.z == 0 && control.contactDamping.y != 0)
+        next = min(next, nativePairLambdaLimit(bubbles[edge.x], bubbles[edge.y], geometry.xy, control.physics.x));
     corrections[index] = float4(geometry.xy * (next - record.response.x), 0, 0);
     record.response.x = next;
     cache[index] = record;
