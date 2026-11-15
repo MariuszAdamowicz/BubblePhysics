@@ -159,6 +159,67 @@ final class NativeMetalSafetyTests: XCTestCase {
         XCTAssertGreaterThan(frame.report.sideCorrectionCount, 0)
     }
 
+    // P-B-40 (CD-D-17): gruby wielokąt (przód i tył 30 od siebie) przesuwa się w kroku o 28 w prawo i mija stojącą bańkę,
+    // więc jej środek kończy krok we wnętrzu wielokąta, 2 od krawędzi tylnej. Rzut na najbliższą krawędź wyrzuca go
+    // za wielokąt, przez tył, i krok jest odrzucany. Środek ma trafić na krawędź przednią, przekroczoną w ruchu
+    // względnym, z marginesem i po stronie startu bańki.
+    // Środek stoi na początku kroku dokładnie na krawędzi przedniej (`previous`). Gdy leży choćby o włos przed nią,
+    // robi to już CCD albo pierwsza pętla strażnika (zwrot na dawną stronę każdej przekroczonej krawędzi), bo przejście
+    // z t > 0 wykrywa `nativeCenterCrossing`. Start na krawędzi (t = 0) tego przejścia nie widzi, więc tylko rzut na
+    // przekroczoną krawędź odróżnia przód od tyłu.
+    func testGuardProjectsOntoTheEdgeCrossedInRelativeMotionNotTheNearestEdge() async throws {
+        var world = ReferenceWorld(configuration: .init(timeStep: 1, linearDamping: 0, angularDamping: 0),
+                                   broadPhase: BruteForceBroadPhase())
+        world.addBubble(try .init(id: .init(rawValue: 1), center: .zero, mass: 1, targetRadius: 1))
+        // Przed krokiem tył leży w x = -30, przód w x = 0 (przez środek bańki); po kroku tył w x = -2, przód w x = 28.
+        let vertices: [ReferenceVector2] = [.init(x: -2, y: -10), .init(x: 28, y: -10),
+                                            .init(x: 28, y: 10), .init(x: -2, y: 10)]
+        for i in vertices.indices {
+            let a = vertices[i], b = vertices[(i + 1) % 4]
+            world.addSegment(.kinematicSegment(id: .init(rawValue: i + 1),
+                previousA: a + .init(x: -28, y: 0), previousB: b + .init(x: -28, y: 0),
+                currentA: a, currentB: b, timeStep: 1, ownerID: 7))
+        }
+        let solver = try makeSolver()
+        let frame = try await solver.executeFrame(world: world, scenarioStep: 1)
+        let center = frame.bubbles[0].center
+        XCTAssertGreaterThan(center.x, 28, "środek ma zostać po stronie startu, przed krawędzią przednią: \(center)")
+        XCTAssertLessThan(center.x, 28.01, "środek ma leżeć tuż za krawędzią przednią, z marginesem: \(center)")
+        XCTAssertEqual(center.y, 0, accuracy: 0.001)
+        XCTAssertEqual(frame.profile.commandBufferCount, 1)
+        let repeated = try await makeSolver().executeFrame(world: world, scenarioStep: 1)
+        XCTAssertEqual(frame.bubbles, repeated.bubbles)
+    }
+
+    // P-B-41 (CD-D-17): ściana boczna (pełna wysokość) i podłoga stykają się wzdłuż x = -52, jak w ramie sceny tłoku,
+    // a środek bańki stoi we wnętrzu ściany przy narożniku, 2 od jej krawędzi wewnętrznej i 1 nad podłogą. Rzut na
+    // najbliższą krawędź przerzuca go między ścianami (ściana → podłoga → ściana) i krok jest odrzucany. Kolejne rzuty
+    // (≤ 4) mają dać narożnik wewnętrzny (-52, 0) z marginesem, w wolnym miejscu, bez odrzucenia kroku.
+    func testGuardResolvesTwoTouchingWallsToTheInnerCorner() async throws {
+        var world = ReferenceWorld(configuration: .init(timeStep: 1, linearDamping: 0, angularDamping: 0),
+                                   broadPhase: BruteForceBroadPhase())
+        world.addBubble(try .init(id: .init(rawValue: 1), center: .init(x: -54, y: -1), mass: 1, targetRadius: 1))
+        func rectangle(_ x0: Float, _ y0: Float, _ x1: Float, _ y1: Float, owner: Int, firstID: Int) {
+            let v: [ReferenceVector2] = [.init(x: x0, y: y0), .init(x: x1, y: y0), .init(x: x1, y: y1), .init(x: x0, y: y1)]
+            for i in v.indices {
+                world.addSegment(.staticSegment(id: .init(rawValue: firstID + i), a: v[i], b: v[(i + 1) % 4], ownerID: owner))
+            }
+        }
+        rectangle(-100, -100, -52, 100, owner: 1, firstID: 1)   // ściana: x ∈ [-100, -52], pełna wysokość
+        rectangle(-52, -100, 100, 0, owner: 2, firstID: 5)      // podłoga: x ∈ [-52, 100], y ∈ [-100, 0]
+        let solver = try makeSolver()
+        let frame = try await solver.executeFrame(world: world, scenarioStep: 1)
+        let center = frame.bubbles[0].center
+        XCTAssertGreaterThanOrEqual(center.x, -52, "środek poza ścianą: \(center)")
+        XCTAssertGreaterThanOrEqual(center.y, 0, "środek poza podłogą: \(center)")
+        XCTAssertEqual(center.x, -52, accuracy: 0.01, "narożnik wewnętrzny: \(center)")
+        XCTAssertEqual(center.y, 0, accuracy: 0.01, "narożnik wewnętrzny: \(center)")
+        XCTAssertGreaterThan(frame.report.sideCorrectionCount, 0)
+        XCTAssertEqual(frame.profile.commandBufferCount, 1)
+        let repeated = try await makeSolver().executeFrame(world: world, scenarioStep: 1)
+        XCTAssertEqual(frame.bubbles, repeated.bubbles)
+    }
+
     func testCCDInvalidatesIncidentWarmStart() async throws {
         let solver = try makeSolver()
         var world = try makeWorld(x: -0.75)
