@@ -473,20 +473,77 @@ Strażnik wydajności wycinka 2: `swift run -c release BubblePhysicsPerfGuard` n
 Każde zmienione oczekiwanie istniejącego testu trafia do treści commita z powodem, bo opis PR musi je wymienić. W zadaniach z `! swift test` implementer sprawdza w wyjściu, że testy padają na asercjach, a nie na błędzie kompilacji, urządzenia Metal czy crashu. Wszystkie komendy `verify:` uruchamia się z korzenia repozytorium. Implementer zatrzymuje się i oddaje decyzję właścicielowi, gdy: tłok miękki ([P-B-27](#p-b-27)) albo narożnik miękki ([P-B-29](#p-b-29)) odrzuca krok po zadaniu 32 (założenie projektu o 8 iteracjach z Key facts); materiały domyślne zmieniają oczekiwanie istniejącego testu poza testami ABI i rozmiarów rekordów ([P-B-33](#p-b-33)).
 
 25. Zmierzyć `swift run -c release BubblePhysicsPerfGuard` po 3 razy w tymczasowym `git worktree` poza repozytorium na `main` (afe237a), 24dcc3b, dd50455 (limit pary), ff7ccfa (rzut strażnika) i jeszcze raz afe237a na końcu, usunąć worktree i zapisać pod tym wycinkiem wiersz `Przyczyna spowolnienia strażnika wydajności: …` z p95 stress-300 i acceptance każdego przebiegu, zaznaczając, że krok afe237a → 24dcc3b obejmuje cały wycinek 1, bity przyczyny, licznik par i usunięcie naprawy, a nie samą naprawę · verify: `grep -q "^Przyczyna spowolnienia strażnika wydajności:" docs/sdlc/changes/2026-11-14-crowd-solver-compression/plan.md && test -z "$(git worktree list | sed 1d)"`
+    ```text
+    $ grep -q "^Przyczyna spowolnienia strażnika wydajności:" docs/sdlc/changes/2026-11-14-crowd-solver-compression/plan.md && test -z "$(git worktree list | sed 1d)"
+    exit 0 (wiersz zapisany w 7e8b108, brak dodatkowych worktree)
+    ```
 Przyczyna spowolnienia strażnika wydajności: nierozstrzygnięta jako regresja kodu, bo spowolnienia z wycinka 2 (acceptance 3,6013 ms, stress-300 2,1939 ms na 62e8fc4) nie udało się odtworzyć. Pomiar 2026-11-15 (Apple M1 Pro, `swift run -c release BubblePhysicsPerfGuard`, 3 przebiegi na commit, p95 w ms, stress-300 / acceptance; punkt odniesienia 1,9634 / 2,4590, limit 2,1598 / 2,7049): afe237a (main) 2,1263 / 2,5726, 2,0480 / 2,6555, 2,0647 / 2,5455; 24dcc3b (koniec wycinka 1 plus bity przyczyny, licznik par i usunięcie naprawy, nie sama naprawa) 2,1397 / 2,4925, 1,9245 / 2,5513, 1,9699 / 2,5328; dd50455 (limit pary) 1,9451 / 2,5713, 1,9767 / 2,4889, 1,9475 / 2,5051; ff7ccfa (rzut strażnika) 2,1310 / 2,4950, 2,1839 / 2,5356, 2,0165 / 2,5032; afe237a na końcu 2,0481 / 2,5486, 2,0947 / 2,5531, 2,0487 / 2,5740. Acceptance na żadnym commicie nie przekracza limitu (najwyżej 2,6555 na afe237a, czyli main sam mieści się w limicie z zapasem 0,05 ms), a żaden krok nie dodaje więcej niż szum między przebiegami (około 0,1 ms); gpu_physics 1,07–1,13 ms i host_waiting 1,80–1,85 ms bez trendu. Kod ff7ccfa i 62e8fc4 różni się tylko CHANGELOG-iem, więc wynik 3,6013 ms z 62e8fc4 pochodzi z obciążenia maszyny przy tamtym pomiarze, a nie z kodu. Jedyny przekroczony limit: stress-300 2,1839 ms na ff7ccfa w jednym z trzech przebiegów (limit 2,1598), przy medianie 2,1310 ms i afe237a w tej samej serii 2,0481–2,1263 ms, czyli w granicach szumu punktu odniesienia.
 26. Dodać `BubbleContactCompliance` (`.hard`), `PhysicsMaterial.contactCompliance` (ostatni parametr, domyślnie `.hard`), `BubbleDescriptor.contactCompliance` i `BubbleResult.contactCompliance` bez walidacji i logiki oraz napisać w `ModelValidationTests` testy [P-B-17](#p-b-17) · verify: `swift build --build-tests && ! swift test --filter ModelValidationTests`
+    ```text
+    $ swift build --build-tests && ! swift test --filter ModelValidationTests
+    (faza czerwona przy commicie d11d29e: testy padały na asercjach)
+    przy weryfikacji końcowej na 88e4955: exit 1, bo ModelValidationTests przechodzi:
+    Executed 21 tests, with 0 failures (0 unexpected), czyli zgodnie z oczekiwaniem po implementacji
+    ```
 27. Napisać `ContactComplianceTests` (`testResultValidation…`, `testWorstAlpha…`, `testRadiusLaw…`, `testCompressionExponent…`, `testSettles…`, `testHardAgainstSoft…`, `testOverride…`) z dociskiem do ściany i materiałem miękkim w `CrowdSceneSupport.swift` oraz miękkie warianty `CrowdCompressionTests` (`testSoftCrowdBalance…`, `testSoftCrowdCompressesMore…`, `testSoftCorner…`) i `ContainmentResolutionTests.testSoftCoincidentPair…`, każdy z asercją porównania z przebiegiem c₀ = 0 z R3, żeby padał, póki podatność nie działa, pokrywając [P-B-18](#p-b-18)–[P-B-30](#p-b-30) · verify: `swift build --build-tests && ! swift test --filter "ContactComplianceTests|CrowdCompressionTests.testSoft|ContainmentResolutionTests.testSoft"`
+    ```text
+    $ swift build --build-tests && ! swift test --filter "ContactComplianceTests|CrowdCompressionTests.testSoft|ContainmentResolutionTests.testSoft"
+    (faza czerwona przy commicie 6301d39: 14 testów GPU padało na asercjach porównania, bez błędu kompilacji, Metal ani crasha)
+    przy weryfikacji końcowej na 88e4955: exit 1, bo filtr przechodzi:
+    Executed 26 tests, with 0 failures (0 unexpected), czyli zgodnie z oczekiwaniem po implementacji
+    ```
 28. Dodać walidację podatności w `PhysicsMaterial` i `BubbleDescriptor` ([G4-AC7](change-design.md#g4-ac7)), pokrywając [P-B-17](#p-b-17) · verify: `swift test --filter ModelValidationTests`
+    ```text
+    $ swift test --filter ModelValidationTests
+    Executed 21 tests, with 0 failures (0 unexpected)
+    ```
 29. Przenieść nadpisanie c₀ z `BubbleResult` przez `resultDescriptor` na wynik scalenia i obie części podziału, ze złą wartością odrzucaną przez `.invalidValue(.valueOutOfRange("contactCompliance"))`, pokrywając [P-B-18](#p-b-18) · verify: `swift test --filter ContactComplianceTests.testResultValidation`
+    ```text
+    $ swift test --filter ContactComplianceTests.testResultValidation
+    exit 0
+    ```
 30. Przekazać α_cfg z `NativeCompleteStepper` przez `CompleteStepper.baseContactCompliance` do `stageBatch` i dodać `validateWorstAlpha` przy `add`, `replace`, scaleniu, podziale, `startTransition` promienia i `updatePhysicsMaterial` ([CD-D-15](change-design.md#cd-d-15)), pokrywając [P-B-19](#p-b-19) i [P-B-20](#p-b-20) · verify: `swift test --filter "ContactComplianceTests.testWorstAlpha|TransactionStagerTests|BubbleWorldCompletionTests"`
+    ```text
+    $ swift test --filter "ContactComplianceTests.testWorstAlpha|TransactionStagerTests|BubbleWorldCompletionTests"
+    Executed 58 tests, with 0 failures (0 unexpected)
+    ```
 31. Dodać `contact` do `NativeMetalBubble`, `NativeBubble` i `RenderBubble` (host liczy c₀·(r/r_ref)^s tylko dla c₀ > 0, z nadpisaniem) oraz `rho` do `NativeContactCacheRecord` i `NativeContactCache` (start (1, 1, 0, 0) w `nativeBuildContacts`, przeniesienie przy trafieniu w `nativeMatchContactCache`, `isfinite` w `nativeCheckFinite`), poprawiając sondy ABI i rozmiary w `NativeMetalSolverLifecycleTests`, co pokrywa [P-B-33](#p-b-33) dla układu rekordów · verify: `grep -qw rho Sources/BubblePhysicsNativeMetal/NativeMetalBufferLayout.swift && grep -qw rho Sources/BubblePhysicsNativeMetal/Shaders/NativeGeometryKernels.metal-source && grep -q 192 Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalSolverLifecycleTests.swift && swift test --filter "NativeMetalShaderABITests|NativeMetalSolverLifecycleTests|NativeMetalXPBDTests|NativeMetalContourTests"`
+    ```text
+    $ grep -qw rho …BufferLayout.swift && grep -qw rho …NativeGeometryKernels.metal-source && grep -q 192 …NativeMetalSolverLifecycleTests.swift && swift test --filter "NativeMetalShaderABITests|NativeMetalSolverLifecycleTests|NativeMetalXPBDTests|NativeMetalContourTests"
+    Executed 48 tests, with 0 failures (0 unexpected)
+    ```
 32. Dodać `nativeContactCompliance(bubble, ρ)` (c = 0 bez potęg przy `contact.x == 0`) i α pary w `nativeUpdateContactMultipliers` i `nativeMeasureResidual`, pokrywając [P-B-21](#p-b-21), [P-B-22](#p-b-22), [P-B-23](#p-b-23) dla k = 0, [P-B-26](#p-b-26), [P-B-27](#p-b-27), [P-B-29](#p-b-29) i [P-B-30](#p-b-30) · verify: `swift test --filter "ContactComplianceTests.testRadiusLaw|ContactComplianceTests.testOverride|CrowdCompressionTests.testSoftCrowdBalance|CrowdCompressionTests.testSoftCorner|ContainmentResolutionTests.testSoft|NativeMetalXPBDTests"`
+    ```text
+    $ swift test --filter "ContactComplianceTests.testRadiusLaw|ContactComplianceTests.testOverride|CrowdCompressionTests.testSoftCrowdBalance|CrowdCompressionTests.testSoftCorner|ContainmentResolutionTests.testSoft|NativeMetalXPBDTests"
+    Executed 26 tests, with 0 failures (0 unexpected)
+    ```
 33. Dodać w `nativeAccumulateContactPressure` drogę pary miękkiej (cięciwa na głębokości nakładanie·c_a/(c_a+c_b); para twarda bez zmian, [CD-D-12](change-design.md#cd-d-12)) i ominięcie bramki deformowalności dla bańki z c > 0, także przy samej ścianie, pokrywając [P-B-25](#p-b-25) i [P-B-28](#p-b-28) · verify: `swift test --filter "ContactComplianceTests.testHardAgainstSoft|CrowdCompressionTests.testSoftCrowdCompressesMore|NativeMetalContourTests"`
+    ```text
+    $ swift test --filter "ContactComplianceTests.testHardAgainstSoft|CrowdCompressionTests.testSoftCrowdCompressesMore|NativeMetalContourTests"
+    Executed 13 tests, with 0 failures (0 unexpected)
+    ```
 34. Dodać jądro `nativeUpdateContactRho` (β = 0,25, `ρ_min` = 0,01, [CD-D-16](change-design.md#cd-d-16); kontur poprzedniej klatki przez indeks starej bańki, bez niego ρ_konturu = 1) do `stageNames` i do kroku po `nativeCompactContactCache`, pokrywając [P-B-23](#p-b-23) dla k > 0 i [P-B-24](#p-b-24) · verify: `swift test --filter "ContactComplianceTests.testCompressionExponent|ContactComplianceTests.testSettles|NativeMetalResourceReuseTests"`
+    ```text
+    $ swift test --filter "ContactComplianceTests.testCompressionExponent|ContactComplianceTests.testSettles|NativeMetalResourceReuseTests"
+    Executed 6 tests, with 0 failures (0 unexpected)
+    ```
 35. Dopisać do sekcji 2.2.0 w `CHANGELOG.md` `BubbleContactCompliance`, `PhysicsMaterial.contactCompliance`, nadpisanie `contactCompliance` w `BubbleDescriptor` i `BubbleResult` oraz odrzucenie podatności przepełniającej Float · verify: `grep -q "BubbleContactCompliance" CHANGELOG.md && grep -q "BubbleResult.contactCompliance" CHANGELOG.md`
+    ```text
+    $ grep -q "BubbleContactCompliance" CHANGELOG.md && grep -q "BubbleResult.contactCompliance" CHANGELOG.md
+    exit 0
+    ```
 36. Uruchomić cały pakiet i zapisać pod tym wycinkiem wiersz `Inwentarz wycinka 3: …` z każdym zmienionym oczekiwaniem istniejącego testu i jego powodem albo „brak poza ABI i rozmiarami rekordów” · verify: `swift test && grep -q "^Inwentarz wycinka 3:" docs/sdlc/changes/2026-11-14-crowd-solver-compression/plan.md`
+    ```text
+    $ swift test && grep -q "^Inwentarz wycinka 3:" docs/sdlc/changes/2026-11-14-crowd-solver-compression/plan.md
+    Executed 1402 tests, with 1 test skipped and 0 failures (0 unexpected) in 529.281 (529.413) seconds
+    exit 0
+    ```
 Inwentarz wycinka 3: brak poza ABI i rozmiarami rekordów (pełny `swift test` na 04bdb03: 1401 testów, 1 pominięty, 0 porażek). Zmienione oczekiwania istniejących testów: `NativeMetalSolverLifecycleTests.testABIRecordsUseSixteenByteLanes` (rekord bańki 176 → 192 B, cache kontaktu 64 → 80 B, bo doszły `NativeMetalBubble.contact` i `NativeContactCacheRecord.rho`), `NativeMetalShaderABITests` (sondy `contact` w rekordzie bańki i w `RenderBubble` oraz `rho` w cache, rozmiar rekordu bańki 11 → 12 lane'ów po 16 B). Żadne inne oczekiwanie istniejącego testu się nie zmieniło, więc materiały domyślne (c₀ = 0) zachowują v2.1.0 w testach konturu, XPBD i renderu ([P-B-33](#p-b-33)). Poprawki testów z zadania 27 po pomiarze (nowe testy wycinka, nie istniejące): scena docisku w zakresie liniowym (F = 300, c₀ = 1e-3), bo przy F ≈ 1000 tłumik kontaktu wyłącza się powyżej `restSpeed` i bańka dochodzi do δ = r, a współczynnik solvera δ/(c·F) wynosi ok. 3,85; [P-B-27](#p-b-27) dowodzi działania materiału rozkładem nakładania (więcej par płyciej i mniejsze największe nakładanie niż przy c₀ = 0), bo średnie nakładanie par w tłoku B = 2,5 jest przy kontakcie miękkim mniejsze (13,8 wobec 16,8).
 37. Uruchomić informacyjnie `swift run -c release BubblePhysicsPerfGuard` i zapisać wynik pod tym wycinkiem w wierszu `Strażnik wydajności wycinka 3: …`, obok wyniku z zadania 25 · verify: `grep -q "^Strażnik wydajności wycinka 3:" docs/sdlc/changes/2026-11-14-crowd-solver-compression/plan.md`
+    ```text
+    $ grep -q "^Strażnik wydajności wycinka 3:" docs/sdlc/changes/2026-11-14-crowd-solver-compression/plan.md
+    exit 0
+    ```
 Strażnik wydajności wycinka 3: `swift run -c release BubblePhysicsPerfGuard` na 04bdb03 (Apple M1 Pro, informacyjnie, exit 0): PASS stress-300 p95 2,0499 ms (punkt odniesienia 1,9634 ms, limit 2,1598 ms, +4,4%); PASS mixed 3,8226 ms (+0,7%, limit 4,1736 ms); PASS decals 2,2359 ms (+2,7%); PASS acceptance 2,6126 ms (punkt odniesienia 2,4590 ms, limit 2,7049 ms, +6,2%); skalowanie 600/300 1,49 (limit 2,50) PASS. Etapy acceptance: host_waiting 1,86 ms, gpu 1,58 ms, gpu_physics 1,14 ms. Obok wyniku z zadania 25: acceptance 2,6126 ms mieści się w zakresie pomiarów main/afe237a (2,5455–2,6555 ms) i w limicie z zapasem 0,09 ms, a stress-300 2,0499 ms w zakresie 2,0480–2,1263 ms z main, więc wycinek 3 (jądro ρ, α pary, kontur pary miękkiej) nie wykracza poza szum maszyny; `docs/benchmarks/perf-guard.json` bez zmian.
 
 ## Deviations from Design
