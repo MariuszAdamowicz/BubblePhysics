@@ -608,6 +608,15 @@ float nativePreviousContourRatio(long identity, float2 direction, device NativeB
     return clamp(1 - deficit, 0.0f, 1.0f);
 }
 
+// Wynik merge/split o ponownie użytym ID nie dziedziczy konturu starego ID (R2), jak w `nativeAccumulateContactPressure`:
+// jego ρ_konturu = 1. Bańka bieżącej klatki jest szukana po ID w `bubbles`, bo nagłówek strukturalny ma jej indeks.
+bool nativeIsStructuralResult(long identity, device NativeBubble *bubbles, constant NativeControl &control,
+    device NativeStructuralHeader *structuralHeaders, constant NativeContourControl &contour) {
+    if (contour.counts.z == 0) return false;
+    uint current = nativeFindBubble(bubbles, control.counts.x, identity);
+    return current < control.counts.x && structuralHeaders[current].range.y != 0;
+}
+
 // ρ każdego końca kontaktu bieżącej klatki: ρ += β·(ρ_konturu − ρ), gdzie ρ_konturu pochodzi z konturu poprzedniej klatki w kierunku
 // normalnej kontaktu (koniec a patrzy w stronę partnera, czyli wzdłuż normalnej, koniec b przeciwnie; bańka przy odcinku w stronę
 // odcinka, czyli przeciwnie do normalnej). Jedno zadanie na rekord cache, więc bez atomików.
@@ -615,18 +624,19 @@ kernel void nativeUpdateContactRho(device NativeBubble *bubbles [[buffer(0)]],
     device NativeContactCache *cache [[buffer(1)]], constant NativeControl &control [[buffer(2)]],
     device NativeContactControl &contacts [[buffer(3)]], constant NativeContourControl &contour [[buffer(4)]],
     device NativeBubble *previousBubbles [[buffer(5)]], device float4 *previousDeformation [[buffer(6)]],
-    device uint *previousCounts [[buffer(7)]], uint index [[thread_position_in_grid]]) {
+    device uint *previousCounts [[buffer(7)]], device NativeStructuralHeader *structuralHeaders [[buffer(8)]],
+    uint index [[thread_position_in_grid]]) {
     if (index >= contacts.counts.z) return;
     NativeContactCache record = cache[index];
     if (record.metadata.z != contacts.limits.x) return;
     float2 normal = record.geometry.xy;
     float2 towardPartner = record.metadata.x == 0 ? normal : -normal;
-    float ratioA = nativePreviousContourRatio(record.participants.x, towardPartner, previousBubbles,
-        previousDeformation, previousCounts, contour);
+    float ratioA = nativeIsStructuralResult(record.participants.x, bubbles, control, structuralHeaders, contour) ? 1
+        : nativePreviousContourRatio(record.participants.x, towardPartner, previousBubbles, previousDeformation, previousCounts, contour);
     record.rho.x = clamp(record.rho.x + kNativeContactRhoSmoothing * (ratioA - record.rho.x), 0.0f, 1.0f);
     if (record.metadata.x == 0) {
-        float ratioB = nativePreviousContourRatio(record.participants.y, -normal, previousBubbles,
-            previousDeformation, previousCounts, contour);
+        float ratioB = nativeIsStructuralResult(record.participants.y, bubbles, control, structuralHeaders, contour) ? 1
+            : nativePreviousContourRatio(record.participants.y, -normal, previousBubbles, previousDeformation, previousCounts, contour);
         record.rho.y = clamp(record.rho.y + kNativeContactRhoSmoothing * (ratioB - record.rho.y), 0.0f, 1.0f);
     }
     cache[index] = record;
@@ -678,9 +688,12 @@ kernel void nativeAccumulateContactPressure(device NativeBubble *bubbles [[buffe
         float towardLength = length(toward);
         // Każda para idzie jedną drogą konturu (CD-D-12): para miękka (podatność choć jednego końca > 0) dzieli wgniecenie wg c_a : c_b,
         // a para twarda i kontakt twardej bańki ze ścianą liczą nacisk z λ i cięciwę radykalną jak w v2.1.0.
-        // ρ_self i ρ_other to wygładzone ρ tej bańki i jej partnera w rekordzie cache (edge.w = ta bańka jest końcem a).
-        float complianceSelf = nativeContactCompliance(bubble, edge.w ? contact.rho.x : contact.rho.y);
-        float complianceOther = edge.z == 0 ? nativeContactCompliance(bubbles[edge.y], edge.w ? contact.rho.y : contact.rho.x) : 0;
+        // ρ_self i ρ_other to wygładzone ρ tej bańki i jej partnera w rekordzie cache. Sąsiedztwo daje końcowi a pary bańka–bańka
+        // edge.w = 0, a końcowi b edge.w = 1; bańka przy odcinku jest końcem a i ma edge.w = 1 (ρ_self = rho.x, bez partnera).
+        float rhoSelf = (edge.z == 0 && edge.w) ? contact.rho.y : contact.rho.x;
+        float rhoOther = edge.w ? contact.rho.x : contact.rho.y;
+        float complianceSelf = nativeContactCompliance(bubble, rhoSelf);
+        float complianceOther = edge.z == 0 ? nativeContactCompliance(bubbles[edge.y], rhoOther) : 0;
         bool softPair = complianceSelf + complianceOther > 0;
         if (towardLength > FLT_EPSILON && !softPair) {
             float alignment = max(0.0f, dot(direction, toward / towardLength));

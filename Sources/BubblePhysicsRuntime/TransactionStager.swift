@@ -218,7 +218,7 @@ private struct StagingContext {
     let textureExists: (TextureID) -> Bool
     let glyphLookup: GlyphLookup
     /// Podstawowa podatność konfiguracji solvera, z której stager liczy α_cfg = c / dt² (CD-D-15).
-    var baseContactCompliance: Float = 0
+    let baseContactCompliance: Float
     var created: [ObjectID] = []
     var removed: [ObjectID] = []
     var replaced: [ObjectID] = []
@@ -537,7 +537,7 @@ private struct StagingContext {
         }
     }
 
-    /// Najmniejsza gęstość konturu, której używa podatność przy k < 0 (`ρ_min` z CD-D-8).
+    /// Najmniejszy stosunek promienia konturu do r (ρ_min z CD-D-8), którego używa podatność przy k < 0.
     private static let minimumContourRatio = 0.01
 
     /// Najgorsza α pary z tą bańką, α_cfg + 2 · c_worst / dt², musi być skończonym Float (CD-D-15), żeby GPU nie dostało podatności,
@@ -666,10 +666,10 @@ private struct StagingContext {
         if center != contact { descriptor = try resultObject(at: center) }
         for id in sources { try remove(id) }
         try add(descriptor)
-        if let added = state.objects[result.id] { try validateWorstAlpha(added) }
         if var merged = state.objects[result.id] {
             StructuralOperations.initializeMerge(&merged, sources: inputs)
             state.objects[result.id] = merged
+            try validateWorstAlpha(merged)
         }
     }
     mutating func split(_ source: ObjectID, first: BubbleSplitPart, second: BubbleSplitPart) throws {

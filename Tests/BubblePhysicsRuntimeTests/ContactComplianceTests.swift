@@ -359,12 +359,17 @@ final class ContactComplianceTests: XCTestCase {
         try assertSettled(result.series, 2, radius: 20, "2F, k = 0")
     }
 
-    // P-B-23 (G4-AC3), k > 0, i P-B-24: podwojona siła zwiększa δ/r mniej niż dwukrotnie, a bańka jest uspokojona (ρ^k nie drga).
+    // P-B-23 (G4-AC3), k > 0: podwojona siła zwiększa δ/r mniej niż dwukrotnie, i to wyraźnie mniej niż przy k = 0, więc ρ^k działa.
+    // Sama asercja `< 2` przeszłaby także przy jądrze ρ, które nic nie robi (ρ = 1, k = 0 daje 2× ± 20%, więc granica 2 jest za luźna).
     func testCompressionExponentMakesDoubledForceDentLessThanTwice() async throws {
         let result = try await doubledForce(material: CrowdScene.softBubblePhysics(base: base, compressionExponent: 2))
         XCTAssertGreaterThan(result.single, 0.01, "bańka uginała się: δ/r = \(result.single)")
         XCTAssertGreaterThan(result.doubled, result.single, "większa siła ugina bardziej")
-        XCTAssertLessThan(result.doubled / result.single, 2, "k = 2: δ/r \(result.single) → \(result.doubled) rośnie mniej niż 2×")
+        let ratio = result.doubled / result.single
+        XCTAssertLessThan(ratio, 2, "k = 2: δ/r \(result.single) → \(result.doubled) rośnie mniej niż 2×")
+        let linear = try await doubledForce(material: CrowdScene.softBubblePhysics(base: base, compressionExponent: 0))
+        let linearRatio = linear.doubled / linear.single
+        XCTAssertLessThan(ratio, linearRatio - 0.1, "k = 2 (\(ratio)×) ma rosnąć wyraźnie wolniej niż k = 0 (\(linearRatio)×)")
     }
 
     // P-B-24 dla k > 0: ρ^k reaguje z opóźnieniem jednego kroku, a wygładzenie ρ ma to uspokoić.
@@ -375,6 +380,32 @@ final class ContactComplianceTests: XCTestCase {
             try assertSettled(result.series, 1, radius: 20, "F, k = \(exponent)")
             try assertSettled(result.series, 2, radius: 20, "2F, k = \(exponent)")
         }
+    }
+
+    // B1 (przegląd końcowy): para dwóch miękkich baniek z różnym ρ. Bańka a ma k = 0, bańka b k = 3, więc c_b = c₀ · ρ_b³ maleje
+    // z wgnieceniem b, a c_a = c₀ stałe. W stanie ustalonym głębokości wgnieceń na normalnej dzielą się wg c_a : c_b, czyli
+    // d_a / d_b = 1 / ρ_b³ z ρ_b = 1 − d_b / r. Zamienione indeksy ρ w `nativeAccumulateContactPressure` dawały 1 / ρ_a³.
+    func testSoftPairSplitsTheDentByComplianceOfEachEndWithItsOwnRho() async throws {
+        let strong = try CrowdScene.softBubblePhysics(base: 4 * base, compressionExponent: 0)
+        let hardening = try CrowdScene.softBubblePhysics(base: 4 * base, compressionExponent: 3)
+        let world = try await CrowdScene.makeWorld(bubble: strong) { setup in
+            setup.updatePhysicsMaterial(CrowdScene.secondBubbleMaterial, material: hardening)
+                .add(try CrowdScene.bubble(1, at: [-19, 0], radius: 20, mass: 1))
+                .add(try CrowdScene.bubble(2, at: [19, 0], radius: 20, mass: 1, material: CrowdScene.secondBubbleMaterial))
+                .setMotorDrive(self.id(1), drive: try MotorDrive(force: [self.force, 0]))
+                .setMotorDrive(self.id(2), drive: try MotorDrive(force: [-self.force, 0]))
+        }
+        var frame = await world.advance(by: step)
+        for _ in 0..<steps { frame = await world.advance(by: step) }
+        XCTAssertNil(world.diagnostics.lastAdvanceIssue)
+        let dentA = 20 - CrowdScene.effectiveRadius(of: try XCTUnwrap(frame.objects[id(1)]))
+        let dentB = 20 - CrowdScene.effectiveRadius(of: try XCTUnwrap(frame.objects[id(2)]))
+        XCTAssertGreaterThan(dentB, 1, "bańka b ma wyraźne wgniecenie: \(dentB)")
+        XCTAssertGreaterThan(dentA, dentB, "bańka a (k = 0) ugina się bardziej niż b, której c maleje z ρ: \(dentA) wobec \(dentB)")
+        let rhoB = 1 - dentB / 20
+        let expected = 1 / (rhoB * rhoB * rhoB)
+        XCTAssertEqual(dentA / dentB, expected, accuracy: 0.1 * expected,
+                       "d_a / d_b = c_a : c_b = 1 / ρ_b³ = \(expected) (d_a = \(dentA), d_b = \(dentB))")
     }
 
     // MARK: twarda przy miękkiej (P-B-25) i nadpisania (P-B-26)

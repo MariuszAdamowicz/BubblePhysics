@@ -259,6 +259,11 @@ final class NativeMetalShaderABITests: XCTestCase {
         let hardWithExtremeExponent = BubbleContactCompliance(base: 0, referenceRadius: 1, radiusExponent: .infinity, compressionExponent: 3)
         XCTAssertEqual(NativePublicProperties.contact(of: hardWithExtremeExponent, override: nil, radius: 5), .zero, "c₀ = 0 bez potęg")
         XCTAssertEqual(NativePublicProperties.contact(of: .hard, override: nil, radius: 5), .zero)
+        // A2: stager liczy w Double i przepuszcza c₀ = 1e-30, r/r_ref = 4, s = 70 (c = 1,4e12); host w Float dawał tam nieskończoność.
+        let overflowingInFloat = BubbleContactCompliance(base: 1e-30, referenceRadius: 1, radiusExponent: 70)
+        let large = NativePublicProperties.contact(of: overflowingInFloat, override: nil, radius: 4)
+        XCTAssertTrue(large.x.isFinite)
+        XCTAssertEqual(large.x, 1.3937966e12, accuracy: 1e7, "c₀ · 4^70 = 1e-30 · 1,3937965749081639e42")
 
         let id = NativeSolverBubbleID(rawValue: 4)
         var properties = NativePublicProperties(flags: SIMD4(1, 0, 0, 0), material: .zero, restitution: 0,

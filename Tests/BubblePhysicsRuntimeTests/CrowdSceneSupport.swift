@@ -194,22 +194,6 @@ enum CrowdScene {
         /// Stany baniek z ostatnich `lastSecondSteps` klatek przebiegu (po jednej tablicy na klatkę).
         var lastSecond: [[(id: ObjectID, position: WorldPoint, effectiveRadius: Float)]] = []
 
-        /// Średnie nakładanie par baniek z ostatniej sekundy: dla każdej klatki i pary, której koła o promieniach docelowych
-        /// nachodzą na siebie, głębokość nakładania r_i + r_j − d; średnia po tych parach. 0, gdy żadna para nie nachodzi.
-        var meanOverlapInLastSecond: Float {
-            var total = 0.0, count = 0
-            for frame in lastSecond {
-                for first in 0..<frame.count {
-                    for second in (first + 1)..<max(first + 1, frame.count) {
-                        let a = frame[first], b = frame[second]
-                        let overlap = (targetRadii[a.id] ?? 0) + (targetRadii[b.id] ?? 0) - simd_distance(a.position, b.position)
-                        if overlap > 0 { total += Double(overlap); count += 1 }
-                    }
-                }
-            }
-            return count == 0 ? 0 : Float(total / Double(count))
-        }
-
         /// Liczba par o nachodzących na siebie kołach promieni docelowych, średnio na klatkę ostatniej sekundy.
         var overlappingPairsPerFrameInLastSecond: Double {
             var count = 0
