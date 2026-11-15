@@ -142,6 +142,11 @@ public struct BubbleDescriptor: Equatable, Sendable {
         try requireFinite(velocity, "bubble.velocity")
         try requirePositive(targetRadius, "bubble.targetRadius")
         try requirePositive(mass, "bubble.mass")
+        if let contactCompliance {
+            guard contactCompliance.isFinite, contactCompliance >= 0 else {
+                throw ModelValidationError.valueOutOfRange("contactCompliance")
+            }
+        }
         self.id = id
         self.drivePolicy = drivePolicy
         self.position = position

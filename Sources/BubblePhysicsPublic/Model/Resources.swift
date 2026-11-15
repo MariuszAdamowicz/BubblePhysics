@@ -26,6 +26,20 @@ public struct BubbleContactCompliance: Equatable, Sendable {
 
     /// Kontakt twardy, jak w v2.1.0.
     public static let hard = BubbleContactCompliance()
+
+    /// Każda wartość nieprawidłowa (ujemna, NaN, nieskończona, promień odniesienia ≤ 0) daje `valueOutOfRange`, a podatność > 0
+    /// w materiale `.rigid` także: kontakt bańka–bryła używa tylko podatności bańki.
+    internal func validate(for kind: PhysicsMaterialKind) throws {
+        guard base.isFinite, base >= 0 else { throw ModelValidationError.valueOutOfRange("contactCompliance.base") }
+        guard referenceRadius.isFinite, referenceRadius > 0 else {
+            throw ModelValidationError.valueOutOfRange("contactCompliance.referenceRadius")
+        }
+        guard radiusExponent.isFinite else { throw ModelValidationError.valueOutOfRange("contactCompliance.radiusExponent") }
+        guard compressionExponent.isFinite else {
+            throw ModelValidationError.valueOutOfRange("contactCompliance.compressionExponent")
+        }
+        guard kind == .bubble || base == 0 else { throw ModelValidationError.valueOutOfRange("contactCompliance.base") }
+    }
 }
 
 /// Zasób fizyczny, bez masy i promienia należących do konkretnego obiektu.
@@ -54,6 +68,7 @@ public struct PhysicsMaterial: Equatable, Sendable {
         guard restitution <= 1 else { throw ModelValidationError.valueOutOfRange("restitution") }
         if let maximumLinearSpeed { try requirePositive(maximumLinearSpeed, "maximumLinearSpeed") }
         if let maximumAngularSpeed { try requirePositive(maximumAngularSpeed, "maximumAngularSpeed") }
+        try contactCompliance.validate(for: kind)
         self.kind = kind
         self.deformability = deformability
         self.damping = damping
