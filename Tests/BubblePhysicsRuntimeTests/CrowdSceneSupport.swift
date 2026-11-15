@@ -1,9 +1,11 @@
 import BubblePhysics
+import simd
 import XCTest
 
 /// Scena tłoku dla testów wycinków 2 i 3 zmiany ściskania (`docs/sdlc/changes/2026-11-14-crowd-solver-compression`):
 /// rama z czterech statycznych brył prostokątnych, tłok rosnących baniek, docisk przez `MotorDrive`.
 /// Cel Runtime nie widzi `SceneBuilders`, więc rama i napęd są tu (wzór: `PhysicsSceneBuilders.box`, `KinematicStagingTests`).
+/// Wycinek 3 dokłada materiał miękki (`softBubblePhysics`) i docisk baniek do ściany przez `MotorDrive` (`pressedBubble`, `wallPress`).
 ///
 /// Wnętrze ram to prostokąt 360 × 640, ściany mają grubość 48, a `simulationRegion` to ich zewnętrzny prostokąt (456 × 736).
 /// Ściany boczne mają pełną wysokość, górna i dolna leżą między nimi, więc bryły stykają się krawędziami bez nakładania.
@@ -61,10 +63,11 @@ enum CrowdScene {
     }
 
     static func bubble(_ value: UInt64, at position: WorldPoint, radius: Float, velocity: WorldPoint = .zero,
-                       mass: Float? = nil, interest: EventInterest = [.didAdd, .didExitSimulationRegion]) throws -> WorldObject {
+                       mass: Float? = nil, interest: EventInterest = [.didAdd, .didExitSimulationRegion],
+                       material: PhysicsMaterialID? = nil, contactCompliance: Float? = nil) throws -> WorldObject {
         .bubble(try BubbleDescriptor(id: id(value), position: position, velocity: velocity, targetRadius: radius,
-                                     mass: mass ?? radius * radius / 400, physicsMaterialID: bubbleMaterial,
-                                     renderMaterialID: style, eventInterest: interest))
+                                     mass: mass ?? radius * radius / 400, physicsMaterialID: material ?? bubbleMaterial,
+                                     renderMaterialID: style, eventInterest: interest, contactCompliance: contactCompliance))
     }
 
     /// Świat z ramą ścian i zasobami, po jednym kroku przyjmującym przygotowanie sceny.
@@ -83,6 +86,76 @@ enum CrowdScene {
     /// Środek w prostokącie ograniczonym wewnętrznymi krawędziami ścian, z tolerancją `guardMargin`.
     static func isInsideFrame(_ point: WorldPoint) -> Bool {
         abs(point.x) <= interiorHalfSize.x + guardMargin && abs(point.y) <= interiorHalfSize.y + guardMargin
+    }
+
+    // MARK: materiał miękki i docisk do ściany (wycinek 3)
+
+    /// Drugi materiał baniek sceny, np. twardy obok miękkiego w jednym świecie.
+    static let secondBubbleMaterial = PhysicsMaterialID(rawValue: 3)
+
+    /// Materiał baniek z podatnością kontaktu c = base · (r / referenceRadius)^s · ρ^k; reszta jak w `bubblePhysics`.
+    /// Bez tłumienia, `maximumLinearSpeed` = 600 jak w scenie tłoku.
+    static func softBubblePhysics(base: Float, radiusExponent: Float = 1, compressionExponent: Float = 0,
+                                  referenceRadius: Float = 20, maximumLinearSpeed: Float? = 600,
+                                  damping: Float = 0) throws -> PhysicsMaterial {
+        try PhysicsMaterial(kind: .bubble, damping: damping, maximumLinearSpeed: maximumLinearSpeed,
+                            contactCompliance: BubbleContactCompliance(base: base, referenceRadius: referenceRadius,
+                                radiusExponent: radiusExponent, compressionExponent: compressionExponent))
+    }
+
+    /// Materiał miękki tłoku z P-B-27 i P-B-28: s = 1, k = 1, c₀ = 1e-3 przy r_ref = 20. Przy kroku 1/60 α pary to rząd wielkości
+    /// sumy odwrotności mas, więc kontakt realnie ustępuje, a bańki nie wchodzą w siebie bez granic.
+    static func softCrowdPhysics() throws -> PhysicsMaterial {
+        try softBubblePhysics(base: 1e-3, radiusExponent: 1, compressionExponent: 1)
+    }
+
+    /// Ściana, w którą bańka jest dociskana.
+    enum WallSide {
+        case left, right
+        var sign: Float { self == .left ? -1 : 1 }
+    }
+
+    /// Bańka dociśnięta do wewnętrznej krawędzi ściany: środek stoi w odległości r od płaszczyzny ściany, a `MotorDrive` pcha ją
+    /// w ścianę stałą siłą `force`. W stanie ustalonym wgniecenie wynosi δ = c · force (XPBD: podatność razy siła),
+    /// niezależnie od masy.
+    static func pressedBubble(_ transaction: WorldTransaction, _ value: UInt64, y: Float, radius: Float, force: Float,
+                              side: WallSide = .left, mass: Float = 1, material: PhysicsMaterialID? = nil,
+                              contactCompliance: Float? = nil) throws -> WorldTransaction {
+        let position = WorldPoint(side.sign * (interiorHalfSize.x - radius), y)
+        return transaction
+            .add(try bubble(value, at: position, radius: radius, mass: mass, material: material,
+                            contactCompliance: contactCompliance))
+            .setMotorDrive(id(value), drive: try MotorDrive(force: [side.sign * force, 0]))
+    }
+
+    /// Wgniecenie δ = r − d, gdzie d to odległość środka od płaszczyzny ściany (może być ujemne, gdy bańka nie dotyka ściany).
+    static func wallDepth(of state: ObjectState, targetRadius: Float, side: WallSide = .left) -> Float {
+        targetRadius - (interiorHalfSize.x - side.sign * state.position.x)
+    }
+
+    /// Promień efektywny bańki z klatki.
+    static func effectiveRadius(of state: ObjectState) -> Float {
+        if case .bubble(let radius) = state.kind { return radius }
+        return 0
+    }
+
+    /// Przebieg docisku: δ każdej wskazanej bańki w każdym z `steps` kroków. Krok odrzucony kończy przebieg niepowodzeniem.
+    static func wallPress(world: BubbleWorld, _ bubbles: [(id: UInt64, radius: Float, side: WallSide)], steps: Int,
+                          file: StaticString = #filePath, line: UInt = #line) async -> [UInt64: [Float]] {
+        var series: [UInt64: [Float]] = [:]
+        for index in 0..<steps {
+            let frame = await world.advance(by: step)
+            XCTAssertNil(world.diagnostics.lastAdvanceIssue, "krok \(index): \(String(describing: world.diagnostics.lastRejectionReason))",
+                         file: file, line: line)
+            if world.diagnostics.lastAdvanceIssue != nil { break }
+            for bubble in bubbles {
+                guard let state = frame.objects[id(bubble.id)] else {
+                    XCTFail("bańka \(bubble.id) zniknęła w kroku \(index)", file: file, line: line); continue
+                }
+                series[bubble.id, default: []].append(wallDepth(of: state, targetRadius: bubble.radius, side: bubble.side))
+            }
+        }
+        return series
     }
 
     // MARK: generator
@@ -116,7 +189,41 @@ enum CrowdScene {
         var outsideFrame: [(step: Int, id: ObjectID, position: WorldPoint)] = []
         var minimumContainedPairs = Int.max
         var wasContainedCountFinite = true
+        /// Promienie docelowe dodanych baniek.
+        var targetRadii: [ObjectID: Float] = [:]
+        /// Stany baniek z ostatnich `lastSecondSteps` klatek przebiegu (po jednej tablicy na klatkę).
+        var lastSecond: [[(id: ObjectID, position: WorldPoint, effectiveRadius: Float)]] = []
+
+        /// Średnie nakładanie par baniek z ostatniej sekundy: dla każdej klatki i pary, której koła o promieniach docelowych
+        /// nachodzą na siebie, głębokość nakładania r_i + r_j − d; średnia po tych parach. 0, gdy żadna para nie nachodzi.
+        var meanOverlapInLastSecond: Float {
+            var total = 0.0, count = 0
+            for frame in lastSecond {
+                for first in 0..<frame.count {
+                    for second in (first + 1)..<max(first + 1, frame.count) {
+                        let a = frame[first], b = frame[second]
+                        let overlap = (targetRadii[a.id] ?? 0) + (targetRadii[b.id] ?? 0) - simd_distance(a.position, b.position)
+                        if overlap > 0 { total += Double(overlap); count += 1 }
+                    }
+                }
+            }
+            return count == 0 ? 0 : Float(total / Double(count))
+        }
+
+        /// Średni stosunek promienia efektywnego do docelowego, po wszystkich bańkach i klatkach ostatniej sekundy.
+        var meanEffectiveRadiusRatioInLastSecond: Float {
+            var total = 0.0, count = 0
+            for frame in lastSecond {
+                for bubble in frame {
+                    guard let target = targetRadii[bubble.id], target > 0 else { continue }
+                    total += Double(bubble.effectiveRadius / target); count += 1
+                }
+            }
+            return count == 0 ? 0 : Float(total / Double(count))
+        }
     }
+
+    static let lastSecondSteps = 60
 
     /// Stawia bańki co 0,25 s w losowym punkcie wnętrza (radius z [12, 48], rośnie od 10% do pełnego w 1 s), aż bilans pól
     /// B dojdzie do `balance`, i robi jeszcze `extraSteps` kroków. Przerywa przy pierwszym odrzuconym kroku,
@@ -165,6 +272,7 @@ enum CrowdScene {
                 }
                 if frame.transactionReceipts.contains(where: { $0.token == pending.token }) {
                     added.append(id(pending.id)); nextID += 1
+                    report.targetRadii[id(pending.id)] = pending.radius
                     areas += Double.pi * Double(pending.radius) * Double(pending.radius)
                     pendingAdd = nil
                     report.addedCount = added.count
@@ -173,10 +281,14 @@ enum CrowdScene {
                 }
             }
             for case .didExitSimulationRegion in frame.events { report.exitEvents += 1 }
+            var sample: [(id: ObjectID, position: WorldPoint, effectiveRadius: Float)] = []
             for identifier in added {
                 guard let state = frame.objects[identifier] else { report.vanishedBubbles += 1; continue }
                 if !isInsideFrame(state.position) { report.outsideFrame.append((report.steps, identifier, state.position)) }
+                sample.append((identifier, state.position, effectiveRadius(of: state)))
             }
+            report.lastSecond.append(sample)
+            if report.lastSecond.count > lastSecondSteps { report.lastSecond.removeFirst() }
             report.minimumContainedPairs = min(report.minimumContainedPairs, diagnostics.containedBubblePairCount)
             if diagnostics.containedBubblePairCount < 0 { report.wasContainedCountFinite = false }
             if let after = stepsAfterLastAdd {

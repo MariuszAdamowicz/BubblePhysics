@@ -15,12 +15,14 @@ final class ContainmentResolutionTests: XCTestCase {
     /// `maximumLinearSpeed` = 100 i tłumienie 5: pojedyncza bańka puszczona z prędkością 100 zwalnia poniżej 2 jedn./s
     /// w ciągu 1 s (exp(−5) · 100 ≈ 0,67), co sprawdza `testDampingSlowsAFastBubbleBelowTwoWithinOneSecond`.
     private let damping: Float = 5
-    private func world(maximumLinearSpeed: Float? = 100, damping: Float? = nil) async throws -> BubbleWorld {
+    private func world(maximumLinearSpeed: Float? = 100, damping: Float? = nil,
+                       contactCompliance: BubbleContactCompliance = .hard) async throws -> BubbleWorld {
         let world = try BubbleWorld(configuration: WorldConfiguration(
             simulationRegion: WorldRectangle(min: [-300, -300], max: [300, 300]), fixedTimeStep: step))
         _ = world.submit(WorldTransaction()
             .updatePhysicsMaterial(material, material: try PhysicsMaterial(kind: .bubble, damping: damping ?? self.damping,
-                                                                         maximumLinearSpeed: maximumLinearSpeed))
+                                                                         maximumLinearSpeed: maximumLinearSpeed,
+                                                                         contactCompliance: contactCompliance))
             .updateRenderMaterial(style, material: try RenderMaterial()))
         _ = await world.advance(by: step)
         XCTAssertNil(world.diagnostics.lastAdvanceIssue)
@@ -155,6 +157,27 @@ final class ContainmentResolutionTests: XCTestCase {
         let events = result.frames.flatMap(\.events)
         XCTAssertTrue(events.contains(.didAdd(id(100))), "wynik scalenia pojawił się mimo zajętego miejsca")
         XCTAssertNotNil(result.frames.last?.objects[id(100)])
+    }
+
+    // P-B-30 (G2-AC3): para z P-B-11 z materiałem miękkim rozsuwa się bez odrzucenia, ale w pierwszym kroku mniej niż przy c₀ = 0.
+    // c = 4e-3 (r = 20, r_ref = 20, s = 1) daje α pary rzędu 29 przy sumie odwrotności mas 2, więc λ pary w pierwszym kroku mieści się
+    // pod limitem 0,25·r i para rusza wolniej niż przy kontakcie twardym, który limit przycina.
+    func testSoftCoincidentPairSeparatesWithoutRejectionAndMovesLessInTheFirstStep() async throws {
+        func firstStepDistanceAndFinal(_ compliance: BubbleContactCompliance) async throws -> (first: Float, final: Float) {
+            let world = try await world(contactCompliance: compliance)
+            let result = await run(world, WorldTransaction().add(try bubble(1, at: [0, 0], radius: 20))
+                .add(try bubble(2, at: [0.01, 0], radius: 20)), steps: 120, startingAt: [id(1): [0, 0], id(2): [0.01, 0]])
+            assertNoRejection(result, "(\(compliance.base))")
+            XCTAssertEqual(result.frames.count, 120)
+            func distance(_ frame: WorldFrame) throws -> Float {
+                simd.distance(try XCTUnwrap(frame.objects[id(1)]).position, try XCTUnwrap(frame.objects[id(2)]).position)
+            }
+            return (try distance(try XCTUnwrap(result.frames.first)), try distance(try XCTUnwrap(result.frames.last)))
+        }
+        let hard = try await firstStepDistanceAndFinal(.hard)
+        let soft = try await firstStepDistanceAndFinal(BubbleContactCompliance(base: 4e-3, referenceRadius: 20, radiusExponent: 1))
+        XCTAssertGreaterThanOrEqual(soft.final, 20, "po 2 s środki oddalone o co najmniej 20")
+        XCTAssertLessThan(soft.first, hard.first, "po pierwszym kroku miękka para (\(soft.first)) bliżej niż twarda (\(hard.first))")
     }
 
     // P-B-10, scena z P-B-11
