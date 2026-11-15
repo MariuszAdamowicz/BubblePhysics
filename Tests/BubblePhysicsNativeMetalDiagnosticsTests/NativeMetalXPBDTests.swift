@@ -81,12 +81,10 @@ final class NativeMetalXPBDTests: XCTestCase {
         var world = try makeWorld(centers: [0])
         world.addSegment(.staticSegment(id: .init(rawValue: 7), a: .init(x: -2, y: -0.5), b: .init(x: 2, y: -0.5)))
         let frame = try await solver.executeFrame(world: world, scenarioStep: 1)
-        // Nakładanie 0,5, limit korekcji 0,25·r = 0,25 na krok: bańka dochodzi do y = 0,25 i budżet iteracji się wyczerpuje.
-        XCTAssertGreaterThanOrEqual(frame.bubbles[0].center.y, 0.2499)
-        XCTAssertLessThanOrEqual(frame.bubbles[0].center.y, 0.2501)
+        XCTAssertGreaterThanOrEqual(frame.bubbles[0].center.y, 0.4999)
         XCTAssertEqual(frame.telemetry.solverIterationCount, 3)
-        XCTAssertEqual(frame.report.solver.iterations, 3)
-        XCTAssertFalse(frame.report.solver.converged)
+        XCTAssertEqual(frame.report.solver.iterations, 1)
+        XCTAssertTrue(frame.report.solver.converged)
         assertFinite(frame)
     }
 

@@ -218,16 +218,11 @@ kernel void nativeApplyCenterGuards(device NativeBubble *bubbles [[buffer(0)]],
     nativeGuardCenter(bubbles, segments, positions, control, contacts, changed, safety, statistics, i);
 }
 
-// Co zostało z budżetu korekcji 0,25·r bańki po korekcjach wykonanych dotąd w tym kroku.
-float nativeContainmentRemaining(NativeBubble bubble, float2 total) {
-    return max(0.0f, nativeCorrectionLimitFactor * bubble.physical.z - length(total));
-}
-
 // Korekcja bańki `a` z pary „bańka w bańce” z `b`. Para skaluje się jednym współczynnikiem dla obu końców
-// (budżet każdego końca wyznacza ten sam współczynnik), więc korekcja pary zachowuje pęd także wtedy, gdy limit zadziała.
+// (każdy koniec ma budżet netto |total + Δ| <= 0,25·r), więc korekcja pary zachowuje pęd także wtedy, gdy limit zadziała.
 // Zwraca zero, gdy pary nie ma. Używają jej obie kopie naprawy, więc dają bit w bit ten sam wynik.
 float2 nativeContainmentCorrection(NativeBubble a, NativeBubble b, float2 center, float2 other, float tolerance,
-                                   float remainingA, float remainingB) {
+                                   float2 totalA, float2 totalB) {
     float minimum = abs(a.physical.z - b.physical.z);
     if (minimum <= tolerance) return 0;
     float2 delta = center - other;
@@ -242,7 +237,8 @@ float2 nativeContainmentCorrection(NativeBubble a, NativeBubble b, float2 center
     if (weight <= 0) return 0;
     float needed = minimum + margin - distance;
     float own = needed * a.physical.y / weight, partner = needed * b.physical.y / weight;
-    float scale = min(nativeBudgetScale(remainingA, own), nativeBudgetScale(remainingB, partner));
+    float scale = min(nativeNetScale(totalA, normal * own, nativeCorrectionLimitFactor * a.physical.z),
+                      nativeNetScale(totalB, -normal * partner, nativeCorrectionLimitFactor * b.physical.z));
     return normal * (own * scale);
 }
 
@@ -270,13 +266,12 @@ kernel void nativeSeparateContainedBubbles(device NativeBubble *bubbles [[buffer
     float2 center = input[i].xy, correction = 0;
     uint readBase = (pass & 1) * control.counts.x, writeBase = ((pass + 1) & 1) * control.counts.x;
     float2 total = correctionTotals[readBase + i];
-    float remaining = nativeContainmentRemaining(a, total);
     for (uint j = lane; j < control.counts.x; j += width) {
         if (i == j) continue;
         NativeBubble b = bubbles[j];
         if (!nativeFilterAccepts(a.filter, b.filter)) continue;
-        correction += nativeContainmentCorrection(a, b, center, input[j].xy, solver.physics.y, remaining,
-                                                  nativeContainmentRemaining(b, correctionTotals[readBase + j]));
+        correction += nativeContainmentCorrection(a, b, center, input[j].xy, solver.physics.y, total,
+                                                  correctionTotals[readBase + j]);
     }
     // Threadgroup memory works on Apple4 (iPhone X); simd_sum requires Apple7.
     // Fixed lane order makes the reduction independent of scheduling, with no
@@ -287,8 +282,7 @@ kernel void nativeSeparateContainedBubbles(device NativeBubble *bubbles [[buffer
     correction = 0;
     for (uint k = 0; k < width; ++k) correction += laneCorrections[k];
     // Para po parze korekcja już mieści się w budżetach obu końców; tu domyka się suma wielu par jednej bańki.
-    float magnitude = length(correction);
-    if (magnitude > remaining) correction *= remaining / magnitude;
+    correction *= nativeNetScale(total, correction, nativeCorrectionLimitFactor * a.physical.z);
     correctionTotals[writeBase + i] = total + correction;
     float2 next = center + correction;
     // A sub-ULP correction that rounds back to the same position cannot create
@@ -324,13 +318,12 @@ kernel void nativeSeparateAndGuardContainedBubbles(device NativeBubble *bubbles 
     float2 center = input[i].xy, correction = 0;
     uint readBase = (pass & 1) * control.counts.x, writeBase = ((pass + 1) & 1) * control.counts.x;
     float2 total = correctionTotals[readBase + i];
-    float remaining = nativeContainmentRemaining(a, total);
     for (uint j = lane; j < control.counts.x; j += width) {
         if (i == j) continue;
         NativeBubble b = bubbles[j];
         if (!nativeFilterAccepts(a.filter, b.filter)) continue;
-        correction += nativeContainmentCorrection(a, b, center, input[j].xy, solver.physics.y, remaining,
-                                                  nativeContainmentRemaining(b, correctionTotals[readBase + j]));
+        correction += nativeContainmentCorrection(a, b, center, input[j].xy, solver.physics.y, total,
+                                                  correctionTotals[readBase + j]);
     }
     // Threadgroup memory works on Apple4 (iPhone X); simd_sum requires Apple7.
     // Fixed lane order makes the reduction independent of scheduling, with no
@@ -341,8 +334,7 @@ kernel void nativeSeparateAndGuardContainedBubbles(device NativeBubble *bubbles 
     correction = 0;
     for (uint k = 0; k < width; ++k) correction += laneCorrections[k];
     // Para po parze korekcja już mieści się w budżetach obu końców; tu domyka się suma wielu par jednej bańki.
-    float magnitude = length(correction);
-    if (magnitude > remaining) correction *= remaining / magnitude;
+    correction *= nativeNetScale(total, correction, nativeCorrectionLimitFactor * a.physical.z);
     correctionTotals[writeBase + i] = total + correction;
     float2 next = center + correction;
     // A sub-ULP correction that rounds back to the same position cannot create
