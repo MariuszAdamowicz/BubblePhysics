@@ -194,4 +194,31 @@ final class ContainmentResolutionTests: XCTestCase {
         // Limit rzeczywiście zadziałał: lżejsza bańka przesunęła się najwyżej o 0,25 · r.
         assertStepDisplacementIsLimited(result, radii: [id(1): 20, id(2): 40])
     }
+
+    // P-B-39 (G2-AC6): limit pary nie zapada stosu pod stałym naciskiem. Scena z `ContactEventTests.testBeganBubbleAndBubble`:
+    // materiały domyślne, dwie bańki r = 8 jedna nad drugą na statycznej podłodze, grawitacja −400, 600 kroków.
+    func testTwoBubbleStackUnderGravityHoldsFor600Steps() async throws {
+        let floorMaterial = PhysicsMaterialID(rawValue: 2)
+        let world = try BubbleWorld(configuration: WorldConfiguration(
+            simulationRegion: WorldRectangle(min: [0, 0], max: [600, 300]), fixedTimeStep: step, globalForce: [0, -400]))
+        let floor = WorldObject.rigidBody(try RigidBodyDescriptor(
+            id: id(100), vertices: [[0, 0], [600, 0], [600, 10], [0, 10]], motionRole: .static,
+            physicsMaterialID: floorMaterial, renderMaterialID: style))
+        _ = world.submit(WorldTransaction()
+            .updatePhysicsMaterial(material, material: try PhysicsMaterial(kind: .bubble))
+            .updatePhysicsMaterial(floorMaterial, material: try PhysicsMaterial(kind: .rigid))
+            .updateRenderMaterial(style, material: try RenderMaterial())
+            .add(floor)
+            .add(try bubble(2, at: [150, 18.3], radius: 8))
+            .add(try bubble(1, at: [150, 34.6], radius: 8)))
+        for index in 0..<600 {
+            let frame = await world.advance(by: step)
+            XCTAssertNil(world.diagnostics.lastAdvanceIssue, "krok \(index)")
+            let upper = try XCTUnwrap(frame.objects[id(1)], "krok \(index): górna bańka zniknęła").position
+            let lower = try XCTUnwrap(frame.objects[id(2)], "krok \(index): dolna bańka zniknęła").position
+            XCTAssertGreaterThan(upper.y, lower.y, "krok \(index): górna bańka nie leży nad dolną")
+            XCTAssertGreaterThanOrEqual(simd.distance(upper, lower), 0.95 * 16,
+                                        "krok \(index): stos zapadł się, odległość środków \(simd.distance(upper, lower))")
+        }
+    }
 }
