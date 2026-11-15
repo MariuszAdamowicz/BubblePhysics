@@ -230,6 +230,21 @@ final class ContactComplianceTests: XCTestCase {
         XCTAssertTrue(positiveExponentFits, "k > 0 nie powiększa c_worst")
     }
 
+    /// GPU liczy czynnik ρ^k w Float osobno, zanim pomnoży go przez część bazową: ρ_min^k musi być skończonym Float także przy
+    /// małym c₀, przy którym sam iloczyn c₀ · ρ_min^k mieści się w Float (0,01^−25 = 1e50 → ∞, a 1e-20 · 1e50 = 1e30).
+    func testWorstAlphaRejectsCompressionExponentWhoseMinimumRhoFactorOverflowsFloatEvenWithTinyBase() async throws {
+        func accepts(compressionExponent: Float) async throws -> Bool {
+            let material = try CrowdScene.softBubblePhysics(base: 1e-20, radiusExponent: 0, compressionExponent: compressionExponent,
+                                                            referenceRadius: 1)
+            let world = try await transactionWorld(material: material, hardMaterial: PhysicsMaterial(kind: .bubble))
+            return await run(world, WorldTransaction().add(try bubble(1, at: [0, 0], radius: 2))).rejection == nil
+        }
+        let overflowingFactor = try await accepts(compressionExponent: -25)
+        XCTAssertFalse(overflowingFactor, "0,01^−25 przepełnia Float na GPU")
+        let finiteFactor = try await accepts(compressionExponent: -19)
+        XCTAssertTrue(finiteFactor, "0,01^−19 = 1e38 mieści się w Float")
+    }
+
     // Ujemny wykładnik promienia: przy s < 0 najgorszy jest mniejszy koniec przedziału promieni.
     func testWorstAlphaTakesTheSmallerRadiusWhenTheRadiusExponentIsNegative() async throws {
         let material = try CrowdScene.softBubblePhysics(base: 1, radiusExponent: -70, referenceRadius: 1)

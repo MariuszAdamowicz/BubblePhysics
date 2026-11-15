@@ -191,6 +191,38 @@ final class PlacementValidationTests: XCTestCase {
         XCTAssertNil(world.diagnostics.lastAdvanceIssue)
     }
 
+    // Obiekty, których filtry się wykluczają, nigdy nie kolidują, więc wspólny środek ani punkt w bryle nie jest dla nich błędem.
+    private let ghost = CollisionFilter(category: 2, mask: 0)
+    private func ghostBubble(_ value: UInt64, at position: WorldPoint) throws -> WorldObject {
+        .bubble(try BubbleDescriptor(id: id(value), position: position, targetRadius: 2, mass: 2,
+                                     physicsMaterialID: bubbleMaterial, renderMaterialID: style, filter: ghost))
+    }
+
+    func testAddIgnoresBubblesAndBodiesWhoseCollisionFilterExcludesTheNewBubble() throws {
+        let state = try staged([resources().add(bubble(1, at: [10, 10]))
+            .add(body(100, rectangle([-60, -60], [-40, -40])))])
+        XCTAssertNoThrow(try stage(WorldTransaction().add(ghostBubble(2, at: [10, 10])), against: state),
+                         "bańka bez kolizji z bańką 1 może stanąć w jej środku")
+        XCTAssertNoThrow(try stage(WorldTransaction().add(ghostBubble(2, at: [-50, -50])), against: state),
+                         "bańka bez kolizji z bryłą może stanąć w jej wnętrzu")
+        XCTAssertNoThrow(try stage(WorldTransaction().add(ghostBubble(2, at: [0, 0])).add(ghostBubble(3, at: [0, 0])),
+                                   against: state), "dwie bańki duchy w jednym punkcie")
+        XCTAssertNoThrow(try stage(WorldTransaction().add(ghostBubble(2, at: [30, 30]))
+            .replace(id(2), with: ghostBubble(2, at: [10, 10])), against: state), "replace na środku bańki bez kolizji")
+        // Region obowiązuje niezależnie od filtra.
+        XCTAssertThrowsError(try stage(WorldTransaction().add(ghostBubble(2, at: [150, 0])), against: state)) {
+            XCTAssertEqual(($0 as? TransactionRejection)?.reason, .invalidPlacement(self.id(2), .outsideRegion))
+        }
+    }
+
+    func testMergeResultIgnoresBubblesWhoseCollisionFilterExcludesTheResult() throws {
+        // Punkt styku (0, 0) to środek bańki 3; wynik z filtrem, który jej nie dotyka, stoi w punkcie styku.
+        let state = try staged([resources().add(bubble(1, at: [-10, 0])).add(bubble(2, at: [10, 0])).add(bubble(3, at: [0, 0]))])
+        let result = BubbleResult(id: id(4), physicsMaterialID: bubbleMaterial, renderMaterialID: style, filter: ghost)
+        let after = try stage(WorldTransaction().mergeBubbles([id(1), id(2)], result: result), against: state)
+        XCTAssertEqual(try XCTUnwrap(after.objects[id(4)]).position, [0, 0])
+    }
+
     func testValidAddAtRegionEdgeIsAccepted() throws {
         let state = try staged([resources()])
         XCTAssertNoThrow(try stage(WorldTransaction().add(bubble(1, at: [100, 100])), against: state))

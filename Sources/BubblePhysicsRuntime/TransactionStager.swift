@@ -426,7 +426,7 @@ private struct StagingContext {
     /// Punkt bańki (region, bryła, wspólny środek) względem stanu po wcześniejszych operacjach tej transakcji.
     func validatePlacement(_ object: RuntimeObject, excluding: Set<ObjectID>) throws {
         guard case .bubble(let bubble) = object.descriptor else { return }
-        if let issue = PlacementGeometry.issue(at: object.position, radius: object.targetRadius, in: state,
+        if let issue = PlacementGeometry.issue(at: object.position, radius: object.targetRadius, filter: bubble.filter, in: state,
                                                excluding: excluding) {
             throw TransactionRejectionReason.invalidPlacement(bubble.id, issue)
         }
@@ -559,8 +559,11 @@ private struct StagingContext {
             let radius = Double((exponent >= 0 ? radii.max() : radii.min()) ?? object.targetRadius)
             let worst = Double(base) * pow(radius / Double(compliance.referenceRadius), exponent)
                 * pow(Self.minimumContourRatio, min(Double(compliance.compressionExponent), 0))
+            // GPU liczy czynnik ρ^k w Float osobno (`nativeContactCompliance`), zanim pomnoży go przez część bazową, więc
+            // ρ_min^k musi być skończonym Float także przy małym c₀, przy którym sam iloczyn się mieści.
+            let factor = pow(Float(Self.minimumContourRatio), min(compliance.compressionExponent, 0))
             // Host liczy c w Float, więc przepełnienie samego c też jest błędem.
-            guard Float(worst).isFinite else { throw ModelValidationError.valueOutOfRange("contactCompliance") }
+            guard factor.isFinite, Float(worst).isFinite else { throw ModelValidationError.valueOutOfRange("contactCompliance") }
             alpha += 2 * Double(Float(worst)) / stepSquared
         }
         guard Float(alpha).isFinite else { throw ModelValidationError.valueOutOfRange("contactCompliance") }
@@ -653,7 +656,7 @@ private struct StagingContext {
         // ani na środku innej bańki. Źródła znikają razem ze scaleniem, więc są z testu wyłączone.
         let snapshot = state, excluded = Set(sources)
         func issue(_ point: WorldPoint) -> PlacementIssue? {
-            PlacementGeometry.issue(at: point, radius: resultRadius, in: snapshot, excluding: excluded)
+            PlacementGeometry.issue(at: point, radius: resultRadius, filter: result.filter, in: snapshot, excluding: excluded)
         }
         // Kandydaci idą w kolejności ID, jak punkt styku, żeby ten sam układ dawał ten sam środek niezależnie od kolejności
         // `sources` w operacji (G3-AC4).
@@ -709,8 +712,10 @@ private struct StagingContext {
         var snapshot = state
         func center(of part: RuntimeObject, excluding: Set<ObjectID>) throws -> WorldPoint {
             let id = part.descriptor.id
+            guard case .bubble(let descriptor) = part.descriptor else { throw TransactionRejectionReason.incompatibleObjectKind(id) }
             func issue(_ point: WorldPoint) -> PlacementIssue? {
-                PlacementGeometry.issue(at: point, radius: part.targetRadius, in: snapshot, excluding: excluding)
+                PlacementGeometry.issue(at: point, radius: part.targetRadius, filter: descriptor.filter, in: snapshot,
+                                        excluding: excluding)
             }
             guard let resolved = StructuralOperations.resolvedSplitCenter(centroid: part.position,
                 sourceCenter: source.position, partRadius: part.targetRadius, issue: issue) else {

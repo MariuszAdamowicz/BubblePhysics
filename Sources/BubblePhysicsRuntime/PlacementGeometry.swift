@@ -23,19 +23,21 @@ enum PlacementGeometry {
     private static let positionTolerance = NativeSolverConfiguration().positionTolerance
 
     /// Pierwsza przyczyna, dla której środek bańki o promieniu `radius` nie może stanąć w `point`, w kolejności
-    /// region, bryła, wspólny środek; `nil`, gdy punkt jest poprawny. Obiekty z `excluding` są z testu wyłączone.
-    static func issue(at point: WorldPoint, radius: Float, in state: RuntimeState,
+    /// region, bryła, wspólny środek; `nil`, gdy punkt jest poprawny. Obiekty z `excluding` są z testu wyłączone, tak jak
+    /// obiekty, których filtr kolizji wyklucza się z `filter` bańki: nigdy z nią nie kolidują, więc solver znosi wspólny środek.
+    static func issue(at point: WorldPoint, radius: Float, filter: CollisionFilter, in state: RuntimeState,
                       excluding: Set<ObjectID>) -> PlacementIssue? {
         // Region obowiązuje niezależnie od `regionExitPolicy`: `.wrap` przenosi bańkę, która wyszła w kroku,
         // a nie dopuszcza postawienia jej poza regionem.
         guard state.configuration.simulationRegion.contains(point) else { return .outsideRegion }
         for (id, object) in state.objects where !excluding.contains(id) {
-            if case .rigidBody(let body) = object.descriptor, contains(shape(of: body, at: object), point) {
+            if case .rigidBody(let body) = object.descriptor, filter.collides(with: body.filter),
+               contains(shape(of: body, at: object), point) {
                 return .insideRigidBody
             }
         }
         for (id, object) in state.objects where !excluding.contains(id) {
-            guard case .bubble = object.descriptor else { continue }
+            guard case .bubble(let other) = object.descriptor, filter.collides(with: other.filter) else { continue }
             if simd_length(point - object.position)
                 < coincidentCenterTolerance(radius: radius, otherRadius: object.targetRadius) {
                 return .coincidentCenter
