@@ -13,6 +13,7 @@ struct NativeBubble {
     ulong2 eventData;
     float4 bounds;
     uint4 filter; // kategoria, maska, reserved, warstwa (Int32 z odwróconym bitem znaku)
+    float4 contact; // część bazowa podatności c₀·(r/r_ref)^s (0 = kontakt twardy), wykładnik ściśnięcia k, reserved, reserved
 };
 struct NativeSegment {
     long2 identity; uint4 flags; float4 previous; float4 current;
@@ -21,6 +22,7 @@ struct NativeSegment {
 };
 struct NativeContactCache {
     long2 participants; uint4 metadata; float4 geometry; float4 response;
+    float4 rho; // wygładzone ρ końców a i b (stosunek promienia konturu do r w kierunku normalnej), reserved
 };
 struct NativeCandidate { long2 participants; uint4 metadata; };
 struct NativeGridEntry { long2 cell; uint4 metadata; };
@@ -654,6 +656,6 @@ kernel void nativeBuildContacts(device NativeBubble *bubbles [[buffer(0)]],
         penetration = a.physical.z - distance;
     }
     NativeContactCache contact = { c.participants, uint4(c.metadata.x, 1, control.limits.x, 0),
-        float4(normal, point), float4(0, penetration, allowedSide, 0) };
+        float4(normal, point), float4(0, penetration, allowedSide, 0), float4(1, 1, 0, 0) };
     contacts[index] = contact;
 }

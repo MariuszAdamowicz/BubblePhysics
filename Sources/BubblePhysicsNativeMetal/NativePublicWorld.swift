@@ -76,6 +76,17 @@ struct NativePublicProperties: Equatable, Sendable {
     var speedLimits: SIMD2<Float> = .zero
     /// Warstwa obiektu; w rekordzie bańki jako `filter.w` (`NativeMetalFilter.encodeLayer`).
     var layer: Int32 = 0
+    /// Podatność kontaktu bańki: część bazowa c₀·(r/r_ref)^s (0 = kontakt twardy), wykładnik ściśnięcia k; w rekordzie bańki jako `contact`.
+    var contact: SIMD4<Float> = .zero
+
+    /// c₀ (po nadpisaniu na bańce) · (r / r_ref)^s dla bieżącego promienia fizycznego `radius`. Przy c₀ = 0 potęg się nie liczy,
+    /// więc skrajny wykładnik nie daje NaN z 0 · ∞ (CD-D-8). Przepełnienie Float wyklucza stager (CD-D-15).
+    static func contact(of compliance: BubbleContactCompliance, override: Float?, radius: Float) -> SIMD4<Float> {
+        let base = override ?? compliance.base
+        guard base > 0 else { return .zero }
+        let scale = base * powf(radius / compliance.referenceRadius, compliance.radiusExponent)
+        return SIMD4(scale, compliance.compressionExponent, 0, 0)
+    }
 }
 
 struct NativePublicSettings: Equatable, Sendable {
@@ -175,7 +186,9 @@ package final class NativePublicWorld {
                     resources: SIMD2(b.physicsMaterialID.rawValue, b.renderMaterialID.rawValue),
                     eventData: SIMD2(b.eventInterest.rawValue, b.mergeGroups.rawValue), filter: b.filter,
                     speedLimits: SIMD2(material.maximumLinearSpeed ?? 0, material.maximumAngularSpeed ?? 0),
-                    layer: object.layer)
+                    layer: object.layer,
+                    contact: NativePublicProperties.contact(of: material.contactCompliance, override: b.contactCompliance,
+                                                            radius: object.collisionRadius))
                 if let shape = object.structuralShape { structuralShapes[b.id] = shape }
             case .rigidBody(let p):
                 guard let material = materials[p.physicsMaterialID] else { throw NativeMetalSolverError.invalidSnapshot }

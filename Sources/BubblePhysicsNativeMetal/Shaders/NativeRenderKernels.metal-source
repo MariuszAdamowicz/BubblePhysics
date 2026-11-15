@@ -14,6 +14,7 @@ struct RenderBubble {
     ulong2 eventData;
     float4 bounds;
     uint4 filter;
+    float4 contact;
 };
 
 // Rekord bryły ma układ `NativeRigidBody` solvera (sonda ABI w NativeMetalShaderABITests). Po kroku niesie obie pozy:

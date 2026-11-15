@@ -201,7 +201,8 @@ kernel void nativeMatchContactCache(device NativeContactCache *previous [[buffer
         uint elapsed = contacts.limits.x - previous[old].metadata.z;
         if (elapsed > 0 && elapsed - 1 > contacts.limits.y) invalid |= 8;
         if (invalid) { result.metadata.w = invalid; reset = 1; }
-        else { result.response.x = previous[old].response.x; result.metadata.y = previous[old].metadata.y + 1;
+        else { result.response.x = previous[old].response.x; result.rho = previous[old].rho;
+            result.metadata.y = previous[old].metadata.y + 1;
             result.metadata.w |= 16; hit = 1; }
     }
     // Merge rank: nowy rekord zajmuje miejsce przed starym przy równym kluczu.

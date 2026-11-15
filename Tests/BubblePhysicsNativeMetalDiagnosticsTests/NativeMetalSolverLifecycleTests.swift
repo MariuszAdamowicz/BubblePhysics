@@ -239,7 +239,7 @@ final class NativeMetalSolverLifecycleTests: XCTestCase {
 
     func testABIRecordsUseSixteenByteLanes() {
         XCTAssertEqual(MemoryLayout<NativeMetalBubble>.alignment, 16)
-        XCTAssertEqual(MemoryLayout<NativeMetalBubble>.stride, 176)
+        XCTAssertEqual(MemoryLayout<NativeMetalBubble>.stride, 192)
         XCTAssertEqual(MemoryLayout<NativeMetalEventRecord>.alignment, 16)
         XCTAssertEqual(MemoryLayout<NativeMetalEventRecord>.stride, 48)
         XCTAssertEqual(MemoryLayout<NativeMetalSensorRecord>.stride, 48)
@@ -247,7 +247,7 @@ final class NativeMetalSolverLifecycleTests: XCTestCase {
         XCTAssertEqual(MemoryLayout<NativeMetalSegment>.alignment, 16)
         XCTAssertEqual(MemoryLayout<NativeMetalSegment>.stride, 112)
         XCTAssertEqual(MemoryLayout<NativeMetalContactCache>.alignment, 16)
-        XCTAssertEqual(MemoryLayout<NativeMetalContactCache>.stride, 64)
+        XCTAssertEqual(MemoryLayout<NativeMetalContactCache>.stride, 80)
         XCTAssertEqual(MemoryLayout<NativeMetalCandidate>.stride, 32)
         XCTAssertEqual(MemoryLayout<NativeMetalGridEntry>.stride, 32)
         XCTAssertEqual(MemoryLayout<NativeMetalContactControl>.stride, 80)
