@@ -42,6 +42,38 @@ final class BubbleWorldCompletionTests: XCTestCase {
         XCTAssertEqual(world.diagnostics.containedBubblePairCount, 5, "odrzucony krok zostawia licznik ostatniego ukończonego")
     }
 
+    // α_cfg: stepper podaje podstawową podatność konfiguracji, a stager sprawdza skończoność α_cfg = c / dt² (dt = 0,125, dt² = 1/64).
+    func testBaseContactComplianceFromTheStepperReachesTheStagerAlphaCheck() async throws {
+        func addBubble(base: Float) async throws -> TransactionRejection? {
+            let stepper = ScriptedAlphaStepper(baseContactCompliance: base)
+            let world = try world(stepper: stepper)
+            let material = PhysicsMaterialID(rawValue: 1), style = RenderMaterialID(rawValue: 1)
+            _ = world.submit(WorldTransaction().updatePhysicsMaterial(material, material: try PhysicsMaterial(kind: .bubble))
+                .updateRenderMaterial(style, material: try RenderMaterial())
+                .add(.bubble(try BubbleDescriptor(id: ObjectID(rawValue: 1), position: .zero, targetRadius: 1,
+                                                  physicsMaterialID: material, renderMaterialID: style))))
+            let frame = await world.advance(by: 0.125)
+            for case .transactionRejected(_, let rejection) in frame.events { return rejection }
+            return nil
+        }
+        let accepted = try await addBubble(base: 1e30)
+        XCTAssertNil(accepted, "α_cfg = 6,4e31 jest skończone")
+        // 1e37 / dt² = 6,4e38 > FLT_MAX.
+        let rejected = try await addBubble(base: 1e37)
+        XCTAssertEqual(rejected, TransactionRejection(operationIndex: 2, reason: .invalidValue(.valueOutOfRange("contactCompliance"))),
+                       "indeks 2 to operacja add po dwóch aktualizacjach materiałów")
+    }
+
+    // Natywny stepper zapamiętuje contactCompliance z konfiguracji (domyślnie 0), a podaje je jako α_cfg.
+    func testNativeStepperExposesTheConfiguredContactCompliance() throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        XCTAssertEqual(try NativeCompleteStepper(device: device).baseContactCompliance, 0)
+        XCTAssertEqual(try NativeCompleteStepper(device: device, configuration: NativeMetalConfiguration(contactCompliance: 0.5))
+            .baseContactCompliance, 0.5)
+        XCTAssertEqual(try NativeCompleteStepper(device: device, configuration: NativeMetalConfiguration(contactCompliance: .nan))
+            .baseContactCompliance, 0, "jak w sanitized: nieskończona i NaN to 0")
+    }
+
     func testFailedStepDoesNotChangeCandidateOverflowCounter() async throws {
         let world = try world(stepper: ScriptedCandidateStepper(script: [(overflow: 4, maximum: 6)], failOnSecondCall: true))
         _ = await world.advance(by: 0.125)
@@ -618,6 +650,18 @@ private final class ScriptedContainmentStepper: CompleteStepper {
         defer { calls += 1 }
         if calls == failOnCall { throw ScriptedFailure.failed }
         return CompletedRuntimeStep(state: batch.state, containedBubblePairCount: counts[min(calls, counts.count - 1)])
+    }
+}
+
+/// Krok bez zmian stanu, z podstawową podatnością konfiguracji podawaną stagerowi (α_cfg).
+@MainActor
+private final class ScriptedAlphaStepper: CompleteStepper {
+    let baseContactCompliance: Float
+    init(baseContactCompliance: Float) { self.baseContactCompliance = baseContactCompliance }
+    func completeStep(_ batch: StagedTransactionBatch, duration: Double, hitTests: [WorldPoint],
+                      commandBuffer: MTLCommandBuffer?,
+                      beforeCommit: ((NativeMetalRenderHandoff?, RuntimeState) throws -> Void)?) async throws -> CompletedRuntimeStep {
+        CompletedRuntimeStep(state: batch.state)
     }
 }
 

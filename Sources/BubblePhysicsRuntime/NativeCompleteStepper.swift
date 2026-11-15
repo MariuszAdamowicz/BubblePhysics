@@ -11,9 +11,13 @@ package final class NativeCompleteStepper: CompleteStepper {
     /// Historia policzona w ostatnim kroku; wchodzi do `previousBlockers` i `previousContacts` dopiero w `didPublish`,
     /// więc krok lub klatka odrzucone przez świat zostawiają stepper bez zmian.
     private var candidateHistory: (blockers: [ObjectID: ObjectID], contacts: Set<ContactPair>)?
+    /// Podstawowa podatność konfiguracji solvera (α_cfg · dt²), po tej samej normalizacji co w solverze.
+    private let configuredContactCompliance: Float
     package init(device: MTLDevice?, configuration: NativeMetalConfiguration = .default) throws {
         native = try device.map { try NativePublicWorld(device: $0, configuration: configuration) }
+        configuredContactCompliance = configuration.sanitized.contactCompliance
     }
+    package var baseContactCompliance: Float { configuredContactCompliance }
     /// Pary z dostarczonym `contactBegan` po ostatnio opublikowanym kroku; szew testów `didPublish`.
     package var publishedContactPairs: Set<ContactPair> { previousContacts }
     package var publishedRenderHandoff: NativeMetalRenderHandoff? { native?.publishedRenderHandoff }

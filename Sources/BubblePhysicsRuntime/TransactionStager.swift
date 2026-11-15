@@ -155,10 +155,13 @@ extension StagedTransactionBatch {
 
 package enum TransactionStager {
     /// `textureExists` mówi, czy tekstura jest w rejestrze zasobów świata; Runtime nie zna rejestru.
+    /// `baseContactCompliance` to podstawowa podatność konfiguracji solvera (α_cfg · dt²); stager sprawdza z nią skończoność α pary.
     package static func stage(_ transaction: WorldTransaction, against state: RuntimeState,
+        baseContactCompliance: Float = 0,
         textureExists: @escaping (TextureID) -> Bool = { _ in false },
         glyphLookup: @escaping GlyphLookup = { _ in nil }) throws -> StagedWorldChange {
-        var candidate = StagingContext(state: state, textureExists: textureExists, glyphLookup: glyphLookup)
+        var candidate = StagingContext(state: state, textureExists: textureExists, glyphLookup: glyphLookup,
+                                       baseContactCompliance: baseContactCompliance)
         for (index, operation) in transaction.operations.enumerated() {
             do { try candidate.apply(operation) }
             catch let error as TransactionRejectionReason {
@@ -177,6 +180,7 @@ package enum TransactionStager {
     /// To tylko staging: nie wykonuje kroku fizyki ani nie publikuje stanu na zewnątrz.
     package static func stageBatch(_ pending: [PendingTransaction], against state: RuntimeState,
         validate: ((StagedWorldChange) throws -> Void)? = nil,
+        baseContactCompliance: Float = 0,
         textureExists: @escaping (TextureID) -> Bool = { _ in false },
         glyphLookup: @escaping GlyphLookup = { _ in nil }) -> StagedTransactionBatch {
         var candidate = state
@@ -185,7 +189,8 @@ package enum TransactionStager {
         var events: [WorldEvent] = []
         for submission in pending {
             do {
-                let change = try stage(submission.transaction, against: candidate, textureExists: textureExists,
+                let change = try stage(submission.transaction, against: candidate,
+                                       baseContactCompliance: baseContactCompliance, textureExists: textureExists,
                                        glyphLookup: glyphLookup)
                 try validate?(change)
                 candidate = change.state
@@ -212,6 +217,8 @@ private struct StagingContext {
     var state: RuntimeState
     let textureExists: (TextureID) -> Bool
     let glyphLookup: GlyphLookup
+    /// Podstawowa podatność konfiguracji solvera, z której stager liczy α_cfg = c / dt² (CD-D-15).
+    var baseContactCompliance: Float = 0
     var created: [ObjectID] = []
     var removed: [ObjectID] = []
     var replaced: [ObjectID] = []
@@ -223,7 +230,10 @@ private struct StagingContext {
         case .add(let descriptor):
             try add(descriptor)
             // Poza `add(_:)`: podział i scalenie dodają wynik w środku źródła, zanim silnik poprawi jego punkt.
-            if let added = state.objects[descriptor.id] { try validatePlacement(added, excluding: [descriptor.id]) }
+            if let added = state.objects[descriptor.id] {
+                try validatePlacement(added, excluding: [descriptor.id])
+                try validateWorstAlpha(added)
+            }
         case .remove(let id): try remove(id)
         case .replace(let id, let descriptor):
             let previous = try object(id)
@@ -232,6 +242,7 @@ private struct StagingContext {
             discardObjectTransitions(id)
             try validate(replacement)
             try validatePlacement(replacement, excluding: [id])
+            try validateWorstAlpha(replacement)
             state.objects[id] = replacement
             try validateJoints(attachedTo: id)
             replaced.append(id)
@@ -240,7 +251,10 @@ private struct StagingContext {
             state.physicsMaterials[id] = material
             // Porządek diagnostyki nie zależy od losowego porządku Dictionary.
             for objectID in state.objects.keys.sorted(by: { $0.rawValue < $1.rawValue }) {
-                if let existing = state.objects[objectID], existing.material?.0 == id { try validate(existing) }
+                if let existing = state.objects[objectID], existing.material?.0 == id {
+                    try validate(existing)
+                    try validateWorstAlpha(existing)
+                }
             }
         case .updateRenderMaterial(let id, let material):
             try requireTexture(material.texture)
@@ -523,6 +537,35 @@ private struct StagingContext {
         }
     }
 
+    /// Najmniejsza gęstość konturu, której używa podatność przy k < 0 (`ρ_min` z CD-D-8).
+    private static let minimumContourRatio = 0.01
+
+    /// Najgorsza α pary z tą bańką, α_cfg + 2 · c_worst / dt², musi być skończonym Float (CD-D-15), żeby GPU nie dostało podatności,
+    /// która przepełnia Float. c_worst = c₀ · (r*/r_ref)^s · ρ_min^min(k, 0), gdzie r* to ten koniec przedziału promieni, który daje
+    /// większe (r/r_ref)^s, czyli większy promień przy s ≥ 0 i mniejszy przy s < 0. Przedział obejmuje bieżący i docelowy promień
+    /// bańki, cel trwającego `startTransition` oraz `endRadius` nowego przejścia. Przy c₀ = 0 potęg się nie liczy.
+    func validateWorstAlpha(_ object: RuntimeObject, endRadius: Float? = nil) throws {
+        guard case .bubble(let bubble) = object.descriptor, let (materialID, _) = object.material,
+              let material = state.physicsMaterials[materialID] else { return }
+        let compliance = material.contactCompliance
+        let base = bubble.contactCompliance ?? compliance.base
+        let stepSquared = Double(state.configuration.fixedTimeStep) * Double(state.configuration.fixedTimeStep)
+        var alpha = Double(baseContactCompliance) / stepSquared
+        if base > 0 {
+            var radii = [object.targetRadius, object.collisionRadius]
+            if let endRadius { radii.append(endRadius) }
+            if case .scalar(let scheduled)? = state.transitions[.bubbleRadius(bubble.id)]?.value { radii.append(scheduled) }
+            let exponent = Double(compliance.radiusExponent)
+            let radius = Double((exponent >= 0 ? radii.max() : radii.min()) ?? object.targetRadius)
+            let worst = Double(base) * pow(radius / Double(compliance.referenceRadius), exponent)
+                * pow(Self.minimumContourRatio, min(Double(compliance.compressionExponent), 0))
+            // Host liczy c w Float, więc przepełnienie samego c też jest błędem.
+            guard Float(worst).isFinite else { throw ModelValidationError.valueOutOfRange("contactCompliance") }
+            alpha += 2 * Double(Float(worst)) / stepSquared
+        }
+        guard Float(alpha).isFinite else { throw ModelValidationError.valueOutOfRange("contactCompliance") }
+    }
+
     /// Górna granica modułu składowej napędu kinematycznego (pozycja, obrót, prędkość). Solver dzieli różnicę póz przez `dt`
     /// (`.target`) i mnoży prędkość przez czas (`.velocity`); skończona, ale ogromna wartość (np. 3e38) przepełniała `Float`
     /// dopiero w kroku i zatrzymywała świat. 1e6 jest o rzędy wielkości ponad każdym realnym światem (dokładność `Float`
@@ -558,6 +601,7 @@ private struct StagingContext {
             let existing = try object(id)
             guard case .bubble(let bubble) = existing.descriptor else { throw TransactionRejectionReason.incompatibleObjectKind(id) }
             try requirePositive(radius, "transition.radius")
+            try validateWorstAlpha(existing, endRadius: radius)
             if existing.motionRole == .static {
                 try state.configuration.validate(BubbleDescriptor(id: id, position: bubble.position,
                     targetRadius: radius, motionRole: .static,
@@ -622,6 +666,7 @@ private struct StagingContext {
         if center != contact { descriptor = try resultObject(at: center) }
         for id in sources { try remove(id) }
         try add(descriptor)
+        if let added = state.objects[result.id] { try validateWorstAlpha(added) }
         if var merged = state.objects[result.id] {
             StructuralOperations.initializeMerge(&merged, sources: inputs)
             state.objects[result.id] = merged
@@ -652,6 +697,7 @@ private struct StagingContext {
             try StructuralOperations.initializeSplit(&a, &b, source: existing, shares: shares)
             try resolveSplitCenters(&a, &b, source: existing)
             try validate(a); try validate(b)
+            try validateWorstAlpha(a); try validateWorstAlpha(b)
             state.objects[first.result.id] = a; state.objects[second.result.id] = b
         }
     }

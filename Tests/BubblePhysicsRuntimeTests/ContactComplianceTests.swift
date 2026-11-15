@@ -208,6 +208,62 @@ final class ContactComplianceTests: XCTestCase {
         assertAccepted(merge, "scalenie z nadpisaniem 0")
     }
 
+    /// Dokładny wzór najgorszej α: α_cfg + 2 · c_worst / dt², z dt = 1/60 (dt² ≈ 2,8e-4): 2c/dt² = 7200 · c. FLT_MAX ≈ 3,4e38.
+    func testWorstAlphaCountsTheFactorTwoTheTimeStepAndTheMinimumRhoForNegativeCompressionExponent() async throws {
+        func accepts(base: Float, compressionExponent: Float = 0) async throws -> Bool {
+            let material = try CrowdScene.softBubblePhysics(base: base, radiusExponent: 0, compressionExponent: compressionExponent,
+                                                            referenceRadius: 1)
+            let world = try await transactionWorld(material: material, hardMaterial: PhysicsMaterial(kind: .bubble))
+            return await run(world, WorldTransaction().add(try bubble(1, at: [0, 0], radius: 2))).rejection == nil
+        }
+        // c = 7e34 jest skończone, c/dt² = 2,5e38 też, ale 2c/dt² = 5e38 przepełnia Float.
+        let overflowsOnlyWithFactorTwo = try await accepts(base: 7e34)
+        XCTAssertFalse(overflowsOnlyWithFactorTwo, "2c/dt² przepełnia Float")
+        let fitsWithFactorTwo = try await accepts(base: 4e34)
+        XCTAssertTrue(fitsWithFactorTwo, "2c/dt² = 2,9e38 mieści się w Float")
+        // k = −1: c_worst = c₀ · ρ_min^k = 100 · c₀ (ρ_min = 0,01).
+        let negativeExponentOverflows = try await accepts(base: 3e34, compressionExponent: -1)
+        XCTAssertFalse(negativeExponentOverflows, "ρ_min^k = 100 przepełnia α")
+        let positiveExponentFits = try await accepts(base: 3e34, compressionExponent: 1)
+        XCTAssertTrue(positiveExponentFits, "k > 0 nie powiększa c_worst")
+    }
+
+    // Ujemny wykładnik promienia: przy s < 0 najgorszy jest mniejszy koniec przedziału promieni.
+    func testWorstAlphaTakesTheSmallerRadiusWhenTheRadiusExponentIsNegative() async throws {
+        let material = try CrowdScene.softBubblePhysics(base: 1, radiusExponent: -70, referenceRadius: 1)
+        let world = try await transactionWorld(material: material, hardMaterial: PhysicsMaterial(kind: .bubble)) {
+            $0.add(try bubble(1, at: [0, 0], radius: 4))
+        }
+        let reason = TransactionRejectionReason.invalidValue(.valueOutOfRange("contactCompliance"))
+        assertRejected(await run(world, WorldTransaction().add(try bubble(2, at: [100, 100], radius: 0.25))), at: 0, reason, "add r = 0,25")
+        assertRejected(await run(world, WorldTransaction().startTransition(
+            ParameterTransition(target: .bubbleRadius(id(1)), value: .scalar(0.25), duration: 0.5))), at: 0, reason, "startTransition do r = 0,25")
+        assertAccepted(await run(world, WorldTransaction().startTransition(
+            ParameterTransition(target: .bubbleRadius(id(1)), value: .scalar(2), duration: 0.5))), "startTransition do r = 2")
+    }
+
+    // Przejście promienia, które już trwa, wchodzi do przedziału: stan końcowy przepełnia α także wtedy, gdy bieżący promień jest mały.
+    func testWorstAlphaIncludesTheScheduledEndOfARunningRadiusTransition() async throws {
+        let world = try await transactionWorld(material: overflowing(), hardMaterial: overflowingExponentWithoutCompliance()) {
+            $0.add(try bubble(1, at: [0, 0], radius: 1))
+        }
+        // Wolne przejście do r = 2 (2^70 ≈ 1,2e21 mieści się w Float przy r_ref = 1): trwa przez cały test.
+        assertAccepted(await run(world, WorldTransaction().startTransition(
+            ParameterTransition(target: .bubbleRadius(id(1)), value: .scalar(2), duration: 5))), "startTransition do r = 2")
+        let reason = TransactionRejectionReason.invalidValue(.valueOutOfRange("contactCompliance"))
+        // r_ref = 0,5: bieżący promień 1 daje 2^70 ≈ 1,2e21 (skończone), ale cel przejścia r = 2 daje 4^70 ≈ 1,4e42, więc samo
+        // przedział z celem przejścia odrzuca aktualizację materiału.
+        assertRejected(await run(world, WorldTransaction().updatePhysicsMaterial(soft,
+            material: try CrowdScene.softBubblePhysics(base: 1, radiusExponent: 70, referenceRadius: 0.5))), at: 0, reason,
+            "updatePhysicsMaterial z celem przejścia r = 2")
+        // Bez przejścia ten sam materiał dla bańki r = 1 jest przyjęty: r_ref = 0,5 jest skończone.
+        let calm = try await transactionWorld(material: overflowing(), hardMaterial: overflowingExponentWithoutCompliance()) {
+            $0.add(try bubble(1, at: [0, 0], radius: 1))
+        }
+        assertAccepted(await run(calm, WorldTransaction().updatePhysicsMaterial(soft,
+            material: try CrowdScene.softBubblePhysics(base: 1, radiusExponent: 70, referenceRadius: 0.5))), "updatePhysicsMaterial bez przejścia")
+    }
+
     // P-B-20 (G3-AC9): `startTransition` promienia po przepełnieniu odrzucone; promień bez zmian.
     func testWorstAlphaRejectsRadiusTransitionThatOverflowsAndKeepsTheRadius() async throws {
         let world = try await transactionWorld(material: overflowing(), hardMaterial: overflowingExponentWithoutCompliance()) {
