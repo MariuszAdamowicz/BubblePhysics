@@ -26,9 +26,10 @@ final class ContainmentResolutionTests: XCTestCase {
         XCTAssertNil(world.diagnostics.lastAdvanceIssue)
         return world
     }
-    private func bubble(_ value: UInt64, at position: WorldPoint, radius: Float, velocity: WorldPoint = .zero) throws -> WorldObject {
+    private func bubble(_ value: UInt64, at position: WorldPoint, radius: Float, velocity: WorldPoint = .zero,
+                        mass: Float? = nil) throws -> WorldObject {
         .bubble(try BubbleDescriptor(id: id(value), position: position, velocity: velocity, targetRadius: radius,
-                                     mass: radius * radius / 400, physicsMaterialID: material, renderMaterialID: style,
+                                     mass: mass ?? radius * radius / 400, physicsMaterialID: material, renderMaterialID: style,
                                      eventInterest: [.didAdd]))
     }
 
@@ -196,7 +197,7 @@ final class ContainmentResolutionTests: XCTestCase {
     }
 
     // P-B-39 (G2-AC6): limit pary nie zapada stosu pod stałym naciskiem. Scena z `ContactEventTests.testBeganBubbleAndBubble`:
-    // materiały domyślne, dwie bańki r = 8 jedna nad drugą na statycznej podłodze, grawitacja −400, 600 kroków.
+    // materiały domyślne, dwie bańki r = 8 (masa 1 jak w tamtej scenie) jedna nad drugą na statycznej podłodze, grawitacja −400, 600 kroków.
     func testTwoBubbleStackUnderGravityHoldsFor600Steps() async throws {
         let floorMaterial = PhysicsMaterialID(rawValue: 2)
         let world = try BubbleWorld(configuration: WorldConfiguration(
@@ -209,8 +210,8 @@ final class ContainmentResolutionTests: XCTestCase {
             .updatePhysicsMaterial(floorMaterial, material: try PhysicsMaterial(kind: .rigid))
             .updateRenderMaterial(style, material: try RenderMaterial())
             .add(floor)
-            .add(try bubble(2, at: [150, 18.3], radius: 8))
-            .add(try bubble(1, at: [150, 34.6], radius: 8)))
+            .add(try bubble(2, at: [150, 18.3], radius: 8, mass: 1))
+            .add(try bubble(1, at: [150, 34.6], radius: 8, mass: 1)))
         for index in 0..<600 {
             let frame = await world.advance(by: step)
             XCTAssertNil(world.diagnostics.lastAdvanceIssue, "krok \(index)")
