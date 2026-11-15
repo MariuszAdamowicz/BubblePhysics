@@ -269,17 +269,14 @@ enum NativeMetalScan {
 /// bańki i danych tylko do odczytu, więc może iść tym samym wątkiem zaraz po zapisie pozycji.
 /// `fused: false` (dwa dispatche) zostaje wyłącznie jako wzorzec bit w bit dla `NativeMetalChainKernelTests`;
 /// produkcja zawsze przekazuje `fused: true`.
-/// `correctionTotals` (indeks 12) to bufor `solverCorrectionTotals`: dwie połówki float2 na bańkę; przebieg `pass` czyta
-/// połówkę `pass & 1` i pisze drugą, a korekcja pary i bańki mieści się w budżecie 0,25·r pomniejszonym o to, co bańka
-/// już się przesunęła w tym kroku.
 enum NativeMetalContainmentRepair {
     /// Zwraca liczbę zakodowanych dispatchy.
     @discardableResult
     static func encodePass(_ encoder: MTLComputeCommandEncoder, pipelines: [String: MTLComputePipelineState],
                            bubbles: MTLBuffer, segments: MTLBuffer, input: MTLBuffer, output: MTLBuffer,
                            control: MTLBuffer, solver: MTLBuffer, contacts: MTLBuffer, changed: MTLBuffer,
-                           safety: MTLBuffer, statistics: MTLBuffer, repairActive: MTLBuffer,
-                           correctionTotals: MTLBuffer, pass: Int, bubbleCount: Int, fused: Bool) -> Int {
+                           safety: MTLBuffer, statistics: MTLBuffer, repairActive: MTLBuffer, pass: Int,
+                           bubbleCount: Int, fused: Bool) -> Int {
         let pipeline = pipelines[fused ? "nativeSeparateAndGuardContainedBubbles" : "nativeSeparateContainedBubbles"]!
         encoder.memoryBarrier(scope: .buffers)
         encoder.setComputePipelineState(pipeline)
@@ -290,7 +287,6 @@ enum NativeMetalContainmentRepair {
         var repairPass = UInt32(pass)
         encoder.setBytes(&repairPass, length: MemoryLayout<UInt32>.stride, index: 8)
         if fused { for (index, buffer) in [segments, contacts, statistics].enumerated() { encoder.setBuffer(buffer, offset: 0, index: 9 + index) } }
-        encoder.setBuffer(correctionTotals, offset: 0, index: 12)
         if bubbleCount > 0 {
             encoder.dispatchThreadgroups(.init(width: bubbleCount, height: 1, depth: 1),
                 threadsPerThreadgroup: .init(width: pipeline.threadExecutionWidth, height: 1, depth: 1))

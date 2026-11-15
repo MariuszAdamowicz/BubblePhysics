@@ -330,27 +330,6 @@ kernel void nativeBuildAdjacency(constant NativeControl &control [[buffer(0)]],
     atomic_fetch_max_explicit(overflow + 1, demanded, memory_order_relaxed);
 }
 
-// Limit korekcji środka bańki na krok: 0,25·r. Dotyczy kontaktów bańka–bańka (warm start i iteracje Jacobiego)
-// oraz naprawy zawierania. Kontakty bańka–ściana (odcinek, bryła sztywna) są poza limitem: nie przycina ich nic
-// i nie zużywają budżetu. Budżet bańki to 0,25·r pomniejszone o długość sumy korekcji bańka–bańka i naprawy
-// zawierania wykonanych dotąd w tym kroku (solverCorrectionTotals). Budżet dotyczy przemieszczenia NETTO:
-// |total + Δ| <= 0,25·r, więc korekcje zmniejszające |total| (np. relaksacja po warm starcie) przechodzą.
-constant float nativeCorrectionLimitFactor = 0.25f;
-
-// Największy współczynnik s w [0, 1], dla którego |total + s·wanted| <= limit (przemieszczenie netto bańki).
-// Gdy suma już przekracza limit (zaokrąglenia), korekcja przechodzi tylko wtedy, gdy nie powiększa |total|.
-float nativeNetScale(float2 total, float2 wanted, float limit) {
-    float a = dot(wanted, wanted);
-    if (a <= 0) return 1.0f;
-    float2 next = total + wanted;
-    if (dot(next, next) <= limit * limit) return 1.0f;
-    float c = dot(total, total) - limit * limit;
-    if (c > 0) return dot(next, next) <= dot(total, total) ? 1.0f : 0.0f;
-    float b = dot(total, wanted);
-    float root = (-b + sqrt(max(b * b - a * c, 0.0f))) / a;
-    return clamp(root, 0.0f, 1.0f);
-}
-
 kernel void nativePrepareSolverContacts(device NativeBubble *bubbles [[buffer(0)]],
     device NativeSegment *segments [[buffer(1)]], device NativeContactCache *cache [[buffer(2)]],
     constant NativeControl &control [[buffer(3)]], device NativeContactControl &contacts [[buffer(4)]],
@@ -361,12 +340,10 @@ kernel void nativePrepareSolverContacts(device NativeBubble *bubbles [[buffer(0)
     uint a = endpoints[index].x, b = endpoints[index].y;
     if (record.metadata.z == contacts.limits.x) {
         // Jedna wspólna lambda obu końców: suma długości warm korekcji każdej bańki
-        // nie może przekroczyć promienia (kontakt z odcinkiem) ani limitu 0,25·r na krok (kontakt bańka–bańka),
-        // niezależnie od liczby kontaktów.
-        float factor = record.metadata.x == 0 ? nativeCorrectionLimitFactor : 1.0f;
-        float maximum = factor * bubbles[a].physical.z / (bubbles[a].physical.y * max(1u, degrees[a]));
+        // nie może przekroczyć jej promienia, niezależnie od liczby kontaktów.
+        float maximum = bubbles[a].physical.z / (bubbles[a].physical.y * max(1u, degrees[a]));
         if (record.metadata.x == 0)
-            maximum = min(maximum, factor * bubbles[b].physical.z / (bubbles[b].physical.y * max(1u, degrees[b])));
+            maximum = min(maximum, bubbles[b].physical.z / (bubbles[b].physical.y * max(1u, degrees[b])));
         record.response.x = min(record.response.x, maximum);
         cache[index] = record;
     }
@@ -376,19 +353,16 @@ kernel void nativeApplyWarmStart(device NativeBubble *bubbles [[buffer(0)]],
     device NativeContactCache *cache [[buffer(1)]], constant NativeControl &control [[buffer(2)]],
     device NativeContactControl &contacts [[buffer(3)]], device uint4 *adjacency [[buffer(4)]],
     device uint *degrees [[buffer(5)]], device float4 *positions [[buffer(6)]],
-    device float2 *correctionTotals [[buffer(7)]], uint index [[thread_position_in_grid]]) {
+    uint index [[thread_position_in_grid]]) {
     if (index >= control.counts.x) return;
-    float2 correction = 0, limited = 0;
+    float2 correction = 0;
     for (uint j = 0; j < degrees[index]; ++j) {
         uint4 edge = adjacency[index * contacts.cache.w + j];
         NativeContactCache record = cache[edge.x];
         float sign = edge.w ? 1 : -1;
-        float2 step = sign * record.geometry.xy * record.response.x * bubbles[index].physical.y;
-        correction += step;
-        if (edge.z == 0) limited += step;
+        correction += sign * record.geometry.xy * record.response.x * bubbles[index].physical.y;
     }
     positions[index] = float4(bubbles[index].position.xy + correction, 0, 0);
-    correctionTotals[index] = limited;
 }
 
 // Normal i głębokość zawsze z jednej, zakończonej iteracji pozycji.
@@ -439,46 +413,8 @@ kernel void nativeUpdateContactMultipliers(device NativeBubble *bubbles [[buffer
     uint degree = edge.z == 0 ? max(degrees[edge.x], degrees[edge.y]) : degrees[edge.x];
     // Wspólna relaksacja obu końców utrzymuje równe/opposite impulsy i stabilizuje gęste grafy.
     float next = max(0.0f, record.response.x + delta / max(1u, degree));
-    corrections[index] = float4(geometry.xy * (next - record.response.x), next - record.response.x, 0);
+    corrections[index] = float4(geometry.xy * (next - record.response.x), 0, 0);
     record.response.x = next;
-    cache[index] = record;
-}
-
-// Wątek na bańkę: jaką część żądanej przez kontakty bańka–bańka korekcji netto mieści jej budżet 0,25·r.
-kernel void nativeLimitBubbleCorrections(device NativeBubble *bubbles [[buffer(0)]],
-    constant NativeControl &control [[buffer(1)]], device NativeContactControl &contacts [[buffer(2)]],
-    device NativeSolverControl &solver [[buffer(3)]], device uint4 *adjacency [[buffer(4)]],
-    device uint *degrees [[buffer(5)]], device float4 *corrections [[buffer(6)]],
-    device float2 *correctionTotals [[buffer(7)]], device float *correctionScales [[buffer(8)]],
-    uint index [[thread_position_in_grid]]) {
-    if (index >= control.counts.x) return;
-    float2 demanded = 0;
-    if (solver.counts.x) {
-        for (uint j = 0; j < degrees[index]; ++j) {
-            uint4 edge = adjacency[index * contacts.cache.w + j];
-            if (edge.z != 0) continue;
-            demanded += (edge.w ? 1 : -1) * corrections[edge.x].xy * bubbles[index].physical.y;
-        }
-    }
-    correctionScales[index] = nativeNetScale(correctionTotals[index], demanded,
-                                             nativeCorrectionLimitFactor * bubbles[index].physical.z);
-}
-
-// Wątek na kontakt: oba końce dostają ten sam współczynnik k = min(s_a, s_b), więc akcja równa się reakcji. Przyrost λ
-// skaluje się razem z korekcją, żeby λ odpowiadało wykonanemu ruchowi.
-kernel void nativeScaleContactCorrections(device NativeContactCache *cache [[buffer(0)]],
-    device NativeContactControl &contacts [[buffer(1)]], device NativeSolverControl &solver [[buffer(2)]],
-    device uint4 *endpoints [[buffer(3)]], device float4 *corrections [[buffer(4)]],
-    device float *correctionScales [[buffer(5)]], uint index [[thread_position_in_grid]]) {
-    if (index >= contacts.counts.z || !endpoints[index].w || !solver.counts.x) return;
-    uint4 edge = endpoints[index];
-    if (edge.z != 0) return;
-    float k = min(correctionScales[edge.x], correctionScales[edge.y]);
-    if (k >= 1) return;
-    float4 correction = corrections[index];
-    corrections[index] = float4(correction.xy * k, correction.z, 0);
-    NativeContactCache record = cache[index];
-    record.response.x = max(0.0f, record.response.x - (1 - k) * correction.z);
     cache[index] = record;
 }
 
@@ -487,23 +423,16 @@ kernel void nativeSolveJacobi(device NativeBubble *bubbles [[buffer(0)]],
     constant NativeControl &control [[buffer(3)]], device NativeContactControl &contacts [[buffer(4)]],
     device NativeSolverControl &solver [[buffer(5)]], device uint4 *adjacency [[buffer(6)]],
     device uint *degrees [[buffer(7)]], device float4 *corrections [[buffer(8)]],
-    device float4 *residuals [[buffer(9)]], device float2 *correctionTotals [[buffer(10)]],
-    uint index [[thread_position_in_grid]]) {
+    device float4 *residuals [[buffer(9)]], uint index [[thread_position_in_grid]]) {
     if (index >= control.counts.x) return;
-    float2 wall = 0, limited = 0;
+    float2 correction = 0;
     if (solver.counts.x) {
         for (uint j = 0; j < degrees[index]; ++j) {
             uint4 edge = adjacency[index * contacts.cache.w + j];
-            float2 step = (edge.w ? 1 : -1) * corrections[edge.x].xy * bubbles[index].physical.y;
-            if (edge.z == 0) limited += step; else wall += step;
+            correction += (edge.w ? 1 : -1) * corrections[edge.x].xy * bubbles[index].physical.y;
         }
     }
-    // Współczynniki k = min(s_a, s_b) są na kontakt, więc suma bańki może w rzadkich układach wyjść poza budżet netto;
-    // ostatnie przycięcie gwarantuje limit (poza przypadkiem, w którym łamie symetrię akcji i reakcji).
-    limited *= nativeNetScale(correctionTotals[index], limited, nativeCorrectionLimitFactor * bubbles[index].physical.z);
-    float2 correction = wall + limited;
     output[index] = float4(input[index].xy + correction, 0, 0);
-    correctionTotals[index] += limited;
     residuals[index] = float4(0, any(correction != 0) ? 1 : 0, solver.counts.x ? 1 : 0, 0);
 }
 

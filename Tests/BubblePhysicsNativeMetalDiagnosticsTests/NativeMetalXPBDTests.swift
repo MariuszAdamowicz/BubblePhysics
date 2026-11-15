@@ -25,7 +25,6 @@ final class NativeMetalXPBDTests: XCTestCase {
     }
 
     // Wspólny zapis pozycji przez kontakt lub odczyt częściowo zapisanej iteracji zmienia hash.
-    // Limit korekcji 0,25·r na krok (r = 1): łańcuch [0; 1,5; 3] rozsuwa się w klatce do odstępów 1,75, nie do 2.
     func testThreeBubbleChainIsRepeatableAndRaceFree() async throws {
         let first = try makeSolver(iterations: 32)
         let second = try makeSolver(iterations: 32)
@@ -36,17 +35,15 @@ final class NativeMetalXPBDTests: XCTestCase {
             assertFinite(a)
             XCTAssertEqual(stateHash(a), stateHash(b), "Klatka \(step)")
             for index in 0..<2 {
-                XCTAssertGreaterThanOrEqual((a.bubbles[index + 1].center - a.bubbles[index].center).length, 1.7499)
+                XCTAssertGreaterThanOrEqual((a.bubbles[index + 1].center - a.bubbles[index].center).length, 1.9999)
             }
         }
     }
 
     // Usunięcie applyWarmStart albo zerowanie poprawnie dopasowanej lambda daje koszt cold-startu.
-    // Nakładanie 0,1 mieści się w limicie 0,25·r na krok; przy większym kontakt nie zbiega w klatce, więc liczy się
-    // cały budżet iteracji i zimny start nie różni się od ciepłego.
     func testWarmStartNeedsNoMoreIterationsThanColdStartAfterFirstFrame() async throws {
         let warm = try makeSolver(iterations: 64)
-        let world = try makeWorld(centers: [0, 1.9, 3.8])
+        let world = try makeWorld(centers: [0, 1.5, 3])
         let initial = try await warm.executeFrame(snapshot: .init(world: world), scenarioStep: 1)
         XCTAssertGreaterThan(initial.report.solver.iterations, 0)
         for step in 2...5 {
@@ -68,8 +65,7 @@ final class NativeMetalXPBDTests: XCTestCase {
         for _ in 0..<4 {
             let solver = try makeSolver(iterations: 32)
             let frame = try await solver.executeFrame(world: world, scenarioStep: 1)
-            // Limit 0,25·r na krok: lewa para rusza się o 0,25 w lewo, środkowa bańka zostaje (1,4 + 0,25).
-            XCTAssertGreaterThanOrEqual((frame.bubbles[1].center - frame.bubbles[0].center).length, 1.6499)
+            XCTAssertGreaterThanOrEqual((frame.bubbles[1].center - frame.bubbles[0].center).length, 1.9999)
             hashes.append(stateHash(frame))
             XCTAssertEqual(stateHash(try XCTUnwrap(solver.publishedFrame)), hashes.last)
         }
@@ -107,10 +103,8 @@ final class NativeMetalXPBDTests: XCTestCase {
         world.addBubble(try .init(id: .init(rawValue: 1), center: .zero, mass: 3, targetRadius: 1))
         world.addBubble(try .init(id: .init(rawValue: 2), center: .init(x: 1.5, y: 0), mass: 1, targetRadius: 1))
         let frame = try await solver.executeFrame(world: world, scenarioStep: 1)
-        // Bez limitu: −0,125 i 1,875. Lżejsza bańka trafia w limit 0,25·r = 0,25, więc para skaluje się wspólnie (k = 0,5):
-        // lżejsza przesuwa się o 0,25, a cięższa o 0,25/3, czyli pęd pary zostaje zachowany.
-        XCTAssertEqual(frame.bubbles[0].center.x, -1.0 / 12, accuracy: 0.00001)
-        XCTAssertEqual(frame.bubbles[1].center.x, 1.75, accuracy: 0.00001)
+        XCTAssertEqual(frame.bubbles[0].center.x, -0.125, accuracy: 0.00001)
+        XCTAssertEqual(frame.bubbles[1].center.x, 1.875, accuracy: 0.00001)
         XCTAssertEqual(3 * frame.bubbles[0].velocity.x + frame.bubbles[1].velocity.x, 0, accuracy: 0.0001)
     }
 
@@ -141,17 +135,16 @@ final class NativeMetalXPBDTests: XCTestCase {
         XCTAssertEqual(frame.contacts[0].age, 1)
     }
 
-    func testWarmStartBoundsAnOversizedMatchedMultiplierByQuarterOfBubbleRadius() async throws {
+    func testWarmStartBoundsAnOversizedMatchedMultiplierByBubbleRadius() async throws {
         let solver = try makeSolver(iterations: 1)
         let world = try makeWorld(centers: [0, 1.5])
         _ = try await solver.executeFrame(snapshot: .init(world: world), scenarioStep: 1)
         let state = try XCTUnwrap(solver.persistentState)
         state.contactCache.contents().bindMemory(to: NativeContactCacheRecord.self, capacity: state.contactCapacity)[0].lambda = 100_000_000
         let frame = try await solver.executeFrame(snapshot: .init(world: world), scenarioStep: 2)
-        // Każda bańka ma promień 1: warm start przesuwa co najwyżej o 0,25·r (limit korekcji na krok), więc środki
-        // trafiają od razu w −0,25 i 1,75, a rezyduum przed pierwszą iteracją jest zerowe (bez limitu warm start
-        // wyrzuciłby je o promień i rezyduum sięgałoby 1,5).
-        XCTAssertLessThanOrEqual(frame.report.solver.initialResidualNorm, 0.0001)
+        // Każda bańka ma promień 1: warm-start przesuwa co najwyżej o promień,
+        // więc rezyduum przed pierwszą iteracją nie przekracza 1.5.
+        XCTAssertLessThanOrEqual(frame.report.solver.initialResidualNorm, 1.50001)
         XCTAssertEqual(frame.bubbles[0].center.x, -0.25, accuracy: 0.00001)
         XCTAssertEqual(frame.bubbles[1].center.x, 1.75, accuracy: 0.00001)
         XCTAssertEqual(frame.telemetry.cacheHitCount, 1)
