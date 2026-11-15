@@ -391,15 +391,69 @@ Zadania 9–14 są zbudowane (commity 74bfd5c, 385be0e, 2d557e9, b5ea0be, a9c875
 13. Dodać bufory `solverCorrectionTotals` i `solverCorrectionScales`, przycięcie λ do 0,25·r w `nativePrepareSolverContacts` oraz `nativeLimitBubbleCorrections` i `nativeScaleContactCorrections` skalujące korekcję i Δλ kontaktu przez min(s_a, s_b), zmieniając oczekiwania `NativeMetalXPBDTests.swift:138`, `NativeMetalSafetyTests.swift:38` i `:9`, co pokrywa [P-B-10](#p-b-10) dla pary z [P-B-11](#p-b-11) i [P-B-38](#p-b-38) · verify: `swift test --filter "ContainmentResolutionTests.testStepDisplacementCoincident|ContainmentResolutionTests.testCoincidentPair|ContainmentResolutionTests.testLimitedPairKeepsMomentum|NativeMetalXPBDTests|NativeMetalSafetyTests"` — **zastąpione** (rewizja [CD-D-9](change-design.md#cd-d-9), kod wycofuje zadanie 16)
 14. Wliczyć korekcję obu kopii naprawy zawierania do `solverCorrectionTotals` (indeks 12), zmieniając oczekiwania `NativeMetalContainmentParallelTests.swift:20`, `:34` i `:50`, co pokrywa [P-B-9](#p-b-9), [P-B-10](#p-b-10) i [P-B-12](#p-b-12) · verify: `swift test --filter "ContainmentResolutionTests|NativeMetalContainmentParallelTests|NativeMetalChainKernelTests|NativeMetalSafetyTests"` — **zastąpione** (rewizja [CD-D-19](change-design.md#cd-d-19), kod wycofuje zadanie 16)
 15. Dopisać do `ContainmentResolutionTests` test stosu dwóch baniek r = 8 na podłodze pod grawitacją −400 przez 600 kroków (`testTwoBubbleStackUnderGravityHolds…`), pokrywając [P-B-39](#p-b-39) · verify: `swift build --build-tests && ! swift test --filter ContainmentResolutionTests.testTwoBubbleStack`
+
+    ```text
+    $ swift test --filter ContainmentResolutionTests.testTwoBubbleStack   # faza czerwona minęła; stan na 7aec3ce
+    Executed 1 test, with 0 failures (0 unexpected) in 0.797 seconds
+    ```
 16. Wycofać zmiany commitów a9c8752 i 97a00f0 w `Sources/` i `Tests/` (bufory i jądra budżetu, `nativeNetScale`, budżet w naprawie i zmienione wtedy oczekiwania testów), zostawiając pliki w `wip/` · verify: `! grep -rqE "solverCorrectionTotals|solverCorrectionScales|nativeLimitBubbleCorrections|nativeScaleContactCorrections|nativeNetScale" Sources Tests && swift test --filter "NativeMetalXPBDTests|NativeMetalSafetyTests|NativeMetalChainKernelTests|NativeMetalContainmentParallelTests|ContactEventTests"`
+
+    ```text
+    $ ! grep -rqE "solverCorrectionTotals|…|nativeNetScale" Sources Tests && swift test --filter "NativeMetalXPBDTests|NativeMetalSafetyTests|NativeMetalChainKernelTests|NativeMetalContainmentParallelTests|ContactEventTests"
+    grep: no matches
+    Executed 85 tests, with 0 failures (0 unexpected) in 6.534 seconds
+    ```
 17. Usunąć naprawę zawierania: jądra i `nativeContainmentCorrection` z `NativePostSolveKernels`, `NativeMetalContainmentRepair`, pętlę, bufor `containmentRepairActive`, trzy nazwy w `stageNames` i testy naprawy z inwentarza, zmieniając oczekiwania `NativeMetalSafetyTests` z inwentarza dla [CD-D-19](change-design.md#cd-d-19) · verify: `! grep -rqE "nativeSeparateContainedBubbles|nativeSeparateAndGuardContainedBubbles|nativeReapplyCenterGuards|nativeContainmentCorrection|NativeMetalContainmentRepair|containmentRepairActive" Sources Tests && swift test --filter "NativeMetalContainmentParallelTests|NativeMetalChainKernelTests|NativeMetalResourceReuseTests|NativeMetalSafetyTests|ContainmentResolutionTests.testMergeIntoOccupied|ContainmentResolutionTests.testEmptyBoard"`
+
+    ```text
+    $ ! grep -rqE "nativeSeparateContainedBubbles|…|containmentRepairActive" Sources Tests && swift test --filter "NativeMetalContainmentParallelTests|NativeMetalChainKernelTests|NativeMetalResourceReuseTests|NativeMetalSafetyTests|ContainmentResolutionTests.testMergeIntoOccupied|ContainmentResolutionTests.testEmptyBoard"
+    grep: no matches
+    Executed 46 tests, with 0 failures (0 unexpected) in 1.830 seconds
+    ```
 18. Dodać przełącznik `pairCorrectionLimit` (konfiguracja, `control.contactDamping.y`, parametr `makeBenchmarkWorld`) i `nativePairLambdaLimit` w `nativePrepareSolverContacts` i `nativeUpdateContactMultipliers`, pokrywając [P-B-9](#p-b-9)–[P-B-11](#p-b-11), [P-B-38](#p-b-38) i [P-B-39](#p-b-39) · verify: `swift test --filter "ContainmentResolutionTests|ContactEventTests"`
+
+    ```text
+    $ swift test --filter "ContainmentResolutionTests|ContactEventTests"
+    Executed 38 tests, with 0 failures (0 unexpected) in 5.981 seconds
+    ```
 19. Uruchomić testy z inwentarza dla limitu pary i każdemu zmienionemu oczekiwaniu dodać bliźniaka z `pairCorrectionLimit: false` i dawnym oczekiwaniem, pokrywając [P-B-32](#p-b-32) · verify: `grep -rqE "pairCorrectionLimit(: | = )false" Tests/BubblePhysicsNativeMetalDiagnosticsTests && grep -rqE "pairCorrectionLimit(: | = )false" Tests/BubblePhysicsMetalRenderTests && swift test --filter "NativeMetalXPBDTests|NativeMetalSafetyTests|AcceptanceEquivalenceTests|AcceptanceRenderEquivalenceTests|PublishedStateDeterminismTests"`
+
+    ```text
+    $ grep -rqE "pairCorrectionLimit(: | = )false" Tests/BubblePhysicsNativeMetalDiagnosticsTests && grep -rqE … Tests/BubblePhysicsMetalRenderTests && swift test --filter "NativeMetalXPBDTests|NativeMetalSafetyTests|AcceptanceEquivalenceTests|AcceptanceRenderEquivalenceTests|PublishedStateDeterminismTests"
+    grep: both match
+    Executed 58 tests, with 0 failures (0 unexpected) in 27.156 seconds
+    ```
 20. Dopisać do `NativeMetalSafetyTests` testy rzutu strażnika `testGuardProjectsOntoTheEdgeCrossedInRelativeMotion…` i `testGuardResolvesTwoTouchingWallsToTheInnerCorner…`, pokrywając [P-B-40](#p-b-40) i [P-B-41](#p-b-41) · verify: `swift build --build-tests && ! swift test --filter "NativeMetalSafetyTests.testGuardProjects|NativeMetalSafetyTests.testGuardResolves"`
+
+    ```text
+    $ swift test --filter "NativeMetalSafetyTests.testGuardProjects|NativeMetalSafetyTests.testGuardResolves"   # faza czerwona minęła (59fd455); stan na 7aec3ce
+    Executed 2 tests, with 0 failures (0 unexpected) in 0.150 seconds
+    ```
 21. Zmienić rzut w `nativeGuardCenter` na przekroczoną krawędź z najwyżej 4 rzutami na sąsiadów i testem wolnego miejsca ([CD-D-17](change-design.md#cd-d-17)), zmieniając tylko te testy strażnika z inwentarza, które zmienia rzut, co pokrywa [P-B-13](#p-b-13), [P-B-14](#p-b-14), [P-B-32](#p-b-32), [P-B-40](#p-b-40) i [P-B-41](#p-b-41) · verify: `swift test --filter "NativeMetalSafetyTests|CrowdCompressionTests|SolverGuardCauseTests|NativeMetalPreviousContourTests|NativeMetalPublicObjectTests"`
+
+    ```text
+    $ swift test --filter "NativeMetalSafetyTests|CrowdCompressionTests|SolverGuardCauseTests|NativeMetalPreviousContourTests|NativeMetalPublicObjectTests"
+    Executed 57 tests, with 0 failures (0 unexpected) in 13.008 seconds
+    ```
 22. Dopisać do sekcji 2.2.0 w `CHANGELOG.md` `lastSolverGuardCause`, `containedBubblePairCount`, zawieranie rozsuwane w kilku krokach bez naprawy i bez odrzucenia kroku, limit λ pary z porównaniem do v2.1.0 jak w [G6-AC1](change-design.md#g6-ac1) i rzut na przekroczoną krawędź · verify: `grep -q "containedBubblePairCount" CHANGELOG.md && grep -q "lastSolverGuardCause" CHANGELOG.md && grep -q "limit λ pary" CHANGELOG.md`
+
+    ```text
+    $ grep -q "containedBubblePairCount" CHANGELOG.md && grep -q "lastSolverGuardCause" CHANGELOG.md && grep -q "limit λ pary" CHANGELOG.md
+    grep: all three match
+    ```
 23. Uruchomić cały pakiet i zapisać pod tym wycinkiem wiersz `Inwentarz wycinka 2: …` z każdym zmienionym oczekiwaniem, jego powodem i bliźniakiem albo usuniętym testem · verify: `swift test && grep -q "^Inwentarz wycinka 2:" docs/sdlc/changes/2026-11-14-crowd-solver-compression/plan.md`
+
+    ```text
+    $ swift test && grep -q "^Inwentarz wycinka 2:" plan.md
+    Executed 1369 tests, with 1 test skipped and 0 failures (0 unexpected) in 485.963 seconds
+    exit 0; grep: match
+    ```
 24. Uruchomić informacyjnie `swift run -c release BubblePhysicsPerfGuard` i zapisać wynik pod tym wycinkiem w wierszu `Strażnik wydajności wycinka 2: …` · verify: `grep -q "^Strażnik wydajności wycinka 2:" docs/sdlc/changes/2026-11-14-crowd-solver-compression/plan.md`
+
+    ```text
+    $ grep -q "^Strażnik wydajności wycinka 2:" plan.md
+    grep: match (wynik strażnika: exit 1, FAIL stress-300 i acceptance — do decyzji właściciela)
+    ```
 
 Inwentarz wycinka 2: każde zmienione oczekiwanie istniejącego testu, z powodem i bliźniakiem albo usuniętym testem (pełny `swift test` na 62e8fc4: 1368 testów, 1 pominięty, 0 porażek). (1) Limit λ pary (CD-D-9), każdy z bliźniakiem `pairCorrectionLimit = false` i dawnym oczekiwaniem: `NativeMetalXPBDTests.testInverseMassWeightsCorrectionsAndPreservesCenterOfMass` (−1/12 i 1,75 zamiast −0,125 i 1,875), `testThreeBubbleChainIsRepeatableAndRaceFree` (odstęp 1,75 w pierwszej klatce zamiast ≥ 2), `testSameInputProducesSamePublishedStateHash` (odstęp 1,65 zamiast ≥ 2), `testWarmStartNeedsNoMoreIterationsThanColdStartAfterFirstFrame` (bez wymogu zbieżności w jednym kroku, nie więcej niż cold start); `AcceptanceEquivalenceTests` (dwa testy wzorca: nowe hashe stanu 4e78b25ccda3ae78 i konturów f3be8eabdb1ca5fb, bliźniaki odtwarzają 62aa8c214dcaec24 i bc19bd9b8aa48c7d); `AcceptanceRenderEquivalenceTests.testAcceptanceSceneRenderedAfter120StepsEqualsTheReferencePixels` (nowy hash pikseli becb5955496833ea, bliźniak odtwarza 5e37c3629219412c). Bez zmian: `PublishedStateDeterminismTests`, `testWarmStartBoundsAnOversizedMatchedMultiplierByBubbleRadius`, `testSegmentContactSeparatesAndIterationBudgetIsReported`. (2) Zawieranie bez bitu 2 (zadanie 12, bez bliźniaka): walidator w `NativeMetalContainmentParallelTests` czyta licznik par zamiast bitu 2, `NativeMetalSafetyTests.testUnresolvableContainmentIsCountedAndDoesNotRejectTheFrame` (dawniej odrzucenie klatki, teraz licznik 1 i klatka przyjęta). (3) Naprawa zawierania usunięta (CD-D-19, zadanie 17, bez bliźniaka, bo naprawy nie da się wyłączyć): `NativeMetalSafetyTests.testCoincidentDifferentRadiiSeparateOverSeveralAcceptedFrames` (para r = 3 i r = 1 o wspólnym środku rozdziela się w kilku klatkach, każda przyjęta, na końcu licznik 0 i odległość ≥ 2) i `testMovingPolygonGuardPublishesContainedPairCountedWithoutRejection` (para zostaje zawarta w tej klatce: licznik 1 zamiast rozsunięcia naprawą). (4) Usunięte testy wołające usuwane jądra naprawy: `NativeMetalChainKernelTests.testFusedRepairPassIsBitIdenticalToSeparationThenGuard` (z `RepairResult`, `repairPass`, `repairSegment`) oraz w `NativeMetalContainmentParallelTests` `testInactiveRepairCopiesPositionsWithoutCorrection`, `testParallelRepairAggregatesOpposingAxesAndRepeatsExactly`, `testParallelRepairIncludesNeighborsBeyondOneSIMDWidth`, `testRepairEarlyOutRetainsCompletedStateInEveryPingPongPass` z fixture `separate`. (5) Rzut strażnika na przekroczoną krawędź (CD-D-17, zadanie 21): żadne istniejące oczekiwanie nie zmieniło się; `testMovingPolygonGuard…`, `testMovingPolygonCannotContainBubbleCenter`, `testInitiallyContainedCenterCanEscapePolygon`, `NativeMetalPreviousContourTests` i `NativeMetalPublicObjectTests` przechodzą bez zmian, a nowe `testGuardProjectsOntoTheEdgeCrossedInRelativeMotionNotTheNearestEdge` i `testGuardResolvesTwoTouchingWallsToTheInnerCorner` dodano w `NativeMetalSafetyTests`.
 
