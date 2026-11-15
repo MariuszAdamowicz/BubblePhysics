@@ -15,6 +15,13 @@ struct NativeBubble {
     uint4 filter; // kategoria, maska, reserved, warstwa (Int32 z odwróconym bitem znaku)
     float4 contact; // część bazowa podatności c₀·(r/r_ref)^s (0 = kontakt twardy), wykładnik ściśnięcia k, reserved, reserved
 };
+// Podatność końca kontaktu: c = c₀·(r/r_ref)^s · max(ρ, ρ_min)^k (CD-D-8). Host liczy część bazową `contact.x`, GPU czynnik ρ^k.
+// Przy `contact.x == 0` zwraca 0 bez potęg, więc skrajny wykładnik nie daje NaN, a kontakt zostaje twardy jak w v2.1.0.
+constant float kNativeMinimumContourRatio = 0.01f; // ρ_min (CD-D-8)
+float nativeContactCompliance(NativeBubble bubble, float rho) {
+    if (bubble.contact.x <= 0) return 0;
+    return bubble.contact.x * pow(max(rho, kNativeMinimumContourRatio), bubble.contact.y);
+}
 struct NativeSegment {
     long2 identity; uint4 flags; float4 previous; float4 current;
     float4 velocity; float4 collision;

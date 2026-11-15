@@ -409,6 +409,14 @@ float4 nativeReadConstraint(device NativeBubble *bubbles, device NativeSegment *
     return nativeConstraintGeometry(bubbles[a], positions[a].xy, kind, other, positionB, segment, fallback);
 }
 
+// α kontaktu (CD-D-5): α_cfg + (c_a(ρ_a) + c_b(ρ_b)) / dt² dla pary bańka–bańka, α_cfg + c_a(ρ_a) / dt² dla bańki i odcinka
+// (ściany albo bryły statycznej). `a` to bańka kontaktu, `other` druga bańka (tylko dla `kind == 0`).
+float nativeContactAlpha(float alphaConfiguration, float dt, NativeBubble a, NativeBubble other, uint kind, float4 rho) {
+    float compliance = nativeContactCompliance(a, rho.x);
+    if (kind == 0) compliance += nativeContactCompliance(other, rho.y);
+    return alphaConfiguration + compliance / (dt * dt);
+}
+
 kernel void nativeUpdateContactMultipliers(device NativeBubble *bubbles [[buffer(0)]],
     device NativeSegment *segments [[buffer(1)]], device NativeContactCache *cache [[buffer(2)]],
     device float4 *positions [[buffer(3)]], constant NativeControl &control [[buffer(4)]],
@@ -420,7 +428,8 @@ kernel void nativeUpdateContactMultipliers(device NativeBubble *bubbles [[buffer
     uint4 edge = endpoints[index]; NativeContactCache record = cache[index];
     float4 geometry = nativeReadConstraint(bubbles, segments, positions, edge.x, edge.y, edge.z, record.geometry.xy);
     float weight = bubbles[edge.x].physical.y + (edge.z == 0 ? bubbles[edge.y].physical.y : 0);
-    float alpha = solver.physics.x;
+    float alpha = nativeContactAlpha(solver.physics.x, control.physics.x, bubbles[edge.x],
+        edge.z == 0 ? bubbles[edge.y] : bubbles[edge.x], edge.z, record.rho);
     if (weight + alpha <= 0) { corrections[index] = 0; return; }
     float delta = (geometry.z - alpha * record.response.x) / (weight + alpha);
     uint degree = edge.z == 0 ? max(degrees[edge.x], degrees[edge.y]) : degrees[edge.x];
@@ -465,7 +474,9 @@ kernel void nativeMeasureResidual(device NativeBubble *bubbles [[buffer(0)]],
         uint a = edge.w && edge.z == 0 ? edge.y : index;
         uint b = edge.w && edge.z == 0 ? index : edge.y;
         float4 geometry = nativeReadConstraint(bubbles, segments, positions, a, b, edge.z, record.geometry.xy);
-        float residual = geometry.z - solver.physics.x * record.response.x;
+        float alpha = nativeContactAlpha(solver.physics.x, control.physics.x, bubbles[a],
+            edge.z == 0 ? bubbles[b] : bubbles[a], edge.z, record.rho);
+        float residual = geometry.z - alpha * record.response.x;
         maximum = max(maximum, record.response.x > 0 ? abs(residual) : max(0.0f, residual));
     }
     residuals[index].x = maximum;

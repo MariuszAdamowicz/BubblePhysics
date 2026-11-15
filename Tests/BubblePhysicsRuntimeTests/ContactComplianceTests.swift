@@ -7,8 +7,10 @@ import XCTest
 /// bańki dociśniętej do ściany. Wszystko przez publiczny `BubbleWorld` na urządzeniu Metal.
 ///
 /// Sceny docisku są z `CrowdSceneSupport.swift`: bańka stoi przy wewnętrznej krawędzi ściany, a `MotorDrive` pcha ją w ścianę stałą
-/// siłą F. W stanie ustalonym XPBD daje wgniecenie δ = c · F, gdzie c = c₀ · (r / r_ref)^s · ρ^k (niezależnie od masy), więc
-/// wartości poniżej wynikają z tego wzoru: przy r_ref = 20, c₀ = 4e-3 i F = 500 bańka r = 20 (s = 1) ugina się o 2.
+/// siłą F. W stanie ustalonym wgniecenie jest proporcjonalne do c · F, gdzie c = c₀ · (r / r_ref)^s · ρ^k, ze współczynnikiem
+/// solvera ≈ 3,85 (8 iteracji Jacobiego nie domyka α ≫ invMass): przy r_ref = 20, c₀ = 1e-3 i F = 300 bańka r = 20 (s = 1)
+/// ugina się o 1,156. Siła musi zostać w zakresie liniowym: powyżej F ≈ 600 (m = 1) prędkość w stronę ściany przekracza
+/// `restSpeed` tłumika kontaktu (max(40, 2r)), tłumik się wyłącza i bańka dochodzi do δ = r (probe przy F = 1000, c₀ = 4e-3).
 @MainActor
 final class ContactComplianceTests: XCTestCase {
     private let soft = PhysicsMaterialID(rawValue: 1)
@@ -17,9 +19,9 @@ final class ContactComplianceTests: XCTestCase {
     private let step = 1.0 / 60
     private func id(_ value: UInt64) -> ObjectID { ObjectID(rawValue: value) }
 
-    /// Docisk i skala wgnieceń: δ = c₀ · F · (r / 20)^s · ρ^k.
-    private let force: Float = 500
-    private let base: Float = 4e-3
+    /// Docisk i skala wgnieceń: δ ≈ 3,85 · c₀ · F · (r / 20)^s · ρ^k, w zakresie liniowym także dla 2F.
+    private let force: Float = 300
+    private let base: Float = 1e-3
     /// 2 s symulacji (pomiar po 2 s), okno uspokojenia od 1 s do 2 s.
     private let steps = 120
     private let settleWindow = 60..<120

@@ -210,6 +210,34 @@ enum CrowdScene {
             return count == 0 ? 0 : Float(total / Double(count))
         }
 
+        /// Liczba par o nachodzących na siebie kołach promieni docelowych, średnio na klatkę ostatniej sekundy.
+        var overlappingPairsPerFrameInLastSecond: Double {
+            var count = 0
+            for frame in lastSecond {
+                for first in 0..<frame.count {
+                    for second in (first + 1)..<max(first + 1, frame.count) {
+                        let a = frame[first], b = frame[second]
+                        if (targetRadii[a.id] ?? 0) + (targetRadii[b.id] ?? 0) - simd_distance(a.position, b.position) > 0 { count += 1 }
+                    }
+                }
+            }
+            return lastSecond.isEmpty ? 0 : Double(count) / Double(lastSecond.count)
+        }
+
+        /// Największe nakładanie pary (r_i + r_j − d, promienie docelowe) w ostatniej sekundzie; 0, gdy żadna para nie nachodzi.
+        var maximumOverlapInLastSecond: Float {
+            var maximum: Float = 0
+            for frame in lastSecond {
+                for first in 0..<frame.count {
+                    for second in (first + 1)..<max(first + 1, frame.count) {
+                        let a = frame[first], b = frame[second]
+                        maximum = max(maximum, (targetRadii[a.id] ?? 0) + (targetRadii[b.id] ?? 0) - simd_distance(a.position, b.position))
+                    }
+                }
+            }
+            return maximum
+        }
+
         /// Średni stosunek promienia efektywnego do docelowego, po wszystkich bańkach i klatkach ostatniej sekundy.
         var meanEffectiveRadiusRatioInLastSecond: Float {
             var total = 0.0, count = 0
