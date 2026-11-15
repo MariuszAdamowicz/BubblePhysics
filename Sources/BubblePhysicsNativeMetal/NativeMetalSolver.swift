@@ -84,7 +84,6 @@ final class NativeMetalPersistentState {
     let solverControl: MTLBuffer
     let guardedBubbles: MTLBuffer
     let safetyControl: MTLBuffer
-    let containmentRepairActive: MTLBuffer
     let segmentsPing: MTLBuffer
     let segmentsPong: MTLBuffer
     let bubbleUpdates: MTLBuffer
@@ -197,7 +196,6 @@ final class NativeMetalPersistentState {
         solverControl = try buffer("solver.control", 1, MemoryLayout<NativeMetalSolverControl>.stride)
         guardedBubbles = try buffer("safety.guardedBubbles", bubbleCapacity, MemoryLayout<UInt32>.stride)
         safetyControl = try buffer("safety.control", 1, MemoryLayout<NativeMetalSafetyControl>.stride)
-        containmentRepairActive = try buffer("safety.containmentRepairActive", 9, MemoryLayout<UInt32>.stride)
         renderPackets = try buffer("renderPackets", bubbleCapacity, MemoryLayout<NativeMetalRenderPacket>.stride)
         let (pointCapacity, pointOverflow) = bubbleCapacity.multipliedReportingOverflow(by: contourStride)
         guard !pointOverflow, pointCapacity <= Int(UInt32.max) else { throw NativeMetalSolverError.allocationFailed }
@@ -417,8 +415,6 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
                           snapshot.configuration.positionTolerance, 0, 0))
         state.solverControl.contents().storeBytes(of: solverParameters, as: NativeMetalSolverControl.self)
         state.safetyControl.contents().storeBytes(of: NativeMetalSafetyControl(counts: .zero), as: NativeMetalSafetyControl.self)
-        memset(state.containmentRepairActive.contents(), 0, state.containmentRepairActive.length)
-        state.containmentRepairActive.contents().storeBytes(of: UInt32(1), as: UInt32.self)
         memset(state.scratch.contents(), 0, state.scratch.length)
         // Wyłącznie zmiany wejścia gry mogą oznaczać teleport; normalna predykcja nie resetuje cache.
         // Poprzedni krok zwykle ma te same obiekty w tej samej kolejności, więc para po indeksie zastępuje słownik;
@@ -760,16 +756,6 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         dispatch("nativeApplyCenterGuards", buffers: [state.workingBubbles, state.workingSegments, inputPositions,
             state.control, state.contactControl, state.guardedBubbles, state.safetyControl, state.dispatchStatistics],
             threads: count)
-        // Bounded GPU repair of pairs introduced by CCD/obstacle projection.
-        // Every repair rechecks obstacle invariants, in the same command buffer.
-        for pass in 0..<8 {
-            NativeMetalContainmentRepair.encodePass(encoder, pipelines: pipelines, bubbles: state.workingBubbles,
-                segments: state.workingSegments, input: inputPositions, output: outputPositions, control: state.control,
-                solver: state.solverControl, contacts: state.contactControl, changed: state.guardedBubbles,
-                safety: state.safetyControl, statistics: state.dispatchStatistics, repairActive: state.containmentRepairActive,
-                pass: pass, bubbleCount: count, fused: true)
-            swap(&inputPositions, &outputPositions)
-        }
         dispatch("nativeValidateBubbleContainment", buffers: [state.workingBubbles, inputPositions,
             state.control, state.solverControl, state.safetyControl], threads: count * count)
         if let diagnosticPostGuard = state.diagnosticPostGuardPositions {
@@ -1234,8 +1220,8 @@ enum NativeMetalPipelineCache {
 
     private static var compiled: [UInt64: Compiled] = [:]
 
-    /// Kernele `nativeScanBlocks`, `nativeAddScanBlockOffsets`, `nativeFinishScan`, `nativeSeparateContainedBubbles`,
-    /// `nativeReapplyCenterGuards` (oraz `nativeGenerateContours`, `nativePrepareRenderData`) obsługują dawne ścieżki,
+    /// Kernele `nativeScanBlocks`, `nativeAddScanBlockOffsets`, `nativeFinishScan`
+    /// (oraz `nativeGenerateContours`, `nativePrepareRenderData`) obsługują dawne ścieżki,
     /// które produkcja pomija; zostają jako wzorzec bit w bit dla `NativeMetalChainKernelTests`.
     static let stageNames: [String] = ["nativePrepareGrid", "nativeBuildGrid", "nativeSortGrid", "nativeSortGridChunk", "nativeEmitCandidates",
         "nativePrepareCandidateCounts", "nativeCompactCandidates", "nativeBuildContacts",
@@ -1246,8 +1232,7 @@ enum NativeMetalPipelineCache {
         "nativeSolveJacobi", "nativeMeasureResidual", "nativeReduceSolverResidual",
         "nativeCapturePositions",
         "nativeUpdateVelocities", "nativeDampContactNormalMotion", "nativeFinalizeSolverContacts", "nativeFindFastCandidates",
-        "nativeResolveCCD", "nativeApplyCenterGuards", "nativeSeparateContainedBubbles", "nativeSeparateAndGuardContainedBubbles",
-        "nativeReapplyCenterGuards", "nativeValidateBubbleContainment", "nativeInvalidateSafetyCache", "nativeCheckFinite",
+        "nativeResolveCCD", "nativeApplyCenterGuards", "nativeValidateBubbleContainment", "nativeInvalidateSafetyCache", "nativeCheckFinite",
         "nativeAccumulateContactPressure", "nativeSeedStructuralContours", "nativeGenerateContours", "nativeGenerateContoursFused", "nativePrepareRenderData", "nativePrepareRenderDataGrouped",
         "nativeApplyPublicRegion", "nativeInvalidateRegionCache",
         "nativeCompactMergeEvents",

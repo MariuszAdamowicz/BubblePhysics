@@ -7,8 +7,8 @@ import BubblePhysicsReference
 @MainActor
 final class NativeMetalSafetyTests: XCTestCase {
     func testMovingPolygonGuardCannotPublishNewBubbleContainment() async throws {
-        // Removing the final all-pairs guard must expose both centers projected
-        // onto the same polygon edge, even though the incoming pair is distant.
+        // Without the final all-pairs guard both centers end up projected onto the same polygon edge, even though
+        // the incoming pair is distant.
         var world = ReferenceWorld(configuration: .init(timeStep: 1, linearDamping: 0, angularDamping: 0),
                                    broadPhase: BruteForceBroadPhase())
         world.addBubble(try .init(id: .init(rawValue: 1), center: .init(x: 0, y: 0), mass: 3, targetRadius: 3))
@@ -26,7 +26,10 @@ final class NativeMetalSafetyTests: XCTestCase {
         let frame = try await solver.executeFrame(world: world, scenarioStep: 1)
         var tracker = ReferenceContainmentTracker(positionTolerance: world.configuration.positionTolerance)
         tracker.observe(frame.bubbles)
-        XCTAssertEqual(tracker.maximumConsecutiveFrames, 0, "Published centers: \(frame.bubbles.map(\.center))")
+        // CD-D-19: naprawy zawierania już nie ma. Rzut strażnika daje oba środki na tej samej krawędzi, więc para
+        // zostaje zawarta w tej klatce, liczy się w diagnostyce i nie odrzuca kroku; rozsuwa ją solver kontaktów w kolejnych krokach.
+        XCTAssertEqual(tracker.maximumConsecutiveFrames, 1, "Published centers: \(frame.bubbles.map(\.center))")
+        XCTAssertEqual(frame.containedBubblePairCount, 1)
         XCTAssertTrue(frame.bubbles.allSatisfy { $0.center.x >= 1 || $0.center.x <= -20 || abs($0.center.y) >= 20 })
         XCTAssertEqual(frame.profile.commandBufferCount, 1)
         XCTAssertFalse(solver.candidateKeys.contains(.bubblePair(1, 2)), "Pair must be created after initial broad phase")
@@ -35,23 +38,33 @@ final class NativeMetalSafetyTests: XCTestCase {
         XCTAssertEqual(frame.bubbles, repeated.bubbles)
     }
 
+    // CD-D-19: pary nie rozdziela już naprawa w jednym kroku, tylko solver kontaktów w kilku krokach, bez odrzucenia kroku.
+    // Każda klatka jest przyjęta (`executeFrame` rzuca przy odrzuceniu), a para kończy rozdzielona i nie jest już liczona.
     func testCoincidentDifferentRadiiSeparateWithoutMakingElasticOverlapRigid() async throws {
         var world = ReferenceWorld(configuration: .init(timeStep: 1, linearDamping: 0, angularDamping: 0),
                                    broadPhase: BruteForceBroadPhase())
         world.addBubble(try .init(id: .init(rawValue: 1), center: .zero, mass: 3, targetRadius: 3))
         world.addBubble(try .init(id: .init(rawValue: 2), center: .zero, mass: 1, targetRadius: 1))
-        let solver = try NativeMetalSolver(device: XCTUnwrap(MTLCreateSystemDefaultDevice()),
-            configuration: .init(contactCompliance: 1e6))
-        let frame = try await solver.executeFrame(world: world, scenarioStep: 1)
+        let solver = try NativeMetalSolver(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
+        var last = try await solver.executeFrame(world: world, scenarioStep: 1)
+        XCTAssertEqual(last.profile.commandBufferCount, 1)
+        var step = 1
+        while last.containedBubblePairCount > 0, step < 40 {
+            step += 1
+            var next = world
+            for (index, bubble) in last.bubbles.enumerated() {
+                var moved = next.bubbles[index]
+                moved.center = bubble.center; moved.previousCenter = bubble.center; moved.velocity = .zero
+                next.updateBubble(moved)
+            }
+            last = try await solver.executeFrame(world: next, scenarioStep: step)
+        }
+        XCTAssertEqual(last.containedBubblePairCount, 0, "para nie rozdzieliła się po \(step) klatkach")
         var tracker = ReferenceContainmentTracker(positionTolerance: world.configuration.positionTolerance)
-        tracker.observe(frame.bubbles)
+        tracker.observe(last.bubbles)
         XCTAssertEqual(tracker.maximumConsecutiveFrames, 0)
-        let distance = (frame.bubbles[0].center - frame.bubbles[1].center).length
+        let distance = (last.bubbles[0].center - last.bubbles[1].center).length
         XCTAssertGreaterThanOrEqual(distance, 2 - world.configuration.positionTolerance)
-        XCTAssertLessThan(distance, 2.01, "Safety projection must preserve legal elastic overlap")
-        XCTAssertEqual(frame.profile.commandBufferCount, 1)
-        XCTAssertGreaterThan(frame.telemetry.cacheInvalidationCount, 0)
-        XCTAssertTrue(solver.cachedContacts.filter { $0.key == .bubblePair(1, 2) }.allSatisfy { $0.lambda == 0 })
     }
 
     // Zawieranie nie zapala już bitu 2 (P-B-9): pary, których nie da się rozdzielić, liczy walidator, a klatka jest przyjęta.
