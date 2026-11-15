@@ -555,10 +555,48 @@ Strażnik wydajności wycinka 3: `swift run -c release BubblePhysicsPerfGuard` n
 **Delivers:** otwarty PR wersji 2.2.0 z inwentarzem w opisie, a CHANGELOG, README i przewodnik integracji opisują zmianę jak w [G6-AC1](change-design.md#g6-ac1).
 
 38. Zamknąć sekcję 2.2.0 w `CHANGELOG.md`: nagłówek `## 2.2.0` bez „(w przygotowaniu)”, wpis o odrzucaniu podatności przepełniającej Float bez pustej linii przed nim, sprawdzenie punkt po punkcie z listą [G6-AC1](change-design.md#g6-ac1), pokrywając [P-B-34](#p-b-34) · verify: `grep -q "^## 2.2.0$" CHANGELOG.md && ! grep -q "w przygotowaniu" CHANGELOG.md`
+
+    ```text
+    $ grep -q "^## 2.2.0$" CHANGELOG.md && ! grep -q "w przygotowaniu" CHANGELOG.md && echo PASS38
+    PASS38
+    ```
 39. Zmienić `MigrationGuideTests.testReadmeStatesCurrentVersionAndLinksTheChangelogAndBothGuides` (`:107`) na oczekiwanie wersji 2.2.0, pokrywając [P-B-34](#p-b-34) · verify: `grep -q '"2.2.0"' Tests/BubblePhysicsPublicTests/MigrationGuideTests.swift && ! swift test --filter MigrationGuideTests`
+
+    ```text
+    $ grep -q '"2.2.0"' Tests/BubblePhysicsPublicTests/MigrationGuideTests.swift   # PASS
+    czerwona faza przed README (commit d26a482): MigrationGuideTests padał, bo README nie zawierało 2.2.0
+    ```
 40. Podać w `README.md:5` wersję 2.2.0, pokrywając [P-B-34](#p-b-34) · verify: `swift test --filter MigrationGuideTests && grep -q "Wersja 2.2.0" README.md && ! grep -q "Wersja 2.1.0" README.md`
+
+    ```text
+    $ swift test --filter MigrationGuideTests
+    Executed 4 tests, with 0 failures (0 unexpected)
+    $ grep -q "Wersja 2.2.0" README.md && ! grep -q "Wersja 2.1.0" README.md && echo PASS40
+    PASS40
+    ```
 41. Dodać do `docs/integration-guide.md` sekcję o tłoku bez bloków `swift`: zalecenie `maximumLinearSpeed` dla baniek w tłoku i pod napędem, podatność `PhysicsMaterial.contactCompliance` z nadpisaniem `contactCompliance` na bańce, prędkość w stronę kontaktu u bańki w spoczynku (nasycona, zabierana po zniknięciu podparcia) i nowy punkt po `invalidPlacement`, pokrywając [P-B-34](#p-b-34) · verify: `grep -q "maximumLinearSpeed" docs/integration-guide.md && grep -q "contactCompliance" docs/integration-guide.md && grep -q "invalidPlacement" docs/integration-guide.md && swift test --filter IntegrationGuideTests`
+
+    ```text
+    $ grep -q "maximumLinearSpeed" … && grep -q "contactCompliance" … && grep -q "invalidPlacement" docs/integration-guide.md && echo PASS41
+    PASS41
+    $ swift test --filter IntegrationGuideTests
+    Executed 3 tests, with 0 failures (0 unexpected)
+    ```
 42. Uruchomić cały pakiet i `swift run -c release BubblePhysicsPerfGuard` z progami 2.1.0, bez zmian w `docs/benchmarks/perf-guard.json`, i zapisać pod tym wycinkiem wiersz `Strażnik wydajności wycinka 4: …`; przy porażce powtórzyć pomiar najwyżej dwa razy na nieobciążonej maszynie, zapisać w wierszu wszystkie wyniki, a dopiero porażka wszystkich trzech wraca do właściciela, pokrywając [P-B-35](#p-b-35) · verify: `swift test && (swift run -c release BubblePhysicsPerfGuard || swift run -c release BubblePhysicsPerfGuard || swift run -c release BubblePhysicsPerfGuard) && git diff --exit-code main -- docs/benchmarks/perf-guard.json && grep -q "^Strażnik wydajności wycinka 4:" docs/sdlc/changes/2026-11-14-crowd-solver-compression/plan.md`
+
+    ```text
+    $ swift test   (HEAD c67ca47)
+    Executed 1402 tests, with 1 test skipped and 0 failures (0 unexpected) in 520.494 (520.623) seconds
+    $ swift run -c release BubblePhysicsPerfGuard   (pierwszy pomiar, bez powtórek)
+    PASS stress-300: p95 2.0372 ms, punkt odniesienia 1.9634 ms, limit 2.1598 ms (+3.8%)
+    PASS mixed: p95 3.7001 ms, punkt odniesienia 3.7942 ms, limit 4.1736 ms (-2.5%)
+    PASS decals: p95 2.2102 ms, punkt odniesienia 2.1770 ms, limit 2.3947 ms (+1.5%)
+    PASS acceptance: p95 2.5327 ms, punkt odniesienia 2.4590 ms, limit 2.7049 ms (+3.0%)
+    scaling 600/300: 1.54 (limit 2.50) PASS
+    $ git diff --exit-code main -- docs/benchmarks/perf-guard.json   # bez różnic
+    ```
+
+Strażnik wydajności wycinka 4: PASS przy progach 2.1.0, bez zmian w `docs/benchmarks/perf-guard.json`. Pomiar na c67ca47: stress-300 2,0372 ms (limit 2,1598), mixed 3,7001 ms (limit 4,1736), decals 2,2102 ms (limit 2,3947), acceptance 2,5327 ms (limit 2,7049), skalowanie 600/300 1,54 (limit 2,50). Wcześniejszy pomiar workera na ae11480 też PASS: acceptance 2,5962 ms, stress-300 2,0497 ms, mixed 3,8591 ms, decals 2,2913 ms. Każdy pomiar przeszedł za pierwszym razem, więc nie było powtórek.
 43. Wymaga właściciela (zgoda na push; push przez `git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push origin feature/crowd-solver-compression`): otworzyć do `main` jeden PR całej zmiany, którego opis wymienia z powodem każdą zmianę istniejącego testu i każdy usunięty test: z wycinka 1 z zadań 6 i 8 (wycinek 1 nie ma wiersza inwentarza, więc listę zbiera się z jego commitów, np. 68374d5: trzy testy scalenia w `TransactionStagerTests` z przesuniętym punktem źródła), z inwentarzy wycinków 2 i 3 ([P-B-31](#p-b-31)–[P-B-33](#p-b-33)); zapisać numer PR pod tym wycinkiem i wypchnąć ten zapis. Późniejsze zmiany opisu tylko przez `gh api -X PATCH repos/MariuszAdamowicz/BubblePhysics/pulls/<nr> -f body=…`, bo `gh pr edit` pada tu na błędzie GraphQL · verify: `b=$(gh pr view feature/crowd-solver-compression --json body -q .body) && for t in testMergeAndSplitReserveStableResultIDsAndRejectPartialResults testAcceptanceSceneRenderedAfter120StepsEqualsTheReferencePixels testFusedRepairPassIsBitIdenticalToSeparationThenGuard testABIRecordsUseSixteenByteLanes; do echo "$b" | grep -q "$t" || exit 1; done`
 
 ## Deviations from Design
