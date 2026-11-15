@@ -12,6 +12,7 @@
 **Template version:** default/0.3.3
 **Plugin version:** 0.7.10
 **Agent Sessions:** claude-code: ef9afe81-5293-4d9d-99d5-ada5d3e46e43, e19c7740-a3a8-4ca5-8140-6dad21b637f7, cf667a2a-34f1-4d88-ab50-9bfc3c56bd23, 2e38e424-233b-44f6-8878-e078a693a316, 70ddadc2-21db-41ec-9a8f-e56fb0dcf8af
+**Agent Sessions:** claude-code: a0d1d82b-d9bf-4160-96b9-616ae3c91bb1
 
 ---
 
