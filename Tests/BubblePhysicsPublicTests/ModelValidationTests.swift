@@ -124,6 +124,68 @@ final class ModelValidationTests: XCTestCase {
         XCTAssertThrowsError(try polygon([[0, 0], [1, 0], [0, 1]], rotation: .infinity))
     }
 
+    // P-B-17 (G4-AC7): podatność kontaktu w materiale.
+    func testContactComplianceDefaultsToHardAndAcceptsValidValues() throws {
+        XCTAssertEqual(try PhysicsMaterial(kind: .bubble).contactCompliance, .hard)
+        XCTAssertEqual(BubbleContactCompliance.hard,
+                       BubbleContactCompliance(base: 0, referenceRadius: 1, radiusExponent: 0, compressionExponent: 0))
+        let soft = BubbleContactCompliance(base: 1e-4, referenceRadius: 20, radiusExponent: -1.5, compressionExponent: 2)
+        XCTAssertEqual(try PhysicsMaterial(kind: .bubble, contactCompliance: soft).contactCompliance, soft)
+        // Wykładniki bez podatności nie dają błędu: przy c₀ = 0 potęgi nie są liczone.
+        XCTAssertNoThrow(try PhysicsMaterial(kind: .bubble,
+            contactCompliance: BubbleContactCompliance(base: 0, radiusExponent: 70, compressionExponent: -70)))
+        XCTAssertNoThrow(try PhysicsMaterial(kind: .rigid, contactCompliance: .hard))
+        XCTAssertNoThrow(try PhysicsMaterial(kind: .rigid,
+            contactCompliance: BubbleContactCompliance(base: 0, referenceRadius: 3, radiusExponent: 1, compressionExponent: 1)))
+    }
+
+    func testMaterialRejectsInvalidContactComplianceWithValueOutOfRange() throws {
+        let invalid: [(String, BubbleContactCompliance)] = [
+            ("ujemna podatność", BubbleContactCompliance(base: -1e-3)),
+            ("NaN podatność", BubbleContactCompliance(base: .nan)),
+            ("nieskończona podatność", BubbleContactCompliance(base: .infinity)),
+            ("NaN wykładnik promienia", BubbleContactCompliance(base: 1, radiusExponent: .nan)),
+            ("nieskończony wykładnik promienia", BubbleContactCompliance(base: 1, radiusExponent: .infinity)),
+            ("NaN wykładnik ściśnięcia", BubbleContactCompliance(base: 1, compressionExponent: .nan)),
+            ("nieskończony wykładnik ściśnięcia", BubbleContactCompliance(base: 1, compressionExponent: -.infinity)),
+            ("promień odniesienia 0", BubbleContactCompliance(base: 1, referenceRadius: 0)),
+            ("ujemny promień odniesienia", BubbleContactCompliance(base: 1, referenceRadius: -2)),
+            ("NaN promień odniesienia", BubbleContactCompliance(base: 1, referenceRadius: .nan)),
+            ("nieskończony promień odniesienia", BubbleContactCompliance(base: 1, referenceRadius: .infinity)),
+            // Wykładniki i promień sprawdza się także przy c₀ = 0.
+            ("NaN wykładnik przy c₀ = 0", BubbleContactCompliance(base: 0, radiusExponent: .nan)),
+            ("promień odniesienia 0 przy c₀ = 0", BubbleContactCompliance(base: 0, referenceRadius: 0)),
+        ]
+        for (name, compliance) in invalid {
+            XCTAssertThrowsError(try PhysicsMaterial(kind: .bubble, contactCompliance: compliance), name) {
+                guard case .valueOutOfRange = $0 as? ModelValidationError else {
+                    return XCTFail("\(name): oczekiwano valueOutOfRange, jest \($0)")
+                }
+            }
+        }
+    }
+
+    func testRigidMaterialRejectsPositiveContactCompliance() throws {
+        XCTAssertThrowsError(try PhysicsMaterial(kind: .rigid, contactCompliance: BubbleContactCompliance(base: 1e-6))) {
+            guard case .valueOutOfRange = $0 as? ModelValidationError else { return XCTFail("\($0)") }
+        }
+    }
+
+    func testBubbleDescriptorValidatesContactComplianceOverride() throws {
+        func descriptor(_ override: Float?) throws -> BubbleDescriptor {
+            try BubbleDescriptor(id: ObjectID(rawValue: 1), position: .zero, targetRadius: 1, physicsMaterialID: material,
+                                 renderMaterialID: style, contactCompliance: override)
+        }
+        XCTAssertNil(try descriptor(nil).contactCompliance)
+        XCTAssertEqual(try descriptor(0).contactCompliance, 0)
+        XCTAssertEqual(try descriptor(2.5e-3).contactCompliance, 2.5e-3)
+        for invalid: Float in [-1e-6, .nan, .infinity, -.infinity] {
+            XCTAssertThrowsError(try descriptor(invalid), "nadpisanie \(invalid)") {
+                XCTAssertEqual($0 as? ModelValidationError, .valueOutOfRange("contactCompliance"))
+            }
+        }
+    }
+
     func testFieldAndSensorValidateRangesAndFieldParameters() throws {
         let circle = try RangeGeometry.circle(radius: 3)
         XCTAssertNoThrow(try ForceFieldDescriptor(id: ObjectID(rawValue: 3), position: .zero, geometry: circle,

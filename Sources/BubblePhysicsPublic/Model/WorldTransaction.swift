@@ -37,13 +37,16 @@ public struct BubbleResult: Equatable, Sendable {
     /// bezwładność), więc przy nadpisanej masie pęd nie jest zachowany. Pole działa
     /// tylko w `mergeBubbles`: w `splitBubble` wartość różna od `nil` odrzuca transakcję.
     public let mass: Float?
+    /// Nadpisanie podstawowej podatności c₀ materiału dla wyniku; `nil` oznacza wartość z materiału. Ujemna, NaN albo
+    /// nieskończona wartość odrzuca transakcję z `.invalidValue(.valueOutOfRange("contactCompliance"))`.
+    public let contactCompliance: Float?
     public init(id: ObjectID, physicsMaterialID: PhysicsMaterialID, renderMaterialID: RenderMaterialID,
                 motionRole: MotionRole = .dynamic, regionExitPolicy: RegionExitPolicy = .remove,
                 mergeGroups: MergeGroupSet = [], eventInterest: EventInterest = [],
                 filter: CollisionFilter = .default, layer: Int32 = 0, decal: Decal? = nil,
-                drivePolicy: BubbleDrivePolicy = .standard, mass: Float? = nil) {
+                drivePolicy: BubbleDrivePolicy = .standard, mass: Float? = nil, contactCompliance: Float? = nil) {
         self.filter = filter; self.layer = layer; self.decal = decal
-        self.drivePolicy = drivePolicy; self.mass = mass
+        self.drivePolicy = drivePolicy; self.mass = mass; self.contactCompliance = contactCompliance
         self.id = id; self.physicsMaterialID = physicsMaterialID; self.renderMaterialID = renderMaterialID
         self.motionRole = motionRole; self.regionExitPolicy = regionExitPolicy
         self.mergeGroups = mergeGroups; self.eventInterest = eventInterest
