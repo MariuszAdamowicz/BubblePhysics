@@ -11,6 +11,8 @@ Zmiany w wydaniach `BubblePhysics`. Przejście z 1.x na 2.0.0 opisuje [docs/MIGR
   - `.outsideRegion`: środek poza `simulationRegion`,
   - `.insideRigidBody`: środek we wnętrzu wielokąta, koła albo kapsuły bryły sztywnej,
   - `.coincidentCenter`: środek bliżej środka innej bańki niż tolerancja wspólnego środka (1e-4 mniejszego z dwóch promieni, nie mniej niż tolerancja położenia solvera).
+- `WorldDiagnostics.lastSolverGuardCause: SolverGuardCause?` podaje przyczynę ostatniego odrzucenia kroku przez strażnika (`lastRejectionReason == .solverGuard`): `.centerCrossing` (środek bańki przeszedł przez ścianę albo wszedł we wnętrze bryły, także łuk obrotu bryły pominięty przez próbkowanie) albo `.rigidRotationBudget` (obrót bryły sztywnej szybszy niż budżet 128 próbek). Jest `nil`, gdy nic nie odrzucono albo ostatnie odrzucenie miało inny powód.
+- `WorldDiagnostics.containedBubblePairCount: Int` to liczba par „bańka w bańce” (mniejsza cała w kole większej) po ostatnim ukończonym kroku. Pusta plansza daje 0.
 
 ### Zmienione
 
@@ -19,6 +21,9 @@ Zmiany w wydaniach `BubblePhysics`. Przejście z 1.x na 2.0.0 opisuje [docs/MIGR
 - Region obowiązuje przy `regionExitPolicy = .wrap` tak samo jak przy pozostałych politykach: `.wrap` przenosi bańkę, która wyszła w kroku, ale nie pozwala postawić jej poza regionem, więc `add` poza regionem daje `.outsideRegion`.
 - `mergeBubbles` i `splitBubble` same poprawiają punkt wyniku. Gdy punkt styku (scalenie) albo centroid części (podział) jest zły, silnik bierze pierwszego poprawnego kandydata z ustalonej listy, więc dwa przebiegi dają ten sam punkt. Transakcję odrzuca dopiero wyczerpanie listy, z `invalidPlacement` dla ID wyniku albo części. Źródła scalenia są z testu punktu wyłączone, bo znikają razem ze scaleniem.
 - Przy podziale z przesuniętą częścią prędkość liniowa i kątowa części są liczone względem jej końcowego środka, więc pęd i moment pędu źródła zostają zachowane.
+- Bańka w bańce, prawie wspólny środek pary i zawieranie po scaleniu w zajętym miejscu nie odrzucają już kroku. Naprawy zawierania, która w v2.1.0 rozdzielała parę w jednym kroku, już nie ma: parę zawartą rozsuwa solver kontaktów w kilku kolejnych krokach, a para zawarta liczy się w `containedBubblePairCount`. Dlatego w pierwszej klatce po dodaniu bańki wewnątrz innej pary nie widać już rozdzielenia.
+- Korekcja od pary baniek ma limit λ pary, wspólny dla warm startu i iteracji Jacobiego: λ ≤ ((max(0, v_a·n) + max(0, −v_b·n))·dt + 0,25·min(r_a, r_b)) / max(invMass_a, invMass_b), czyli 0,25 · min r ponad ruch baniek w stronę kontaktu. W v2.1.0 limit r / (invMass · liczba kontaktów) miał tylko warm start, więc nowy limit bywa ostrzejszy albo łagodniejszy, zależnie od liczby kontaktów, prędkości i promieni pary, a Jacobi ma limit pierwszy raz. Obie bańki pary dostają tę samą λ, więc pęd pary jest zachowany. Kontakty ze ścianami i bryłami oraz rzutowanie na przeszkody są bez limitu. Stos baniek pod grawitacją się trzyma, bo limit przepuszcza prędkość, którą bańka w spoczynku gromadzi w stronę kontaktu.
+- Strażnik środka rzutuje środek, który leży we wnętrzu ściany albo bryły, na krawędź przekroczoną w ruchu względnym (z położeniem krawędzi `previous` → `current`), a bez takiej krawędzi na najbliższą, jak dotąd. Gdy punkt po rzucie leży we wnętrzu sąsiedniej bryły (np. przy narożniku dwóch stykających się ścian), następuje najwyżej 4 kolejnych rzutów, każdy na krawędź z wolnym miejscem, czyli w regionie, poza bryłami i bez wejścia odcinka od startu kroku w jakąkolwiek bryłę. Dwie stykające się ściany dają narożnik wewnętrzny z marginesem zamiast odrzucenia kroku. Gdy żadna krawędź nie wyprowadza środka do wolnego miejsca, krok jest odrzucany z `.centerCrossing`.
 
 ## 2.1.0
 
