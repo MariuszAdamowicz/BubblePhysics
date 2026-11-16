@@ -219,6 +219,8 @@ package struct NativeSolverFrame {
     package var contactCandidateOverflowCount = 0
     /// Największa liczba kandydatów na obiekt w tym kroku (etap 2).
     package var maximumContactCandidatesPerObject = 0
+    /// Liczba par baniek, z których mniejsza mieści się cała w kole większej, po tym kroku (walidator zawierania).
+    package var containedBubblePairCount = 0
     /// Wynik dla każdego punktu `NativeSolverInput.hitTests`, w tej samej kolejności; `nil` to puste miejsce.
     package var hitTestResults: [ObjectID?] = []
 }
@@ -238,11 +240,21 @@ package enum NativeMetalWorldError: Error {
     case unavailable, invalidFrame, frameInFlight, nonFinite, guardFailure
 }
 
+/// Przyczyna odrzucenia przez strażnik (`NativeMetalWorldError.guardFailure`), odczytana z bitów statusu GPU:
+/// bit 8 to `centerCrossing`, bit 16 to `rigidRotationBudget`. Oba zapalają się zawsze razem z bitem 2.
+package enum NativeMetalGuardCause: Sendable, Equatable {
+    case centerCrossing
+    case rigidRotationBudget
+}
+
 package struct NativeMetalSafetyFailure: Error {
     package let reason: NativeMetalWorldError
     package let telemetry: NativeMetalFrameTelemetry
     package let profile: NativeMetalFrameProfile
-    package init(reason: NativeMetalWorldError, telemetry: NativeMetalFrameTelemetry, profile: NativeMetalFrameProfile) {
-        self.reason = reason; self.telemetry = telemetry; self.profile = profile
+    /// Tylko przy `.guardFailure`; `nil` przy każdym innym powodzie.
+    package let guardCause: NativeMetalGuardCause?
+    package init(reason: NativeMetalWorldError, telemetry: NativeMetalFrameTelemetry, profile: NativeMetalFrameProfile,
+                 guardCause: NativeMetalGuardCause? = nil) {
+        self.reason = reason; self.telemetry = telemetry; self.profile = profile; self.guardCause = guardCause
     }
 }

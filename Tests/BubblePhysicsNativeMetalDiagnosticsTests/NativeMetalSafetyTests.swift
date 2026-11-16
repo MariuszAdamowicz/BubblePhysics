@@ -6,9 +6,9 @@ import BubblePhysicsReference
 
 @MainActor
 final class NativeMetalSafetyTests: XCTestCase {
-    func testMovingPolygonGuardCannotPublishNewBubbleContainment() async throws {
-        // Removing the final all-pairs guard must expose both centers projected
-        // onto the same polygon edge, even though the incoming pair is distant.
+    func testMovingPolygonGuardPublishesContainedPairCountedWithoutRejection() async throws {
+        // Without the final all-pairs guard both centers end up projected onto the same polygon edge, even though
+        // the incoming pair is distant.
         var world = ReferenceWorld(configuration: .init(timeStep: 1, linearDamping: 0, angularDamping: 0),
                                    broadPhase: BruteForceBroadPhase())
         world.addBubble(try .init(id: .init(rawValue: 1), center: .init(x: 0, y: 0), mass: 3, targetRadius: 3))
@@ -26,7 +26,10 @@ final class NativeMetalSafetyTests: XCTestCase {
         let frame = try await solver.executeFrame(world: world, scenarioStep: 1)
         var tracker = ReferenceContainmentTracker(positionTolerance: world.configuration.positionTolerance)
         tracker.observe(frame.bubbles)
-        XCTAssertEqual(tracker.maximumConsecutiveFrames, 0, "Published centers: \(frame.bubbles.map(\.center))")
+        // CD-D-19: naprawy zawierania już nie ma. Rzut strażnika daje oba środki na tej samej krawędzi, więc para
+        // zostaje zawarta w tej klatce, liczy się w diagnostyce i nie odrzuca kroku; rozsuwa ją solver kontaktów w kolejnych krokach.
+        XCTAssertEqual(tracker.maximumConsecutiveFrames, 1, "Published centers: \(frame.bubbles.map(\.center))")
+        XCTAssertEqual(frame.containedBubblePairCount, 1)
         XCTAssertTrue(frame.bubbles.allSatisfy { $0.center.x >= 1 || $0.center.x <= -20 || abs($0.center.y) >= 20 })
         XCTAssertEqual(frame.profile.commandBufferCount, 1)
         XCTAssertFalse(solver.candidateKeys.contains(.bubblePair(1, 2)), "Pair must be created after initial broad phase")
@@ -35,26 +38,37 @@ final class NativeMetalSafetyTests: XCTestCase {
         XCTAssertEqual(frame.bubbles, repeated.bubbles)
     }
 
-    func testCoincidentDifferentRadiiSeparateWithoutMakingElasticOverlapRigid() async throws {
+    // CD-D-19: pary nie rozdziela już naprawa w jednym kroku, tylko solver kontaktów w kilku krokach, bez odrzucenia kroku.
+    // Każda klatka jest przyjęta (`executeFrame` rzuca przy odrzuceniu), a para kończy rozdzielona i nie jest już liczona.
+    func testCoincidentDifferentRadiiSeparateOverSeveralAcceptedFrames() async throws {
         var world = ReferenceWorld(configuration: .init(timeStep: 1, linearDamping: 0, angularDamping: 0),
                                    broadPhase: BruteForceBroadPhase())
         world.addBubble(try .init(id: .init(rawValue: 1), center: .zero, mass: 3, targetRadius: 3))
         world.addBubble(try .init(id: .init(rawValue: 2), center: .zero, mass: 1, targetRadius: 1))
-        let solver = try NativeMetalSolver(device: XCTUnwrap(MTLCreateSystemDefaultDevice()),
-            configuration: .init(contactCompliance: 1e6))
-        let frame = try await solver.executeFrame(world: world, scenarioStep: 1)
+        let solver = try NativeMetalSolver(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
+        var last = try await solver.executeFrame(world: world, scenarioStep: 1)
+        XCTAssertEqual(last.profile.commandBufferCount, 1)
+        var step = 1
+        while last.containedBubblePairCount > 0, step < 40 {
+            step += 1
+            var next = world
+            for (index, bubble) in last.bubbles.enumerated() {
+                var moved = next.bubbles[index]
+                moved.center = bubble.center; moved.previousCenter = bubble.center; moved.velocity = .zero
+                next.updateBubble(moved)
+            }
+            last = try await solver.executeFrame(world: next, scenarioStep: step)
+        }
+        XCTAssertEqual(last.containedBubblePairCount, 0, "para nie rozdzieliła się po \(step) klatkach")
         var tracker = ReferenceContainmentTracker(positionTolerance: world.configuration.positionTolerance)
-        tracker.observe(frame.bubbles)
+        tracker.observe(last.bubbles)
         XCTAssertEqual(tracker.maximumConsecutiveFrames, 0)
-        let distance = (frame.bubbles[0].center - frame.bubbles[1].center).length
+        let distance = (last.bubbles[0].center - last.bubbles[1].center).length
         XCTAssertGreaterThanOrEqual(distance, 2 - world.configuration.positionTolerance)
-        XCTAssertLessThan(distance, 2.01, "Safety projection must preserve legal elastic overlap")
-        XCTAssertEqual(frame.profile.commandBufferCount, 1)
-        XCTAssertGreaterThan(frame.telemetry.cacheInvalidationCount, 0)
-        XCTAssertTrue(solver.cachedContacts.filter { $0.key == .bubblePair(1, 2) }.allSatisfy { $0.lambda == 0 })
     }
 
-    func testImpossibleContainmentRepairRejectsFrameAfterFinalWallGuards() async throws {
+    // Zawieranie nie zapala już bitu 2 (P-B-9): pary, których nie da się rozdzielić, liczy walidator, a klatka jest przyjęta.
+    func testUnresolvableContainmentIsCountedAndDoesNotRejectTheFrame() async throws {
         var world = ReferenceWorld(configuration: .init(timeStep: 1, linearDamping: 0, angularDamping: 0),
                                    broadPhase: BruteForceBroadPhase())
         world.addBubble(try .init(id: .init(rawValue: 1), center: .init(x: 0.05, y: 0.05), mass: 3, targetRadius: 3))
@@ -69,14 +83,10 @@ final class NativeMetalSafetyTests: XCTestCase {
         }
         let solver = try NativeMetalSolver(device: XCTUnwrap(MTLCreateSystemDefaultDevice()),
             configuration: .init(contactCompliance: 1e6))
-        let runner = NativeMetalWorldRunner(executor: solver)
-        var cpu = world
-        _ = cpu.step()
-        _ = await runner.step(world: &world, scenarioStep: 1)
-        XCTAssertEqual(runner.telemetry.fallbackReason, "guardFailure")
-        XCTAssertEqual(world.bubbles, cpu.bubbles)
-        XCTAssertNil(solver.publishedFrame)
-        XCTAssertEqual(runner.telemetry.commandBufferCount, 1)
+        let frame = try await solver.executeFrame(world: world, scenarioStep: 1)
+        XCTAssertEqual(frame.containedBubblePairCount, 1)
+        XCTAssertNotNil(solver.publishedFrame)
+        XCTAssertEqual(frame.profile.commandBufferCount, 1)
     }
 
     func testDiagnosticRunnerPreservesSuccessfulGPUFrameTelemetry() async throws {
@@ -147,6 +157,67 @@ final class NativeMetalSafetyTests: XCTestCase {
         let p = frame.bubbles[0].center
         XCTAssertFalse(p.x > -2 && p.x < 2 && p.y > -2 && p.y < 2)
         XCTAssertGreaterThan(frame.report.sideCorrectionCount, 0)
+    }
+
+    // P-B-40 (CD-D-17): gruby wielokąt (przód i tył 30 od siebie) przesuwa się w kroku o 28 w prawo i mija stojącą bańkę,
+    // więc jej środek kończy krok we wnętrzu wielokąta, 2 od krawędzi tylnej. Rzut na najbliższą krawędź wyrzuca go
+    // za wielokąt, przez tył, i krok jest odrzucany. Środek ma trafić na krawędź przednią, przekroczoną w ruchu
+    // względnym, z marginesem i po stronie startu bańki.
+    // Środek stoi na początku kroku dokładnie na krawędzi przedniej (`previous`). Gdy leży choćby o włos przed nią,
+    // robi to już CCD albo pierwsza pętla strażnika (zwrot na dawną stronę każdej przekroczonej krawędzi), bo przejście
+    // z t > 0 wykrywa `nativeCenterCrossing`. Start na krawędzi (t = 0) tego przejścia nie widzi, więc tylko rzut na
+    // przekroczoną krawędź odróżnia przód od tyłu.
+    func testGuardProjectsOntoTheEdgeCrossedInRelativeMotionNotTheNearestEdge() async throws {
+        var world = ReferenceWorld(configuration: .init(timeStep: 1, linearDamping: 0, angularDamping: 0),
+                                   broadPhase: BruteForceBroadPhase())
+        world.addBubble(try .init(id: .init(rawValue: 1), center: .zero, mass: 1, targetRadius: 1))
+        // Przed krokiem tył leży w x = -30, przód w x = 0 (przez środek bańki); po kroku tył w x = -2, przód w x = 28.
+        let vertices: [ReferenceVector2] = [.init(x: -2, y: -10), .init(x: 28, y: -10),
+                                            .init(x: 28, y: 10), .init(x: -2, y: 10)]
+        for i in vertices.indices {
+            let a = vertices[i], b = vertices[(i + 1) % 4]
+            world.addSegment(.kinematicSegment(id: .init(rawValue: i + 1),
+                previousA: a + .init(x: -28, y: 0), previousB: b + .init(x: -28, y: 0),
+                currentA: a, currentB: b, timeStep: 1, ownerID: 7))
+        }
+        let solver = try makeSolver()
+        let frame = try await solver.executeFrame(world: world, scenarioStep: 1)
+        let center = frame.bubbles[0].center
+        XCTAssertGreaterThan(center.x, 28, "środek ma zostać po stronie startu, przed krawędzią przednią: \(center)")
+        XCTAssertLessThan(center.x, 28.01, "środek ma leżeć tuż za krawędzią przednią, z marginesem: \(center)")
+        XCTAssertEqual(center.y, 0, accuracy: 0.001)
+        XCTAssertEqual(frame.profile.commandBufferCount, 1)
+        let repeated = try await makeSolver().executeFrame(world: world, scenarioStep: 1)
+        XCTAssertEqual(frame.bubbles, repeated.bubbles)
+    }
+
+    // P-B-41 (CD-D-17): ściana boczna (pełna wysokość) i podłoga stykają się wzdłuż x = -52, jak w ramie sceny tłoku,
+    // a środek bańki stoi we wnętrzu ściany przy narożniku, 2 od jej krawędzi wewnętrznej i 1 nad podłogą. Rzut na
+    // najbliższą krawędź przerzuca go między ścianami (ściana → podłoga → ściana) i krok jest odrzucany. Kolejne rzuty
+    // (≤ 4) mają dać narożnik wewnętrzny (-52, 0) z marginesem, w wolnym miejscu, bez odrzucenia kroku.
+    func testGuardResolvesTwoTouchingWallsToTheInnerCorner() async throws {
+        var world = ReferenceWorld(configuration: .init(timeStep: 1, linearDamping: 0, angularDamping: 0),
+                                   broadPhase: BruteForceBroadPhase())
+        world.addBubble(try .init(id: .init(rawValue: 1), center: .init(x: -54, y: -1), mass: 1, targetRadius: 1))
+        func rectangle(_ x0: Float, _ y0: Float, _ x1: Float, _ y1: Float, owner: Int, firstID: Int) {
+            let v: [ReferenceVector2] = [.init(x: x0, y: y0), .init(x: x1, y: y0), .init(x: x1, y: y1), .init(x: x0, y: y1)]
+            for i in v.indices {
+                world.addSegment(.staticSegment(id: .init(rawValue: firstID + i), a: v[i], b: v[(i + 1) % 4], ownerID: owner))
+            }
+        }
+        rectangle(-100, -100, -52, 100, owner: 1, firstID: 1)   // ściana: x ∈ [-100, -52], pełna wysokość
+        rectangle(-52, -100, 100, 0, owner: 2, firstID: 5)      // podłoga: x ∈ [-52, 100], y ∈ [-100, 0]
+        let solver = try makeSolver()
+        let frame = try await solver.executeFrame(world: world, scenarioStep: 1)
+        let center = frame.bubbles[0].center
+        XCTAssertGreaterThanOrEqual(center.x, -52, "środek poza ścianą: \(center)")
+        XCTAssertGreaterThanOrEqual(center.y, 0, "środek poza podłogą: \(center)")
+        XCTAssertEqual(center.x, -52, accuracy: 0.01, "narożnik wewnętrzny: \(center)")
+        XCTAssertEqual(center.y, 0, accuracy: 0.01, "narożnik wewnętrzny: \(center)")
+        XCTAssertGreaterThan(frame.report.sideCorrectionCount, 0)
+        XCTAssertEqual(frame.profile.commandBufferCount, 1)
+        let repeated = try await makeSolver().executeFrame(world: world, scenarioStep: 1)
+        XCTAssertEqual(frame.bubbles, repeated.bubbles)
     }
 
     func testCCDInvalidatesIncidentWarmStart() async throws {

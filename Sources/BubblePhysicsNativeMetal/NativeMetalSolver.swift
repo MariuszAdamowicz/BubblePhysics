@@ -84,7 +84,6 @@ final class NativeMetalPersistentState {
     let solverControl: MTLBuffer
     let guardedBubbles: MTLBuffer
     let safetyControl: MTLBuffer
-    let containmentRepairActive: MTLBuffer
     let segmentsPing: MTLBuffer
     let segmentsPong: MTLBuffer
     let bubbleUpdates: MTLBuffer
@@ -197,7 +196,6 @@ final class NativeMetalPersistentState {
         solverControl = try buffer("solver.control", 1, MemoryLayout<NativeMetalSolverControl>.stride)
         guardedBubbles = try buffer("safety.guardedBubbles", bubbleCapacity, MemoryLayout<UInt32>.stride)
         safetyControl = try buffer("safety.control", 1, MemoryLayout<NativeMetalSafetyControl>.stride)
-        containmentRepairActive = try buffer("safety.containmentRepairActive", 9, MemoryLayout<UInt32>.stride)
         renderPackets = try buffer("renderPackets", bubbleCapacity, MemoryLayout<NativeMetalRenderPacket>.stride)
         let (pointCapacity, pointOverflow) = bubbleCapacity.multipliedReportingOverflow(by: contourStride)
         guard !pointOverflow, pointCapacity <= Int(UInt32.max) else { throw NativeMetalSolverError.allocationFailed }
@@ -402,7 +400,7 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         var parameters = NativeMetalControl(counts: SIMD4(UInt32(count), UInt32(segmentCount), UInt32(truncatingIfNeeded: scenarioStep), 0),
             physics: SIMD4(snapshot.configuration.timeStep, snapshot.configuration.linearDamping,
                            snapshot.configuration.angularDamping, snapshot.configuration.contactStiffness),
-            contactDamping: SIMD4(snapshot.configuration.contactDamping, 0, 0, 0))
+            contactDamping: SIMD4(snapshot.configuration.contactDamping, configuration.pairCorrectionLimit ? 1 : 0, 0, 0))
         if let region = snapshot.publicSettings?.region {
             parameters.region = SIMD4(region.min.x, region.min.y, region.max.x, region.max.y)
         }
@@ -417,8 +415,6 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
                           snapshot.configuration.positionTolerance, 0, 0))
         state.solverControl.contents().storeBytes(of: solverParameters, as: NativeMetalSolverControl.self)
         state.safetyControl.contents().storeBytes(of: NativeMetalSafetyControl(counts: .zero), as: NativeMetalSafetyControl.self)
-        memset(state.containmentRepairActive.contents(), 0, state.containmentRepairActive.length)
-        state.containmentRepairActive.contents().storeBytes(of: UInt32(1), as: UInt32.self)
         memset(state.scratch.contents(), 0, state.scratch.length)
         // Wyłącznie zmiany wejścia gry mogą oznaczać teleport; normalna predykcja nie resetuje cache.
         // Poprzedni krok zwykle ma te same obiekty w tej samej kolejności, więc para po indeksie zastępuje słownik;
@@ -688,6 +684,10 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         dispatchContacts("nativeCompactContactCache", buffers: [state.mergedCache, state.workingCache, state.contactControl,
             state.scanValues, state.scanOffsets, state.dispatchStatistics], argument: 2)
         prepareIndirectArguments()
+        // Wygładzone ρ obu końców każdego kontaktu z konturu poprzedniej klatki (CD-D-16), przed solverem, który liczy z niego α.
+        dispatchContacts("nativeUpdateContactRho", buffers: [state.workingBubbles, state.workingCache, state.control,
+            state.contactControl, state.contourControl, state.publishedBubbles, state.publishedDeformation,
+            state.publishedContourCounts, structuralHeaderBuffer], argument: 3)
         dispatch("nativeClearAdjacency", buffers: [state.control, state.adjacencyCounts], threads: count)
         dispatchContacts("nativeEmitAdjacency", buffers: [state.workingBubbles, state.workingSegments, state.workingCache,
             state.control, state.contactControl, state.adjacency, state.contactEndpoints, state.dispatchStatistics,
@@ -760,16 +760,6 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         dispatch("nativeApplyCenterGuards", buffers: [state.workingBubbles, state.workingSegments, inputPositions,
             state.control, state.contactControl, state.guardedBubbles, state.safetyControl, state.dispatchStatistics],
             threads: count)
-        // Bounded GPU repair of pairs introduced by CCD/obstacle projection.
-        // Every repair rechecks obstacle invariants, in the same command buffer.
-        for pass in 0..<8 {
-            NativeMetalContainmentRepair.encodePass(encoder, pipelines: pipelines, bubbles: state.workingBubbles,
-                segments: state.workingSegments, input: inputPositions, output: outputPositions, control: state.control,
-                solver: state.solverControl, contacts: state.contactControl, changed: state.guardedBubbles,
-                safety: state.safetyControl, statistics: state.dispatchStatistics, repairActive: state.containmentRepairActive,
-                pass: pass, bubbleCount: count, fused: true)
-            swap(&inputPositions, &outputPositions)
-        }
         dispatch("nativeValidateBubbleContainment", buffers: [state.workingBubbles, inputPositions,
             state.control, state.solverControl, state.safetyControl], threads: count * count)
         if let diagnosticPostGuard = state.diagnosticPostGuardPositions {
@@ -943,11 +933,16 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
             gpuMilliseconds: timing.gpuMilliseconds, solverIterationCount: configuration.solverIterationCount,
             ccdCandidateCount: Int(safetyResult.counts.x), guardCorrectionCount: Int(safetyResult.counts.y),
             cacheInvalidationCount: Int(safetyResult.counts.z))
-        func rejectSafety(_ reason: NativeMetalWorldError) -> NativeMetalSafetyFailure {
-            .init(reason: reason, telemetry: diagnostics, profile: profile)
+        func rejectSafety(_ reason: NativeMetalWorldError, guardCause: NativeMetalGuardCause? = nil) -> NativeMetalSafetyFailure {
+            .init(reason: reason, telemetry: diagnostics, profile: profile, guardCause: guardCause)
         }
         guard safetyResult.counts.w & 1 == 0 else { throw rejectSafety(.nonFinite) }
-        guard safetyResult.counts.w & 2 == 0 else { throw rejectSafety(.guardFailure) }
+        guard safetyResult.counts.w & 2 == 0 else {
+            // Bity przyczyny zapalają się zawsze razem z bitem 2; oba w jednej klatce: wygrywa centerCrossing.
+            let cause: NativeMetalGuardCause? = safetyResult.counts.w & 8 != 0 ? .centerCrossing
+                : (safetyResult.counts.w & 16 != 0 ? .rigidRotationBudget : nil)
+            throw rejectSafety(.guardFailure, guardCause: cause)
+        }
         guard safetyResult.counts.w & 4 == 0 else { throw rejectSafety(.invalidFrame) }
         if let postSolver = state.diagnosticPostSolverPositions,
            let postGuard = state.diagnosticPostGuardPositions {
@@ -1074,6 +1069,7 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
             }
         }
         let overflowCounters = state.candidateOverflow.contents().load(as: SIMD4<UInt32>.self)
+        frame.containedBubblePairCount = Int(safetyResult.diagnostics.x)
         frame.contactCandidateOverflowCount = Int(overflowCounters.x)
         frame.maximumContactCandidatesPerObject = Int(overflowCounters.y)
         if snapshot.publicSettings != nil {
@@ -1228,20 +1224,19 @@ enum NativeMetalPipelineCache {
 
     private static var compiled: [UInt64: Compiled] = [:]
 
-    /// Kernele `nativeScanBlocks`, `nativeAddScanBlockOffsets`, `nativeFinishScan`, `nativeSeparateContainedBubbles`,
-    /// `nativeReapplyCenterGuards` (oraz `nativeGenerateContours`, `nativePrepareRenderData`) obsługują dawne ścieżki,
+    /// Kernele `nativeScanBlocks`, `nativeAddScanBlockOffsets`, `nativeFinishScan`
+    /// (oraz `nativeGenerateContours`, `nativePrepareRenderData`) obsługują dawne ścieżki,
     /// które produkcja pomija; zostają jako wzorzec bit w bit dla `NativeMetalChainKernelTests`.
     static let stageNames: [String] = ["nativePrepareGrid", "nativeBuildGrid", "nativeSortGrid", "nativeSortGridChunk", "nativeEmitCandidates",
         "nativePrepareCandidateCounts", "nativeCompactCandidates", "nativeBuildContacts",
         "nativePrepareContactFlags", "nativeCompactActiveContacts", "nativeMatchContactCache",
-        "nativeRetainContactCache", "nativeCompactContactCache", "nativeScanBlocks", "nativePrepareIndirectArguments",
+        "nativeRetainContactCache", "nativeCompactContactCache", "nativeUpdateContactRho", "nativeScanBlocks", "nativePrepareIndirectArguments",
         "nativeAddScanBlockOffsets", "nativeFinishScan", "nativeScanSingleGroup", "nativeClearAdjacency", "nativeEmitAdjacency", "nativeBuildAdjacency",
         "nativePrepareSolverContacts", "nativeApplyWarmStart", "nativeUpdateContactMultipliers",
         "nativeSolveJacobi", "nativeMeasureResidual", "nativeReduceSolverResidual",
         "nativeCapturePositions",
         "nativeUpdateVelocities", "nativeDampContactNormalMotion", "nativeFinalizeSolverContacts", "nativeFindFastCandidates",
-        "nativeResolveCCD", "nativeApplyCenterGuards", "nativeSeparateContainedBubbles", "nativeSeparateAndGuardContainedBubbles",
-        "nativeReapplyCenterGuards", "nativeValidateBubbleContainment", "nativeInvalidateSafetyCache", "nativeCheckFinite",
+        "nativeResolveCCD", "nativeApplyCenterGuards", "nativeValidateBubbleContainment", "nativeInvalidateSafetyCache", "nativeCheckFinite",
         "nativeAccumulateContactPressure", "nativeSeedStructuralContours", "nativeGenerateContours", "nativeGenerateContoursFused", "nativePrepareRenderData", "nativePrepareRenderDataGrouped",
         "nativeApplyPublicRegion", "nativeInvalidateRegionCache",
         "nativeCompactMergeEvents",

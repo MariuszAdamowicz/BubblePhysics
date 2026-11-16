@@ -31,6 +31,8 @@ public final class BubbleWorld {
     /// Stan końcowy „zawiódł”: ustawiony raz, nigdy nie czyszczony.
     private var failureReason: WorldFailureReason?
     private var lastRejectionReason: WorldRejectionReason?
+    private var lastSolverGuardCause: SolverGuardCause?
+    private var containedBubblePairCount = 0
     private var didRenderLastAdvance = false
     /// Obiekty ostatniego opublikowanego kroku, które rysują się bez interpolacji.
     private var snappedObjects: Set<ObjectID> = []
@@ -67,10 +69,13 @@ public final class BubbleWorld {
 
     /// Konstruktor wyłącznie dla diagnostycznego harnessu; limit nie jest parametrem API gry.
     package static func makeBenchmarkWorld(configuration: WorldConfiguration, device: MTLDevice,
-                                           solverIterationLimit: Int) throws -> BubbleWorld {
-        try BubbleWorld(configuration: configuration, stepper: NativeCompleteStepper(device: device,
-            configuration: NativeMetalConfiguration(solverIterationCount: solverIterationLimit)),
-            assets: AssetRegistry(device: device))
+                                           solverIterationLimit: Int,
+                                           pairCorrectionLimit: Bool = true) throws -> BubbleWorld {
+        var solver = NativeMetalConfiguration(solverIterationCount: solverIterationLimit)
+        // Bliźniacze testy z dawnym oczekiwaniem wyłączają limit λ pary (CD-D-20).
+        solver.pairCorrectionLimit = pairCorrectionLimit
+        return try BubbleWorld(configuration: configuration, stepper: NativeCompleteStepper(device: device,
+            configuration: solver), assets: AssetRegistry(device: device))
     }
 
     package var benchmarkTelemetry: NativeMetalFrameTelemetry? {
@@ -111,6 +116,7 @@ public final class BubbleWorld {
             contactCandidateOverflow: contactCandidateOverflow,
             maximumContactCandidatesPerObject: maximumContactCandidatesPerObject,
             failureReason: failureReason, lastRejectionReason: lastRejectionReason,
+            lastSolverGuardCause: lastSolverGuardCause, containedBubblePairCount: containedBubblePairCount,
             didRenderLastAdvance: didRenderLastAdvance)
     }
 
@@ -294,6 +300,7 @@ public final class BubbleWorld {
             // Punkty przekazane temu krokowi; zapytania złożone w czasie kroku czekają na następny.
             let hitTestBatch = pendingHitTests
             let batch = TransactionStager.stageBatch(pending, against: state, validate: stepper.validate,
+                baseContactCompliance: stepper.baseContactCompliance,
                 textureExists: { [assets] texture in assets?.contains(texture) ?? false },
                 glyphLookup: { [assets] source in assets?.glyphLookup(source) })
             // Obiekty z partii znamy przed krokiem; zawinięcia dopiero po nim, więc w klatce z krokiem ich nie ma. Zawiniętą bańkę
@@ -333,6 +340,8 @@ public final class BubbleWorld {
                 droppedEvents += complete.eventOverflow.droppedCount
                 contactCandidateOverflow += complete.contactCandidateOverflowCount
                 maximumContactCandidatesPerObject = complete.maximumContactCandidatesPerObject
+                // Przypisanie po kroku, jak maksimum kandydatów, nie suma jak przepełnienie.
+                containedBubblePairCount = complete.containedBubblePairCount
                 lastFrame = WorldFrame(stepIndex: clock.completedSteps, simulationTime: clock.simulationTime,
                     transactionReceipts: receipts, events: events,
                     eventOverflow: WorldEventOverflow(droppedCount: droppedEvents), driveFeedback: complete.driveFeedback,
@@ -382,9 +391,11 @@ public final class BubbleWorld {
         case .frameRejected:
             lastAdvanceIssue = .frameRejected
             lastRejectionReason = .frameEncoding
-        case .stepRejected(let reason):
+            lastSolverGuardCause = nil
+        case .stepRejected(let reason, let cause):
             lastAdvanceIssue = .stepFailed
             lastRejectionReason = reason
+            lastSolverGuardCause = cause
         case .failed(let reason):
             failureReason = reason
             pending.removeAll()
@@ -395,7 +406,8 @@ public final class BubbleWorld {
 
     private enum StepOutcome {
         case cancelled, frameRejected
-        case stepRejected(WorldRejectionReason)
+        /// Przyczyna jest tylko przy `.solverGuard`.
+        case stepRejected(WorldRejectionReason, SolverGuardCause?)
         case failed(WorldFailureReason)
     }
 
@@ -405,25 +417,34 @@ public final class BubbleWorld {
         if error is CancellationError { return .cancelled }
         if error is GameRenderError { return .frameRejected }
         if error is WorldRenderCommandError { return .failed(.commandExecutionFailed) }
-        if let failure = error as? NativeMetalSafetyFailure { return outcome(of: failure.reason) }
+        if let failure = error as? NativeMetalSafetyFailure {
+            let outcome = outcome(of: failure.reason)
+            guard case .stepRejected(.solverGuard, _) = outcome else { return outcome }
+            let cause: SolverGuardCause? = switch failure.guardCause {
+            case .centerCrossing: .centerCrossing
+            case .rigidRotationBudget: .rigidRotationBudget
+            case nil: nil
+            }
+            return .stepRejected(.solverGuard, cause)
+        }
         if let reason = error as? NativeMetalWorldError { return outcome(of: reason) }
         if let solver = error as? NativeMetalSolverError {
             switch solver {
             case .commandFailed: return .failed(.commandExecutionFailed)
-            case .invalidSnapshot: return .stepRejected(.invalidSnapshot)
-            default: return .stepRejected(.unexpected)
+            case .invalidSnapshot: return .stepRejected(.invalidSnapshot, nil)
+            default: return .stepRejected(.unexpected, nil)
             }
         }
-        return .stepRejected(.unexpected)
+        return .stepRejected(.unexpected, nil)
     }
 
     private static func outcome(of reason: NativeMetalWorldError) -> StepOutcome {
         switch reason {
         case .nonFinite: return .failed(.nonFiniteValues)
-        case .guardFailure: return .stepRejected(.solverGuard)
-        case .invalidFrame: return .stepRejected(.invalidFrame)
-        case .frameInFlight: return .stepRejected(.frameInFlight)
-        case .unavailable: return .stepRejected(.unexpected)
+        case .guardFailure: return .stepRejected(.solverGuard, nil)
+        case .invalidFrame: return .stepRejected(.invalidFrame, nil)
+        case .frameInFlight: return .stepRejected(.frameInFlight, nil)
+        case .unavailable: return .stepRejected(.unexpected, nil)
         }
     }
 }

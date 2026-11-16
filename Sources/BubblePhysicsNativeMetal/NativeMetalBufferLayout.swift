@@ -13,6 +13,7 @@ struct NativeMetalBubble: Equatable, Sendable {
     var eventData = SIMD2<UInt64>.zero // interest, merge groups
     var bounds = SIMD4<Float>.zero // AABB zdeformowanego konturu po kroku: min.xy, max.xy
     var filter = NativeMetalFilter.default // kategoria, maska, reserved, warstwa (`NativeMetalFilter.encodeLayer`)
+    var contact = SIMD4<Float>.zero // część bazowa podatności c₀·(r/r_ref)^s (0 = kontakt twardy), wykładnik ściśnięcia k, reserved, reserved
 
     init(_ bubble: NativeSolverBubble) {
         identity = SIMD2(Int64(bubble.id.rawValue), 0)
@@ -91,6 +92,7 @@ struct NativeContactCacheRecord: Equatable, Sendable {
     var metadata: SIMD4<UInt32> // kind, age, lastSeenFrame, flags
     var geometry: SIMD4<Float> // normal.xy, point.xy
     var response: SIMD4<Float> // lambda, penetration, allowedSide (0 = nil), reserved
+    var rho: SIMD4<Float> = SIMD4(1, 1, 0, 0) // wygładzone ρ końców a i b (stosunek promienia konturu do r w kierunku normalnej), reserved
     var key: NativeContactKey { .init(kind: metadata.x, first: participants.x, second: participants.y) }
     var lambda: Float { get { response.x } set { response.x = newValue } }
     var age: UInt32 { metadata.y }
@@ -150,6 +152,9 @@ struct NativeMetalSolverControl: Sendable {
 
 struct NativeMetalSafetyControl: Sendable {
     var counts: SIMD4<UInt32> // kandydaci CCD, korekcje guardów, resetowane rekordy, bity błędów
+    /// Shadery adresują `atomic_uint *safety` jako `safety+0..3` (counts) i `safety+4..7` (diagnostics): para „bańka w bańce”
+    /// to atomic add do `diagnostics.x` (safety+4). Struktury MSL nie ma, więc układ pilnuje stride 32.
+    var diagnostics = SIMD4<UInt32>.zero // liczba par bańka w bańce, rezerwa
 }
 
 struct NativeMetalRenderPacket: Equatable, Sendable {
@@ -238,6 +243,7 @@ package struct NativeMetalSnapshot: Sendable {
                     value.eventData = properties.eventData
                     value.filter = NativeMetalFilter.pack(properties.filter, layer: properties.layer)
                     value.deformation = SIMD4(0, 0, properties.speedLimits.x, properties.speedLimits.y)
+                    value.contact = properties.contact
                 }
                 changes.append(.init(index: index, value: value))
             }

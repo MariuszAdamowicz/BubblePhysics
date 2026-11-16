@@ -16,8 +16,12 @@ package protocol CompleteStepper: AnyObject {
                       beforeCommit: ((NativeMetalRenderHandoff?, RuntimeState) throws -> Void)?) async throws -> CompletedRuntimeStep
     /// Wołane po publikacji kroku; odrzucony krok lub klatka go nie wywołują.
     func didPublish(_ step: CompletedRuntimeStep)
+    /// Podstawowa podatność konfiguracji solvera (`NativeMetalConfiguration.contactCompliance`), czyli α_cfg · dt². Stager dzieli ją przez
+    /// dt² i sprawdza skończoność najgorszej α pary (CD-D-15).
+    var baseContactCompliance: Float { get }
 }
 extension CompleteStepper {
+    package var baseContactCompliance: Float { 0 }
     package func validate(_ change: StagedWorldChange) throws {}
     package func didPublish(_ step: CompletedRuntimeStep) {}
 
@@ -38,6 +42,8 @@ package struct CompletedRuntimeStep {
     package let contactCandidateOverflowCount: Int
     /// Największa liczba kandydatów na obiekt w tym kroku (etap 2).
     package let maximumContactCandidatesPerObject: Int
+    /// Liczba par baniek, z których mniejsza mieści się cała w kole większej, po tym kroku.
+    package let containedBubblePairCount: Int
     /// Wynik hit-testu dla każdego punktu z `hitTests` kroku, w tej samej kolejności; `nil` to puste miejsce.
     /// Pusta tablica (stepper bez zapytań) oznacza `nil` dla każdego punktu.
     package let hitTestResults: [ObjectID?]
@@ -47,6 +53,7 @@ package struct CompletedRuntimeStep {
     package init(state: RuntimeState, events: [WorldEvent] = [],
                  eventOverflow: WorldEventOverflow = WorldEventOverflow(), driveFeedback: [DriveFeedback] = [],
                  contactCandidateOverflowCount: Int = 0, maximumContactCandidatesPerObject: Int = 0,
+                 containedBubblePairCount: Int = 0,
                  hitTestResults: [ObjectID?] = [], snappedObjectIDs: Set<ObjectID> = []) {
         self.hitTestResults = hitTestResults
         self.snappedObjectIDs = snappedObjectIDs
@@ -55,5 +62,6 @@ package struct CompletedRuntimeStep {
         self.driveFeedback = driveFeedback
         self.contactCandidateOverflowCount = contactCandidateOverflowCount
         self.maximumContactCandidatesPerObject = maximumContactCandidatesPerObject
+        self.containedBubblePairCount = containedBubblePairCount
     }
 }

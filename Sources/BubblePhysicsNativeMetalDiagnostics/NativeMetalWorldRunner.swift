@@ -19,6 +19,7 @@ struct NativeMetalWorldFrame {
     var eventOverflow = WorldEventOverflow()
     var contactCandidateOverflowCount = 0
     var maximumContactCandidatesPerObject = 0
+    var containedBubblePairCount = 0
 }
 
 /// Publikuje atomowo pełną klatkę GPU albo wykonuje pełny krok CPU.

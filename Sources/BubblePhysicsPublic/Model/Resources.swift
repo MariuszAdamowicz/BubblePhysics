@@ -4,6 +4,44 @@ public enum PhysicsMaterialKind: Hashable, Sendable {
     case rigid
 }
 
+/// Podatność kontaktu bańki: c = base · (r / referenceRadius)^radiusExponent · ρ^compressionExponent, gdzie r to bieżący promień
+/// fizyczny bańki, a ρ ∈ [0, 1] to stosunek promienia konturu do r w kierunku kontaktu. `base` = 0 (`.hard`) to kontakt twardy
+/// z v2.1.0: potęgi nie są wtedy liczone.
+public struct BubbleContactCompliance: Equatable, Sendable {
+    /// Podstawowa podatność c₀ ≥ 0; 0 oznacza kontakt twardy.
+    public let base: Float
+    /// Promień odniesienia r_ref > 0.
+    public let referenceRadius: Float
+    /// Wykładnik s promienia: względne wgniecenie przy tej samej sile rośnie jak r^(s−1).
+    public let radiusExponent: Float
+    /// Wykładnik k ściśnięcia: dla k > 0 bańka sztywnieje wraz ze ściśnięciem konturu.
+    public let compressionExponent: Float
+
+    public init(base: Float = 0, referenceRadius: Float = 1, radiusExponent: Float = 0, compressionExponent: Float = 0) {
+        self.base = base
+        self.referenceRadius = referenceRadius
+        self.radiusExponent = radiusExponent
+        self.compressionExponent = compressionExponent
+    }
+
+    /// Kontakt twardy, jak w v2.1.0.
+    public static let hard = BubbleContactCompliance()
+
+    /// Każda wartość nieprawidłowa (ujemna, NaN, nieskończona, promień odniesienia ≤ 0) daje `valueOutOfRange`, a podatność > 0
+    /// w materiale `.rigid` także: kontakt bańka–bryła używa tylko podatności bańki.
+    internal func validate(for kind: PhysicsMaterialKind) throws {
+        guard base.isFinite, base >= 0 else { throw ModelValidationError.valueOutOfRange("contactCompliance.base") }
+        guard referenceRadius.isFinite, referenceRadius > 0 else {
+            throw ModelValidationError.valueOutOfRange("contactCompliance.referenceRadius")
+        }
+        guard radiusExponent.isFinite else { throw ModelValidationError.valueOutOfRange("contactCompliance.radiusExponent") }
+        guard compressionExponent.isFinite else {
+            throw ModelValidationError.valueOutOfRange("contactCompliance.compressionExponent")
+        }
+        guard kind == .bubble || base == 0 else { throw ModelValidationError.valueOutOfRange("contactCompliance.base") }
+    }
+}
+
 /// Zasób fizyczny, bez masy i promienia należących do konkretnego obiektu.
 public struct PhysicsMaterial: Equatable, Sendable {
     public let kind: PhysicsMaterialKind
@@ -15,10 +53,13 @@ public struct PhysicsMaterial: Equatable, Sendable {
     /// Górne granice prędkości; `nil` oznacza brak limitu. Dotyczą każdego obiektu z tym materiałem, także kinematycznego: napęd szybszy niż limit jest przycinany do limitu.
     public let maximumLinearSpeed: Float?
     public let maximumAngularSpeed: Float?
+    /// Podatność kontaktu bańki; materiał `.rigid` przyjmuje tylko `.hard`.
+    public let contactCompliance: BubbleContactCompliance
 
     public init(kind: PhysicsMaterialKind, deformability: Float = 0, damping: Float = 0,
                 friction: Float = 0, restitution: Float = 0,
-                maximumLinearSpeed: Float? = nil, maximumAngularSpeed: Float? = nil) throws {
+                maximumLinearSpeed: Float? = nil, maximumAngularSpeed: Float? = nil,
+                contactCompliance: BubbleContactCompliance = .hard) throws {
         try requireNonnegative(deformability, "deformability")
         try requireNonnegative(damping, "damping")
         try requireNonnegative(friction, "friction")
@@ -27,6 +68,7 @@ public struct PhysicsMaterial: Equatable, Sendable {
         guard restitution <= 1 else { throw ModelValidationError.valueOutOfRange("restitution") }
         if let maximumLinearSpeed { try requirePositive(maximumLinearSpeed, "maximumLinearSpeed") }
         if let maximumAngularSpeed { try requirePositive(maximumAngularSpeed, "maximumAngularSpeed") }
+        try contactCompliance.validate(for: kind)
         self.kind = kind
         self.deformability = deformability
         self.damping = damping
@@ -34,6 +76,7 @@ public struct PhysicsMaterial: Equatable, Sendable {
         self.restitution = restitution
         self.maximumLinearSpeed = maximumLinearSpeed
         self.maximumAngularSpeed = maximumAngularSpeed
+        self.contactCompliance = contactCompliance
     }
 }
 

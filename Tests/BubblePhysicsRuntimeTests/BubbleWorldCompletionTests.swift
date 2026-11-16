@@ -28,6 +28,52 @@ final class BubbleWorldCompletionTests: XCTestCase {
         XCTAssertEqual(world.diagnostics.maximumContactCandidatesPerObject, 9)
     }
 
+    // P-B-9: licznik par „bańka w bańce” jest wartością ostatniego ukończonego kroku, a nie sumą; odrzucony krok go nie zmienia.
+    func testContainedBubblePairCountIsAssignedPerStepAndKeptByAFailedStep() async throws {
+        let stepper = ScriptedContainmentStepper(counts: [3, 0, 5], failOnCall: 3)
+        let world = try world(stepper: stepper)
+        XCTAssertEqual(world.diagnostics.containedBubblePairCount, 0)
+        for expected in [3, 0, 5] {
+            _ = await world.advance(by: 0.125)
+            XCTAssertEqual(world.diagnostics.containedBubblePairCount, expected)
+        }
+        _ = await world.advance(by: 0.125)
+        XCTAssertEqual(world.diagnostics.lastAdvanceIssue, .stepFailed)
+        XCTAssertEqual(world.diagnostics.containedBubblePairCount, 5, "odrzucony krok zostawia licznik ostatniego ukończonego")
+    }
+
+    // α_cfg: stepper podaje podstawową podatność konfiguracji, a stager sprawdza skończoność α_cfg = c / dt² (dt = 0,125, dt² = 1/64).
+    func testBaseContactComplianceFromTheStepperReachesTheStagerAlphaCheck() async throws {
+        func addBubble(base: Float) async throws -> TransactionRejection? {
+            let stepper = ScriptedAlphaStepper(baseContactCompliance: base)
+            let world = try world(stepper: stepper)
+            let material = PhysicsMaterialID(rawValue: 1), style = RenderMaterialID(rawValue: 1)
+            _ = world.submit(WorldTransaction().updatePhysicsMaterial(material, material: try PhysicsMaterial(kind: .bubble))
+                .updateRenderMaterial(style, material: try RenderMaterial())
+                .add(.bubble(try BubbleDescriptor(id: ObjectID(rawValue: 1), position: .zero, targetRadius: 1,
+                                                  physicsMaterialID: material, renderMaterialID: style))))
+            let frame = await world.advance(by: 0.125)
+            for case .transactionRejected(_, let rejection) in frame.events { return rejection }
+            return nil
+        }
+        let accepted = try await addBubble(base: 1e30)
+        XCTAssertNil(accepted, "α_cfg = 6,4e31 jest skończone")
+        // 1e37 / dt² = 6,4e38 > FLT_MAX.
+        let rejected = try await addBubble(base: 1e37)
+        XCTAssertEqual(rejected, TransactionRejection(operationIndex: 2, reason: .invalidValue(.valueOutOfRange("contactCompliance"))),
+                       "indeks 2 to operacja add po dwóch aktualizacjach materiałów")
+    }
+
+    // Natywny stepper zapamiętuje contactCompliance z konfiguracji (domyślnie 0), a podaje je jako α_cfg.
+    func testNativeStepperExposesTheConfiguredContactCompliance() throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        XCTAssertEqual(try NativeCompleteStepper(device: device).baseContactCompliance, 0)
+        XCTAssertEqual(try NativeCompleteStepper(device: device, configuration: NativeMetalConfiguration(contactCompliance: 0.5))
+            .baseContactCompliance, 0.5)
+        XCTAssertEqual(try NativeCompleteStepper(device: device, configuration: NativeMetalConfiguration(contactCompliance: .nan))
+            .baseContactCompliance, 0, "jak w sanitized: nieskończona i NaN to 0")
+    }
+
     func testFailedStepDoesNotChangeCandidateOverflowCounter() async throws {
         let world = try world(stepper: ScriptedCandidateStepper(script: [(overflow: 4, maximum: 6)], failOnSecondCall: true))
         _ = await world.advance(by: 0.125)
@@ -474,10 +520,35 @@ final class BubbleWorldCompletionTests: XCTestCase {
         XCTAssertEqual(retry.transactionReceipts.map(\.token), [token])
         XCTAssertEqual(retry.stepIndex, 1)
     }
+
+    // P-B-15, P-B-16, P-B-36: przyczyna z bitów strażnika trafia do diagnostyki, a każde inne odrzucenie ją czyści.
+    func testGuardCauseFromTheSafetyFailureReachesDiagnosticsAndAnyOtherRejectionClearsIt() async throws {
+        let stepper = ScriptedStepper([
+            .fail(safety(.guardFailure, cause: .centerCrossing)), .fail(safety(.guardFailure, cause: .rigidRotationBudget)),
+            .fail(safety(.guardFailure)), .fail(safety(.guardFailure, cause: .centerCrossing)),
+            .fail(safety(.invalidFrame)), .fail(safety(.guardFailure, cause: .centerCrossing)), .complete])
+        let world = try world(stepper: stepper)
+        XCTAssertNil(world.diagnostics.lastSolverGuardCause, "przed jakimkolwiek odrzuceniem")
+        let expected: [(WorldRejectionReason, SolverGuardCause?)] = [
+            (.solverGuard, .centerCrossing), (.solverGuard, .rigidRotationBudget), (.solverGuard, nil),
+            (.solverGuard, .centerCrossing), (.invalidFrame, nil), (.solverGuard, .centerCrossing)]
+        for (index, (reason, cause)) in expected.enumerated() {
+            _ = await world.advance(by: 0.125)
+            XCTAssertEqual(world.diagnostics.lastAdvanceIssue, .stepFailed, "krok \(index)")
+            XCTAssertEqual(world.diagnostics.lastRejectionReason, reason, "krok \(index)")
+            XCTAssertEqual(world.diagnostics.lastSolverGuardCause, cause, "krok \(index)")
+        }
+        // Udany krok niczego nie odrzuca, więc powód i przyczyna ostatniego odrzucenia zostają razem.
+        _ = await world.advance(by: 0.125)
+        XCTAssertNil(world.diagnostics.lastAdvanceIssue)
+        XCTAssertEqual(world.diagnostics.lastRejectionReason, .solverGuard)
+        XCTAssertEqual(world.diagnostics.lastSolverGuardCause, .centerCrossing)
+    }
 }
 
-private func safety(_ reason: NativeMetalWorldError) -> NativeMetalSafetyFailure {
-    NativeMetalSafetyFailure(reason: reason, telemetry: NativeMetalFrameTelemetry(), profile: NativeMetalFrameProfile())
+private func safety(_ reason: NativeMetalWorldError, cause: NativeMetalGuardCause? = nil) -> NativeMetalSafetyFailure {
+    NativeMetalSafetyFailure(reason: reason, telemetry: NativeMetalFrameTelemetry(), profile: NativeMetalFrameProfile(),
+                             guardCause: cause)
 }
 
 /// Wyłącznie zewnętrzna granica ukończenia kroku jest kontrolowana przez test.
@@ -563,6 +634,34 @@ private final class ScriptedCandidateStepper: CompleteStepper {
         let entry = script[min(calls, script.count - 1)]
         return CompletedRuntimeStep(state: batch.state, contactCandidateOverflowCount: entry.overflow,
             maximumContactCandidatesPerObject: entry.maximum)
+    }
+}
+
+/// Kolejne kroki zgłaszają liczbę par „bańka w bańce”; krok o numerze `failOnCall` (od 0) jest odrzucany.
+@MainActor
+private final class ScriptedContainmentStepper: CompleteStepper {
+    private let counts: [Int]
+    private let failOnCall: Int
+    private var calls = 0
+    init(counts: [Int], failOnCall: Int) { self.counts = counts; self.failOnCall = failOnCall }
+    func completeStep(_ batch: StagedTransactionBatch, duration: Double, hitTests: [WorldPoint],
+                      commandBuffer: MTLCommandBuffer?,
+                      beforeCommit: ((NativeMetalRenderHandoff?, RuntimeState) throws -> Void)?) async throws -> CompletedRuntimeStep {
+        defer { calls += 1 }
+        if calls == failOnCall { throw ScriptedFailure.failed }
+        return CompletedRuntimeStep(state: batch.state, containedBubblePairCount: counts[min(calls, counts.count - 1)])
+    }
+}
+
+/// Krok bez zmian stanu, z podstawową podatnością konfiguracji podawaną stagerowi (α_cfg).
+@MainActor
+private final class ScriptedAlphaStepper: CompleteStepper {
+    let baseContactCompliance: Float
+    init(baseContactCompliance: Float) { self.baseContactCompliance = baseContactCompliance }
+    func completeStep(_ batch: StagedTransactionBatch, duration: Double, hitTests: [WorldPoint],
+                      commandBuffer: MTLCommandBuffer?,
+                      beforeCommit: ((NativeMetalRenderHandoff?, RuntimeState) throws -> Void)?) async throws -> CompletedRuntimeStep {
+        CompletedRuntimeStep(state: batch.state)
     }
 }
 

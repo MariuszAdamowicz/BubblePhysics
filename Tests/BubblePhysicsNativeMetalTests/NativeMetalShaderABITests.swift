@@ -73,7 +73,8 @@ final class NativeMetalShaderABITests: XCTestCase {
                 ("resources", MemoryLayout<NativeMetalBubble>.offset(of: \.resources)),
                 ("eventData", MemoryLayout<NativeMetalBubble>.offset(of: \.eventData)),
                 ("bounds", MemoryLayout<NativeMetalBubble>.offset(of: \.bounds)),
-                ("filter", MemoryLayout<NativeMetalBubble>.offset(of: \.filter))]),
+                ("filter", MemoryLayout<NativeMetalBubble>.offset(of: \.filter)),
+                ("contact", MemoryLayout<NativeMetalBubble>.offset(of: \.contact))]),
             Probe(name: "segment", mslSize: "NativeSegment", swiftSize: MemoryLayout<NativeMetalSegment>.stride, fields: [
                 ("identity", MemoryLayout<NativeMetalSegment>.offset(of: \.identity)),
                 ("flags", MemoryLayout<NativeMetalSegment>.offset(of: \.flags)),
@@ -86,7 +87,8 @@ final class NativeMetalShaderABITests: XCTestCase {
                 ("participants", MemoryLayout<NativeContactCacheRecord>.offset(of: \.participants)),
                 ("metadata", MemoryLayout<NativeContactCacheRecord>.offset(of: \.metadata)),
                 ("geometry", MemoryLayout<NativeContactCacheRecord>.offset(of: \.geometry)),
-                ("response", MemoryLayout<NativeContactCacheRecord>.offset(of: \.response))]),
+                ("response", MemoryLayout<NativeContactCacheRecord>.offset(of: \.response)),
+                ("rho", MemoryLayout<NativeContactCacheRecord>.offset(of: \.rho))]),
             Probe(name: "candidate", mslSize: "NativeCandidate", swiftSize: MemoryLayout<NativeMetalCandidate>.stride, fields: [
                 ("metadata", MemoryLayout<NativeMetalCandidate>.offset(of: \.metadata))]),
             Probe(name: "grid", mslSize: "NativeGridEntry", swiftSize: MemoryLayout<NativeMetalGridEntry>.stride, fields: [
@@ -162,7 +164,8 @@ final class NativeMetalShaderABITests: XCTestCase {
             ("material", MemoryLayout<NativeMetalBubble>.offset(of: \.material)),
             ("eventData", MemoryLayout<NativeMetalBubble>.offset(of: \.eventData)),
             ("bounds", MemoryLayout<NativeMetalBubble>.offset(of: \.bounds)),
-            ("filter", MemoryLayout<NativeMetalBubble>.offset(of: \.filter))])]
+            ("filter", MemoryLayout<NativeMetalBubble>.offset(of: \.filter)),
+            ("contact", MemoryLayout<NativeMetalBubble>.offset(of: \.contact))])]
         assertMatches(probes, try measure(probes, sources: [try source("NativeRenderKernels")], device: device))
     }
 
@@ -247,6 +250,33 @@ final class NativeMetalShaderABITests: XCTestCase {
         XCTAssertEqual(NativeMetalFilter.encodeLayer(0), 0x8000_0000)
     }
 
+    /// P-B-33: host liczy c₀·(r/r_ref)^s tylko dla c₀ > 0 (z nadpisaniem), a rekord bańki niesie wynik i wykładnik k w `contact`.
+    func testHostComputesContactComplianceForBubbleRecord() throws {
+        let compliance = BubbleContactCompliance(base: 2, referenceRadius: 10, radiusExponent: 2, compressionExponent: 1.5)
+        XCTAssertEqual(NativePublicProperties.contact(of: compliance, override: nil, radius: 20), SIMD4(8, 1.5, 0, 0))
+        XCTAssertEqual(NativePublicProperties.contact(of: compliance, override: 0.5, radius: 20), SIMD4(2, 1.5, 0, 0), "nadpisanie c₀")
+        XCTAssertEqual(NativePublicProperties.contact(of: compliance, override: 0, radius: 20), .zero, "nadpisanie 0 daje kontakt twardy")
+        let hardWithExtremeExponent = BubbleContactCompliance(base: 0, referenceRadius: 1, radiusExponent: .infinity, compressionExponent: 3)
+        XCTAssertEqual(NativePublicProperties.contact(of: hardWithExtremeExponent, override: nil, radius: 5), .zero, "c₀ = 0 bez potęg")
+        XCTAssertEqual(NativePublicProperties.contact(of: .hard, override: nil, radius: 5), .zero)
+        // A2: stager liczy w Double i przepuszcza c₀ = 1e-30, r/r_ref = 4, s = 70 (c = 1,4e12); host w Float dawał tam nieskończoność.
+        let overflowingInFloat = BubbleContactCompliance(base: 1e-30, referenceRadius: 1, radiusExponent: 70)
+        let large = NativePublicProperties.contact(of: overflowingInFloat, override: nil, radius: 4)
+        XCTAssertTrue(large.x.isFinite)
+        XCTAssertEqual(large.x, 1.3937966e12, accuracy: 1e7, "c₀ · 4^70 = 1e-30 · 1,3937965749081639e42")
+
+        let id = NativeSolverBubbleID(rawValue: 4)
+        var properties = NativePublicProperties(flags: SIMD4(1, 0, 0, 0), material: .zero, restitution: 0,
+            resources: .zero, eventData: .zero)
+        properties.contact = SIMD4(8, 1.5, 0, 0)
+        var input = NativeSolverInput(configuration: .init(), bubbles: [NativeSolverBubble(id: id, center: .zero, mass: 1, targetRadius: 1)],
+            segments: [], publicSettings: NativePublicSettings(properties: [id: properties],
+                region: try WorldRectangle(min: [-10, -10], max: [10, 10])))
+        input.hitTests = []
+        let record = try XCTUnwrap(NativeMetalSnapshot(input: input).bubbleChanges.first).value
+        XCTAssertEqual(record.contact, SIMD4(8, 1.5, 0, 0))
+    }
+
     /// P-B-71: rekord bańki niesie warstwę w `filter.w` bez zmiany kategorii i maski ani rozmiaru rekordu.
     func testBubbleRecordCarriesLayerInFilterW() throws {
         let id = NativeSolverBubbleID(rawValue: 4)
@@ -267,6 +297,6 @@ final class NativeMetalShaderABITests: XCTestCase {
             XCTAssertEqual(record.filter.x, 6); XCTAssertEqual(record.filter.y, 0x30)
         }
         XCTAssertEqual(MemoryLayout<NativeMetalBubble>.stride, NativeMetalRenderHandoff.bubbleRecordByteCount)
-        XCTAssertEqual(MemoryLayout<NativeMetalBubble>.stride, 11 * 16, "rozmiar rekordu bańki bez zmian: 11 lane'ów po 16 B")
+        XCTAssertEqual(MemoryLayout<NativeMetalBubble>.stride, 12 * 16, "rekord bańki: 11 lane'ów po 16 B i lane `contact` (podatność kontaktu)")
     }
 }
