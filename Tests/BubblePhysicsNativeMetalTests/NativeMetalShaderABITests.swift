@@ -299,4 +299,13 @@ final class NativeMetalShaderABITests: XCTestCase {
         XCTAssertEqual(MemoryLayout<NativeMetalBubble>.stride, NativeMetalRenderHandoff.bubbleRecordByteCount)
         XCTAssertEqual(MemoryLayout<NativeMetalBubble>.stride, 12 * 16, "rekord bańki: 11 lane'ów po 16 B i lane `contact` (podatność kontaktu)")
     }
+
+    /// F-13: shadery adresują bufor safety jako `atomic_uint *safety` bez struktury MSL, więc sonda ABI go nie widzi.
+    /// Układ pilnujemy po stronie Swift: 8 słów `uint`, safety+0..3 to `counts`, safety+4..7 to `diagnostics`.
+    func testSafetyControlIsEightUIntWordsWithDiagnosticsAtWordFour() {
+        XCTAssertEqual(MemoryLayout<NativeMetalSafetyControl>.stride, 32, "bufor safety: 8 × uint")
+        XCTAssertEqual(MemoryLayout<NativeMetalSafetyControl>.offset(of: \.counts), 0, "safety+0..3: liczniki i bity błędów")
+        XCTAssertEqual(MemoryLayout<NativeMetalSafetyControl>.offset(of: \.diagnostics), 16,
+            "safety+4: licznik par bańka w bańce (atomic add w shaderze)")
+    }
 }

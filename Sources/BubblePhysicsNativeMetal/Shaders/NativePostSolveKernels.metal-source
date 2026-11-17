@@ -1,5 +1,6 @@
-// ABI: cztery atomiki uint, wyłącznie liczniki i bity statusu. Bit 2 to odrzucenie przez strażnika; razem z nim bit 8
-// (centerCrossing) albo bit 16 (rigidRotationBudget) podaje przyczynę.
+// ABI: bufor safety to 8 atomików uint (NativeMetalSafetyControl, stride 32). safety+0..3 to liczniki i bity błędów
+// (safety+3: bity błędów), safety+4..7 to diagnostyka: safety+4 to licznik par bańka w bańce, safety+5..7 rezerwa.
+// Bit 2 to odrzucenie przez strażnika; razem z nim bit 8 (centerCrossing) albo bit 16 (rigidRotationBudget) podaje przyczynę.
 // Każdy wątek bańki zapisuje tylko własną pozycję oraz rząd kandydatów.
 void nativeSafetyEvent(device atomic_uint *safety, uint slot) {
     atomic_fetch_add_explicit(safety + slot, 1, memory_order_relaxed);
