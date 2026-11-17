@@ -38,7 +38,8 @@ final class NativeMetalXPBDTests: XCTestCase {
 
     // Usunięcie applyWarmStart albo zerowanie poprawnie dopasowanej lambda daje koszt cold-startu.
     // Z limitem λ pary (CD-D-9) para nie dochodzi do zbieżności w jednym kroku (λ ≤ 0,25·min r / max invMass), więc
-    // kolejne klatki tego samego wejścia zużywają cały budżet: zostaje „nie więcej niż cold start” (bliźniak: ...WithoutPairCorrectionLimit).
+    // kolejne klatki tego samego wejścia zużywają cały budżet: zostaje „nie więcej niż cold start”, a warm start widać w residuum
+    // przed pierwszą iteracją, mniejszym niż w klatce zimnej (bliźniak: ...WithoutPairCorrectionLimit).
     func testWarmStartNeedsNoMoreIterationsThanColdStartAfterFirstFrame() async throws {
         try await assertWarmStartNeedsNoMoreIterationsThanColdStartAfterFirstFrame(pairCorrectionLimit: true)
     }
@@ -200,6 +201,9 @@ final class NativeMetalXPBDTests: XCTestCase {
             XCTAssertLessThanOrEqual(warmed.report.solver.iterations, coldFrame.report.solver.iterations)
             if pairCorrectionLimit {
                 XCTAssertLessThanOrEqual(warmed.report.solver.iterations, initial.report.solver.iterations)
+                // Limit pary trzyma obie klatki na tym samym końcowym residuum (0,25) przy pełnym budżecie, więc warm start widać
+                // w residuum przed pierwszą iteracją: zapamiętane mnożniki przesuwają pary, zanim ruszy Jacobi (0,25 wobec 0,5).
+                XCTAssertLessThan(warmed.report.solver.initialResidualNorm, coldFrame.report.solver.initialResidualNorm, "Klatka \(step)")
             } else {
                 XCTAssertLessThan(warmed.report.solver.iterations, initial.report.solver.iterations)
                 XCTAssertTrue(warmed.report.solver.converged)
