@@ -28,102 +28,34 @@ final class NativeMetalXPBDTests: XCTestCase {
     // Limit λ pary (CD-D-9) tnie przesunięcie pary do 0,25·min r na krok: skrajne bańki łańcucha idą o 0,25, środkowa
     // zostaje (dwa równe, przeciwne przyrosty), więc po pierwszej klatce odstępy rosną z 1,5 do 1,75 zamiast do 2 (bliźniak: ...WithoutPairCorrectionLimit).
     func testThreeBubbleChainIsRepeatableAndRaceFree() async throws {
-        let first = try makeSolver(iterations: 32)
-        let second = try makeSolver(iterations: 32)
-        let world = try makeWorld(centers: [0, 1.5, 3])
-        for step in 1...60 {
-            let a = try await first.executeFrame(world: world, scenarioStep: step)
-            let b = try await second.executeFrame(world: world, scenarioStep: step)
-            assertFinite(a)
-            XCTAssertEqual(stateHash(a), stateHash(b), "Klatka \(step)")
-            for index in 0..<2 {
-                let gap = (a.bubbles[index + 1].center - a.bubbles[index].center).length
-                // Pierwsza klatka: dokładnie 1,75; potem bańki rozchodzą się z nabytą prędkością (bez tłumienia).
-                if step == 1 { XCTAssertEqual(gap, 1.75, accuracy: 0.0001) } else { XCTAssertGreaterThanOrEqual(gap, 1.75 - 0.0001, "Klatka \(step)") }
-            }
-        }
+        try await assertThreeBubbleChainIsRepeatableAndRaceFree(pairCorrectionLimit: true)
     }
 
     // Bliźniak (CD-D-20): bez limitu pary oczekiwanie z v2.1.0, pełne rozdzielenie w jednym kroku.
     func testThreeBubbleChainIsRepeatableAndRaceFreeWithoutPairCorrectionLimit() async throws {
-        let first = try makeSolver(iterations: 32, pairCorrectionLimit: false)
-        let second = try makeSolver(iterations: 32, pairCorrectionLimit: false)
-        let world = try makeWorld(centers: [0, 1.5, 3])
-        for step in 1...60 {
-            let a = try await first.executeFrame(world: world, scenarioStep: step)
-            let b = try await second.executeFrame(world: world, scenarioStep: step)
-            assertFinite(a)
-            XCTAssertEqual(stateHash(a), stateHash(b), "Klatka \(step)")
-            for index in 0..<2 {
-                XCTAssertGreaterThanOrEqual((a.bubbles[index + 1].center - a.bubbles[index].center).length, 1.9999)
-            }
-        }
+        try await assertThreeBubbleChainIsRepeatableAndRaceFree(pairCorrectionLimit: false)
     }
 
     // Usunięcie applyWarmStart albo zerowanie poprawnie dopasowanej lambda daje koszt cold-startu.
     // Z limitem λ pary (CD-D-9) para nie dochodzi do zbieżności w jednym kroku (λ ≤ 0,25·min r / max invMass), więc
     // kolejne klatki tego samego wejścia zużywają cały budżet: zostaje „nie więcej niż cold start” (bliźniak: ...WithoutPairCorrectionLimit).
     func testWarmStartNeedsNoMoreIterationsThanColdStartAfterFirstFrame() async throws {
-        let warm = try makeSolver(iterations: 64)
-        let world = try makeWorld(centers: [0, 1.5, 3])
-        let initial = try await warm.executeFrame(snapshot: .init(world: world), scenarioStep: 1)
-        XCTAssertGreaterThan(initial.report.solver.iterations, 0)
-        for step in 2...5 {
-            let warmed = try await warm.executeFrame(snapshot: .init(world: world), scenarioStep: step)
-            let cold = try makeSolver(iterations: 64)
-            let coldFrame = try await cold.executeFrame(snapshot: .init(world: world), scenarioStep: step)
-            XCTAssertEqual(warmed.telemetry.cacheHitCount, 2)
-            XCTAssertLessThanOrEqual(warmed.report.solver.iterations, coldFrame.report.solver.iterations)
-            XCTAssertLessThanOrEqual(warmed.report.solver.iterations, initial.report.solver.iterations)
-            assertFinite(warmed)
-        }
+        try await assertWarmStartNeedsNoMoreIterationsThanColdStartAfterFirstFrame(pairCorrectionLimit: true)
     }
 
     // Bliźniak (CD-D-20): bez limitu pary oczekiwanie z v2.1.0, warm start zbiega szybciej niż pierwsza klatka.
     func testWarmStartNeedsNoMoreIterationsThanColdStartAfterFirstFrameWithoutPairCorrectionLimit() async throws {
-        let warm = try makeSolver(iterations: 64, pairCorrectionLimit: false)
-        let world = try makeWorld(centers: [0, 1.5, 3])
-        let initial = try await warm.executeFrame(snapshot: .init(world: world), scenarioStep: 1)
-        XCTAssertGreaterThan(initial.report.solver.iterations, 0)
-        for step in 2...5 {
-            // Pełny snapshot jawnie ponawia kontrolowane wejście, zachowując cache solvera.
-            let warmed = try await warm.executeFrame(snapshot: .init(world: world), scenarioStep: step)
-            let cold = try makeSolver(iterations: 64, pairCorrectionLimit: false)
-            let coldFrame = try await cold.executeFrame(snapshot: .init(world: world), scenarioStep: step)
-            XCTAssertEqual(warmed.telemetry.cacheHitCount, 2)
-            XCTAssertLessThanOrEqual(warmed.report.solver.iterations, coldFrame.report.solver.iterations)
-            XCTAssertLessThan(warmed.report.solver.iterations, initial.report.solver.iterations)
-            XCTAssertTrue(warmed.report.solver.converged)
-            assertFinite(warmed)
-        }
+        try await assertWarmStartNeedsNoMoreIterationsThanColdStartAfterFirstFrame(pairCorrectionLimit: false)
     }
 
     // Limit λ pary (CD-D-9): odstęp pierwszej pary po jednym kroku to 1,4 + 0,25 = 1,65 (środkowa bańka stoi w miejscu).
     func testSameInputProducesSamePublishedStateHash() async throws {
-        let world = try makeWorld(centers: [0, 1.4, 2.9])
-        var hashes: [UInt64] = []
-        for _ in 0..<4 {
-            let solver = try makeSolver(iterations: 32)
-            let frame = try await solver.executeFrame(world: world, scenarioStep: 1)
-            XCTAssertEqual((frame.bubbles[1].center - frame.bubbles[0].center).length, 1.65, accuracy: 0.0001)
-            hashes.append(stateHash(frame))
-            XCTAssertEqual(stateHash(try XCTUnwrap(solver.publishedFrame)), hashes.last)
-        }
-        XCTAssertTrue(hashes.allSatisfy { $0 == hashes[0] })
+        try await assertSameInputProducesSamePublishedStateHash(pairCorrectionLimit: true)
     }
 
     // Bliźniak (CD-D-20): bez limitu pary oczekiwanie z v2.1.0.
     func testSameInputProducesSamePublishedStateHashWithoutPairCorrectionLimit() async throws {
-        let world = try makeWorld(centers: [0, 1.4, 2.9])
-        var hashes: [UInt64] = []
-        for _ in 0..<4 {
-            let solver = try makeSolver(iterations: 32, pairCorrectionLimit: false)
-            let frame = try await solver.executeFrame(world: world, scenarioStep: 1)
-            XCTAssertGreaterThanOrEqual((frame.bubbles[1].center - frame.bubbles[0].center).length, 1.9999)
-            hashes.append(stateHash(frame))
-            XCTAssertEqual(stateHash(try XCTUnwrap(solver.publishedFrame)), hashes.last)
-        }
-        XCTAssertTrue(hashes.allSatisfy { $0 == hashes[0] })
+        try await assertSameInputProducesSamePublishedStateHash(pairCorrectionLimit: false)
     }
 
     func testSegmentContactSeparatesAndIterationBudgetIsReported() async throws {
@@ -154,22 +86,12 @@ final class NativeMetalXPBDTests: XCTestCase {
     // Limit λ pary (CD-D-9) = 0,25·min r / max invMass = 0,25, jedno λ dla obu końców: przesunięcia to invMass·λ,
     // czyli 0,25/3 i 0,25 (zamiast 0,125 i 0,375 bez limitu), a pęd pary nadal się zeruje.
     func testInverseMassWeightsCorrectionsAndPreservesCenterOfMass() async throws {
-        let solver = try makeSolver(iterations: 3)
-        let world = try makeInverseMassWorld()
-        let frame = try await solver.executeFrame(world: world, scenarioStep: 1)
-        XCTAssertEqual(frame.bubbles[0].center.x, -1.0 / 12, accuracy: 0.00001)
-        XCTAssertEqual(frame.bubbles[1].center.x, 1.75, accuracy: 0.00001)
-        XCTAssertEqual(3 * frame.bubbles[0].velocity.x + frame.bubbles[1].velocity.x, 0, accuracy: 0.0001)
+        try await assertInverseMassWeightsCorrections(pairCorrectionLimit: true, expectedCenters: (-1.0 / 12, 1.75))
     }
 
     // Bliźniak (CD-D-20): bez limitu pary oczekiwanie z v2.1.0.
     func testInverseMassWeightsCorrectionsAndPreservesCenterOfMassWithoutPairCorrectionLimit() async throws {
-        let solver = try makeSolver(iterations: 3, pairCorrectionLimit: false)
-        let world = try makeInverseMassWorld()
-        let frame = try await solver.executeFrame(world: world, scenarioStep: 1)
-        XCTAssertEqual(frame.bubbles[0].center.x, -0.125, accuracy: 0.00001)
-        XCTAssertEqual(frame.bubbles[1].center.x, 1.875, accuracy: 0.00001)
-        XCTAssertEqual(3 * frame.bubbles[0].velocity.x + frame.bubbles[1].velocity.x, 0, accuracy: 0.0001)
+        try await assertInverseMassWeightsCorrections(pairCorrectionLimit: false, expectedCenters: (-0.125, 1.875))
     }
 
     func testUnsatisfiedConstraintReportsIterationLimit() async throws {
@@ -200,36 +122,12 @@ final class NativeMetalXPBDTests: XCTestCase {
     }
 
     func testWarmStartBoundsAnOversizedMatchedMultiplierByBubbleRadius() async throws {
-        let solver = try makeSolver(iterations: 1)
-        let world = try makeWorld(centers: [0, 1.5])
-        _ = try await solver.executeFrame(snapshot: .init(world: world), scenarioStep: 1)
-        let state = try XCTUnwrap(solver.persistentState)
-        state.contactCache.contents().bindMemory(to: NativeContactCacheRecord.self, capacity: state.contactCapacity)[0].lambda = 100_000_000
-        let frame = try await solver.executeFrame(snapshot: .init(world: world), scenarioStep: 2)
-        // Każda bańka ma promień 1: warm-start przesuwa co najwyżej o promień,
-        // więc rezyduum przed pierwszą iteracją nie przekracza 1.5.
-        XCTAssertLessThanOrEqual(frame.report.solver.initialResidualNorm, 1.50001)
-        XCTAssertEqual(frame.bubbles[0].center.x, -0.25, accuracy: 0.00001)
-        XCTAssertEqual(frame.bubbles[1].center.x, 1.75, accuracy: 0.00001)
-        XCTAssertEqual(frame.telemetry.cacheHitCount, 1)
-        assertFinite(frame)
+        try await assertWarmStartBoundsAnOversizedMatchedMultiplier(pairCorrectionLimit: true)
     }
 
     // Bliźniak (CD-D-20): bez limitu pary warm-start ogranicza dopiero dawny próg r / (invMass · stopień).
     func testWarmStartBoundsAnOversizedMatchedMultiplierByBubbleRadiusWithoutPairCorrectionLimit() async throws {
-        let solver = try makeSolver(iterations: 1, pairCorrectionLimit: false)
-        let world = try makeWorld(centers: [0, 1.5])
-        _ = try await solver.executeFrame(snapshot: .init(world: world), scenarioStep: 1)
-        let state = try XCTUnwrap(solver.persistentState)
-        state.contactCache.contents().bindMemory(to: NativeContactCacheRecord.self, capacity: state.contactCapacity)[0].lambda = 100_000_000
-        let frame = try await solver.executeFrame(snapshot: .init(world: world), scenarioStep: 2)
-        // Każda bańka ma promień 1: warm-start przesuwa co najwyżej o promień,
-        // więc rezyduum przed pierwszą iteracją nie przekracza 1.5.
-        XCTAssertLessThanOrEqual(frame.report.solver.initialResidualNorm, 1.50001)
-        XCTAssertEqual(frame.bubbles[0].center.x, -0.25, accuracy: 0.00001)
-        XCTAssertEqual(frame.bubbles[1].center.x, 1.75, accuracy: 0.00001)
-        XCTAssertEqual(frame.telemetry.cacheHitCount, 1)
-        assertFinite(frame)
+        try await assertWarmStartBoundsAnOversizedMatchedMultiplier(pairCorrectionLimit: false)
     }
 
     func testRejectedSolvedFramePreservesPublishedPositionsAndMultipliersForBothBufferParities() async throws {
@@ -261,6 +159,92 @@ final class NativeMetalXPBDTests: XCTestCase {
             let expected = try await control.executeFrame(world: world, scenarioStep: 3)
             XCTAssertEqual(stateHash(recovered), stateHash(expected))
         }
+    }
+
+    // MARK: wspólne ciała bliźniaków (CD-D-20): `pairCorrectionLimit: false` daje oczekiwanie z v2.1.0
+
+    private func assertThreeBubbleChainIsRepeatableAndRaceFree(pairCorrectionLimit: Bool) async throws {
+        let first = try makeSolver(iterations: 32, pairCorrectionLimit: pairCorrectionLimit)
+        let second = try makeSolver(iterations: 32, pairCorrectionLimit: pairCorrectionLimit)
+        let world = try makeWorld(centers: [0, 1.5, 3])
+        for step in 1...60 {
+            let a = try await first.executeFrame(world: world, scenarioStep: step)
+            let b = try await second.executeFrame(world: world, scenarioStep: step)
+            assertFinite(a)
+            XCTAssertEqual(stateHash(a), stateHash(b), "Klatka \(step)")
+            for index in 0..<2 {
+                let gap = (a.bubbles[index + 1].center - a.bubbles[index].center).length
+                if !pairCorrectionLimit {
+                    XCTAssertGreaterThanOrEqual(gap, 1.9999)
+                } else if step == 1 {
+                    // Pierwsza klatka: dokładnie 1,75; potem bańki rozchodzą się z nabytą prędkością (bez tłumienia).
+                    XCTAssertEqual(gap, 1.75, accuracy: 0.0001)
+                } else {
+                    XCTAssertGreaterThanOrEqual(gap, 1.75 - 0.0001, "Klatka \(step)")
+                }
+            }
+        }
+    }
+
+    private func assertWarmStartNeedsNoMoreIterationsThanColdStartAfterFirstFrame(pairCorrectionLimit: Bool) async throws {
+        let warm = try makeSolver(iterations: 64, pairCorrectionLimit: pairCorrectionLimit)
+        let world = try makeWorld(centers: [0, 1.5, 3])
+        let initial = try await warm.executeFrame(snapshot: .init(world: world), scenarioStep: 1)
+        XCTAssertGreaterThan(initial.report.solver.iterations, 0)
+        for step in 2...5 {
+            // Pełny snapshot jawnie ponawia kontrolowane wejście, zachowując cache solvera.
+            let warmed = try await warm.executeFrame(snapshot: .init(world: world), scenarioStep: step)
+            let cold = try makeSolver(iterations: 64, pairCorrectionLimit: pairCorrectionLimit)
+            let coldFrame = try await cold.executeFrame(snapshot: .init(world: world), scenarioStep: step)
+            XCTAssertEqual(warmed.telemetry.cacheHitCount, 2)
+            XCTAssertLessThanOrEqual(warmed.report.solver.iterations, coldFrame.report.solver.iterations)
+            if pairCorrectionLimit {
+                XCTAssertLessThanOrEqual(warmed.report.solver.iterations, initial.report.solver.iterations)
+            } else {
+                XCTAssertLessThan(warmed.report.solver.iterations, initial.report.solver.iterations)
+                XCTAssertTrue(warmed.report.solver.converged)
+            }
+            assertFinite(warmed)
+        }
+    }
+
+    private func assertSameInputProducesSamePublishedStateHash(pairCorrectionLimit: Bool) async throws {
+        let world = try makeWorld(centers: [0, 1.4, 2.9])
+        var hashes: [UInt64] = []
+        for _ in 0..<4 {
+            let solver = try makeSolver(iterations: 32, pairCorrectionLimit: pairCorrectionLimit)
+            let frame = try await solver.executeFrame(world: world, scenarioStep: 1)
+            let gap = (frame.bubbles[1].center - frame.bubbles[0].center).length
+            if pairCorrectionLimit { XCTAssertEqual(gap, 1.65, accuracy: 0.0001) } else { XCTAssertGreaterThanOrEqual(gap, 1.9999) }
+            hashes.append(stateHash(frame))
+            XCTAssertEqual(stateHash(try XCTUnwrap(solver.publishedFrame)), hashes.last)
+        }
+        XCTAssertTrue(hashes.allSatisfy { $0 == hashes[0] })
+    }
+
+    private func assertInverseMassWeightsCorrections(pairCorrectionLimit: Bool, expectedCenters: (Float, Float)) async throws {
+        let solver = try makeSolver(iterations: 3, pairCorrectionLimit: pairCorrectionLimit)
+        let world = try makeInverseMassWorld()
+        let frame = try await solver.executeFrame(world: world, scenarioStep: 1)
+        XCTAssertEqual(frame.bubbles[0].center.x, expectedCenters.0, accuracy: 0.00001)
+        XCTAssertEqual(frame.bubbles[1].center.x, expectedCenters.1, accuracy: 0.00001)
+        XCTAssertEqual(3 * frame.bubbles[0].velocity.x + frame.bubbles[1].velocity.x, 0, accuracy: 0.0001)
+    }
+
+    private func assertWarmStartBoundsAnOversizedMatchedMultiplier(pairCorrectionLimit: Bool) async throws {
+        let solver = try makeSolver(iterations: 1, pairCorrectionLimit: pairCorrectionLimit)
+        let world = try makeWorld(centers: [0, 1.5])
+        _ = try await solver.executeFrame(snapshot: .init(world: world), scenarioStep: 1)
+        let state = try XCTUnwrap(solver.persistentState)
+        state.contactCache.contents().bindMemory(to: NativeContactCacheRecord.self, capacity: state.contactCapacity)[0].lambda = 100_000_000
+        let frame = try await solver.executeFrame(snapshot: .init(world: world), scenarioStep: 2)
+        // Każda bańka ma promień 1: warm-start przesuwa co najwyżej o promień,
+        // więc rezyduum przed pierwszą iteracją nie przekracza 1.5.
+        XCTAssertLessThanOrEqual(frame.report.solver.initialResidualNorm, 1.50001)
+        XCTAssertEqual(frame.bubbles[0].center.x, -0.25, accuracy: 0.00001)
+        XCTAssertEqual(frame.bubbles[1].center.x, 1.75, accuracy: 0.00001)
+        XCTAssertEqual(frame.telemetry.cacheHitCount, 1)
+        assertFinite(frame)
     }
 
     /// `pairCorrectionLimit: false` daje bliźniaki z oczekiwaniem z v2.1.0 (CD-D-20).
