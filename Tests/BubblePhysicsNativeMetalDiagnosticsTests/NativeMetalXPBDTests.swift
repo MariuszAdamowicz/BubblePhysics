@@ -131,6 +131,45 @@ final class NativeMetalXPBDTests: XCTestCase {
         try await assertWarmStartBoundsAnOversizedMatchedMultiplier(pairCorrectionLimit: false)
     }
 
+    // LD-D-1: przy limicie pary warm start nie ma limitu na bańkę. Każda para ma własny limit λ (0,25·min r / max invMass plus ruch
+    // w stronę kontaktu), a korekty bańki się sumują, więc bańka z k kontaktami bez ruchu przesuwa się o co najwyżej k·0,25·min r:
+    // od 5 kontaktów albo przy ruchu w stronę kontaktu przesunięcie może przekroczyć promień. Tu 4 sąsiadów r = 0,5 po jednej
+    // stronie bańki r = 2: przesunięcie środkowej bańki to suma wektorowa limitów par (|·| ≈ 0,385) i zostaje poniżej promienia.
+    func testWarmStartOfBubbleWithFourContactsAddsUpThePairLimits() async throws {
+        let solver = try makeSolver(iterations: 1)
+        var world = ReferenceWorld(configuration: .init(linearDamping: 0), broadPhase: BruteForceBroadPhase())
+        world.addBubble(try .init(id: .init(rawValue: 1), center: .zero, mass: 1, targetRadius: 2))
+        // Co 36°: sąsiedzi nachodzą na środkową bańkę o 0,7, a na siebie nie (cięciwa 3,6·sin 18° ≈ 1,11 > 1).
+        let angles: [Float] = [126, 162, 198, 234].map { $0 * .pi / 180 }
+        for (offset, angle) in angles.enumerated() {
+            world.addBubble(try .init(id: .init(rawValue: offset + 2), center: .init(x: 1.8 * cos(angle), y: 1.8 * sin(angle)),
+                                      mass: 1, targetRadius: 0.5))
+        }
+        _ = try await solver.executeFrame(snapshot: .init(world: world), scenarioStep: 1)
+        let state = try XCTUnwrap(solver.persistentState)
+        XCTAssertEqual(solver.cachedContacts.count, 4)
+        let records = state.contactCache.contents().bindMemory(to: NativeContactCacheRecord.self, capacity: state.contactCapacity)
+        for index in 0..<solver.cachedContacts.count { records[index].lambda = 100_000_000 }
+        let frame = try await solver.executeFrame(snapshot: .init(world: world), scenarioStep: 2)
+        XCTAssertEqual(frame.telemetry.cacheHitCount, 4)
+        // Limit pary bez ruchu: 0,25 · min(2; 0,5) / 1 = 0,125. Każda para odpycha środkową bańkę od sąsiada o 0,125, a po warm
+        // starcie wszystkie pary dalej nachodzą na siebie, więc jedyna iteracja Jacobiego nie zmienia λ ponad limit.
+        let pairLimit: Float = 0.125
+        let expectedX = angles.reduce(0) { $0 - pairLimit * cos($1) }
+        let expectedY = angles.reduce(0) { $0 - pairLimit * sin($1) }
+        XCTAssertEqual(frame.bubbles[0].center.x, expectedX, accuracy: 0.00001)
+        XCTAssertEqual(frame.bubbles[0].center.y, expectedY, accuracy: 0.00001)
+        let displacement = frame.bubbles[0].center.length
+        XCTAssertGreaterThan(displacement, 3 * pairLimit, "korekty par się sumują, nie ma limitu na bańkę")
+        XCTAssertLessThan(displacement, 2, "przy 4 kontaktach bez ruchu przesunięcie zostaje poniżej promienia")
+        for (offset, angle) in angles.enumerated() {
+            let center = frame.bubbles[offset + 1].center
+            XCTAssertEqual(center.x, (1.8 + pairLimit) * cos(angle), accuracy: 0.00001, "sąsiad \(offset + 2)")
+            XCTAssertEqual(center.y, (1.8 + pairLimit) * sin(angle), accuracy: 0.00001, "sąsiad \(offset + 2)")
+        }
+        assertFinite(frame)
+    }
+
     func testRejectedSolvedFramePreservesPublishedPositionsAndMultipliersForBothBufferParities() async throws {
         for budget in [3, 4] {
             let executor = XPBDRejectingExecutor()

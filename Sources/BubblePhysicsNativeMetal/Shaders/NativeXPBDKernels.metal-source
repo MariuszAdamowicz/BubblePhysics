@@ -348,8 +348,11 @@ kernel void nativePrepareSolverContacts(device NativeBubble *bubbles [[buffer(0)
     NativeContactCache record = cache[index];
     uint a = endpoints[index].x, b = endpoints[index].y;
     if (record.metadata.z == contacts.limits.x) {
-        // Jedna wspólna lambda obu końców: suma długości warm korekcji każdej bańki
-        // nie może przekroczyć jej promienia, niezależnie od liczby kontaktów.
+        // Jedna wspólna lambda obu końców. Kontakt ze ścianą albo odcinkiem i para baniek bez limitu pary (v2.1.0) mają
+        // λ ≤ r / (invMass · stopień) dla każdego końca, więc suma warm korekcji bańki nie przekracza jej promienia.
+        // Z limitem pary λ pary baniek ogranicza tylko nativePairLambdaLimit: korekta jednej pary jest ograniczona, ale suma
+        // korekt bańki nie jest ograniczona promieniem; bez ruchu sięga k · 0,25 · min r przy k kontaktach (LD-D-1,
+        // testWarmStartOfBubbleWithFourContactsAddsUpThePairLimits).
         float maximum = bubbles[a].physical.z / (bubbles[a].physical.y * max(1u, degrees[a]));
         if (record.metadata.x == 0) {
             if (control.contactDamping.y != 0)
