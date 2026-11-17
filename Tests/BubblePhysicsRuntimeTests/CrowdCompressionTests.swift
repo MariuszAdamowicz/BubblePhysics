@@ -6,7 +6,9 @@ import XCTest
 /// w ramie ścian, a bańki nie znikają. Scena z `CrowdSceneSupport.swift`; wszystko idzie przez publiczny `BubbleWorld` na urządzeniu Metal.
 @MainActor
 final class CrowdCompressionTests: XCTestCase {
-    /// Wspólne asercje G1-AC1, G1-AC2 i G2-AC5 dla przebiegu tłoku.
+    /// Wspólne asercje G1-AC1, G1-AC2 i G2-AC5 dla przebiegu tłoku. Licznika par zawartych nie sprawdzają: przy B = 2,5 pola kół
+    /// są 2,5 raza większe od wnętrza i część par zostaje zawarta w równowadze (probe: 14 przy c₀ = 0, 7 przy materiale miękkim,
+    /// tyle samo po 600, 1800 i 3600 krokach). Spadek licznika do 0 sprawdzają przebiegi bez takiego nadmiaru pól.
     private func assertCrowdKeptStepsAccepted(_ report: CrowdScene.CrowdReport, world: BubbleWorld, balance: Double,
                                               file: StaticString = #filePath, line: UInt = #line) {
         XCTAssertNil(report.firstIssue?.issue,
@@ -18,8 +20,6 @@ final class CrowdCompressionTests: XCTestCase {
         XCTAssertEqual(report.vanishedBubbles, 0, "bańki, które zniknęły z klatki", file: file, line: line)
         XCTAssertTrue(report.outsideFrame.isEmpty, "środek poza ramą: \(report.outsideFrame.prefix(3))", file: file, line: line)
         XCTAssertGreaterThanOrEqual(report.balance, balance, file: file, line: line)
-        XCTAssertTrue(report.wasContainedCountFinite, file: file, line: line)
-        XCTAssertGreaterThanOrEqual(report.minimumContainedPairs, 0, file: file, line: line)
         XCTAssertGreaterThanOrEqual(report.steps, 600, "przebieg obejmuje 600 kroków po ostatniej bańce", file: file, line: line)
     }
 
@@ -28,6 +28,15 @@ final class CrowdCompressionTests: XCTestCase {
         let world = try await CrowdScene.makeWorld()
         let report = try await CrowdScene.runCrowd(world: world, balance: 2.5, seed: 2_500, extraSteps: 600)
         assertCrowdKeptStepsAccepted(report, world: world, balance: 2.5)
+    }
+
+    // Solver rozsuwa pary „bańka w bańce” w kilku krokach: przy B = 1 po 600 krokach od ostatniej bańki żadnej pary zawartej już
+    // nie ma (przy c₀ = 0 i B = 1,5 jedna para zostaje zawarta w równowadze).
+    func testHardCrowdBalance1SeparatesAllContainedPairs() async throws {
+        let world = try await CrowdScene.makeWorld()
+        let report = try await CrowdScene.runCrowd(world: world, balance: 1, seed: 2_500, extraSteps: 600)
+        assertCrowdKeptStepsAccepted(report, world: world, balance: 1)
+        XCTAssertEqual(report.lastContainedPairs, 0, "pary zawarte po ostatnim kroku")
     }
 
     /// Narożnik z G1-AC4: bańka r = 20 pchana siłą 3000 po przekątnej w narożnik ramy, za nią tłok 10 baniek. Zwraca bańkę 1 z
@@ -108,6 +117,8 @@ final class CrowdCompressionTests: XCTestCase {
             let report = try await CrowdScene.runCrowd(world: world, balance: balance, seed: 2_500, extraSteps: 600)
             XCTAssertNil(report.firstIssue?.issue, "B = \(balance): krok \(report.firstIssue?.step ?? 0) odrzucony")
             XCTAssertEqual(report.lastSecond.count, CrowdScene.lastSecondSteps)
+            // Przy B = 1,5 materiał miękki rozsuwa wszystkie pary zawarte (przy B = 2,5 część zostaje w równowadze).
+            if balance == 1.5 { XCTAssertEqual(report.lastContainedPairs, 0, "B = 1,5: pary zawarte po ostatnim kroku") }
             ratios[balance] = report.meanEffectiveRadiusRatioInLastSecond
         }
         let low = try XCTUnwrap(ratios[1.5]), high = try XCTUnwrap(ratios[2.5])
