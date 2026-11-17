@@ -36,6 +36,7 @@ final class CrowdCompressionTests: XCTestCase {
         let world = try await CrowdScene.makeWorld()
         let report = try await CrowdScene.runCrowd(world: world, balance: 1, seed: 2_500, extraSteps: 600)
         assertCrowdKeptStepsAccepted(report, world: world, balance: 1)
+        XCTAssertGreaterThan(report.peakContainedPairs, 0, "pary zawarte w trakcie przebiegu")
         XCTAssertEqual(report.lastContainedPairs, 0, "pary zawarte po ostatnim kroku")
     }
 
@@ -118,7 +119,10 @@ final class CrowdCompressionTests: XCTestCase {
             XCTAssertNil(report.firstIssue?.issue, "B = \(balance): krok \(report.firstIssue?.step ?? 0) odrzucony")
             XCTAssertEqual(report.lastSecond.count, CrowdScene.lastSecondSteps)
             // Przy B = 1,5 materiał miękki rozsuwa wszystkie pary zawarte (przy B = 2,5 część zostaje w równowadze).
-            if balance == 1.5 { XCTAssertEqual(report.lastContainedPairs, 0, "B = 1,5: pary zawarte po ostatnim kroku") }
+            if balance == 1.5 {
+                XCTAssertGreaterThan(report.peakContainedPairs, 0, "B = 1,5: pary zawarte w trakcie przebiegu")
+                XCTAssertEqual(report.lastContainedPairs, 0, "B = 1,5: pary zawarte po ostatnim kroku")
+            }
             ratios[balance] = report.meanEffectiveRadiusRatioInLastSecond
         }
         let low = try XCTUnwrap(ratios[1.5]), high = try XCTUnwrap(ratios[2.5])
