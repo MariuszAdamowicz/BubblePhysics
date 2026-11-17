@@ -261,7 +261,8 @@ final class PlacementValidationTests: XCTestCase {
             XCTAssertEqual(PlacementGeometry.issue(at: point, radius: 2, filter: filter, in: state, excluding: excluding), expected,
                            "skan stanu, punkt \(point)")
             XCTAssertEqual(PlacementGeometry.issue(at: point, radius: 2, filter: filter, in: state, excluding: excluding,
-                                                   rigidBodies: bodies), expected, "gotowa lista brył, punkt \(point)")
+                                                   rigidBodies: bodies, positionTolerance: PlacementGeometry.defaultPositionTolerance),
+                           expected, "gotowa lista brył, punkt \(point)")
         }
         XCTAssertEqual(Set(bodies.map(\.id)), [id(100), id(101), id(102), id(103), id(104)], "lista ma tylko bryły")
     }
@@ -344,7 +345,8 @@ final class PlacementValidationTests: XCTestCase {
             for (other, radius) in others {
                 let position = try XCTUnwrap(outcome.frame.objects[id(other)], file: file, line: line).position
                 XCTAssertGreaterThan(simd_distance(center, position),
-                    PlacementGeometry.coincidentCenterTolerance(radius: resultRadius, otherRadius: radius),
+                    PlacementGeometry.coincidentCenterTolerance(radius: resultRadius, otherRadius: radius,
+                                                                positionTolerance: PlacementGeometry.defaultPositionTolerance),
                     "nie na środku bańki \(other)", file: file, line: line)
             }
             centers.append(center)
