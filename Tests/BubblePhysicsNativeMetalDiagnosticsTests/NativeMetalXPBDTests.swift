@@ -134,7 +134,7 @@ final class NativeMetalXPBDTests: XCTestCase {
 
     // LD-D-1: przy limicie pary warm start nie ma limitu na bańkę. Każda para ma własny limit λ (0,25·min r / max invMass plus ruch
     // w stronę kontaktu), a korekty bańki się sumują, więc bańka z k kontaktami bez ruchu przesuwa się o co najwyżej k·0,25·min r:
-    // od 5 kontaktów albo przy ruchu w stronę kontaktu przesunięcie może przekroczyć promień. Tu 4 sąsiadów r = 0,5 po jednej
+    // suma nie jest ograniczona promieniem i może go przekroczyć. Tu 4 sąsiadów r = 0,5 po jednej
     // stronie bańki r = 2: przesunięcie środkowej bańki to suma wektorowa limitów par (|·| ≈ 0,385) i zostaje poniżej promienia.
     func testWarmStartOfBubbleWithFourContactsAddsUpThePairLimits() async throws {
         let solver = try makeSolver(iterations: 1)

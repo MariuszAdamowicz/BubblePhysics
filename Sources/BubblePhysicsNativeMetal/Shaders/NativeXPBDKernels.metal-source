@@ -353,14 +353,14 @@ kernel void nativePrepareSolverContacts(device NativeBubble *bubbles [[buffer(0)
         float compliance = nativeContactCompliance(bubbles[a], record.rho.x);
         if (record.metadata.x == 0) compliance += nativeContactCompliance(bubbles[b], record.rho.y);
         record.rho.z = compliance;
-        cache[index] = record;
     }
-    if (record.metadata.z == contacts.limits.x) {
+    bool limited = record.metadata.z == contacts.limits.x;
+    if (limited) {
         // Jedna wspólna lambda obu końców. Kontakt ze ścianą albo odcinkiem i para baniek bez limitu pary (v2.1.0) mają
         // λ ≤ r / (invMass · stopień) dla każdego końca, więc suma warm korekcji bańki nie przekracza jej promienia.
         // Z limitem pary λ pary baniek ogranicza tylko nativePairLambdaLimit: korekta jednej pary jest ograniczona, ale suma
-        // korekt bańki nie jest ograniczona promieniem; bez ruchu sięga k · 0,25 · min r przy k kontaktach (LD-D-1,
-        // testWarmStartOfBubbleWithFourContactsAddsUpThePairLimits).
+        // korekt bańki nie jest ograniczona promieniem i może go przekroczyć; bez ruchu wynosi co najwyżej k · 0,25 · min r
+        // przy k kontaktach (LD-D-1, testWarmStartOfBubbleWithFourContactsAddsUpThePairLimits).
         float maximum = bubbles[a].physical.z / (bubbles[a].physical.y * max(1u, degrees[a]));
         if (record.metadata.x == 0) {
             if (control.contactDamping.y != 0)
@@ -369,8 +369,9 @@ kernel void nativePrepareSolverContacts(device NativeBubble *bubbles [[buffer(0)
                 maximum = min(maximum, bubbles[b].physical.z / (bubbles[b].physical.y * max(1u, degrees[b])));
         }
         record.response.x = min(record.response.x, maximum);
-        cache[index] = record;
     }
+    // Jeden zapis rekordu, gdy zmieniło się rho.z albo limit λ.
+    if (endpoints[index].w || limited) cache[index] = record;
 }
 
 kernel void nativeApplyWarmStart(device NativeBubble *bubbles [[buffer(0)]],
