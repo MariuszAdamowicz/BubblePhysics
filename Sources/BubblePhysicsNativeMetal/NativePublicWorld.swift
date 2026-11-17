@@ -84,9 +84,8 @@ struct NativePublicProperties: Equatable, Sendable {
     static func contact(of compliance: BubbleContactCompliance, override: Float?, radius: Float) -> SIMD4<Float> {
         let base = override ?? compliance.base
         guard base > 0 else { return .zero }
-        // W Double jak walidacja stagera (`validateWorstAlpha`): potęga w Float przepełniałaby tam, gdzie stager przepuszcza.
-        let scale = Float(Double(base) * pow(Double(radius) / Double(compliance.referenceRadius), Double(compliance.radiusExponent)))
-        return SIMD4(scale, compliance.compressionExponent, 0, 0)
+        // Ten sam wzór w Double co walidacja stagera (`validateWorstAlpha`).
+        return SIMD4(Float(compliance.scaledBase(base, radius: radius)), compliance.compressionExponent, 0, 0)
     }
 }
 

@@ -555,9 +555,8 @@ private struct StagingContext {
             var radii = [object.targetRadius, object.collisionRadius]
             if let endRadius { radii.append(endRadius) }
             if case .scalar(let scheduled)? = state.transitions[.bubbleRadius(bubble.id)]?.value { radii.append(scheduled) }
-            let exponent = Double(compliance.radiusExponent)
-            let radius = Double((exponent >= 0 ? radii.max() : radii.min()) ?? object.targetRadius)
-            let worst = Double(base) * pow(radius / Double(compliance.referenceRadius), exponent)
+            let radius = (compliance.radiusExponent >= 0 ? radii.max() : radii.min()) ?? object.targetRadius
+            let worst = compliance.scaledBase(base, radius: radius)
                 * pow(Self.minimumContourRatio, min(Double(compliance.compressionExponent), 0))
             // GPU liczy czynnik ρ^k w Float osobno (`nativeContactCompliance`), zanim pomnoży go przez część bazową, więc
             // ρ_min^k musi być skończonym Float także przy małym c₀, przy którym sam iloczyn się mieści.

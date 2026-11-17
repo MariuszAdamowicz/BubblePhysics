@@ -100,6 +100,23 @@ final class ContactComplianceTests: XCTestCase {
         (try CrowdScene.softBubblePhysics(base: 1e-3), try PhysicsMaterial(kind: .bubble))
     }
 
+    /// Jeden wzór c₀ · (r / r_ref)^s w `Double` (F-3), z którego korzystają `validateWorstAlpha` i `NativePublicProperties.contact`:
+    /// wartości jak w obu miejscach przed wydzieleniem, a przy c₀ = 0 bez potęg, więc skrajny wykładnik nie daje NaN.
+    func testScaledBaseIsTheSharedComplianceFormulaInDouble() {
+        let compliance = BubbleContactCompliance(base: 2, referenceRadius: 10, radiusExponent: 2, compressionExponent: 1.5)
+        XCTAssertEqual(compliance.scaledBase(2, radius: 20), 8)
+        XCTAssertEqual(compliance.scaledBase(0.5, radius: 20), 2, "nadpisanie c₀")
+        for (base, radius) in [(Float(1e-3), Float(7.3)), (3.7e-4, 31.25), (4e-3, 0.4)] {
+            let expected = Double(base) * pow(Double(radius) / Double(compliance.referenceRadius), Double(compliance.radiusExponent))
+            XCTAssertEqual(compliance.scaledBase(base, radius: radius), expected, "c₀ = \(base), r = \(radius)")
+        }
+        // Potęga w Double: (4 / 1)^90 przepełnia Float, a nie Double.
+        let large = BubbleContactCompliance(base: 1, referenceRadius: 1, radiusExponent: 90)
+        XCTAssertEqual(large.scaledBase(1, radius: 4), pow(4, 90))
+        let extreme = BubbleContactCompliance(base: 0, referenceRadius: 1, radiusExponent: -1e30)
+        XCTAssertEqual(extreme.scaledBase(0, radius: 5), 0, "c₀ = 0 bez potęg")
+    }
+
     // P-B-18 (G4-AC7): zła wartość nadpisania w `BubbleResult` odrzuca transakcję, źródła zostają.
     func testResultValidationRejectsInvalidContactComplianceOverrideInMergeAndSplit() async throws {
         let (softMaterial, hardMaterial) = try defaultMaterials()

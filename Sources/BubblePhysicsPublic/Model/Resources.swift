@@ -1,3 +1,5 @@
+import Foundation
+
 public enum PhysicsMaterialKind: Hashable, Sendable {
     case bubble
     /// Wszystkie sztywne bryły: wielokąt, koło i kapsuła.
@@ -26,6 +28,14 @@ public struct BubbleContactCompliance: Equatable, Sendable {
 
     /// Kontakt twardy, jak w v2.1.0.
     public static let hard = BubbleContactCompliance()
+
+    /// Część bazowa podatności c₀ · (r / r_ref)^s w `Double` dla podanego c₀ (po nadpisaniu na bańce) i promienia r. Jedno źródło
+    /// wzoru dla walidacji stagera i rekordu GPU: potęga w Float przepełniałaby tam, gdzie walidacja w Double przepuszcza.
+    /// Przy c₀ ≤ 0 potęg się nie liczy, więc skrajny wykładnik nie daje NaN z 0 · ∞ (CD-D-8).
+    package func scaledBase(_ base: Float, radius: Float) -> Double {
+        guard base > 0 else { return 0 }
+        return Double(base) * pow(Double(radius) / Double(referenceRadius), Double(radiusExponent))
+    }
 
     /// Każda wartość nieprawidłowa (ujemna, NaN, nieskończona, promień odniesienia ≤ 0) daje `valueOutOfRange`, a podatność > 0
     /// w materiale `.rigid` także: kontakt bańka–bryła używa tylko podatności bańki.
