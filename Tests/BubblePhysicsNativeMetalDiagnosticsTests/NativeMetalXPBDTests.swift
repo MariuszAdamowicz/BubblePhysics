@@ -1,5 +1,6 @@
 import XCTest
 import Metal
+import BubblePhysicsModel
 import BubblePhysicsReference
 @testable import BubblePhysicsNativeMetal
 @testable import BubblePhysicsNativeMetalDiagnostics
@@ -288,6 +289,34 @@ final class NativeMetalXPBDTests: XCTestCase {
         XCTAssertEqual(frame.bubbles[1].center.x, 1.75, accuracy: 0.00001)
         XCTAssertEqual(frame.telemetry.cacheHitCount, 1)
         assertFinite(frame)
+    }
+
+    // F-6 (LD-D-6): `nativePrepareSolverContacts` zapisuje w `rho.z` sumę współczynników podatności końców c_a(ρ_a) + c_b(ρ_b),
+    // a `nativeContactAlpha` czyta ją zamiast liczyć pow() w każdej iteracji. Para miękkich baniek o różnych c₀ i k.
+    func testPreparedContactCarriesTheSumOfEndComplianceInRhoZ() async throws {
+        let solver = try makeSolver(iterations: 8)
+        let ids = [NativeSolverBubbleID(rawValue: 1), NativeSolverBubbleID(rawValue: 2)]
+        let contact: [SIMD4<Float>] = [SIMD4(0.002, 1.5, 0, 0), SIMD4(0.0005, 3, 0, 0)]
+        var properties: [NativeSolverBubbleID: NativePublicProperties] = [:]
+        for index in 0..<2 {
+            var property = NativePublicProperties(flags: SIMD4(1, 0, 0, 0), material: SIMD4(0, 0.5, 0, 0), restitution: 0,
+                resources: .zero, eventData: .zero)
+            property.contact = contact[index]
+            properties[ids[index]] = property
+        }
+        var input = NativeSolverInput(configuration: .init(), bubbles: [
+            NativeSolverBubble(id: ids[0], center: .zero, mass: 1, targetRadius: 1),
+            NativeSolverBubble(id: ids[1], center: SIMD2(1.5, 0), mass: 1, targetRadius: 1)],
+            segments: [], publicSettings: NativePublicSettings(properties: properties,
+                region: try WorldRectangle(min: [-10, -10], max: [10, 10])))
+        input.hitTests = []
+        for step in 1...3 { _ = try await solver.executeFrame(input: input, scenarioStep: step) }
+        let record = try XCTUnwrap(solver.cachedContacts.first)
+        XCTAssertEqual(record.metadata.x, 0, "para bańka–bańka")
+        func compliance(_ value: SIMD4<Float>, _ rho: Float) -> Float { value.x * pow(max(rho, 0.01), value.y) }
+        let expected = compliance(contact[0], record.rho.x) + compliance(contact[1], record.rho.y)
+        XCTAssertGreaterThan(expected, 0)
+        XCTAssertEqual(record.rho.z, expected, accuracy: expected * 1e-5, "rho.z = c_a(ρ_a) + c_b(ρ_b)")
     }
 
     /// `pairCorrectionLimit: false` daje bliźniaki z oczekiwaniem z v2.1.0 (CD-D-20).

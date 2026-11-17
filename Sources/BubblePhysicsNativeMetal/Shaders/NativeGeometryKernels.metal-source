@@ -29,7 +29,8 @@ struct NativeSegment {
 };
 struct NativeContactCache {
     long2 participants; uint4 metadata; float4 geometry; float4 response;
-    float4 rho; // wygładzone ρ końców a i b (stosunek promienia konturu do r w kierunku normalnej), reserved
+    float4 rho; // wygładzone ρ końców a i b (stosunek promienia konturu do r w kierunku normalnej),
+                // z: c_a(ρ_a) + c_b(ρ_b) z nativePrepareSolverContacts (dla odcinka tylko c_a), reserved
 };
 struct NativeCandidate { long2 participants; uint4 metadata; };
 struct NativeGridEntry { long2 cell; uint4 metadata; };
