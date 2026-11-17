@@ -12,21 +12,20 @@ enum PlacementGeometry {
     }
 
     /// Najmniejsza odległość środków dwóch baniek, poniżej której środki uchodzą za wspólny (CD-D-7): względna do
-    /// mniejszego promienia, ale nie mniejsza niż tolerancja położenia solvera, żeby punkty różne o 1 ULP
-    /// (których naprawa nie rozsunie stabilnie) też były odrzucane.
-    static func coincidentCenterTolerance(radius: Float, otherRadius: Float) -> Float {
+    /// mniejszego promienia, ale nie mniejsza niż tolerancja położenia solvera `positionTolerance` (ze steppera), żeby
+    /// punkty różne o 1 ULP (których naprawa nie rozsunie stabilnie) też były odrzucane.
+    static func coincidentCenterTolerance(radius: Float, otherRadius: Float,
+                                          positionTolerance: Float = defaultPositionTolerance) -> Float {
         max(1e-4 * min(radius, otherRadius), positionTolerance)
     }
-    /// Tolerancja położenia solvera. Stager nie widzi konfiguracji solvera, a `NativePublicWorld` buduje ją z samego
-    /// `timeStep` i tłumienia (`NativePublicWorld.swift:217`), więc rzeczywista wartość świata to domyślne
-    /// `NativeSolverConfiguration.positionTolerance`; odczyt z domyślnej konfiguracji trzyma obie strony zgodne.
-    private static let positionTolerance = NativeSolverConfiguration().positionTolerance
+    /// Tolerancja położenia dla steppera, który jej nie podaje (`CompleteStepper`), i domyślna w wywołaniach stagera.
+    package static let defaultPositionTolerance: Float = 0.0001
 
     /// Pierwsza przyczyna, dla której środek bańki o promieniu `radius` nie może stanąć w `point`, w kolejności
     /// region, bryła, wspólny środek; `nil`, gdy punkt jest poprawny. Obiekty z `excluding` są z testu wyłączone, tak jak
     /// obiekty, których filtr kolizji wyklucza się z `filter` bańki: nigdy z nią nie kolidują, więc solver znosi wspólny środek.
     static func issue(at point: WorldPoint, radius: Float, filter: CollisionFilter, in state: RuntimeState,
-                      excluding: Set<ObjectID>) -> PlacementIssue? {
+                      excluding: Set<ObjectID>, positionTolerance: Float = defaultPositionTolerance) -> PlacementIssue? {
         // Region obowiązuje niezależnie od `regionExitPolicy`: `.wrap` przenosi bańkę, która wyszła w kroku,
         // a nie dopuszcza postawienia jej poza regionem.
         guard state.configuration.simulationRegion.contains(point) else { return .outsideRegion }
@@ -39,7 +38,8 @@ enum PlacementGeometry {
         for (id, object) in state.objects where !excluding.contains(id) {
             guard case .bubble(let other) = object.descriptor, filter.collides(with: other.filter) else { continue }
             if simd_length(point - object.position)
-                < coincidentCenterTolerance(radius: radius, otherRadius: object.targetRadius) {
+                < coincidentCenterTolerance(radius: radius, otherRadius: object.targetRadius,
+                                            positionTolerance: positionTolerance) {
                 return .coincidentCenter
             }
         }

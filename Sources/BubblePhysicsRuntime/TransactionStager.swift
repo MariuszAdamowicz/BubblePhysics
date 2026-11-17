@@ -156,12 +156,14 @@ extension StagedTransactionBatch {
 package enum TransactionStager {
     /// `textureExists` mówi, czy tekstura jest w rejestrze zasobów świata; Runtime nie zna rejestru.
     /// `baseContactCompliance` to podstawowa podatność konfiguracji solvera (α_cfg · dt²); stager sprawdza z nią skończoność α pary.
+    /// `positionTolerance` to tolerancja położenia solvera, z której stager liczy próg wspólnego środka baniek.
     package static func stage(_ transaction: WorldTransaction, against state: RuntimeState,
         baseContactCompliance: Float = 0,
+        positionTolerance: Float = PlacementGeometry.defaultPositionTolerance,
         textureExists: @escaping (TextureID) -> Bool = { _ in false },
         glyphLookup: @escaping GlyphLookup = { _ in nil }) throws -> StagedWorldChange {
         var candidate = StagingContext(state: state, textureExists: textureExists, glyphLookup: glyphLookup,
-                                       baseContactCompliance: baseContactCompliance)
+                                       baseContactCompliance: baseContactCompliance, positionTolerance: positionTolerance)
         for (index, operation) in transaction.operations.enumerated() {
             do { try candidate.apply(operation) }
             catch let error as TransactionRejectionReason {
@@ -181,6 +183,7 @@ package enum TransactionStager {
     package static func stageBatch(_ pending: [PendingTransaction], against state: RuntimeState,
         validate: ((StagedWorldChange) throws -> Void)? = nil,
         baseContactCompliance: Float = 0,
+        positionTolerance: Float = PlacementGeometry.defaultPositionTolerance,
         textureExists: @escaping (TextureID) -> Bool = { _ in false },
         glyphLookup: @escaping GlyphLookup = { _ in nil }) -> StagedTransactionBatch {
         var candidate = state
@@ -190,7 +193,8 @@ package enum TransactionStager {
         for submission in pending {
             do {
                 let change = try stage(submission.transaction, against: candidate,
-                                       baseContactCompliance: baseContactCompliance, textureExists: textureExists,
+                                       baseContactCompliance: baseContactCompliance, positionTolerance: positionTolerance,
+                                       textureExists: textureExists,
                                        glyphLookup: glyphLookup)
                 try validate?(change)
                 candidate = change.state
@@ -219,6 +223,8 @@ private struct StagingContext {
     let glyphLookup: GlyphLookup
     /// Podstawowa podatność konfiguracji solvera, z której stager liczy α_cfg = c / dt² (CD-D-15).
     let baseContactCompliance: Float
+    /// Tolerancja położenia solvera ze steppera; z niej idzie próg wspólnego środka (`PlacementGeometry.coincidentCenterTolerance`).
+    let positionTolerance: Float
     var created: [ObjectID] = []
     var removed: [ObjectID] = []
     var replaced: [ObjectID] = []
@@ -427,7 +433,7 @@ private struct StagingContext {
     func validatePlacement(_ object: RuntimeObject, excluding: Set<ObjectID>) throws {
         guard case .bubble(let bubble) = object.descriptor else { return }
         if let issue = PlacementGeometry.issue(at: object.position, radius: object.targetRadius, filter: bubble.filter, in: state,
-                                               excluding: excluding) {
+                                               excluding: excluding, positionTolerance: positionTolerance) {
             throw TransactionRejectionReason.invalidPlacement(bubble.id, issue)
         }
     }
@@ -655,7 +661,8 @@ private struct StagingContext {
         // ani na środku innej bańki. Źródła znikają razem ze scaleniem, więc są z testu wyłączone.
         let snapshot = state, excluded = Set(sources)
         func issue(_ point: WorldPoint) -> PlacementIssue? {
-            PlacementGeometry.issue(at: point, radius: resultRadius, filter: result.filter, in: snapshot, excluding: excluded)
+            PlacementGeometry.issue(at: point, radius: resultRadius, filter: result.filter, in: snapshot, excluding: excluded,
+                                    positionTolerance: positionTolerance)
         }
         // Kandydaci idą w kolejności ID, jak punkt styku, żeby ten sam układ dawał ten sam środek niezależnie od kolejności
         // `sources` w operacji (G3-AC4).
@@ -714,7 +721,7 @@ private struct StagingContext {
             guard case .bubble(let descriptor) = part.descriptor else { throw TransactionRejectionReason.incompatibleObjectKind(id) }
             func issue(_ point: WorldPoint) -> PlacementIssue? {
                 PlacementGeometry.issue(at: point, radius: part.targetRadius, filter: descriptor.filter, in: snapshot,
-                                        excluding: excluding)
+                                        excluding: excluding, positionTolerance: positionTolerance)
             }
             guard let resolved = StructuralOperations.resolvedSplitCenter(centroid: part.position,
                 sourceCenter: source.position, partRadius: part.targetRadius, issue: issue) else {

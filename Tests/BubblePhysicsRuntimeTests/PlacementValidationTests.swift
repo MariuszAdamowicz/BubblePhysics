@@ -1,5 +1,7 @@
-import BubblePhysics
+@testable import BubblePhysics
+import BubblePhysicsNativeMetal
 @testable import BubblePhysicsRuntime
+import Metal
 import simd
 import XCTest
 
@@ -104,6 +106,35 @@ final class PlacementValidationTests: XCTestCase {
             XCTAssertEqual(($0 as? TransactionRejection)?.reason, .invalidPlacement(self.id(2), .coincidentCenter))
         }
         XCTAssertNoThrow(try stage(WorldTransaction().add(bubble(2, at: [10.01, 10])), against: state))
+    }
+
+    /// F-2: tolerancja wspólnego środka idzie ze steppera (jak `baseContactCompliance`), a nie z domyślnej konfiguracji solvera.
+    /// Dla r = 2 część względna to 2e-4; odstęp 0,005 jest powyżej domyślnej tolerancji solvera (1e-4) i poniżej 0,01.
+    func testCoincidentCenterToleranceComesFromTheStepper() async throws {
+        func addNear(positionTolerance: Float) async throws -> TransactionRejection? {
+            let world = BubbleWorld(configuration: try configuration(),
+                                    stepper: PositionToleranceStepper(positionTolerance: positionTolerance))
+            _ = world.submit(try resources().add(bubble(1, at: [10, 10])))
+            let setup = await world.advance(by: step)
+            XCTAssertEqual(setup.transactionReceipts.count, 1, "przygotowanie sceny musi zostać przyjęte")
+            return await run(world, WorldTransaction().add(try bubble(2, at: [10.005, 10]))).rejection
+        }
+        let wide = try await addNear(positionTolerance: 0.01)
+        XCTAssertEqual(wide, TransactionRejection(operationIndex: 0, reason: .invalidPlacement(id(2), .coincidentCenter)))
+        let narrow = try await addNear(positionTolerance: 1e-4)
+        XCTAssertNil(narrow)
+
+        let state = try staged([resources().add(bubble(1, at: [10, 10]))])
+        XCTAssertThrowsError(try TransactionStager.stage(WorldTransaction().add(bubble(2, at: [10.005, 10])), against: state,
+                                                         positionTolerance: 0.01))
+        XCTAssertNoThrow(try stage(WorldTransaction().add(bubble(2, at: [10.005, 10])), against: state))
+    }
+
+    /// Natywny stepper podaje tolerancję, z którą `NativePublicWorld` buduje konfigurację solvera; domyślna w protokole to 1e-4.
+    func testNativeStepperExposesTheSolverPositionTolerance() throws {
+        XCTAssertEqual(try NativeCompleteStepper(device: nil).positionTolerance, NativePublicWorld.positionTolerance)
+        XCTAssertEqual(NativePublicWorld.positionTolerance, 1e-4)
+        XCTAssertEqual(PositionToleranceStepper.protocolDefault, 1e-4)
     }
 
     func testAddCoincidentWithBubbleCreatedEarlierInTheSameTransactionIsRejected() throws {
@@ -508,5 +539,28 @@ final class PlacementValidationTests: XCTestCase {
         assertRejected(outcome, at: 1, .invalidPlacement(id(2), .outsideRegion))
         XCTAssertNotNil(outcome.frame.objects[id(1)], "źródło zostaje")
         try await assertNextStepAccepted(world)
+    }
+}
+
+/// Krok bez zmian stanu, z tolerancją pozycji podawaną stagerowi.
+@MainActor
+private final class PositionToleranceStepper: CompleteStepper {
+    let positionTolerance: Float
+    init(positionTolerance: Float) { self.positionTolerance = positionTolerance }
+    func completeStep(_ batch: StagedTransactionBatch, duration: Double, hitTests: [WorldPoint],
+                      commandBuffer: MTLCommandBuffer?,
+                      beforeCommit: ((NativeMetalRenderHandoff?, RuntimeState) throws -> Void)?) async throws -> CompletedRuntimeStep {
+        CompletedRuntimeStep(state: batch.state)
+    }
+    /// Domyślna tolerancja z extension `CompleteStepper`, dla steppera, który jej nie podaje.
+    static var protocolDefault: Float { DefaultToleranceStepper().positionTolerance }
+}
+
+@MainActor
+private final class DefaultToleranceStepper: CompleteStepper {
+    func completeStep(_ batch: StagedTransactionBatch, duration: Double, hitTests: [WorldPoint],
+                      commandBuffer: MTLCommandBuffer?,
+                      beforeCommit: ((NativeMetalRenderHandoff?, RuntimeState) throws -> Void)?) async throws -> CompletedRuntimeStep {
+        CompletedRuntimeStep(state: batch.state)
     }
 }

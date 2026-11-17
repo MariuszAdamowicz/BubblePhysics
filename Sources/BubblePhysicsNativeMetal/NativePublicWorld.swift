@@ -103,6 +103,9 @@ struct NativePublicSettings: Equatable, Sendable {
 /// Adapter używa trwałego solvera; pełna publikacja następuje dopiero po powodzeniu GPU.
 @MainActor
 package final class NativePublicWorld {
+    /// Tolerancja położenia solvera, z którą świat buduje `NativeSolverConfiguration` kroku; stager dostaje ją przez stepper
+    /// (`CompleteStepper.positionTolerance`), żeby próg wspólnego środka był ten sam co w solverze.
+    package static let positionTolerance = NativeSolverConfiguration().positionTolerance
     private let solver: NativeMetalSolver
     private var polygons: [ObjectID: (geometry: PolygonGeometry, position: WorldPoint, rotation: Float, segments: [NativeSolverSegment])] = [:]
     private var nextSegmentID = 1
@@ -229,7 +232,8 @@ package final class NativePublicWorld {
         })
         solverBubbles.sort { $0.id < $1.id }
         solverSegments.sort { $0.id < $1.id }
-        var input = NativeSolverInput(configuration: .init(timeStep: dt, linearDamping: 0, angularDamping: 0),
+        var input = NativeSolverInput(configuration: .init(timeStep: dt, linearDamping: 0, angularDamping: 0,
+                                                              positionTolerance: Self.positionTolerance),
             bubbles: solverBubbles, segments: solverSegments,
             publicSettings: NativePublicSettings(properties: properties, region: region,
                 rigidPolygons: rigidPolygons, eventBufferCapacity: eventBufferCapacity,
