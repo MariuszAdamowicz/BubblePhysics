@@ -659,10 +659,10 @@ private struct StagingContext {
         var descriptor = try resultObject(at: contact)
         // Punkt wyniku poprawia silnik, bo wybiera go silnik, a nie gra: wynik nie może stanąć w bryle, poza regionem
         // ani na środku innej bańki. Źródła znikają razem ze scaleniem, więc są z testu wyłączone.
-        let snapshot = state, excluded = Set(sources)
+        let snapshot = state, excluded = Set(sources), bodies = PlacementGeometry.rigidBodies(in: snapshot)
         func issue(_ point: WorldPoint) -> PlacementIssue? {
             PlacementGeometry.issue(at: point, radius: resultRadius, filter: result.filter, in: snapshot, excluding: excluded,
-                                    positionTolerance: positionTolerance)
+                                    rigidBodies: bodies, positionTolerance: positionTolerance)
         }
         // Kandydaci idą w kolejności ID, jak punkt styku, żeby ten sam układ dawał ten sam środek niezależnie od kolejności
         // `sources` w operacji (G3-AC4).
@@ -716,12 +716,14 @@ private struct StagingContext {
     func resolveSplitCenters(_ first: inout RuntimeObject, _ second: inout RuntimeObject, source: RuntimeObject) throws {
         let centroids = (first.position, second.position)
         var snapshot = state
+        // Bryły się w podziale nie zmieniają; zmienia się tylko bańka pierwszej części w `snapshot`.
+        let bodies = PlacementGeometry.rigidBodies(in: snapshot)
         func center(of part: RuntimeObject, excluding: Set<ObjectID>) throws -> WorldPoint {
             let id = part.descriptor.id
             guard case .bubble(let descriptor) = part.descriptor else { throw TransactionRejectionReason.incompatibleObjectKind(id) }
             func issue(_ point: WorldPoint) -> PlacementIssue? {
                 PlacementGeometry.issue(at: point, radius: part.targetRadius, filter: descriptor.filter, in: snapshot,
-                                        excluding: excluding, positionTolerance: positionTolerance)
+                                        excluding: excluding, rigidBodies: bodies, positionTolerance: positionTolerance)
             }
             guard let resolved = StructuralOperations.resolvedSplitCenter(centroid: part.position,
                 sourceCenter: source.position, partRadius: part.targetRadius, issue: issue) else {

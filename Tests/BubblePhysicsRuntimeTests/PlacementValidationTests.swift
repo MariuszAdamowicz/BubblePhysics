@@ -229,6 +229,43 @@ final class PlacementValidationTests: XCTestCase {
                                      physicsMaterialID: bubbleMaterial, renderMaterialID: style, filter: ghost))
     }
 
+    /// F-7: przeciążenie `issue` z gotową listą brył (budowaną raz na scalenie lub podział) daje te same przyczyny co
+    /// dotychczasowa sygnatura: region, bryła (wielokąt obrócony, koło, kapsuła), filtr kolizji, wyłączenie z testu, wspólny środek.
+    func testIssueWithPrebuiltRigidBodiesGivesTheSameCausesAsTheStateScan() throws {
+        var rotated = RuntimeObject(try body(101, rectangle([-4, -1], [4, 1]), at: [20, 0]))
+        rotated.rotation = .pi / 2
+        let state0 = try staged([resources().add(bubble(1, at: [0, 30]))
+            .add(body(100, rectangle([-60, -60], [-40, -40])))
+            .add(body(102, .circle(radius: 3), at: [0, -20]))
+            .add(body(103, .capsule(halfLength: 5, radius: 1), at: [30, 30]))
+            .add(.rigidBody(try RigidBodyDescriptor(id: id(104), shape: .circle(radius: 3), position: [-20, 0],
+                                                    physicsMaterialID: rigidMaterial, renderMaterialID: style, filter: ghost)))])
+        var state = state0
+        state.objects[id(101)] = rotated
+        let bodies = PlacementGeometry.rigidBodies(in: state)
+        let cases: [(WorldPoint, Set<ObjectID>, CollisionFilter, PlacementIssue?)] = [
+            ([200, 0], [], .default, .outsideRegion),
+            ([-50, -50], [], .default, .insideRigidBody),
+            ([-50, -50], [id(100)], .default, nil),
+            ([-50, -50], [], ghost, nil),
+            ([20, 3.5], [], .default, .insideRigidBody),
+            ([23.5, 0], [], .default, nil),
+            ([0, -18], [], .default, .insideRigidBody),
+            ([34, 30.5], [], .default, .insideRigidBody),
+            ([-20, 0], [], .default, nil),
+            ([0, 30], [], .default, .coincidentCenter),
+            ([0, 30], [id(1)], .default, nil),
+            ([0, 30.005], [], .default, nil),
+        ]
+        for (point, excluding, filter, expected) in cases {
+            XCTAssertEqual(PlacementGeometry.issue(at: point, radius: 2, filter: filter, in: state, excluding: excluding), expected,
+                           "skan stanu, punkt \(point)")
+            XCTAssertEqual(PlacementGeometry.issue(at: point, radius: 2, filter: filter, in: state, excluding: excluding,
+                                                   rigidBodies: bodies), expected, "gotowa lista brył, punkt \(point)")
+        }
+        XCTAssertEqual(Set(bodies.map(\.id)), [id(100), id(101), id(102), id(103), id(104)], "lista ma tylko bryły")
+    }
+
     func testAddIgnoresBubblesAndBodiesWhoseCollisionFilterExcludesTheNewBubble() throws {
         let state = try staged([resources().add(bubble(1, at: [10, 10]))
             .add(body(100, rectangle([-60, -60], [-40, -40])))])
