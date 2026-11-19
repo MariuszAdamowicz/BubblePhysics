@@ -427,6 +427,14 @@ Testy o zmienionych oczekiwaniach (slice 2):
     1
     ```
 29. Uruchomić perf guard na bezczynnym Macu (M1 Pro, `uptime` ≤ 2) i zapisać jego linie `PASS` w tym pliku we wpisie `Perf guard (slice 3):`, dla [P-B-27](#p-b-27). Jeśli perf guard nie przechodzi, zatrzymać implement bez zmiany progów w `docs/benchmarks/perf-guard.json` ([G5-AC3](change-design.md#g5-ac3)) · verify: `grep -q "^Perf guard (slice 3):" docs/sdlc/changes/2026-11-19-engine-v2-3-0/plan.md && swift run -c release BubblePhysicsPerfGuard`
+    ```text
+    $ uptime   # przed uruchomieniem
+    22:27  up 2 days,  7:46, 18 users, load averages: 1,88 2,70 3,26
+    $ swift run -c release BubblePhysicsPerfGuard   # @db1e76e, progi docs/benchmarks/perf-guard.json bez zmian
+    PASS stress-300 / mixed / decals / acceptance / scaling 600/300 (patrz wpis „Perf guard (slice 3):”)
+    $ grep -c "^Perf guard (slice 3):" docs/sdlc/changes/2026-11-19-engine-v2-3-0/plan.md
+    1
+    ```
 
 Lista do opisu PR: testy o zmienionych oczekiwaniach z wycinków 1–3, każdy z powodem (szczegóły we wpisach „Testy o zmienionych oczekiwaniach” wycinków 1 i 2 wyżej).
 
@@ -449,6 +457,13 @@ Wycinek 3 (G1, wydanie):
 - Bez zmian oczekiwań: testy napędu v2.2.0 (`MotionControllersPrepareTests`, `MotionControllersFeedbackTests`, `MotionCommandTests`, `NativeMetalMotionRoleTests`) przechodzą bez zmian (P-B-10); nowe są `BandDriveTests`, testy gałęzi siłowej, walidacji pól i odrzucenia K · dt² / m ≥ 1.
 
 Bez zmian oczekiwań (sprawdzone): `NativeMetalRestDampingTests`, `NativeMetalMotionRoleTests`, `NativeMetalBenchmarkTests`, hashe `AcceptanceEquivalenceTests` i `AcceptanceRenderEquivalenceTests` (Apple M1 Pro).
+
+Perf guard (slice 3): `swift run -c release BubblePhysicsPerfGuard` na Macu M1 Pro, load average 1,88 przed uruchomieniem (inne sesje działały równolegle), progi bez zmian. Wynik @db1e76e:
+- PASS stress-300: p95 1,9965 ms, punkt odniesienia 1,9634 ms, limit 2,1598 ms (+1,7 %)
+- PASS mixed: p95 4,1044 ms, punkt odniesienia 3,7942 ms, limit 4,1736 ms (+8,2 %)
+- PASS decals: p95 2,1577 ms, punkt odniesienia 2,1770 ms, limit 2,3947 ms (-0,9 %)
+- PASS acceptance: p95 2,5900 ms, punkt odniesienia 2,4590 ms, limit 2,7049 ms (+5,3 %)
+- PASS scaling 600/300: 1,57 (limit 2,50)
 
 ## Deviations from Design
 
