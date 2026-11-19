@@ -13,6 +13,7 @@
 
 **Plugin version:** 0.7.10
 **Agent Sessions:** claude-code: 226bb044-4b96-41a6-9190-fa96c346d482
+**Agent Sessions:** claude-code: 3876e97f-1419-40b6-9aa5-ac4ae637033c
 
 ---
 
@@ -245,7 +246,7 @@ Niezmiennik zastępowanego kodu: przy `bandStiffness == nil` napęd liczy bit w 
 
 | Slice | Name | Delivers | Seams | Behaviours | Status |
 |-------|------|----------|-------|------------|--------|
-| 1 | Fizyczna dynamika kontaktu miękkiego | ugięcie kontaktu miękkiego c·F, bańka w spoczynku stoi, tłumienie z `contactDampingRatio` (G4, nagłówek `ContactComplianceTests` z G5-AC2) | `PhysicsMaterial.contactDampingRatio`, `NativePublicProperties.contact`, bufor `contactCorrection` w warm starcie i Jacobim, `nativeUpdateVelocities`, `nativeDampContactNormalMotion`, limit λ pary tylko dla par twardych, sondy, `ContactDynamicsTests`, `CrowdCompressionTests` | [P-B-19](#p-b-19)–[P-B-25](#p-b-25), [P-B-29](#p-b-29), [P-B-30](#p-b-30) | todo |
+| 1 | Fizyczna dynamika kontaktu miękkiego | ugięcie kontaktu miękkiego c·F, bańka w spoczynku stoi, tłumienie z `contactDampingRatio` (G4, nagłówek `ContactComplianceTests` z G5-AC2) | `PhysicsMaterial.contactDampingRatio`, `NativePublicProperties.contact`, bufor `contactCorrection` w warm starcie i Jacobim, `nativeUpdateVelocities`, `nativeDampContactNormalMotion`, limit λ pary tylko dla par twardych, sondy, `ContactDynamicsTests`, `CrowdCompressionTests` | [P-B-19](#p-b-19)–[P-B-25](#p-b-25), [P-B-29](#p-b-29), [P-B-30](#p-b-30) | wip |
 | 2 | ρ bez opóźnienia i kontur z bieżących kontaktów | sprężyna twardnieje w tym samym kroku, kontur bez pamięci poprzedniej klatki (G2-AC1, G2-AC2, G3) | `nativeUpdateContactRho`, `nativeAccumulateContactPressure`, usunięcie `deformationRecoveryRate`, `ReferenceSolverInputAdapter`, testy ρ i konturu | [P-B-11](#p-b-11)–[P-B-13](#p-b-13), [P-B-15](#p-b-15)–[P-B-18](#p-b-18) | unplanned |
 | 3 | Gumka siłowa i wydanie | gra chwyta bańkę siłą; raport siatki, perf guard, przewodnik, CHANGELOG 2.3.0 (G1, G2-AC3, G5-AC1, G5-AC3, G5-AC4, końcowe G5-AC2) | `BubbleDrivePolicy`, `MotionControllers`, `TransactionStager`, `BandDriveTests`, `RhoGridReportTests`, dokumentacja | [P-B-1](#p-b-1)–[P-B-10](#p-b-10), [P-B-14](#p-b-14), [P-B-26](#p-b-26)–[P-B-28](#p-b-28) | unplanned |
 
