@@ -226,7 +226,8 @@ package enum MotionControllers {
                         damping: parameter == .damping ? scalar : m.damping,
                         friction: parameter == .friction ? scalar : m.friction,
                         restitution: parameter == .restitution ? scalar : m.restitution,
-                        maximumLinearSpeed: m.maximumLinearSpeed, maximumAngularSpeed: m.maximumAngularSpeed)
+                        maximumLinearSpeed: m.maximumLinearSpeed, maximumAngularSpeed: m.maximumAngularSpeed,
+                        contactCompliance: m.contactCompliance, contactDampingRatio: m.contactDampingRatio)
                 }
             default: break
             }

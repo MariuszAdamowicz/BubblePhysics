@@ -108,7 +108,8 @@ final class CrowdCompressionTests: XCTestCase {
         XCTAssertEqual(hard.lastSecond.count, CrowdScene.lastSecondSteps)
         let hardRatio = hard.meanEffectiveRadiusRatioInLastSecond, softRatio = soft.meanEffectiveRadiusRatioInLastSecond
         XCTAssertEqual(hardRatio, 1, accuracy: 0.01, "c₀ = 0: bez wgniecenia konturu, średni promień efektywny / docelowy \(hardRatio)")
-        XCTAssertLessThan(softRatio, hardRatio - 0.1,
+        // Pomiar 0,16; próg 0,5 odrzuca materiał, którego siła spadła kilkukrotnie, a nie tylko c = 0.
+        XCTAssertLessThan(softRatio, 0.5,
                           "średni promień efektywny / docelowy w ostatniej sekundzie: miękki \(softRatio), twardy \(hardRatio)")
     }
 

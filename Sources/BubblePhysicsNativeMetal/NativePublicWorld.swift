@@ -81,7 +81,9 @@ struct NativePublicProperties: Equatable, Sendable {
     var contact: SIMD4<Float> = .zero
 
     /// c₀ (po nadpisaniu na bańce) · (r / r_ref)^s dla bieżącego promienia fizycznego `radius`. Przy c₀ = 0 potęg się nie liczy,
-    /// więc skrajny wykładnik nie daje NaN z 0 · ∞ (CD-D-8). Przepełnienie Float wyklucza stager (CD-D-15).
+    /// więc skrajny wykładnik nie daje NaN z 0 · ∞ (CD-D-8).
+    /// Lane `.z` zawsze niesie ζ_c, także przy c₀ = 0 (gałąź `guard`): tłumik pary czyta go też dla bańki twardej.
+    /// Przepełnienie Float wyklucza stager (CD-D-15).
     static func contact(of compliance: BubbleContactCompliance, override: Float?, radius: Float,
                         dampingRatio: Float) -> SIMD4<Float> {
         let base = override ?? compliance.base

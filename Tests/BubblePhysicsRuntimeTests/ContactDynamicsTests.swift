@@ -22,7 +22,7 @@ final class ContactDynamicsTests: XCTestCase {
 
     private var staticDeflection: Float { compliance * force }
 
-    private func world(bubble: PhysicsMaterial, second: PhysicsMaterial? = nil) async throws -> (BubbleWorld, WorldTransaction) {
+    private func world(bubble: PhysicsMaterial, second: PhysicsMaterial? = nil) throws -> (BubbleWorld, WorldTransaction) {
         let configuration = try WorldConfiguration(simulationRegion: CrowdScene.region(), fixedTimeStep: dt,
                                                    eventBufferCapacity: 4096)
         var setup = try CrowdScene.resources(bubble: bubble)
@@ -31,15 +31,16 @@ final class ContactDynamicsTests: XCTestCase {
         return (try BubbleWorld(configuration: configuration), setup)
     }
 
-    /// Wgniecenie bańki ze ścianą po starcie w połowie ugięcia statycznego, bez prędkości.
+    /// Wgniecenie bańki ze ścianą po starcie w połowie ugięcia statycznego, bez prędkości. Bańkę dociska stała siła globalna
+    /// (G4-AC1).
     private func wallSeries(dampingRatio: Float, seconds: Double) async throws -> [Float] {
         let material = try CrowdScene.softBubblePhysics(base: compliance, dampingRatio: dampingRatio)
-        let (world, base) = try await world(bubble: material)
+        let (world, base) = try world(bubble: material)
         let start = staticDeflection / 2
         let position = WorldPoint(-(CrowdScene.interiorHalfSize.x - radius + start), 0)
         let setup = try base
             .add(CrowdScene.bubble(1, at: position, radius: radius, mass: 1))
-            .setMotorDrive(CrowdScene.id(1), drive: MotorDrive(force: [-force, 0]))
+            .setGlobalForce([-force, 0])
         _ = world.submit(setup)
         var series: [Float] = []
         for index in 0..<Int((seconds / dt).rounded()) {
@@ -53,7 +54,7 @@ final class ContactDynamicsTests: XCTestCase {
     /// Nakładanie pary (r_a + r_b − odległość środków) bańki 1 (m = 1, ζ_a) i 2 (m = 4, ζ_b) ściskanych ku sobie dwoma polami
     /// kierunkowymi o równych, przeciwnych siłach, każde z filtrem na ID jednej bańki.
     private func pairSeries(ratioA: Float, ratioB: Float, seconds: Double) async throws -> [Float] {
-        let (world, base) = try await world(bubble: CrowdScene.softBubblePhysics(base: compliance, dampingRatio: ratioA),
+        let (world, base) = try world(bubble: CrowdScene.softBubblePhysics(base: compliance, dampingRatio: ratioA),
                                             second: CrowdScene.softBubblePhysics(base: compliance, dampingRatio: ratioB))
         // Połowa ugięcia statycznego pary: (c_a + c_b) · F / 2.
         let overlap = compliance * force
@@ -80,17 +81,34 @@ final class ContactDynamicsTests: XCTestCase {
 
     /// Ekstrema szeregu: pierwsza próbka jako e₀, potem każda zmiana kierunku zmian (próbki bez zmiany nie liczą się jako kierunek,
     /// bo położenie Float przy ścianie ma krok ≈ 1,5e-5).
-    private func extrema(_ series: [Float]) -> [Float] {
-        var result: [Float] = [series[0]]
+    private func extrema(_ series: [Float]) -> [Float] { extremumIndices(series).map { series[$0] } }
+
+    /// Indeksy ekstremów (pierwsza próbka jako e₀), z których `extrema` bierze wartości.
+    private func extremumIndices(_ series: [Float]) -> [Int] {
+        var result: [Int] = [0]
         var direction: Float = 0
         for i in 1..<series.count {
             let change = series[i] - series[i - 1]
             guard change != 0 else { continue }
             let sign: Float = change > 0 ? 1 : -1
-            if direction != 0, sign != direction { result.append(series[i - 1]) }
+            if direction != 0, sign != direction { result.append(i - 1) }
             direction = sign
         }
         return result
+    }
+
+    /// Okres drgań tłumionych z rozstawu pierwszych czterech ekstremów: kolejne ekstrema dzieli pół okresu.
+    private func measuredPeriod(_ series: [Float]) -> Double {
+        let indices = extremumIndices(series)
+        XCTAssertGreaterThanOrEqual(indices.count, 4, "za mało ekstremów: \(indices)")
+        guard indices.count >= 4 else { return .nan }
+        return 2 * Double(indices[3] - indices[0]) / 3 * dt
+    }
+
+    /// Okres tłumiony 2π / (ω · √(1 − ζ²)) dla ω = √(1 / (podatność · masa)).
+    private func expectedPeriod(compliance: Float, mass: Float, ratio: Float) -> Double {
+        let omega = Double(1 / (compliance * mass)).squareRoot()
+        return 2 * .pi / (omega * Double(1 - ratio * ratio).squareRoot())
     }
 
     private func logarithmicDecrement(_ series: [Float]) throws -> Float {
@@ -122,6 +140,10 @@ final class ContactDynamicsTests: XCTestCase {
         let measured = try logarithmicDecrement(series)
         print("[contact-dynamics] ściana ζ_c = 0,2: dekrement = \(measured), oczekiwany = \(expectedDecrement(0.2)), ekstrema = \(extrema(series).prefix(5))")
         XCTAssertEqual(measured, expectedDecrement(0.2), accuracy: 0.1 * expectedDecrement(0.2))
+        // ω = √(1 / (c · m)), m = 1: sprawdza podatność i masę efektywną, nie tylko tłumienie.
+        let period = measuredPeriod(series), expected = expectedPeriod(compliance: compliance, mass: 1, ratio: 0.2)
+        print("[contact-dynamics] ściana ζ_c = 0,2: okres = \(period), oczekiwany = \(expected)")
+        XCTAssertEqual(period, expected, accuracy: 0.1 * expected)
     }
 
     func testWallContactWithCriticalDampingDoesNotOvershootTheEquilibrium() async throws {
@@ -138,6 +160,10 @@ final class ContactDynamicsTests: XCTestCase {
         let measured = try logarithmicDecrement(series)
         print("[contact-dynamics] para ζ = (0,1; 0,3): dekrement = \(measured), oczekiwany = \(expectedDecrement(0.2))")
         XCTAssertEqual(measured, expectedDecrement(0.2), accuracy: 0.1 * expectedDecrement(0.2))
+        // Podatność pary c_a + c_b = 2c, masa zredukowana 1 · 4 / (1 + 4).
+        let period = measuredPeriod(series), expected = expectedPeriod(compliance: 2 * compliance, mass: 0.8, ratio: 0.2)
+        print("[contact-dynamics] para: okres = \(period), oczekiwany = \(expected)")
+        XCTAssertEqual(period, expected, accuracy: 0.1 * expected)
     }
 
     func testPairContactWithCriticalDampingDoesNotOvershootTheEquilibrium() async throws {

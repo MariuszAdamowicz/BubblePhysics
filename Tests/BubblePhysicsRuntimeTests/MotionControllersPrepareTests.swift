@@ -33,6 +33,23 @@ final class MotionControllersPrepareTests: XCTestCase {
         }
     }
 
+    /// Przejście parametru materiału odtwarza materiał, więc musi zachować podatność kontaktu i ζ_c (G4-AC1, G4-AC2).
+    func testMaterialParameterTransitionKeepsContactComplianceAndDampingRatio() throws {
+        let materialID = PhysicsMaterialID(rawValue: 7)
+        let compliance = BubbleContactCompliance(base: 0.174, referenceRadius: 20, radiusExponent: 1, compressionExponent: 0.5)
+        let material = try PhysicsMaterial(kind: .bubble, damping: 0.1, contactCompliance: compliance, contactDampingRatio: 0.2)
+        let transaction = WorldTransaction()
+            .updatePhysicsMaterial(materialID, material: material)
+            .startTransition(ParameterTransition(target: .physicsMaterial(materialID, .damping), value: .scalar(0.5), duration: 1))
+        var prepared = try TransactionStager.stage(transaction, against: RuntimeState(configuration: try WorldConfiguration(
+            simulationRegion: WorldRectangle(min: [-1000, -1000], max: [1000, 1000])))).state
+        try MotionControllers.prepare(&prepared, duration: duration)
+        let transitioned = try XCTUnwrap(prepared.physicsMaterials[materialID])
+        XCTAssertNotEqual(transitioned.damping, material.damping, "przejście ruszyło tłumienie")
+        XCTAssertEqual(transitioned.contactDampingRatio, 0.2)
+        XCTAssertEqual(transitioned.contactCompliance, compliance)
+    }
+
     /// Deterministyczny generator (xorshift), by zestawy identyfikatorów były powtarzalne między uruchomieniami.
     private struct Sequence64 {
         var value: UInt64

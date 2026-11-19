@@ -66,7 +66,7 @@ final class PairLambdaCeilingProbeTests: XCTestCase {
 
     private let forces: [Float] = [2_000, 3_500, 4_500, 6_000]
 
-    private func run(chain: Bool) async throws -> (limited: [Float: Measurement], free: [Float: Measurement]) {
+    private func run(chain: Bool) async throws -> [Float: Measurement] {
         var limited: [Float: Measurement] = [:], free: [Float: Measurement] = [:]
         for force in forces {
             limited[force] = try await measure(force: force, pairLimit: true, chain: chain)
@@ -81,11 +81,11 @@ final class PairLambdaCeilingProbeTests: XCTestCase {
             XCTAssertEqual(m.overlap, pairCompliance * force, accuracy: 0.1 * pairCompliance * force, "bez limitu, F = \(force)")
             XCTAssertLessThan(m.drift, 0.5, "bez limitu, F = \(force): para stoi (łańcuch trzech mas uspokaja się wolniej)")
         }
-        return (limited, free)
+        return limited
     }
 
     func testDirectPushOnTheLighterBubbleHasNoCeilingBecauseApproachCoversTheForce() async throws {
-        let (limited, _) = try await run(chain: false)
+        let limited = try await run(chain: false)
         for (force, m) in limited {
             XCTAssertEqual(m.overlap, pairCompliance * force, accuracy: 0.1 * pairCompliance * force, "wprost, F = \(force)")
         }
@@ -94,7 +94,7 @@ final class PairLambdaCeilingProbeTests: XCTestCase {
     // P-B-29: równowaga (c_środkowej + c_sąsiadki) · F przy każdej sile, także powyżej sufitu 0,25 · min r · m_min / dt².
     func testChainThroughAMiddleBubbleKeepsEquilibriumAtEveryForce() async throws {
         XCTAssertTrue(forces.contains { $0 > ceiling }, "zestaw sił obejmuje siły powyżej dawnego sufitu \(ceiling)")
-        let (limited, _) = try await run(chain: true)
+        let limited = try await run(chain: true)
         for force in forces {
             let m = try XCTUnwrap(limited[force])
             XCTAssertEqual(m.overlap, pairCompliance * force, accuracy: 0.1 * pairCompliance * force, "łańcuch, F = \(force)")
