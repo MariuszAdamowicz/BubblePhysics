@@ -342,13 +342,54 @@ Testy o zmienionych oczekiwaniach (slice 1):
 **Delivers:** ρ kontaktu wynika z pozycji przewidzianych w bieżącym kroku, a kontur pokazuje tylko bieżące kontakty, bez relaksacji w czasie.
 
 10. Napisać w `NativeMetalXPBDTests` testy ρ rekordu: ściana clamp(d/r) przy bańce z prędkością w stronę ściany, `damping` = 0 i bez siły (d z pozycji przewidzianej x + v·dt, różnej od pozycji z końca poprzedniego kroku), para z podziałem c z ρ poprzedniego kroku, para twarda (ρ = 1), para miękka–twarda (całe nakładanie na koniec miękki), nowy rekord z ρ_prev = 1, dla [P-B-12](#p-b-12) i [P-B-13](#p-b-13) · verify: `swift build --build-tests && ! swift test --skip-build --filter BubblePhysicsNativeMetalDiagnosticsTests.NativeMetalXPBDTests`
+    ```text
+    # faza czerwona minęła w a2ac7c4; stan zielony @ccbaf55 (pełny zestaw):
+    Test Suite 'NativeMetalXPBDTests' passed
+    Executed 22 tests, with 0 failures (0 unexpected) in 2.741 (2.744) seconds
+    ```
 11. Dodać wewnętrzne `NativePublicWorld.cachedContacts` i napisać w `NativeMetalStructuralOperationTests` testy wyniku scalenia o ID źródła (ρ_prev = 1 w pierwszym kroku; kontur z seeda w pierwszej klatce, w drugiej tylko z kontaktów) dla [P-B-13](#p-b-13) i [P-B-16](#p-b-16) · verify: `swift build --build-tests && ! swift test --skip-build --filter BubblePhysicsNativeMetalTests.NativeMetalStructuralOperationTests`
+    ```text
+    # faza czerwona minęła w e164a56; stan zielony @ccbaf55 (pełny zestaw):
+    Test Suite 'NativeMetalStructuralOperationTests' passed
+    Executed 9 tests, with 0 failures (0 unexpected) in 0.363 (0.365) seconds
+    ```
 12. Napisać `ContactRhoHistoryTests` na materiale z kc > 0 (`CrowdScene.softBubblePhysics(base:compressionExponent:)` z kc = 3, bo przy kc = 0 c nie zależy od ρ i test przeszedłby już dziś; świat A dociśnięty siłą globalną a świat B z nową bańką w P) dla [P-B-11](#p-b-11) · verify: `swift build --build-tests && ! swift test --skip-build --filter BubblePhysicsRuntimeTests.ContactRhoHistoryTests`
+    ```text
+    # faza czerwona minęła w 9daf626; stan zielony @ccbaf55 (pełny zestaw):
+    Test Suite 'ContactRhoHistoryTests' passed
+    Executed 2 tests, with 0 failures (0 unexpected) in 2.595 (2.595) seconds
+    ```
 13. Zastąpić w `NativeMetalContourTests` test relaksacji 30 klatek (`testReleasedContourReturnsWithinTwoPercentAfterThirtyFrames`) testem wgniecenia 0 w klatce zniknięcia kontaktu dla [P-B-15](#p-b-15) · verify: `swift build --build-tests && ! swift test --skip-build --filter BubblePhysicsNativeMetalDiagnosticsTests.NativeMetalContourTests`
+    ```text
+    # faza czerwona minęła w c825d82; stan zielony @ccbaf55 (pełny zestaw):
+    Test Suite 'NativeMetalContourTests' passed
+    Executed 11 tests, with 0 failures (0 unexpected) in 0.455 (0.456) seconds
+    ```
 14. Przepisać `nativeUpdateContactRho` według widoku wywołań R2 (ρ z `response.y` i r, podział c pary, ρ = 1 dla pary twardej, ρ_prev = 1 dla wyniku strukturalnego) z nowymi wiązaniami w `NativeMetalSolver`, usuwając `kNativeContactRhoSmoothing` i `nativePreviousContourRatio`, pokrywając [P-B-12](#p-b-12) i [P-B-13](#p-b-13) · verify: `! grep -rqE "kNativeContactRhoSmoothing|nativePreviousContourRatio" Sources/ && swift test --filter "BubblePhysicsNativeMetalDiagnosticsTests.NativeMetalXPBDTests|BubblePhysicsRuntimeTests.ContactRhoHistoryTests"`
+    ```text
+    $ ! grep -rqE "kNativeContactRhoSmoothing|nativePreviousContourRatio" Sources/   # absent
+    # @ccbaf55 (pełny zestaw): NativeMetalXPBDTests 22 tests, 0 failures; ContactRhoHistoryTests 2 tests, 0 failures
+    ```
 15. Usunąć `recovered` i jego bufory z `nativeAccumulateContactPressure`, `deformationRecoveryRate` z `NativeSolverConfiguration` i adaptera (`shape.y` = 0, zarezerwowane) oraz poprawić nieaktualne komentarze o wygładzaniu ρ i relaksacji, pokrywając [P-B-15](#p-b-15), [P-B-16](#p-b-16) i [P-B-18](#p-b-18) · verify: `! grep -rq "deformationRecoveryRate" Sources/BubblePhysicsNativeMetal Sources/BubblePhysicsNativeMetalDiagnostics && ! grep -rq "wygładzon" Sources/BubblePhysicsNativeMetal && ! grep -q "relaksacji trwałego" Sources/BubblePhysicsNativeMetal/Shaders/NativeGeometryKernels.metal-source && swift test --filter "NativeMetalContourTests|NativeMetalStructuralOperationTests|ContactRhoHistoryTests"`
+    ```text
+    $ ! grep -rq "deformationRecoveryRate" Sources/BubblePhysicsNativeMetal Sources/BubblePhysicsNativeMetalDiagnostics   # absent
+    $ ! grep -rq "wygładzon" Sources/BubblePhysicsNativeMetal   # absent
+    $ ! grep -q "relaksacji trwałego" Sources/BubblePhysicsNativeMetal/Shaders/NativeGeometryKernels.metal-source   # absent
+    # @ccbaf55 (pełny zestaw): NativeMetalContourTests 11, NativeMetalStructuralOperationTests 9, ContactRhoHistoryTests 2 — 0 failures
+    ```
 16. Napisać `ContactContourTests` z pomocnikiem wgniecenia geometrycznego (odcięcie ścianą, cięciwa pary) na `debugContourSnapshot()` dla [P-B-17](#p-b-17) · verify: `swift build --build-tests && swift test --skip-build --filter BubblePhysicsRuntimeTests.ContactContourTests 2>&1 | grep -q "Executed [1-9][0-9]* tests\?, with 0 failures"`
+    ```text
+    # @ccbaf55 (pełny zestaw):
+    Test Suite 'ContactContourTests' passed
+    Executed 2 tests, with 0 failures (0 unexpected) in 1.329 (1.330) seconds
+    ```
 17. Zmienić oczekiwania testów zmienionych przez G2 i G3 (m.in. `NativeMetalContourTests` :160, `NativeMetalMotionRoleTests` :91, `NativeMetalBenchmarkTests`, `ContactComplianceTests` :415, hashe `AcceptanceEquivalenceTests` i `AcceptanceRenderEquivalenceTests` przeliczone na M1 Pro), każdy z powodem w commicie i we wpisie `Testy o zmienionych oczekiwaniach (slice 2):` w tym pliku · verify: `grep -q "^Testy o zmienionych oczekiwaniach (slice 2):" docs/sdlc/changes/2026-11-19-engine-v2-3-0/plan.md && swift build --build-tests && swift test`
+    ```text
+    $ swift build --build-tests && swift test   # @ccbaf55
+    Executed 1438 tests, with 1 test skipped and 0 failures (0 unexpected) in 614.062 (614.224) seconds
+    $ grep -c "^Testy o zmienionych oczekiwaniach (slice 2):" docs/sdlc/changes/2026-11-19-engine-v2-3-0/plan.md
+    0
+    ```
 
 ## Deviations from Design
 
