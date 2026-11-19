@@ -166,4 +166,104 @@ final class MotionCommandTests: XCTestCase {
             return false
         })
     }
+
+    // MARK: gumka siłowa (v2.3.0, P-B-5, P-B-7)
+
+    private func assertOutOfRange(_ name: String, file: StaticString = #filePath, line: UInt = #line,
+                                  _ build: () throws -> BubbleDrivePolicy) {
+        XCTAssertThrowsError(try build(), name, file: file, line: line) { error in
+            XCTAssertEqual(error as? ModelValidationError, .valueOutOfRange(name), file: file, line: line)
+        }
+    }
+
+    /// P-B-5 (G1-AC5): `valueOutOfRange` z nazwą pola także dla ∞, 0 i wartości ujemnych (nie `nonFiniteValue` / `nonPositiveValue`).
+    func testBandPolicyRejectsOutOfRangeFieldsWithTheFieldName() throws {
+        for value: Float in [0, -1, .infinity, .nan] {
+            assertOutOfRange("drive.bandStiffness") { try BubbleDrivePolicy(bandStiffness: value) }
+        }
+        for value: Float in [-0.5, .infinity, .nan] {
+            assertOutOfRange("drive.bandDamping") { try BubbleDrivePolicy(bandStiffness: 10, bandDamping: value) }
+        }
+        for value: Float in [0, -1, .infinity, .nan] {
+            assertOutOfRange("drive.maximumForce") { try BubbleDrivePolicy(bandStiffness: 10, maximumForce: value) }
+        }
+    }
+
+    /// P-B-5, CD-D-14: pola gumki bez `bandStiffness` są sprzeczną konfiguracją.
+    func testBandDampingOrMaximumForceWithoutStiffnessIsRejected() throws {
+        assertOutOfRange("drive.bandDamping") { try BubbleDrivePolicy(bandDamping: 1) }
+        assertOutOfRange("drive.maximumForce") { try BubbleDrivePolicy(maximumForce: 100) }
+        let band = try BubbleDrivePolicy(bandStiffness: 10, bandDamping: 2, maximumForce: 500)
+        XCTAssertEqual(band.bandStiffness, 10)
+        XCTAssertEqual(band.bandDamping, 2)
+        XCTAssertEqual(band.maximumForce, 500)
+        let defaults = try BubbleDrivePolicy(bandStiffness: 10)
+        XCTAssertEqual(defaults.bandDamping, 0)
+        XCTAssertNil(defaults.maximumForce)
+        XCTAssertNil(BubbleDrivePolicy.standard.bandStiffness)
+    }
+
+    /// Cel o ogromnej, ale skończonej składowej: w trybie gumki siła K·(cel − położenie) przepełniłaby `Float` (P-B-7),
+    /// w trybie prędkościowym cel jest tylko kierunkiem i zostaje przyjęty (bez zmian względem v2.2.0).
+    private static func wasRejected(_ frame: WorldFrame, _ token: TransactionToken) -> Bool {
+        frame.events.contains { event in
+            if case .transactionRejected(let rejected, _) = event { return rejected == token }
+            return false
+        }
+    }
+
+    private func isHugeTargetRejected(policy: BubbleDrivePolicy, update: Bool) async throws -> Bool {
+        let world = try BubbleWorld(configuration: WorldConfiguration(simulationRegion:
+            WorldRectangle(min: [-20,-20], max: [20,20])))
+        let id = ObjectID(rawValue: 1)
+        world.submit(try WorldTransaction()
+            .updatePhysicsMaterial(.init(rawValue: 1), material: PhysicsMaterial(kind: .bubble))
+            .updateRenderMaterial(.init(rawValue: 1), material: try RenderMaterial())
+            .add(.bubble(BubbleDescriptor(id: id, position: .zero, targetRadius: 0.5,
+                physicsMaterialID: .init(rawValue: 1), renderMaterialID: .init(rawValue: 1), drivePolicy: policy))))
+        let huge = WorldPoint(1e38, 0)
+        let token: TransactionToken
+        if update {
+            world.submit(WorldTransaction().beginPlayerDrive(id, target: [1, 0]))
+            _ = await world.advance(by: 1.0 / 60)
+            token = world.submit(WorldTransaction().updatePlayerDrive(id, target: huge))
+        } else {
+            token = world.submit(WorldTransaction().beginPlayerDrive(id, target: huge))
+        }
+        let frame = await world.advance(by: 1.0 / 60)
+        XCTAssertNil(world.diagnostics.lastAdvanceIssue)
+        return Self.wasRejected(frame, token)
+    }
+
+    func testHugeDriveTargetIsRejectedInBandModeAndAcceptedInVelocityMode() async throws {
+        let band = try BubbleDrivePolicy(bandStiffness: 10)
+        let velocity = try BubbleDrivePolicy()
+        let beginVelocity = try await isHugeTargetRejected(policy: velocity, update: false)
+        let updateVelocity = try await isHugeTargetRejected(policy: velocity, update: true)
+        let beginBand = try await isHugeTargetRejected(policy: band, update: false)
+        let updateBand = try await isHugeTargetRejected(policy: band, update: true)
+        XCTAssertTrue(beginBand, "beginPlayerDrive w trybie gumki")
+        XCTAssertTrue(updateBand, "updatePlayerDrive w trybie gumki")
+        XCTAssertFalse(beginVelocity, "beginPlayerDrive w trybie prędkościowym")
+        XCTAssertFalse(updateVelocity, "updatePlayerDrive w trybie prędkościowym")
+    }
+
+    /// Rozsądny cel w trybie gumki nie jest odrzucany (limit nie jest zbyt ciasny).
+    func testReasonableDriveTargetIsAcceptedInBandMode() async throws {
+        let world = try BubbleWorld(configuration: WorldConfiguration(simulationRegion:
+            WorldRectangle(min: [-20,-20], max: [20,20])))
+        let id = ObjectID(rawValue: 1)
+        world.submit(try WorldTransaction()
+            .updatePhysicsMaterial(.init(rawValue: 1), material: PhysicsMaterial(kind: .bubble))
+            .updateRenderMaterial(.init(rawValue: 1), material: try RenderMaterial())
+            .add(.bubble(BubbleDescriptor(id: id, position: .zero, targetRadius: 0.5,
+                physicsMaterialID: .init(rawValue: 1), renderMaterialID: .init(rawValue: 1),
+                drivePolicy: BubbleDrivePolicy(bandStiffness: 10)))))
+        let token = world.submit(WorldTransaction().beginPlayerDrive(id, target: [900_000, -900_000]))
+        let frame = await world.advance(by: 1.0 / 60)
+        XCTAssertFalse(frame.events.contains { event in
+            if case .transactionRejected(let rejected, _) = event { return rejected == token }
+            return false
+        })
+    }
 }
