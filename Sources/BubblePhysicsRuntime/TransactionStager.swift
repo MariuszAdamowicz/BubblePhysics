@@ -524,6 +524,7 @@ private struct StagingContext {
             guard object.motionRole != .kinematic else {
                 throw TransactionRejectionReason.unsupportedMotionRole(value.id, .kinematic)
             }
+            try validateBandStability(of: value)
             // Rola runtime może różnić się od roli przy dodaniu deskryptora.
             if object.motionRole == .static {
                 var maximumRadius = object.targetRadius
@@ -542,6 +543,16 @@ private struct StagingContext {
             }
         case .forceField(let value): try state.configuration.validate(value)
         case .sensor(let value): try state.configuration.validate(value)
+        }
+    }
+
+    /// Gumka całkuje siłę jawnie, więc wymaga K · dt² / m < 1 (CD-D-9). `validate(_:)` widzi masę każdej bańki po dodaniu, zamianie,
+    /// scaleniu i podziale (podział zmniejsza masę), więc jedno sprawdzenie obejmuje wszystkie cztery ścieżki.
+    private func validateBandStability(of bubble: BubbleDescriptor) throws {
+        guard let stiffness = bubble.drivePolicy.bandStiffness else { return }
+        let step = Double(state.configuration.fixedTimeStep)
+        guard Double(stiffness) * step * step / Double(bubble.mass) < 1 else {
+            throw ModelValidationError.valueOutOfRange("drive.bandStiffness")
         }
     }
 
