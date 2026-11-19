@@ -410,19 +410,65 @@ Testy o zmienionych oczekiwaniach (slice 2):
 **Delivers:** gra może chwycić bańkę gumką siłową, a gałąź ma raport siatki, zielony perf guard, przewodnik, CHANGELOG 2.3.0 i wersję 2.3.0 w README; PR, scalenie i tag robi autor po scaleniu PR #6 ([CD-D-12](change-design.md#cd-d-12)).
 
 18. Dodać do `BubbleDrivePolicy` pola `bandStiffness`, `bandDamping`, `maximumForce` z wartościami domyślnymi i bez walidacji, i napisać w `MotionCommandTests` testy walidacji pól dla [P-B-5](#p-b-5) oraz testy celu 1e38 w trybie gumki i prędkościowym przez publiczny świat dla [P-B-7](#p-b-7) · verify: `swift build --build-tests && ! swift test --skip-build --filter BubblePhysicsPublicTests.MotionCommandTests`
+    ```text
+    # faza czerwona minęła w 1359c43; stan zielony @d226f02 (pełny zestaw):
+    Executed 1460 tests, with 2 tests skipped and 0 failures (0 unexpected) in 547.949 (548.088) seconds
+    ```
 19. Walidować pola gumki w `BubbleDrivePolicy.init` z `valueOutOfRange` i nazwą pola, i dodać `requireDriveMagnitude(target)` w `.beginPlayerDrive` i `.updatePlayerDrive` przy `bandStiffness != nil`, pokrywając [P-B-5](#p-b-5) i [P-B-7](#p-b-7) · verify: `swift test --filter BubblePhysicsPublicTests.MotionCommandTests`
+    ```text
+    $ swift test --skip-build --filter "...MotionControllersPrepareTests|...BandDriveTests|...TransactionStagerTests|...MotionControllersFeedbackTests|BubblePhysicsPublicTests.MotionCommandTests|...NativeMetalMotionRoleTests"   # @d226f02, obejmuje MotionCommandTests
+    Executed 66 tests, with 0 failures (0 unexpected) in 5.413 (5.419) seconds
+    ```
 20. Napisać w `TransactionStagerTests` testy odrzucenia K·dt²/m ≥ 1 przy wstawieniu, zamianie, scaleniu i podziale do zbyt małej masy, ze światem bez zmian, dla [P-B-6](#p-b-6) · verify: `swift build --build-tests && ! swift test --skip-build --filter BubblePhysicsRuntimeTests.TransactionStagerTests`
+    ```text
+    # faza czerwona minęła w 3535ca9; stan zielony @d226f02: TransactionStagerTests w przebiegu filtra zadania 24 (66 tests, 0 failures)
+    ```
 21. Dodać sprawdzenie K·dt²/m < 1 w gałęzi `.bubble` prywatnego `validate(_:)` w `TransactionStager`, pokrywając [P-B-6](#p-b-6) · verify: `swift test --filter BubblePhysicsRuntimeTests.TransactionStagerTests`
+    ```text
+    # @d226f02: TransactionStagerTests w przebiegu filtra zadania 24
+    Executed 66 tests, with 0 failures (0 unexpected) in 5.413 (5.419) seconds
+    ```
 22. Napisać w `MotionControllersPrepareTests` testy gałęzi siłowej: przyrost F/m·dt, obcięcie do `maximumForce` z zachowaniem kierunku, tłumienie e^(−D·dt/m), siła globalna i pole kierunkowe dodane do gumki, dla [P-B-9](#p-b-9) · verify: `swift build --build-tests && ! swift test --skip-build --filter BubblePhysicsRuntimeTests.MotionControllersPrepareTests`
+    ```text
+    # faza czerwona minęła w cdc0b7f; stan zielony @d226f02: MotionControllersPrepareTests w przebiegu filtra zadania 24 (66 tests, 0 failures)
+    ```
 23. Napisać `BandDriveTests` przez publiczny świat (prędkość ustalona przy D = 0 i D > 0, stosunek mas, pięć naciągnięć przy ścianie na materiale kc = 0 z nowym `CrowdScene.bandPressedBubble`, puszczenie, dwie kolejne ramki z `DriveFeedback`) dla [P-B-1](#p-b-1)–[P-B-4](#p-b-4) i [P-B-8](#p-b-8) · verify: `swift build --build-tests && ! swift test --skip-build --filter BubblePhysicsRuntimeTests.BandDriveTests`
+    ```text
+    # faza czerwona minęła w b4ad101; stan zielony @d226f02: BandDriveTests w przebiegu filtra zadania 24 (66 tests, 0 failures)
+    ```
 24. Dodać gałąź siłową `.playerDriven` w `MotionControllers.prepare` według widoku wywołań kroku hosta w R2, z gałęzią `bandStiffness == nil` bez zmian, pokrywając [P-B-1](#p-b-1)–[P-B-4](#p-b-4), [P-B-8](#p-b-8)–[P-B-10](#p-b-10) · verify: `swift test --filter "BubblePhysicsRuntimeTests.MotionControllersPrepareTests|BubblePhysicsRuntimeTests.BandDriveTests|BubblePhysicsRuntimeTests.TransactionStagerTests|BubblePhysicsRuntimeTests.MotionControllersFeedbackTests|BubblePhysicsPublicTests.MotionCommandTests|BubblePhysicsNativeMetalTests.NativeMetalMotionRoleTests"`
+    ```text
+    $ swift test --skip-build --filter "BubblePhysicsRuntimeTests.MotionControllersPrepareTests|BubblePhysicsRuntimeTests.BandDriveTests|BubblePhysicsRuntimeTests.TransactionStagerTests|BubblePhysicsRuntimeTests.MotionControllersFeedbackTests|BubblePhysicsPublicTests.MotionCommandTests|BubblePhysicsNativeMetalTests.NativeMetalMotionRoleTests"   # @d226f02
+    Executed 66 tests, with 0 failures (0 unexpected) in 5.413 (5.419) seconds
+    ```
 25. Napisać opt-in `RhoGridReportTests` (`XCTSkip` bez `BUBBLE_PHYSICS_RHO_GRID_REPORT=1`, katalog repo z `#filePath` jak w `MigrationGuideTests`), uruchomić go i zacommitować raport siatki dla [P-B-14](#p-b-14) · verify: `BUBBLE_PHYSICS_RHO_GRID_REPORT=1 swift test --filter BubblePhysicsRuntimeTests.RhoGridReportTests && ls docs/benchmarks/v2.3.0-rho-grid-*.md`
+    ```text
+    $ BUBBLE_PHYSICS_RHO_GRID_REPORT=1 swift test --skip-build --filter BubblePhysicsRuntimeTests.RhoGridReportTests   # @d226f02
+    Test Case '-[BubblePhysicsRuntimeTests.RhoGridReportTests testWritesTheHardeningGridReport]' passed (6.246 seconds).
+    Executed 1 test, with 0 failures (0 unexpected) in 6.246 (6.247) seconds
+    $ ls docs/benchmarks/v2.3.0-rho-grid-*.md
+    docs/benchmarks/v2.3.0-rho-grid-2026-11-19.md   # ponowny zapis identyczny z zacommitowanym (git status czysty)
+    ```
 26. Poprawić komentarz `ObjectState.Kind.bubble(effectiveRadius:)` (`WorldFrame.swift:96`) i opisać w `docs/integration-guide.md` zawartość wiersza dokumentacji [P-B-28](#p-b-28), z przepisanym punktem „Prędkość w stronę kontaktu” (:97) · verify: `! grep -q "odbudow" Sources/BubblePhysicsPublic/Model/WorldFrame.swift && ! grep -q "gromadzi prędkość" docs/integration-guide.md && grep -q "bandStiffness" docs/integration-guide.md && grep -q "contactDampingRatio" docs/integration-guide.md && grep -qi "wystrz" docs/integration-guide.md && grep -q "skok" docs/integration-guide.md && swift test --filter BubblePhysicsPublicTests.IntegrationGuideTests`
+    ```text
+    $ ! grep -q "odbudow" ... && grep -qi "wystrz" docs/integration-guide.md && grep -q "skok" docs/integration-guide.md   # @d226f02
+    greps OK
+    $ swift test --skip-build --filter BubblePhysicsPublicTests.IntegrationGuideTests
+    Executed 3 tests, with 0 failures (0 unexpected) in 0.011 (0.013) seconds
+    ```
 27. Dodać sekcję `## 2.3.0` w `CHANGELOG.md` dla całej zmiany, z treścią CHANGELOG z wiersza [P-B-28](#p-b-28), i podbić wersję w `README.md:5` oraz w `MigrationGuideTests` (:5, :107) · verify: `grep -q "^## 2.3.0" CHANGELOG.md && grep -qi "wystrz" CHANGELOG.md && grep -q "maximumLinearSpeed" CHANGELOG.md && grep -q "Wersja 2.3.0" README.md && swift test --filter BubblePhysicsPublicTests.MigrationGuideTests`
+    ```text
+    $ grep -q "^## 2.3.0" CHANGELOG.md && ... && grep -q "Wersja 2.3.0" README.md   # @d226f02
+    greps OK
+    $ swift test --skip-build --filter BubblePhysicsPublicTests.MigrationGuideTests
+    Executed 4 tests, with 0 failures (0 unexpected) in 0.011 (0.013) seconds
+    ```
 28. Uruchomić pełny zestaw i zapisać w tym pliku wpis `Lista do opisu PR:` z testami o zmienionych oczekiwaniach z wycinków 1–3 i powodami, dla [P-B-26](#p-b-26) · verify: `grep -q "^Lista do opisu PR:" docs/sdlc/changes/2026-11-19-engine-v2-3-0/plan.md && swift build --build-tests && swift test`
     ```text
     $ swift build --build-tests && swift test   # @a0dcca6
     Executed 1459 tests, with 2 tests skipped and 0 failures (0 unexpected) in 556.750 (556.894) seconds
+    $ swift build --build-tests && swift test   # @d226f02, po poprawkach przeglądu końcowego
+    Executed 1460 tests, with 2 tests skipped and 0 failures (0 unexpected) in 547.949 (548.088) seconds
     $ grep -c "^Lista do opisu PR:" docs/sdlc/changes/2026-11-19-engine-v2-3-0/plan.md
     1
     ```
@@ -432,6 +478,9 @@ Testy o zmienionych oczekiwaniach (slice 2):
     22:27  up 2 days,  7:46, 18 users, load averages: 1,88 2,70 3,26
     $ swift run -c release BubblePhysicsPerfGuard   # @db1e76e, progi docs/benchmarks/perf-guard.json bez zmian
     PASS stress-300 / mixed / decals / acceptance / scaling 600/300 (patrz wpis „Perf guard (slice 3):”)
+    # powtórki orkiestratora @d226f02 na niebezczynnym Macu (pomiar niemiarodajny według reguły uptime ≤ 2):
+    23:04 load 2,56: FAIL stress-300 +29,5 %, mixed +81,6 %, decals +47,1 %, acceptance +15,1 %; scaling 1,66 PASS
+    23:15 load 14,79: PASS stress-300 +7,6 %, mixed +2,4 %, acceptance +8,7 %; FAIL decals +27,4 %; scaling 1,55 PASS
     $ grep -c "^Perf guard (slice 3):" docs/sdlc/changes/2026-11-19-engine-v2-3-0/plan.md
     1
     ```
