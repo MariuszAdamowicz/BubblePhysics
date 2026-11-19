@@ -258,13 +258,49 @@ Wycinek 1 sam naprawia model kontaktu miękkiego (ugięcie c·F zamiast 3,85·c�
 
 1. Dodać `PhysicsMaterial.contactDampingRatio` (domyślnie 1, bez walidacji) i napisać w `ModelValidationTests` testy `testContactDampingRatio…` dla [P-B-24](#p-b-24) · verify: `swift build --build-tests && ! swift test --filter ModelValidationTests`
 2. Walidować `contactDampingRatio` w `PhysicsMaterial.init` według wzorca `BubbleContactCompliance.validate(for:)`, pokrywając [P-B-24](#p-b-24) · verify: `swift test --filter ModelValidationTests`
+    ```text
+    $ swift test --filter ModelValidationTests
+    Executed 24 tests, with 0 failures (0 unexpected)
+    ```
 3. Przepisać `ContactVelocityCorrectionProbeTests` na oczekiwania [P-B-19](#p-b-19) i napisać `ContactDynamicsTests` (ściana; para z dwoma polami `.directional` filtrowanymi na ID; ζ_c = 0, 0,2 i 1) dla [P-B-20](#p-b-20)–[P-B-22](#p-b-22) · verify: `swift build --build-tests && ! swift test --filter "ContactVelocityCorrectionProbeTests|ContactDynamicsTests"`
 4. Dodać parametr `dampingRatio` do `NativePublicProperties.contact(of:override:radius:)` i wpisywać ζ_c każdej bańki do lane `.z`, także twardej; poprawić komentarze `contact` w `NativeMetalBufferLayout.swift` i `NativeGeometryKernels.metal-source` oraz oczekiwanie `testHostComputesContactComplianceForBubbleRecord` · verify: `grep -q "contactDampingRatio" Sources/BubblePhysicsNativeMetal/NativePublicWorld.swift && swift test --filter NativeMetalShaderABITests`
+    ```text
+    $ grep -c "contactDampingRatio" Sources/BubblePhysicsNativeMetal/NativePublicWorld.swift
+    1
+    $ swift test --filter NativeMetalShaderABITests
+    Executed 9 tests, with 0 failures (0 unexpected)
+    ```
 5. Dodać bufor `contactCorrection` (`SIMD2<Float>`), który `nativeApplyWarmStart` inicjalizuje swoim `correction`, a `nativeSolveJacobi` powiększa o swoje `correction`, oraz rozdział korekt w `nativeUpdateVelocities` dla `contact.x > 0`, z bańką twardą bez zmian, pokrywając [P-B-19](#p-b-19) i [P-B-23](#p-b-23) · verify: `swift test --filter "ContactVelocityCorrectionProbeTests|CrowdCompressionTests.testHard"`
+    ```text
+    $ swift test --filter "ContactVelocityCorrectionProbeTests|CrowdCompressionTests.testHard"
+    Executed 4 tests, with 0 failures (0 unexpected) in 20.184 (20.185) seconds
+    ```
 6. Przenieść czynnik tłumienia `nativeDampContactNormalMotion` do pętli po kontaktach (miękki: 2·ζ_c·ω ze średnią ζ_c pary; twardy: `contactDamping`), pokrywając [P-B-20](#p-b-20)–[P-B-23](#p-b-23) · verify: `swift test --filter "ContactDynamicsTests|ContactVelocityCorrectionProbeTests|CrowdCompressionTests.testHard"`
+    ```text
+    $ swift test --filter "ContactDynamicsTests|ContactVelocityCorrectionProbeTests|CrowdCompressionTests.testHard"
+    Executed 9 tests, with 0 failures (0 unexpected) in 37.581 (37.585) seconds
+    ```
 7. Przepisać `PairLambdaCeilingProbeTests.testChain…` na [P-B-29](#p-b-29) (równowaga przy każdej sile, bez bramki `BUBBLE_PHYSICS_PAIR_CEILING_PROBE`; pchnięcie wprost zostaje jako test bez bramki) i napisać w `CrowdCompressionTests` test `testSoftContainedPairSeparatesWithoutAJump` dla [P-B-30](#p-b-30) · verify: `swift build --build-tests && ! swift test --filter PairLambdaCeilingProbeTests.testChain`
 8. Ograniczyć `nativePairLambdaLimit` do par z `rho.z == 0` w `nativePrepareSolverContacts` (para miękka: ograniczenie warm startu r / (m⁻¹ · stopień) z v2.1.0) i w `nativeUpdateContactMultipliers` (para miękka bez limitu), pokrywając [P-B-29](#p-b-29) i [P-B-30](#p-b-30). Jeśli [P-B-30](#p-b-30) nie przechodzi, zatrzymać implement: limit par miękkich wraca do `change-design` · verify: `swift test --filter "PairLambdaCeilingProbeTests|CrowdCompressionTests.testSoftContainedPair|CrowdCompressionTests.testHard|NativeMetalXPBDTests"`
+    ```text
+    $ swift test --filter "PairLambdaCeilingProbeTests|CrowdCompressionTests.testSoftContainedPair|CrowdCompressionTests.testHard|NativeMetalXPBDTests"
+    Test Case '-[BubblePhysicsRuntimeTests.CrowdCompressionTests testSoftContainedPairSeparatesWithoutAJump]' failed (0.988 seconds).
+    Executed 18 tests, with 0 failures (0 unexpected) in 1.555 (1.557) seconds   # NativeMetalXPBDTests
+    Executed 2 tests, with 0 failures (0 unexpected) in 4.741 (4.741) seconds    # PairLambdaCeilingProbeTests
+    Executed 24 tests, with 1 failure (0 unexpected) in 22.423 (22.426) seconds
+    FAILED — P-B-30 (G4-AC7): maks. przesunięcie środka w kroku 15,3 przy progu 3; zadanie 8 nie zamknięte, decyzja wraca do change-design
+    ```
 9. Przepisać nagłówek `ContactComplianceTests` bez współczynnika 3,85 i „Jacobiego”, przeliczyć granicę liniowości F ([P-B-25](#p-b-25)) i zmienić oczekiwania testów miękkich zmienionych przez G4 (np. `NativeMetalRestDampingTests`, `CrowdCompressionTests`, oraz trzy testy par twarda–miękka `ContactComplianceTests.testHard*`, w których ugina się miękka bańka: przy c₀ = 1e-3 i F = 300 δ spada z ok. 1,16 do 0,3, więc progi `wallDepth > 0.5` i `softRadius < 19.7` trzeba przeliczyć albo zwiększyć c₀ ok. 3,85×), każdy z powodem w commicie i we wpisie `Testy o zmienionych oczekiwaniach (slice 1):` w tym pliku, bez zmian w testach kontaktów twardych · verify: `! grep -q "Jacobiego" Tests/BubblePhysicsRuntimeTests/ContactComplianceTests.swift && grep -q "^Testy o zmienionych oczekiwaniach (slice 1):" docs/sdlc/changes/2026-11-19-engine-v2-3-0/plan.md && swift build --build-tests && swift test`
+    ```text
+    # zadanie 9 nie zaczęte (wycinek zatrzymany na bramce P-B-30); stan polecenia testów planu @e3675c6:
+    $ swift build --build-tests && swift test
+    Executed 1425 tests, with 1 test skipped and 8 failures (0 unexpected) in 627.824 (628.007) seconds
+    ContactComplianceTests: testCompressionExponentMakesDoubledForceDentLessThanTwice, testOverrideOfBaseComplianceInDescriptorBendsOnlyThatBubble,
+      testOverrideOfBaseComplianceInMergeResultBendsOnlyThatResult, testOverrideOfBaseComplianceInSplitPartsBendsOnlyThatPart,
+      testRadiusLawWithExponent0DentsTheSmallerBubbleMoreInRelativeTerms   # oczekiwania do przeliczenia w zadaniu 9
+    CrowdCompressionTests.testSoftCrowdBalance2_5KeepsStepsAcceptedAndOverlapsMoreThanHard (2 asercje)  # zadanie 9
+    CrowdCompressionTests.testSoftContainedPairSeparatesWithoutAJump   # P-B-30, wiersz odstępstwa 6
+    ```
 
 ## Deviations from Design
 
@@ -284,4 +320,9 @@ Wycinek 1 sam naprawia model kontaktu miękkiego (ugięcie c·F zamiast 3,85·c�
 
 | # | Slice | Task | Type (change/gap) | Description | Status | Date |
 |---|-------|------|-------------------|-------------|--------|------|
-|   |       |      |                   |             |        |      |
+| 1 | 1 | 5 | change | Bufor z planu `contactCorrection` po stronie hosta nazywa się `NativeMetalPersistentState.bubbleContactCorrection` (`SIMD2<Float>` na bańkę; w shaderach parametr `contactCorrection`: buffer(7) w `nativeApplyWarmStart`, buffer(10) w `nativeSolveJacobi`, buffer(3) w `nativeUpdateVelocities`), żeby nie kolidował z istniejącym buforem kontaktów `contactCorrections`. | pending | 2026-11-19 |
+| 2 | 1 | 3 | change | `CrowdScene.softBubblePhysics` w `Tests/BubblePhysicsRuntimeTests/CrowdSceneSupport.swift` dostał parametr `dampingRatio` (domyślnie 1); R2 wymienia ten plik tylko jako reużywany. | pending | 2026-11-19 |
+| 3 | 1 | 3 | change | Testy oscylatora `ContactDynamicsTests` używają c₀ = 0,174, F = 0,6, dt = 1/120 (ω·dt ≈ 0,02), a nie scen z c₀ = 1e-3: przy sztywnym kontakcie test mierzyłby tłumienie numeryczne kroku, nie ζ_c. Zmierzony dekrement 1,358 (ściana) i 1,332 (para) wobec 1,283, czyli +6 % i +4 %. | pending | 2026-11-19 |
+| 4 | 1 | 3 | gap | `ForceFieldDescriptor`, którego okrąg wychodzi poza obszar symulacji, sprawia, że cała transakcja znika bez potwierdzenia i bez `lastRejectionReason`. Test pary używa promienia pola 100. Błąd istniejący wcześniej, poza celem tej zmiany. | pending | 2026-11-19 |
+| 5 | 1 | 7 | change | Test łańcucha `PairLambdaCeilingProbeTests` zachowuje świat kontrolny bez limitu (`pairCorrectionLimit: false`) obok świata z limitem, żeby sprawdzać samą scenę; pchnięcie wprost działa bez bramki środowiskowej, jak w planie. | pending | 2026-11-19 |
+| 6 | 1 | 8 | gap | Bramka P-B-30 (G4-AC7) nie przechodzi: maks. przesunięcie środka małej bańki w kroku 15,3 przy progu 3 (12,0 przed zmianą limitu λ, 3,30 w v2.2.0 @312ef58). Sonda: brak limitu λ dla pary miękkiej daje korektę 10,3 w pierwszym kroku przy nakładaniu 46, a pełna korekta w prędkości (CD-D-16) rozpędza bańkę do `maximumLinearSpeed`. Cofnięcie samego podziału korekty nie pomaga (10,3) i psuje G4-AC5; ograniczenie przyrostu prędkości od kontaktu do 0,25·min r pary przechodzi na styk (2,988), bez zachowania pędu pary. Test zacommitowany jako czerwony (e3675c6); zadanie 9 nie zaczęte. Zgodnie z zadaniem 8 decyzja wraca do change-design. | pending | 2026-11-19 |
