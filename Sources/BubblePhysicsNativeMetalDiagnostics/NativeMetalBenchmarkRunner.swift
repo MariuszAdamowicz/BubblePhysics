@@ -136,7 +136,8 @@ public enum NativeMetalBenchmarkRunner {
             try Task.checkCancellation()
             _ = await runner.step(world: &world, scenarioStep: step)
             guard isPublishedGPU(runner), let errors = radiusErrors(world: world, runner: runner) else { return }
-            if step == 1 && errors.maximum == 0 { return } // An instantaneous reset is missing recovery evidence.
+            // Kontur bez pamięci poprzedniej klatki wraca do koła już w pierwszej klatce po zwolnieniu (błąd 0), a to jest
+            // poprawny dowód powrotu, nie brak dowodu: pętla zapisuje go jak każdy inny przebieg.
             grows = grows || errors.maximum > previousAmplitude + 0.000001
             previousAmplitude = errors.maximum
             finalMean = errors.mean

@@ -1,7 +1,7 @@
 import BubblePhysics
 import XCTest
 
-/// P-B-11 (G2-AC1, CD-D-16): kontakt bańki ze ścianą nie zależy od historii. Świat A dociska bańkę stałą siłą globalną przez
+/// P-B-11 (G2-AC1, CD-D-4): kontakt bańki ze ścianą nie zależy od historii. Świat A dociska bańkę stałą siłą globalną przez
 /// kilka sekund, aż do spoczynku w położeniu P. Świat B dostaje nową bańkę od razu w P z tą samą prędkością, bez historii
 /// konturu i cache kontaktów. Po jednym kroku oba mają to samo położenie i ten sam kontur.
 ///

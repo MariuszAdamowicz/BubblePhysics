@@ -593,8 +593,8 @@ kernel void nativeRigidApplyCCD(device NativeRigidBody *bodies [[buffer(0)]],
 
 struct NativeContourControl { uint4 counts; float4 shape; };
 
-// Wynik merge/split o ponownie użytym ID nie dziedziczy konturu starego ID (R2), jak w `nativeAccumulateContactPressure`:
-// jego ρ_konturu = 1. Bańka bieżącej klatki jest szukana po ID w `bubbles`, bo nagłówek strukturalny ma jej indeks.
+// Wynik merge/split o ponownie użytym ID nie dziedziczy ρ rekordu starego ID (R2, P-B-13): jego ρ_prev = 1. Bańka bieżącej klatki
+// jest szukana po ID w `bubbles`, bo nagłówek strukturalny ma jej indeks.
 bool nativeIsStructuralResult(long identity, device NativeBubble *bubbles, constant NativeControl &control,
     device NativeStructuralHeader *structuralHeaders, constant NativeContourControl &contour) {
     if (contour.counts.z == 0) return false;
@@ -602,12 +602,14 @@ bool nativeIsStructuralResult(long identity, device NativeBubble *bubbles, const
     return current < control.counts.x && structuralHeaders[current].range.y != 0;
 }
 
-// ρ każdego końca kontaktu bieżącego kroku wynika z geometrii tego kroku, bez historii konturu (CD-D-16, G2). `response.y` to
+// ρ każdego końca kontaktu bieżącego kroku wynika z geometrii tego kroku, bez historii konturu (CD-D-4, G2). `response.y` to
 // penetracja z pozycji przewidzianych (nativeBuildContacts), więc ρ twardnieje w tym samym kroku, w którym bańka wchodzi w kontakt.
 // - odcinek (metadata.x = 1): ρ = clamp((r − penetracja) / r, 0, 1) = d / r, gdzie d to odległość przewidzianego środka od odcinka;
 // - para (metadata.x = 0): nakładanie dzieli się między końce wg podatności, ρ_self = clamp((r_self − nakładanie · c_self /
-//   (c_self + c_other)) / r_self, 0, 1). Podatności liczone są z ρ rekordu z poprzedniego kroku (zasada podziału pary); nowy rekord
-//   ma ρ_prev = 1, a koniec będący wynikiem scalenia lub podziału o ID źródła też (nie dziedziczy ρ źródła). Para twarda
+//   (c_self + c_other)) / r_self, 0, 1). Podatności liczone są z ρ rekordu z poprzedniego kroku (CD-D-5); nowy rekord ma
+//   ρ_prev = 1. Dla końca będącego wynikiem scalenia lub podziału ρ_prev = 1 gwarantuje host: unieważnia każdy rekord cache
+//   takiego ID (NativeMetalSolver), więc rekord startuje od ρ (1, 1); gałąź `nativeIsStructuralResult` poniżej jest tylko
+//   drugą zaporą (backstop) na wypadek rekordu, który przeżyłby unieważnienie. Para twarda
 //   (c_a + c_b = 0) ma ρ = 1, a w parze miękka–twarda całe nakładanie przypada na koniec miękki.
 // Jedno zadanie na rekord cache, więc bez atomików.
 kernel void nativeUpdateContactRho(device NativeBubble *bubbles [[buffer(0)]],
@@ -629,6 +631,7 @@ kernel void nativeUpdateContactRho(device NativeBubble *bubbles [[buffer(0)]],
     uint b = nativeFindBubble(bubbles, control.counts.x, record.participants.y);
     if (b >= control.counts.x || bubbles[b].identity.x != record.participants.y) return;
     float radiusB = bubbles[b].physical.z;
+    // Zapora: dla wyniku strukturalnego ρ_prev = 1 zapewnia już unieważnienie rekordu przez hosta, ta gałąź jest tylko zabezpieczeniem.
     float previousA = nativeIsStructuralResult(record.participants.x, bubbles, control, structuralHeaders, contour) ? 1.0f : record.rho.x;
     float previousB = nativeIsStructuralResult(record.participants.y, bubbles, control, structuralHeaders, contour) ? 1.0f : record.rho.y;
     float complianceA = nativeContactCompliance(bubbles[a], previousA);

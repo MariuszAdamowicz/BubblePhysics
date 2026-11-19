@@ -102,6 +102,38 @@ final class NativeMetalContourTests: XCTestCase {
                       "żadna próbka nie pamięta poprzedniego wgniecenia")
     }
 
+    // P-B-15 (G3-AC1), wariant z rozsunięciem pary: bańki rozchodzą się z prędkości, a rekord cache pary zostaje w pamięci jako
+    // nieaktywny. W klatce, w której para nie jest już w kontakcie, kontur każdej z nich jest kołowy (ta sama tolerancja).
+    func testContourIsCircularInTheFrameAPairMovesApart() async throws {
+        let solver = try makeSolver()
+        var world = ReferenceWorld(configuration: .init(timeStep: 1 / 60, linearDamping: 0,
+            angularDamping: 0, maxContourSegmentLength: 0.1), broadPhase: BruteForceBroadPhase())
+        world.addBubble(try .init(id: .init(rawValue: 1), center: .init(x: -0.9, y: 0), mass: 1, targetRadius: 1))
+        world.addBubble(try .init(id: .init(rawValue: 2), center: .init(x: 0.9, y: 0), mass: 1, targetRadius: 1))
+        let loaded = try await solver.executeFrame(world: world, scenarioStep: 1)
+        XCTAssertFalse(loaded.contacts.isEmpty, "para w kontakcie w klatce wyjściowej")
+        for bubble in loaded.bubbles {
+            let points = try XCTUnwrap(loaded.contours[bubble.id])
+            XCTAssertGreaterThan(points.map { abs(($0 - bubble.center).length - 1) }.max()!, 0.05, "kontur wgnieciony przez parę")
+        }
+        // Rozsunięcie z prędkości: w następnej klatce środki są dalej niż suma promieni z zapasem ponad próg kontaktu.
+        var apart: [ReferenceBubble] = []
+        for (index, bubble) in loaded.bubbles.enumerated() {
+            var moved = bubble
+            moved.center.x += index == 0 ? -0.5 : 0.5
+            moved.velocity = .zero
+            apart.append(moved)
+        }
+        for bubble in apart { world.updateBubble(bubble) }
+        let released = try await solver.executeFrame(world: world, scenarioStep: 2)
+        XCTAssertTrue(released.contacts.isEmpty, "para rozsunięta poza próg kontaktu")
+        for bubble in released.bubbles {
+            let points = try XCTUnwrap(released.contours[bubble.id])
+            XCTAssertTrue(points.allSatisfy { abs(($0 - bubble.center).length - 1) <= 0.001 },
+                          "bańka \(bubble.id.rawValue): żadna próbka nie pamięta poprzedniego wgniecenia")
+        }
+    }
+
     // Akumulacja nacisku co klatkę nie może pompować spoczynkowego konturu.
     func testRestingContourDoesNotGainOscillationAmplitude() async throws {
         let solver = try makeSolver()
