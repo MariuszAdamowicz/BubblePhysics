@@ -656,11 +656,10 @@ float nativeContourRayLimit(float2 center, float2 direction, float2 a, float2 b,
 kernel void nativeAccumulateContactPressure(device NativeBubble *bubbles [[buffer(0)]],
     device NativeSegment *segments [[buffer(1)]], device NativeContactCache *cache [[buffer(2)]],
     constant NativeControl &control [[buffer(3)]], device NativeContactControl &contacts [[buffer(4)]],
-    constant NativeContourControl &contour [[buffer(5)]], device NativeBubble *previousBubbles [[buffer(6)]],
-    device float4 *previousDeformation [[buffer(7)]], device uint *previousCounts [[buffer(8)]],
-    device float4 *pressure [[buffer(9)]], device uint *counts [[buffer(10)]],
-    device uint4 *adjacency [[buffer(11)]], device uint *degrees [[buffer(12)]],
-    device atomic_uint *safety [[buffer(13)]], device NativeStructuralHeader *structuralHeaders [[buffer(14)]],
+    constant NativeContourControl &contour [[buffer(5)]],
+    device float4 *pressure [[buffer(6)]], device uint *counts [[buffer(7)]],
+    device uint4 *adjacency [[buffer(8)]], device uint *degrees [[buffer(9)]],
+    device atomic_uint *safety [[buffer(10)]],
     uint index [[thread_position_in_grid]]) {
     uint bubbleIndex = index / contour.counts.x, sample = index % contour.counts.x;
     if (bubbleIndex >= control.counts.x || atomic_load_explicit(safety + 3, memory_order_relaxed)) return;
@@ -686,7 +685,7 @@ kernel void nativeAccumulateContactPressure(device NativeBubble *bubbles [[buffe
         float towardLength = length(toward);
         // Każda para idzie jedną drogą konturu (CD-D-12): para miękka (podatność choć jednego końca > 0) dzieli wgniecenie wg c_a : c_b,
         // a para twarda i kontakt twardej bańki ze ścianą liczą nacisk z λ i cięciwę radykalną jak w v2.1.0.
-        // ρ_self i ρ_other to wygładzone ρ tej bańki i jej partnera w rekordzie cache. Sąsiedztwo daje końcowi a pary bańka–bańka
+        // ρ_self i ρ_other to ρ tej bańki i jej partnera w rekordzie cache, z geometrii bieżącego kroku (nativeUpdateContactRho). Sąsiedztwo daje końcowi a pary bańka–bańka
         // edge.w = 0, a końcowi b edge.w = 1; bańka przy odcinku jest końcem a i ma edge.w = 1 (ρ_self = rho.x, bez partnera).
         float rhoSelf = (edge.z == 0 && edge.w) ? contact.rho.y : contact.rho.x;
         float rhoOther = edge.w ? contact.rho.x : contact.rho.y;
@@ -720,30 +719,13 @@ kernel void nativeAccumulateContactPressure(device NativeBubble *bubbles [[buffe
             point + tangent * halfLength, limit, contour.shape.w);
     }
     float deficit = clamp(1 - limit / bubble.physical.z, 0.0f, 1.0f);
-    float recovered = 0;
-    // Wynik merge/split o ponownie użytym ID nie dziedziczy starego konturu tego ID.
-    // Jego źródła fizyczne są próbkowane jawnie przez nativeSeedStructuralContours.
-    bool hasStructuralShape = contour.counts.z != 0 && structuralHeaders[bubbleIndex].range.y != 0;
-    uint old = hasStructuralShape ? contour.counts.y
-        : nativeSafetyBubbleIndex(bubble.identity.x, previousBubbles, contour.counts.y);
-    if (old < contour.counts.y && previousCounts[old] > 0) {
-        // Resampling przy zmianie promienia/liczby punktów zachowuje lokalność nacisku.
-        uint oldCount = previousCounts[old];
-        float location = float(sample) * float(oldCount) / float(count);
-        uint first = uint(location) % oldCount, second = (first + 1) % oldCount;
-        float oldDeficit = mix(previousDeformation[old * contour.counts.x + first].x,
-            previousDeformation[old * contour.counts.x + second].x, fract(location));
-        // Zmiana promienia zachowuje światowy kontur, a dopiero potem relaksuje go w czasie.
-        recovered = max(0.0f, 1 - previousBubbles[old].physical.z * (1-oldDeficit) / bubble.physical.z)
-            * exp(-contour.shape.y * max(0.0f, bubble.physical.w) * control.physics.x);
-    }
     // Wartość lambda jest używana przez solver, ale nie jest dodatkową
     // geometrią konturu. Jej lokalne maksima poruszały kontur mimo prawie
     // niezmienionej geometrii zatwierdzonej klatki.
-    float4 value = float4(max(deficit, recovered), deficit, 0, 0);
+    float4 value = float4(deficit, deficit, 0, 0);
     if (bubble.publicFlags.x) {
         float softness = bubble.material.y * (1 - bubble.material.z);
-        value = float4(max(max(deficit, directionalPressure * softness), recovered), deficit, 0, 0);
+        value = float4(max(deficit, directionalPressure * softness), deficit, 0, 0);
         // Bańka z podatnością kontaktu omija bramkę deformowalności: bez niej materiał z domyślnym `deformability` = 0 nie miałby
         // konturu, a ρ zostałoby 1. Bramka `material.z >= 1` zostaje.
         if (softness == 0 && bubble.material.z == 0 && bubble.contact.x <= 0) value.xy = 0;

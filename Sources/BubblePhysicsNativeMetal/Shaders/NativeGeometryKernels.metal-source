@@ -29,7 +29,7 @@ struct NativeSegment {
 };
 struct NativeContactCache {
     long2 participants; uint4 metadata; float4 geometry; float4 response;
-    float4 rho; // wygładzone ρ końców a i b (stosunek promienia konturu do r w kierunku normalnej),
+    float4 rho; // ρ końców a i b z geometrii bieżącego kroku (stosunek promienia konturu do r w kierunku normalnej),
                 // z: c_a(ρ_a) + c_b(ρ_b) z nativePrepareSolverContacts (dla odcinka tylko c_a), reserved
 };
 struct NativeCandidate { long2 participants; uint4 metadata; };
@@ -62,8 +62,8 @@ struct NativeStructuralSource { ulong2 identity; float4 geometry; uint4 clips; }
 struct NativeStructuralContourControl { uint4 counts; float4 shape; };
 
 // Pierwszy kontur wyniku powstaje na GPU z unii źródeł (merge) lub ich
-// przecięć z półpłaszczyznami (split). Późniejsze kroki używają normalnej
-// relaksacji trwałego bufora deformacji.
+// przecięć z półpłaszczyznami (split). Późniejsze kroki liczą kontur wyłącznie
+// z bieżących kontaktów, bez pamięci poprzedniej klatki.
 kernel void nativeSeedStructuralContours(device NativeBubble *bubbles [[buffer(0)]],
     device NativeStructuralHeader *headers [[buffer(1)]],
     device NativeStructuralSource *sources [[buffer(2)]], device float4 *clips [[buffer(3)]],

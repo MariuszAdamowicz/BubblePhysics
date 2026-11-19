@@ -411,7 +411,7 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         state.control.contents().storeBytes(of: parameters, as: NativeMetalControl.self)
         var contourParameters = NativeMetalContourControl(
             counts: SIMD4(UInt32(state.contourStride), UInt32(lastSnapshot?.sourceBubbles.count ?? 0), 0, 0),
-            shape: SIMD4(contourConfiguration.maxContourSegmentLength, contourConfiguration.deformationRecoveryRate,
+            shape: SIMD4(contourConfiguration.maxContourSegmentLength, 0,
                          contourConfiguration.contourSurfaceTension, contourConfiguration.positionTolerance))
         let solverParameters = NativeMetalSolverControl(
             counts: SIMD4(1, 0, 0, UInt32(clamping: configuration.solverIterationCount)),
@@ -795,9 +795,8 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
             state.control, state.contactControl, state.solverControl, state.safetyControl],
             argument: 4)
         dispatch("nativeAccumulateContactPressure", buffers: [state.workingBubbles, state.workingSegments,
-            state.workingCache, state.control, state.contactControl, state.contourControl, state.publishedBubbles,
-            state.publishedDeformation, state.publishedContourCounts, state.contourScratch, state.workingContourCounts,
-            state.adjacency, state.adjacencyCounts, state.safetyControl, structuralHeaderBuffer],
+            state.workingCache, state.control, state.contactControl, state.contourControl, state.contourScratch,
+            state.workingContourCounts, state.adjacency, state.adjacencyCounts, state.safetyControl],
             threads: count * state.contourStride)
         if !structuralSources.isEmpty {
             dispatch("nativeSeedStructuralContours", buffers: [state.workingBubbles, structuralHeaderBuffer,

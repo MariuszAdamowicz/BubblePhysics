@@ -245,6 +245,8 @@ final class NativeMetalStructuralOperationTests: XCTestCase {
         let first = try await native.step(objects: [input], materials: merged.physicsMaterials,
             region: merged.configuration.simulationRegion, duration: 1.0 / 60)
         XCTAssertLessThan(try XCTUnwrap(first.objects[id(3)]).effectiveRadius, 0.7, "pierwsza klatka: kontur z seeda")
+        // Kształt strukturalny dostaje tylko krok, w którym operacja jest wykonana; kolejny krok go nie niesie.
+        input.structuralShape = nil
         let second = try await native.step(objects: [input], materials: merged.physicsMaterials,
             region: merged.configuration.simulationRegion, duration: 1.0 / 60)
         XCTAssertEqual(try XCTUnwrap(second.objects[id(3)]).effectiveRadius, object.targetRadius, accuracy: 0.001,

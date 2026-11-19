@@ -349,7 +349,7 @@ kernel void nativePrepareSolverContacts(device NativeBubble *bubbles [[buffer(0)
     if (index >= contacts.counts.z) return;
     NativeContactCache record = cache[index];
     uint a = endpoints[index].x, b = endpoints[index].y;
-    // ρ jest już wygładzone (nativeUpdateContactRho) i stałe w klatce, więc suma podatności końców c_a(ρ_a) + c_b(ρ_b)
+    // ρ jest już policzone z geometrii kroku (nativeUpdateContactRho) i stałe w klatce, więc suma podatności końców c_a(ρ_a) + c_b(ρ_b)
     // trafia do rho.z raz na kontakt; nativeContactAlpha czyta ją w każdej iteracji bez pow() (LD-D-6).
     if (endpoints[index].w) {
         float compliance = nativeContactCompliance(bubbles[a], record.rho.x);
