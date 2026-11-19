@@ -104,10 +104,11 @@ enum CrowdScene {
                             contactDampingRatio: dampingRatio)
     }
 
-    /// Materiał miękki tłoku z P-B-27 i P-B-28: s = 1, k = 1, c₀ = 1e-3 przy r_ref = 20. Przy kroku 1/60 α pary to rząd wielkości
-    /// sumy odwrotności mas, więc kontakt realnie ustępuje, a bańki nie wchodzą w siebie bez granic.
+    /// Materiał miękki tłoku z P-B-27 i P-B-28: s = 1, k = 1, c₀ = 3,85e-3 przy r_ref = 20. Od v2.3.0 kontakt miękki ugina się
+    /// o pełne c · F (CD-D-16), czyli 3,85× mniej niż dawne c₀ = 1e-3 z częściową korektą prędkości; c₀ przeskalowane o ten
+    /// współczynnik zachowuje dawny wygląd: kontakt realnie ustępuje, a bańki nie wchodzą w siebie bez granic.
     static func softCrowdPhysics() throws -> PhysicsMaterial {
-        try softBubblePhysics(base: 1e-3, radiusExponent: 1, compressionExponent: 1)
+        try softBubblePhysics(base: 3.85e-3, radiusExponent: 1, compressionExponent: 1)
     }
 
     /// Ściana, w którą bańka jest dociskana.

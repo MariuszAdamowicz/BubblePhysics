@@ -91,11 +91,13 @@ final class CrowdCompressionTests: XCTestCase {
         return 20 - min(corner.x - state.position.x, corner.y - state.position.y)
     }
 
-    // P-B-27: tłok B = 2,5 z materiałem miękkim jak P-B-13, a materiał naprawdę działa. Plan oczekiwał większego średniego nakładania
-    // par niż przy c₀ = 0, ale w tym tłoku twardy kontakt zostawia mało par nakładających się głęboko (bańka wewnątrz innej, nakładanie
-    // do 86), a miękki wiele płytszych (probe, c₀ = 1e-3: 807 par na klatkę wobec 729, średnie nakładanie 13,8 wobec 16,8, największe
-    // 61 wobec 86). Dlatego dowodem działania jest rozkład nakładania: więcej par nakłada się płyciej, a największe nakładanie maleje.
-    func testSoftCrowdBalance2_5KeepsStepsAcceptedAndOverlapsMoreThanHard() async throws {
+    // P-B-27: tłok B = 2,5 z materiałem miękkim jak P-B-13, a materiał naprawdę działa. Od v2.3.0 (G4, CD-D-16) kontakt miękki jest
+    // sprężyną z pełną korektą prędkości, więc rozkład nakładania nie dowodzi już działania materiału: probe (c₀ = 3,85e-3, to samo
+    // ziarno) dał 670 par nakładających się na klatkę wobec 729 dla c₀ = 0, średnie nakładanie 23,3 wobec 16,7 i największe 93,3 wobec
+    // 81,2, bo sprężyny w gęstym tłoku zostawiają część par zawartych (58 po ostatnim kroku), a dawne oczekiwanie (więcej par płyciej,
+    // mniejsze maksimum) wynikało z częściowej korekty prędkości i limitu λ pary. Dowodem działania jest kontur: tylko bańka z c > 0
+    // ma wgniecenie, więc średni promień efektywny / docelowy spada poniżej 1 (probe: 0,16 wobec 1,00 przy c₀ = 0).
+    func testSoftCrowdBalance2_5KeepsStepsAcceptedAndCompressesContoursUnlikeHard() async throws {
         let softWorld = try await CrowdScene.makeWorld(bubble: CrowdScene.softCrowdPhysics())
         let soft = try await CrowdScene.runCrowd(world: softWorld, balance: 2.5, seed: 2_500, extraSteps: 600)
         assertCrowdKeptStepsAccepted(soft, world: softWorld, balance: 2.5)
@@ -104,10 +106,10 @@ final class CrowdCompressionTests: XCTestCase {
         XCTAssertNil(hard.firstIssue?.issue, "przebieg odniesienia z c₀ = 0")
         XCTAssertEqual(soft.lastSecond.count, CrowdScene.lastSecondSteps)
         XCTAssertEqual(hard.lastSecond.count, CrowdScene.lastSecondSteps)
-        XCTAssertGreaterThan(soft.overlappingPairsPerFrameInLastSecond, hard.overlappingPairsPerFrameInLastSecond,
-                             "pary nakładające się na klatkę w ostatniej sekundzie: miękki \(soft.overlappingPairsPerFrameInLastSecond), twardy \(hard.overlappingPairsPerFrameInLastSecond)")
-        XCTAssertLessThan(soft.maximumOverlapInLastSecond, hard.maximumOverlapInLastSecond,
-                          "największe nakładanie w ostatniej sekundzie: miękki \(soft.maximumOverlapInLastSecond), twardy \(hard.maximumOverlapInLastSecond)")
+        let hardRatio = hard.meanEffectiveRadiusRatioInLastSecond, softRatio = soft.meanEffectiveRadiusRatioInLastSecond
+        XCTAssertEqual(hardRatio, 1, accuracy: 0.01, "c₀ = 0: bez wgniecenia konturu, średni promień efektywny / docelowy \(hardRatio)")
+        XCTAssertLessThan(softRatio, hardRatio - 0.1,
+                          "średni promień efektywny / docelowy w ostatniej sekundzie: miękki \(softRatio), twardy \(hardRatio)")
     }
 
     // P-B-28: silniejszy nacisk (B = 2,5 wobec 1,5, to samo ziarno) mocniej ściska kontury.
