@@ -83,8 +83,9 @@ final class NativeMetalContourTests: XCTestCase {
         XCTAssertLessThanOrEqual(maximumEdge(points), world.configuration.maxContourSegmentLength)
     }
 
-    // Zgubienie pamięci deformacji przy zmianie wejścia CPU dałoby natychmiastowy skok do koła.
-    func testReleasedContourReturnsWithinTwoPercentAfterThirtyFrames() async throws {
+    // P-B-15 (G3-AC1): kontur nie ma pamięci poprzedniej klatki. W klatce, w której kontakt znika, wgniecenie w jego kierunku
+    // wynosi 0, a bańka bez innych kontaktów ma kontur kołowy (dawna relaksacja 30 klatek została usunięta).
+    func testContourIsCircularInTheFrameTheContactDisappears() async throws {
         let solver = try makeSolver()
         var world = try makeWorld()
         world.addSegment(wall())
@@ -95,14 +96,10 @@ final class NativeMetalContourTests: XCTestCase {
         world.removeSegment(id: .init(rawValue: 1))
         var bubble = loaded.bubbles[0]; bubble.velocity = .zero; world.updateBubble(bubble)
         let released = try await solver.executeFrame(world: world, scenarioStep: 2)
-        let firstPoints = try XCTUnwrap(released.contours[bubble.id])
-        let firstDeficit = 1 - (firstPoints[0] - released.bubbles[0].center).length
-        XCTAssertGreaterThan(firstDeficit, 0)
-        XCTAssertLessThan(firstDeficit, loadedDeficit)
-        var final = released
-        for step in 3...31 { final = try await solver.executeFrame(world: world, scenarioStep: step) }
-        let points = try XCTUnwrap(final.contours[bubble.id])
-        XCTAssertTrue(points.allSatisfy { abs(($0 - final.bubbles[0].center).length - 1) <= 0.02 })
+        let points = try XCTUnwrap(released.contours[bubble.id])
+        XCTAssertEqual((points[0] - released.bubbles[0].center).length, 1, accuracy: 0.001, "kierunek byłego kontaktu")
+        XCTAssertTrue(points.allSatisfy { abs(($0 - released.bubbles[0].center).length - 1) <= 0.001 },
+                      "żadna próbka nie pamięta poprzedniego wgniecenia")
     }
 
     // Akumulacja nacisku co klatkę nie może pompować spoczynkowego konturu.
