@@ -24,7 +24,8 @@ final class ContactRhoHistoryTests: XCTestCase {
         return world
     }
 
-    func testWallContactAfterOneStepIsTheSameWithAndWithoutHistory() async throws {
+    /// Świat A po spoczynku i świat B z nową bańką w tym samym miejscu, oba po jednym kroku.
+    private func oneStepAfterRest() async throws -> (history: BubbleWorld, fresh: BubbleWorld, a: ObjectState, b: ObjectState) {
         let touching = WorldPoint(-(CrowdScene.interiorHalfSize.x - radius), 0)
         let history = try await world(position: touching, velocity: .zero)
         var rest: ObjectState?
@@ -43,10 +44,22 @@ final class ContactRhoHistoryTests: XCTestCase {
         let freshFrame = await fresh.advance(by: CrowdScene.step)
         XCTAssertNil(history.diagnostics.lastAdvanceIssue)
         XCTAssertNil(fresh.diagnostics.lastAdvanceIssue)
-        let a = try XCTUnwrap(historyFrame.objects[CrowdScene.id(1)]), b = try XCTUnwrap(freshFrame.objects[CrowdScene.id(1)])
+        return (history, fresh, try XCTUnwrap(historyFrame.objects[CrowdScene.id(1)]),
+                try XCTUnwrap(freshFrame.objects[CrowdScene.id(1)]))
+    }
+
+    // G2-AC1: ρ z historii (świat A) i ρ nowego rekordu (świat B) nie dają różnicy położenia po jednym kroku.
+    func testWallContactPositionAfterOneStepIsTheSameWithAndWithoutHistory() async throws {
+        let (_, _, a, b) = try await oneStepAfterRest()
         XCTAssertEqual(a.position.x, b.position.x, accuracy: 1e-3, "położenie po jednym kroku")
         XCTAssertEqual(a.position.y, b.position.y, accuracy: 1e-3)
+        XCTAssertEqual(CrowdScene.effectiveRadius(of: a), CrowdScene.effectiveRadius(of: b), accuracy: 1e-3)
+    }
 
+    // G2-AC1: kontur po jednym kroku też. Dopóki `nativeAccumulateContactPressure` bierze max(wgniecenie, recovered) z konturu
+    // poprzedniej klatki (G3, usuwane osobno), świat A ma szerszy kontur na bokach niż świat B.
+    func testWallContactContourAfterOneStepIsTheSameWithAndWithoutHistory() async throws {
+        let (history, fresh, _, _) = try await oneStepAfterRest()
         let contourA = try XCTUnwrap(history.debugContourSnapshot()[CrowdScene.id(1)])
         let contourB = try XCTUnwrap(fresh.debugContourSnapshot()[CrowdScene.id(1)])
         XCTAssertEqual(contourA.count, contourB.count)

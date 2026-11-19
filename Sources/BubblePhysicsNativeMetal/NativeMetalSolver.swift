@@ -688,10 +688,9 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         dispatchContacts("nativeCompactContactCache", buffers: [state.mergedCache, state.workingCache, state.contactControl,
             state.scanValues, state.scanOffsets, state.dispatchStatistics], argument: 2)
         prepareIndirectArguments()
-        // Wygładzone ρ obu końców każdego kontaktu z konturu poprzedniej klatki (CD-D-16), przed solverem, który liczy z niego α.
+        // ρ obu końców każdego kontaktu z geometrii bieżącego kroku (pozycje przewidziane, CD-D-16), przed solverem, który liczy z niego α.
         dispatchContacts("nativeUpdateContactRho", buffers: [state.workingBubbles, state.workingCache, state.control,
-            state.contactControl, state.contourControl, state.publishedBubbles, state.publishedDeformation,
-            state.publishedContourCounts, structuralHeaderBuffer], argument: 3)
+            state.contactControl, state.contourControl, structuralHeaderBuffer], argument: 3)
         dispatch("nativeClearAdjacency", buffers: [state.control, state.adjacencyCounts], threads: count)
         dispatchContacts("nativeEmitAdjacency", buffers: [state.workingBubbles, state.workingSegments, state.workingCache,
             state.control, state.contactControl, state.adjacency, state.contactEndpoints, state.dispatchStatistics,

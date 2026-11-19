@@ -381,13 +381,17 @@ final class NativeMetalXPBDTests: XCTestCase {
         let first = try pairRecord(solver)
         XCTAssertEqual(first.rho.x, 1 - 0.5 * 0.8, accuracy: 1e-4)
         XCTAssertEqual(first.rho.y, (1.5 - 0.5 * 0.2) / 1.5, accuracy: 1e-4)
+        // Krok drugi startuje z pozycji po kroku pierwszym (solver trwały), więc nakładanie nie jest znane z wejścia; podział
+        // nie zależy od niego: (r_a − r_a·ρ_a) / (r_b − r_b·ρ_b) = c_a / c_b, z c z ρ rekordu z kroku pierwszego.
         _ = try await solver.executeFrame(input: input, scenarioStep: 2)
         let second = try pairRecord(solver)
         XCTAssertEqual(second.metadata.y, 2, "rekord dopasowany z kroku pierwszego")
         let cA = compliance(contact[0], first.rho.x), cB = compliance(contact[1], first.rho.y)
-        XCTAssertEqual(second.rho.x, 1 - 0.5 * cA / (cA + cB), accuracy: 1e-4)
-        XCTAssertEqual(second.rho.y, (1.5 - 0.5 * cB / (cA + cB)) / 1.5, accuracy: 1e-4)
-        XCTAssertNotEqual(second.rho.x, first.rho.x, accuracy: 1e-3, "podział zależy od ρ poprzedniego kroku")
+        let shareA = 1 * (1 - second.rho.x), shareB = 1.5 * (1 - second.rho.y)
+        XCTAssertGreaterThan(shareA + shareB, 0.05)
+        XCTAssertEqual(shareA / (shareA + shareB), cA / (cA + cB), accuracy: 1e-3)
+        let freshShare = 0.8 as Float
+        XCTAssertGreaterThan(abs(shareA / (shareA + shareB) - freshShare), 0.05, "podział zależy od ρ poprzedniego kroku, nie od c(1)")
     }
 
     // P-B-13: para twarda (c = 0 na obu końcach) ma ρ = 1 na obu końcach, a para miękka–twarda przerzuca całe nakładanie
