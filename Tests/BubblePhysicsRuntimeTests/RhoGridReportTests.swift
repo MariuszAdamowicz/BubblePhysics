@@ -21,7 +21,8 @@ final class RhoGridReportTests: XCTestCase {
     private let mass: Float = 1.36
     private let stiffness: Float = 20
     private let force: Float = 1500
-    private let gap: Float = 30
+    /// Mały dystans rozbiegu: przy D = 0 energia rozpędu przy dużym `gap` (30) przebija miękką ścianę (c₀ = 4e-3, kc = 0).
+    private let gap: Float = 5
     private let seconds = 8.0
 
     private let baseCompliances: [Float] = [1e-3, 2.5e-3, 4e-3]
@@ -53,9 +54,9 @@ final class RhoGridReportTests: XCTestCase {
         let world = try BubbleWorld(configuration: CrowdScene.configuration())
         var setup = try CrowdScene.resources(bubble: material)
         for wall in try CrowdScene.walls() { setup = setup.add(wall) }
-        let policy = try BubbleDrivePolicy(rigidifies: false, bandStiffness: stiffness, bandDamping: 5, maximumForce: force)
+        let policy = try BubbleDrivePolicy(rigidifies: false, bandStiffness: stiffness, bandDamping: 0, maximumForce: force)
         let touching = CrowdScene.interiorHalfSize.x - radius
-        let target = WorldPoint(-(touching + 90), 0)
+        let target = WorldPoint(-(touching + 150), 0)
         _ = world.submit(setup
             .add(try CrowdScene.bubble(1, at: WorldPoint(-(touching - gap), 0), radius: radius, mass: mass, drivePolicy: policy))
             .beginPlayerDrive(CrowdScene.id(1), target: target))
@@ -106,7 +107,7 @@ final class RhoGridReportTests: XCTestCase {
             "Raport z testu opt-in `RhoGridReportTests` (`BUBBLE_PHYSICS_RHO_GRID_REPORT=1 swift test --filter BubblePhysicsRuntimeTests.RhoGridReportTests`). Bez progu, ocenia autor.",
             "",
             "Scena: bańka m = \(mass), r = \(Int(radius)), r_ref = \(Int(referenceRadius)), s = 1, krok 1/\(Int((1 / dt).rounded())), start \(Int(gap)) od ściany lewej, "
-                + "dociągana do niej gumką w nasyceniu (K = \(Int(stiffness)), D = 5, `maximumForce` F = \(Int(force)), cel 90 w głąb ściany), `damping` = 0, "
+                + "dociągana do niej gumką w nasyceniu (K = \(Int(stiffness)), D = 0, `maximumForce` F = \(Int(force)), cel 150 w głąb ściany), `damping` = 0, "
                 + "\(Int(seconds)) s. Ściśnięcie ε = δ / r.",
             "",
             "- maksimum: największe ε w przebiegu (uderzenie w ścianę),",

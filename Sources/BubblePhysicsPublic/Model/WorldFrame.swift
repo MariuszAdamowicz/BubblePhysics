@@ -94,7 +94,8 @@ public enum WorldEvent: Equatable, Sendable {
 public struct ObjectState: Equatable, Sendable {
     public enum Kind: Equatable, Sendable {
         /// Minimalna odległość konturu od środka po deformacji w bieżącym kroku; nie jest promieniem docelowym. Kontur pokazuje tylko
-        /// kontakty z bieżącego kroku, więc bez kontaktu wynosi tyle co promień bańki.
+        /// kontakty z bieżącego kroku, więc bez kontaktu wynosi tyle co promień bańki (wyjątek: w pierwszej ramce wyniku scalenia lub
+        /// podziału kontur pochodzi z zalążka).
         case bubble(effectiveRadius: Float)
         case polygon
         case circle(radius: Float)

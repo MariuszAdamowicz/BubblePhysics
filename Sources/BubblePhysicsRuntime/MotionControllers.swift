@@ -66,17 +66,16 @@ package enum MotionControllers {
             guard let target = object.playerDriveTarget else { object.velocity = .zero; break }
             let policy: BubbleDrivePolicy?
             if case .bubble(let bubble) = object.descriptor { policy = bubble.drivePolicy } else { policy = nil }
-            if let stiffness = policy?.bandStiffness {
+            if let policy, let stiffness = policy.bandStiffness {
                 // Gumka siłowa: prędkość wynika z siły i masy (v2.3.0). Siła globalna i pola działają jak w `.dynamic` (CD-D-10);
                 // `maximumForce` ogranicza samą gumkę. Tłumienie gumki −D · v jest całkowane wykładniczo, jak tłumienie materiału.
                 var band = (target - object.position) * stiffness
-                if let maximumForce = policy?.maximumForce {
+                if let maximumForce = policy.maximumForce {
                     let magnitude = length(band)
                     if magnitude > maximumForce { band *= maximumForce / magnitude }
                 }
                 let force = band + externalForce(id: id, at: object.position, fields: fields, globalForce: globalForce)
-                let damping = policy?.bandDamping ?? 0
-                object.velocity = (object.velocity + force / mass * dt) * exp(-damping * dt / mass)
+                object.velocity = (object.velocity + force / mass * dt) * exp(-policy.bandDamping * dt / mass)
             } else {
                 let delta = target - object.position
                 let speed = bubbleDriveSpeed(distance: length(delta), policy: policy)

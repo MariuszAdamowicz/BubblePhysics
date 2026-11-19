@@ -203,16 +203,14 @@ final class MotionCommandTests: XCTestCase {
         XCTAssertNil(BubbleDrivePolicy.standard.bandStiffness)
     }
 
-    /// Cel o ogromnej, ale skończonej składowej: w trybie gumki siła K·(cel − położenie) przepełniłaby `Float` (P-B-7),
-    /// w trybie prędkościowym cel jest tylko kierunkiem i zostaje przyjęty (bez zmian względem v2.2.0).
-    private static func wasRejected(_ frame: WorldFrame, _ token: TransactionToken) -> Bool {
-        frame.events.contains { event in
-            if case .transactionRejected(let rejected, _) = event { return rejected == token }
-            return false
+    private static func rejection(in frame: WorldFrame, for token: TransactionToken) -> TransactionRejection? {
+        for event in frame.events {
+            if case .transactionRejected(let rejected, let rejection) = event, rejected == token { return rejection }
         }
+        return nil
     }
 
-    private func isHugeTargetRejected(policy: BubbleDrivePolicy, update: Bool) async throws -> Bool {
+    private func hugeTargetRejection(policy: BubbleDrivePolicy, update: Bool) async throws -> TransactionRejection? {
         let world = try BubbleWorld(configuration: WorldConfiguration(simulationRegion:
             WorldRectangle(min: [-20,-20], max: [20,20])))
         let id = ObjectID(rawValue: 1)
@@ -232,20 +230,23 @@ final class MotionCommandTests: XCTestCase {
         }
         let frame = await world.advance(by: 1.0 / 60)
         XCTAssertNil(world.diagnostics.lastAdvanceIssue)
-        return Self.wasRejected(frame, token)
+        return Self.rejection(in: frame, for: token)
     }
 
+    /// Cel o ogromnej, ale skończonej składowej: w trybie gumki siła K·(cel − położenie) przepełniłaby `Float` (P-B-7),
+    /// w trybie prędkościowym cel jest tylko kierunkiem i zostaje przyjęty (bez zmian względem v2.2.0).
     func testHugeDriveTargetIsRejectedInBandModeAndAcceptedInVelocityMode() async throws {
         let band = try BubbleDrivePolicy(bandStiffness: 10)
         let velocity = try BubbleDrivePolicy()
-        let beginVelocity = try await isHugeTargetRejected(policy: velocity, update: false)
-        let updateVelocity = try await isHugeTargetRejected(policy: velocity, update: true)
-        let beginBand = try await isHugeTargetRejected(policy: band, update: false)
-        let updateBand = try await isHugeTargetRejected(policy: band, update: true)
-        XCTAssertTrue(beginBand, "beginPlayerDrive w trybie gumki")
-        XCTAssertTrue(updateBand, "updatePlayerDrive w trybie gumki")
-        XCTAssertFalse(beginVelocity, "beginPlayerDrive w trybie prędkościowym")
-        XCTAssertFalse(updateVelocity, "updatePlayerDrive w trybie prędkościowym")
+        let beginVelocity = try await hugeTargetRejection(policy: velocity, update: false)
+        let updateVelocity = try await hugeTargetRejection(policy: velocity, update: true)
+        let beginBand = try await hugeTargetRejection(policy: band, update: false)
+        let updateBand = try await hugeTargetRejection(policy: band, update: true)
+        let reason = TransactionRejectionReason.invalidValue(.valueOutOfRange("playerDrive.target"))
+        XCTAssertEqual(beginBand?.reason, reason, "beginPlayerDrive w trybie gumki")
+        XCTAssertEqual(updateBand?.reason, reason, "updatePlayerDrive w trybie gumki")
+        XCTAssertNil(beginVelocity, "beginPlayerDrive w trybie prędkościowym")
+        XCTAssertNil(updateVelocity, "updatePlayerDrive w trybie prędkościowym")
     }
 
     /// Rozsądny cel w trybie gumki nie jest odrzucany (limit nie jest zbyt ciasny).
@@ -261,9 +262,6 @@ final class MotionCommandTests: XCTestCase {
                 drivePolicy: BubbleDrivePolicy(bandStiffness: 10)))))
         let token = world.submit(WorldTransaction().beginPlayerDrive(id, target: [900_000, -900_000]))
         let frame = await world.advance(by: 1.0 / 60)
-        XCTAssertFalse(frame.events.contains { event in
-            if case .transactionRejected(let rejected, _) = event { return rejected == token }
-            return false
-        })
+        XCTAssertNil(Self.rejection(in: frame, for: token))
     }
 }

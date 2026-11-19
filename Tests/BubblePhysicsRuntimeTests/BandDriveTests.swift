@@ -11,7 +11,7 @@ final class BandDriveTests: XCTestCase {
     private let dt = CrowdScene.step
     private let radius: Float = 10
 
-    private func world(material: PhysicsMaterial) async throws -> (BubbleWorld, WorldTransaction) {
+    private func world(material: PhysicsMaterial) throws -> (BubbleWorld, WorldTransaction) {
         let world = try BubbleWorld(configuration: CrowdScene.configuration())
         var setup = try CrowdScene.resources(bubble: material)
         for wall in try CrowdScene.walls() { setup = setup.add(wall) }
@@ -21,10 +21,10 @@ final class BandDriveTests: XCTestCase {
     private func speed(_ state: ObjectState) -> Float { (state.velocity.x * state.velocity.x + state.velocity.y * state.velocity.y).squareRoot() }
 
     /// Prędkość ustalona bańki ciągniętej ze stałym naciągnięciem s wzdłuż +x: cel jest przesuwany co krok tak, by naciągnięcie
-    /// zostało równe s (G1-AC1). Zwraca prędkość po `seconds` oraz opublikowaną ramkę, żeby test mógł sprawdzić maksimum.
+    /// zostało równe s (G1-AC1). Zwraca prędkość po `seconds` oraz maksimum prędkości z całego przebiegu.
     private func steadyState(mass: Float, damping: Float, policy: BubbleDrivePolicy, stretch: Float,
                              seconds: Double = 4) async throws -> (speed: Float, peak: Float) {
-        let (world, base) = try await world(material: CrowdScene.bubblePhysics(damping: damping))
+        let (world, base) = try world(material: CrowdScene.bubblePhysics(damping: damping))
         let start = WorldPoint(-150, 0)
         _ = world.submit(try base
             .add(CrowdScene.bubble(1, at: start, radius: radius, mass: mass, drivePolicy: policy))
@@ -59,6 +59,17 @@ final class BandDriveTests: XCTestCase {
         XCTAssertLessThan(b.speed, a.speed, "tłumienie gumki zmniejsza prędkość ustaloną")
     }
 
+    /// P-B-1 dla m ≠ 1: tłumienie gumki −D · v daje v = K · s / (m · γ + D), więc całkowanie e^(−D·dt/m) różni się od
+    /// e^(−D·dt) (m = 2,5, D = 3, γ = 2: 7,5 wobec 4,8 dla błędnego wzoru).
+    func testSteadySpeedWithBandDampingAndMassOtherThanOne() async throws {
+        let stiffness: Float = 60, stretch: Float = 1, mass: Float = 2.5, gamma: Float = 2, bandDamping: Float = 3
+        let policy = try BubbleDrivePolicy(rigidifies: false, bandStiffness: stiffness, bandDamping: bandDamping)
+        let result = try await steadyState(mass: mass, damping: gamma, policy: policy, stretch: stretch)
+        let expected = stiffness * stretch / (mass * gamma + bandDamping)
+        XCTAssertEqual(result.speed, expected, accuracy: 0.05 * expected, "m = \(mass), D = \(bandDamping)")
+        XCTAssertLessThan(result.peak, 600)
+    }
+
     /// P-B-2: przy D = 0 stosunek prędkości ustalonych to odwrotność stosunku mas, w osobnych światach.
     func testSteadySpeedRatioIsTheInverseOfTheMassRatio() async throws {
         let policy = try BubbleDrivePolicy(rigidifies: false, bandStiffness: 60)
@@ -79,7 +90,7 @@ final class BandDriveTests: XCTestCase {
     /// Bańka kc = 0 przy lewej ścianie, ciągnięta w nią gumką `K` z limitem `maximumForce`; stan po 6 s.
     private func pressedAgainstTheWall(stretch: Float) async throws -> Rest {
         let compliance: Float = 0.01
-        let (world, base) = try await world(material: CrowdScene.softBubblePhysics(base: compliance))
+        let (world, base) = try world(material: CrowdScene.softBubblePhysics(base: compliance))
         let policy = try BubbleDrivePolicy(rigidifies: false, bandStiffness: 10, bandDamping: 5, maximumForce: 300)
         _ = world.submit(try CrowdScene.bandPressedBubble(base, 1, y: 0, radius: 20, stretch: stretch, policy: policy))
         var frame = await world.advance(by: dt)
@@ -119,7 +130,7 @@ final class BandDriveTests: XCTestCase {
     /// P-B-4 (G1-AC4): po `endPlayerDrive` bańka zachowuje prędkość z ostatniego kroku napędu i leci dalej (hamuje ją tylko
     /// tłumienie materiału, tu zerowe).
     func testReleasingTheDriveKeepsTheVelocity() async throws {
-        let (world, base) = try await world(material: CrowdScene.bubblePhysics(damping: 0))
+        let (world, base) = try world(material: CrowdScene.bubblePhysics(damping: 0))
         let policy = try BubbleDrivePolicy(rigidifies: false, bandStiffness: 60, bandDamping: 3)
         let start = WorldPoint(-150, 0)
         _ = world.submit(try base
@@ -151,7 +162,7 @@ final class BandDriveTests: XCTestCase {
     /// P-B-8 (G1-AC6): D = 0, γ = 0, cel stały, jeden krok na ramkę, bez kontaktów: Δv między ramkami N i N+1 równa się
     /// K · (target − achievedPoint) / m · dt, z `DriveFeedback` ramki N.
     func testVelocityChangeBetweenFramesFollowsTheFeedbackStretch() async throws {
-        let (world, base) = try await world(material: CrowdScene.bubblePhysics(damping: 0))
+        let (world, base) = try world(material: CrowdScene.bubblePhysics(damping: 0))
         let stiffness: Float = 30, mass: Float = 2
         let policy = try BubbleDrivePolicy(rigidifies: false, bandStiffness: stiffness)
         _ = world.submit(try base
