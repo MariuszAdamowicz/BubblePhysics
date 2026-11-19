@@ -79,7 +79,8 @@ Jedna zmiana po stronie hosta (gumka i jej walidacja) i trzy w kroku natywnym. K
     Shaders/
 +     NativePostSolveKernels.metal-source  # nativeUpdateContactRho z geometrii kroku; bez kNativeContactRhoSmoothing, (slice 2)
 +                                          #   nativePreviousContourRatio; nativeAccumulateContactPressure bez recovered
-+     NativeXPBDKernels.metal-source       # warm start i Jacobi zapisują contactCorrection; nativeUpdateVelocities: korekta XPBD + reszta·s; damping na kontakt (slice 1)
++     NativeXPBDKernels.metal-source       # warm start i Jacobi zapisują contactCorrection; nativeUpdateVelocities: korekta XPBD + reszta·s; damping na kontakt;
++                                          #   limit λ pary tylko dla rho.z = 0 w nativePrepareSolverContacts i nativeUpdateContactMultipliers (slice 1)
 +     NativeGeometryKernels.metal-source   # komentarz NativeBubble.contact (slice 1), nativeSeedStructuralContours (slice 2)
   Sources/BubblePhysicsNativeMetalDiagnostics/
 +   ReferenceSolverInputAdapter.swift      # bez przekazania deformationRecoveryRate (slice 2)
@@ -95,7 +96,8 @@ Jedna zmiana po stronie hosta (gumka i jej walidacja) i trzy w kroku natywnym. K
 +   ContactComplianceTests.swift     # nagłówek bez „Jacobiego”, granica liniowości przeliczona (slice 1)
 +   ContactRhoHistoryTests.swift     # NEW: świat A vs świat B (P-B-11) (slice 2)
 +   RhoGridReportTests.swift         # NEW: raport siatki c₀ × kc (opt-in, zapis do docs/benchmarks) (slice 3)
-+   CrowdCompressionTests.swift      # NEW test: najmniejsza bańka tłoku dociśnięta siłą 5 000 do sąsiadki (slice 1)
++   CrowdCompressionTests.swift      # NEW test: miękka para rozsuwa się z zawierania bez skoku > 0,25·min r (slice 1)
++   PairLambdaCeilingProbeTests.swift  # łańcuch: równowaga przy każdej sile, bez opt-in; pchnięcie wprost bez zmian (slice 1)
     CrowdSceneSupport.swift          # sceny dociśnięcia do ściany (pressedBubble, wallDepth) — reużywane
   Tests/BubblePhysicsNativeMetalTests/
 +   NativeMetalShaderABITests.swift  # testHostComputesContactComplianceForBubbleRecord: lane .z = ζ_c także dla bańki twardej (slice 1)
@@ -144,9 +146,12 @@ Krok natywny (`NativeMetalSolver.swift:605-792`). Przeguby i bryły działają w
 -nativeUpdateContactRho(bubbles, cache, control, contactControl, contour, previousBubbles, previousDeformation, previousCounts, structuralHeaders)
 +nativeUpdateContactRho(bubbles, segments, cache, control, contactControl)    # ściana: clamp(d/r); para: podział c z ρ rekordu
  nativeEmitAdjacency → nativePrepareSolverContacts                           # rho.z = c_a(ρ_a) + c_b(ρ_b), bez zmian
++    └── ograniczenie warm startu pary: rho.z > 0 → r / (m⁻¹ · stopień) z v2.1.0; rho.z = 0 → nativePairLambdaLimit (CD-D-17)
  nativeApplyWarmStart                                                        # solverPositionsPing = predicted + warm start
 +    └── contactCorrection[i] = correction                                   # warm start to też korekta kontaktów XPBD
  for 0..<solverIterationCount {
+     nativeUpdateContactMultipliers
++        └── min(next, nativePairLambdaLimit) tylko dla pary z rho.z = 0     # para miękka: bez limitu (CD-D-17)
      nativeSolveJacobi(input → output)
 +        └── contactCorrection[i] += correction                              # ta sama wartość, którą kernel już liczy
      swap, przeguby, bryły
@@ -205,7 +210,8 @@ Dynamika kontaktu miękkiego (G4). Warunki z [G4-AC1](change-design.md#g4-ac1): 
 | <a id="p-b-21"></a>P-B-21 | Wariant pary: dwie masy ściskane polami kierunkowymi z filtrem ID | jak [P-B-20](#p-b-20), ω z masy zredukowanej, ζ_c średnie | [G4-AC1](change-design.md#g4-ac1), [CD-D-6](change-design.md#cd-d-6) |
 | <a id="p-b-22"></a>P-B-22 | ζ_c = 0, puszczenie z wychylenia | co najmniej dwa przestrzelenia równowagi | [G4-AC2](change-design.md#g4-ac2) |
 | <a id="p-b-23"></a>P-B-23 | Kontakty twarde, bańki twarde | tłumienie `contactDamping` i korekta ·s jak w v2.2.0; testy kontaktów twardych bez zmian | [G4-AC3](change-design.md#g4-ac3), [CD-D-7](change-design.md#cd-d-7) |
-| <a id="p-b-29"></a>P-B-29 | Najmniejsza bańka tłoku (r = 12, m = 0,36) dociśnięta siłą 5 000 (`MotorDrive`, górna siła gumki z [CD-D-9](change-design.md#cd-d-9)) do miękkiej sąsiadki opartej o ścianę | po uspokojeniu kontury nie przenikają się ±0,5; limit λ pary (`nativePairLambdaLimit`, XPBD:336-340) traci składnik zbliżenia, gdy bańki w spoczynku stoją | [G3-AC2](change-design.md#g3-ac2) |
+| <a id="p-b-29"></a>P-B-29 | Łańcuch: sąsiadka r = 20 przy ścianie, bańka środkowa r = 12, m = 0,36 bez własnej siły, pchacz pchany `MotorDrive` siłą 2 000 / 3 500 / 4 500 / 6 000 | nakładanie pary środkowa–sąsiadka = (c_a + c_b)·F ±10 % przy każdej sile, jak bez `pairCorrectionLimit` (sonda c11034b: dziś przy 4 500 i 6 000 jest 19,0 i 22,0) | [G4-AC6](change-design.md#g4-ac6), [CD-D-17](change-design.md#cd-d-17) |
+| <a id="p-b-30"></a>P-B-30 | Bańka r = 12 w całości wewnątrz miękkiej r = 40, oba c₀ = 1e-3 | rozsuwa się bez odrzuconego kroku, przesunięcie środka w kroku ≤ 3; `testHardCrowdBalance1SeparatesAllContainedPairs` bez zmian | [G4-AC7](change-design.md#g4-ac7), [CD-D-17](change-design.md#cd-d-17) |
 | <a id="p-b-24"></a>P-B-24 | `PhysicsMaterial` z ζ_c < 0 / ∞; materiał `.rigid` z ζ_c ≠ 1 | `valueOutOfRange`; domyślnie 1 | [G4-AC4](change-design.md#g4-ac4), [CD-D-15](change-design.md#cd-d-15) |
 
 Zgodność (G5).
@@ -225,7 +231,7 @@ Niezmiennik zastępowanego kodu: przy `bandStiffness == nil` napęd liczy bit w 
 |---|---|---|
 | unit (model, bez GPU) — `BubblePhysicsPublicTests` | walidacja pól polityki i materiału | [P-B-5](#p-b-5), [P-B-24](#p-b-24) |
 | unit (runtime) — `MotionControllersPrepareTests`, `TransactionStagerTests`, `MotionCommandTests` | całkowanie siły gumki, sumowanie sił, odrzucenia transakcji i celu | [P-B-6](#p-b-6), [P-B-7](#p-b-7), [P-B-9](#p-b-9) |
-| integracja przez publiczny świat (Metal) — `BubblePhysicsRuntimeTests` | dynamika gumki, kontaktu i historii ρ end to end | [P-B-1](#p-b-1)–[P-B-4](#p-b-4), [P-B-8](#p-b-8), [P-B-10](#p-b-10), [P-B-11](#p-b-11), [P-B-19](#p-b-19)–[P-B-22](#p-b-22), [P-B-25](#p-b-25), [P-B-29](#p-b-29) |
+| integracja przez publiczny świat (Metal) — `BubblePhysicsRuntimeTests` | dynamika gumki, kontaktu i historii ρ end to end | [P-B-1](#p-b-1)–[P-B-4](#p-b-4), [P-B-8](#p-b-8), [P-B-10](#p-b-10), [P-B-11](#p-b-11), [P-B-19](#p-b-19)–[P-B-22](#p-b-22), [P-B-25](#p-b-25), [P-B-29](#p-b-29), [P-B-30](#p-b-30) |
 | jądro natywne — `BubblePhysicsNativeMetalDiagnosticsTests`, `BubblePhysicsNativeMetalTests` | ρ rekordu, kontur, ABI, tłumienie twarde | [P-B-12](#p-b-12), [P-B-13](#p-b-13), [P-B-15](#p-b-15)–[P-B-17](#p-b-17), [P-B-23](#p-b-23) |
 | raport (opt-in, zapis pliku) | siatka twardnienia dla autora, bez progu | [P-B-14](#p-b-14) |
 | static check (grep, diff dokumentacji) | usunięty kod i dokumentacja | [P-B-18](#p-b-18), [P-B-28](#p-b-28) |
@@ -239,7 +245,7 @@ Niezmiennik zastępowanego kodu: przy `bandStiffness == nil` napęd liczy bit w 
 
 | Slice | Name | Delivers | Seams | Behaviours | Status |
 |-------|------|----------|-------|------------|--------|
-| 1 | Fizyczna dynamika kontaktu miękkiego | ugięcie kontaktu miękkiego c·F, bańka w spoczynku stoi, tłumienie z `contactDampingRatio` (G4, nagłówek `ContactComplianceTests` z G5-AC2) | `PhysicsMaterial.contactDampingRatio`, `NativePublicProperties.contact`, bufor `contactCorrection` w warm starcie i Jacobim, `nativeUpdateVelocities`, `nativeDampContactNormalMotion`, sonda, `ContactDynamicsTests`, `CrowdCompressionTests` | [P-B-19](#p-b-19)–[P-B-25](#p-b-25), [P-B-29](#p-b-29) | todo |
+| 1 | Fizyczna dynamika kontaktu miękkiego | ugięcie kontaktu miękkiego c·F, bańka w spoczynku stoi, tłumienie z `contactDampingRatio` (G4, nagłówek `ContactComplianceTests` z G5-AC2) | `PhysicsMaterial.contactDampingRatio`, `NativePublicProperties.contact`, bufor `contactCorrection` w warm starcie i Jacobim, `nativeUpdateVelocities`, `nativeDampContactNormalMotion`, limit λ pary tylko dla par twardych, sondy, `ContactDynamicsTests`, `CrowdCompressionTests` | [P-B-19](#p-b-19)–[P-B-25](#p-b-25), [P-B-29](#p-b-29), [P-B-30](#p-b-30) | todo |
 | 2 | ρ bez opóźnienia i kontur z bieżących kontaktów | sprężyna twardnieje w tym samym kroku, kontur bez pamięci poprzedniej klatki (G2-AC1, G2-AC2, G3) | `nativeUpdateContactRho`, `nativeAccumulateContactPressure`, usunięcie `deformationRecoveryRate`, `ReferenceSolverInputAdapter`, testy ρ i konturu | [P-B-11](#p-b-11)–[P-B-13](#p-b-13), [P-B-15](#p-b-15)–[P-B-18](#p-b-18) | unplanned |
 | 3 | Gumka siłowa i wydanie | gra chwyta bańkę siłą; raport siatki, perf guard, przewodnik, CHANGELOG 2.3.0 (G1, G2-AC3, G5-AC1, G5-AC3, G5-AC4, końcowe G5-AC2) | `BubbleDrivePolicy`, `MotionControllers`, `TransactionStager`, `BandDriveTests`, `RhoGridReportTests`, dokumentacja | [P-B-1](#p-b-1)–[P-B-10](#p-b-10), [P-B-14](#p-b-14), [P-B-26](#p-b-26)–[P-B-28](#p-b-28) | unplanned |
 
@@ -253,10 +259,11 @@ Wycinek 1 sam naprawia model kontaktu miękkiego (ugięcie c·F zamiast 3,85·c�
 2. Walidować `contactDampingRatio` w `PhysicsMaterial.init` według wzorca `BubbleContactCompliance.validate(for:)`, pokrywając [P-B-24](#p-b-24) · verify: `swift test --filter ModelValidationTests`
 3. Przepisać `ContactVelocityCorrectionProbeTests` na oczekiwania [P-B-19](#p-b-19) i napisać `ContactDynamicsTests` (ściana; para z dwoma polami `.directional` filtrowanymi na ID; ζ_c = 0, 0,2 i 1) dla [P-B-20](#p-b-20)–[P-B-22](#p-b-22) · verify: `swift build --build-tests && ! swift test --filter "ContactVelocityCorrectionProbeTests|ContactDynamicsTests"`
 4. Dodać parametr `dampingRatio` do `NativePublicProperties.contact(of:override:radius:)` i wpisywać ζ_c każdej bańki do lane `.z`, także twardej; poprawić komentarze `contact` w `NativeMetalBufferLayout.swift` i `NativeGeometryKernels.metal-source` oraz oczekiwanie `testHostComputesContactComplianceForBubbleRecord` · verify: `grep -q "contactDampingRatio" Sources/BubblePhysicsNativeMetal/NativePublicWorld.swift && swift test --filter NativeMetalShaderABITests`
-5. Dodać bufor `contactCorrection` (`SIMD2<Float>`), który `nativeApplyWarmStart` inicjalizuje swoim `correction`, a `nativeSolveJacobi` powiększa o swoje `correction`, oraz rozdział korekt w `nativeUpdateVelocities` dla `contact.x > 0`, z bańką twardą bez zmian, pokrywając [P-B-19](#p-b-19) i [P-B-23](#p-b-23) · verify: `swift test --filter "ContactVelocityCorrectionProbeTests|ContactComplianceTests.testHard|CrowdCompressionTests.testHard"`
-6. Przenieść czynnik tłumienia `nativeDampContactNormalMotion` do pętli po kontaktach (miękki: 2·ζ_c·ω ze średnią ζ_c pary; twardy: `contactDamping`), pokrywając [P-B-20](#p-b-20)–[P-B-23](#p-b-23) · verify: `swift test --filter "ContactDynamicsTests|ContactVelocityCorrectionProbeTests|ContactComplianceTests.testHard|CrowdCompressionTests.testHard"`
-7. Napisać w `CrowdCompressionTests` test `testSmallestCrowdBubblePushedWith5000DoesNotPenetrateItsNeighbour` dla [P-B-29](#p-b-29). Jeśli nie przechodzi, zatrzymać implement: limit λ par miękkich to zmiana projektu i wraca do `change-design` · verify: `swift test --filter CrowdCompressionTests.testSmallestCrowdBubble`
-8. Przepisać nagłówek `ContactComplianceTests` bez współczynnika 3,85 i „Jacobiego”, przeliczyć granicę liniowości F ([P-B-25](#p-b-25)) i zmienić oczekiwania testów miękkich zmienionych przez G4 (np. `NativeMetalRestDampingTests`, `CrowdCompressionTests`), każdy z powodem w commicie i we wpisie `Testy o zmienionych oczekiwaniach (slice 1):` w tym pliku, bez zmian w testach kontaktów twardych · verify: `! grep -q "Jacobiego" Tests/BubblePhysicsRuntimeTests/ContactComplianceTests.swift && grep -q "^Testy o zmienionych oczekiwaniach (slice 1):" docs/sdlc/changes/2026-11-19-engine-v2-3-0/plan.md && swift build --build-tests && swift test`
+5. Dodać bufor `contactCorrection` (`SIMD2<Float>`), który `nativeApplyWarmStart` inicjalizuje swoim `correction`, a `nativeSolveJacobi` powiększa o swoje `correction`, oraz rozdział korekt w `nativeUpdateVelocities` dla `contact.x > 0`, z bańką twardą bez zmian, pokrywając [P-B-19](#p-b-19) i [P-B-23](#p-b-23) · verify: `swift test --filter "ContactVelocityCorrectionProbeTests|CrowdCompressionTests.testHard"`
+6. Przenieść czynnik tłumienia `nativeDampContactNormalMotion` do pętli po kontaktach (miękki: 2·ζ_c·ω ze średnią ζ_c pary; twardy: `contactDamping`), pokrywając [P-B-20](#p-b-20)–[P-B-23](#p-b-23) · verify: `swift test --filter "ContactDynamicsTests|ContactVelocityCorrectionProbeTests|CrowdCompressionTests.testHard"`
+7. Przepisać `PairLambdaCeilingProbeTests.testChain…` na [P-B-29](#p-b-29) (równowaga przy każdej sile, bez bramki `BUBBLE_PHYSICS_PAIR_CEILING_PROBE`; pchnięcie wprost zostaje jako test bez bramki) i napisać w `CrowdCompressionTests` test `testSoftContainedPairSeparatesWithoutAJump` dla [P-B-30](#p-b-30) · verify: `swift build --build-tests && ! swift test --filter PairLambdaCeilingProbeTests.testChain`
+8. Ograniczyć `nativePairLambdaLimit` do par z `rho.z == 0` w `nativePrepareSolverContacts` (para miękka: ograniczenie warm startu r / (m⁻¹ · stopień) z v2.1.0) i w `nativeUpdateContactMultipliers` (para miękka bez limitu), pokrywając [P-B-29](#p-b-29) i [P-B-30](#p-b-30). Jeśli [P-B-30](#p-b-30) nie przechodzi, zatrzymać implement: limit par miękkich wraca do `change-design` · verify: `swift test --filter "PairLambdaCeilingProbeTests|CrowdCompressionTests.testSoftContainedPair|CrowdCompressionTests.testHard|NativeMetalXPBDTests"`
+9. Przepisać nagłówek `ContactComplianceTests` bez współczynnika 3,85 i „Jacobiego”, przeliczyć granicę liniowości F ([P-B-25](#p-b-25)) i zmienić oczekiwania testów miękkich zmienionych przez G4 (np. `NativeMetalRestDampingTests`, `CrowdCompressionTests`, oraz trzy testy par twarda–miękka `ContactComplianceTests.testHard*`, w których ugina się miękka bańka: przy c₀ = 1e-3 i F = 300 δ spada z ok. 1,16 do 0,3, więc progi `wallDepth > 0.5` i `softRadius < 19.7` trzeba przeliczyć albo zwiększyć c₀ ok. 3,85×), każdy z powodem w commicie i we wpisie `Testy o zmienionych oczekiwaniach (slice 1):` w tym pliku, bez zmian w testach kontaktów twardych · verify: `! grep -q "Jacobiego" Tests/BubblePhysicsRuntimeTests/ContactComplianceTests.swift && grep -q "^Testy o zmienionych oczekiwaniach (slice 1):" docs/sdlc/changes/2026-11-19-engine-v2-3-0/plan.md && swift build --build-tests && swift test`
 
 ## Deviations from Design
 
@@ -264,6 +271,7 @@ Wycinek 1 sam naprawia model kontaktu miękkiego (ugięcie c·F zamiast 3,85·c�
 |----|------|--------|-----------------|------|
 | [CD-D-16](change-design.md#cd-d-16) | change | approved | yes, Architecture §4a i CD-D-16 edited 2026-11-19 | Projekt każe przechwycić pozycje `nativeCapturePositions` „po iteracjach Jacobiego, przed przegubami, bryłami”, ale przeguby i bryły działają w tej samej pętli (`NativeMetalSolver.swift:723-751`), więc takiej chwili nie ma. Plan sumuje przesunięcie warm startu i samego Jacobiego w każdej iteracji w buforze `contactCorrection`, zapisywanym przez `nativeApplyWarmStart` i `nativeSolveJacobi` (bez nowego kernela i dispatchu), i liczy X/dt + (final − predicted − X)·s/dt. To ten sam wzór co w projekcie przy solved = predicted + X, z korektami przegubów i brył ze skalą s, jak chciał projekt. |
 | [G2-AC3](change-design.md#g2-ac3) | change | approved | yes, G2-AC3 i Components edited 2026-11-19 | Raport siatki powstaje w teście opt-in `RhoGridReportTests` w `BubblePhysicsRuntimeTests` przez publiczny świat, a nie jako scenariusz w `BubblePhysicsNativeMetalDiagnostics`: ten moduł nie zależy od runtime, w którym działa gumka (`Package.swift:49`), a żaden kod w repo nie zapisuje dziś raportów do `docs/benchmarks/`. |
+| [CD-D-17](change-design.md#cd-d-17) | change | approved | yes, G4-AC6, G4-AC7, Architecture §4c, Components, CD-D-17 i Key facts edited 2026-11-19 | Przegląd planu przewidział sufit siły pary po CD-D-16, a sonda `PairLambdaCeilingProbeTests` (c11034b) potwierdziła go tylko dla siły przenoszonej przez bańkę środkową: ok. 3 888 dla r = 12, m = 0,36. Pierwotny test P-B-29 pchał małą bańkę wprost i by tego nie wykrył; teraz to łańcuch. Autor wybrał (a): limit λ pary tylko dla par twardych, z bramką P-B-30 dla miękkiego zawierania. |
 
 ## Replan log
 
