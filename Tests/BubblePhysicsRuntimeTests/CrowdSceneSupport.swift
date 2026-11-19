@@ -64,10 +64,12 @@ enum CrowdScene {
 
     static func bubble(_ value: UInt64, at position: WorldPoint, radius: Float, velocity: WorldPoint = .zero,
                        mass: Float? = nil, interest: EventInterest = [.didAdd, .didExitSimulationRegion],
-                       material: PhysicsMaterialID? = nil, contactCompliance: Float? = nil) throws -> WorldObject {
+                       material: PhysicsMaterialID? = nil, contactCompliance: Float? = nil,
+                       drivePolicy: BubbleDrivePolicy = .standard) throws -> WorldObject {
         .bubble(try BubbleDescriptor(id: id(value), position: position, velocity: velocity, targetRadius: radius,
                                      mass: mass ?? radius * radius / 400, physicsMaterialID: material ?? bubbleMaterial,
-                                     renderMaterialID: style, eventInterest: interest, contactCompliance: contactCompliance))
+                                     renderMaterialID: style, eventInterest: interest, drivePolicy: drivePolicy,
+                                     contactCompliance: contactCompliance))
     }
 
     /// Świat z ramą ścian i zasobami, po jednym kroku przyjmującym przygotowanie sceny.
@@ -128,6 +130,18 @@ enum CrowdScene {
             .add(try bubble(value, at: position, radius: radius, mass: mass, material: material,
                             contactCompliance: contactCompliance))
             .setMotorDrive(id(value), drive: try MotorDrive(force: [side.sign * force, 0]))
+    }
+
+    /// Bańka przy ścianie chwycona gumką zamiast `MotorDrive` (v2.3.0, G1-AC3): środek stoi w odległości r od płaszczyzny ściany,
+    /// a cel leży o `stretch` głębiej w ścianie. Siła gumki to K · naciągnięcie, obcięta do `maximumForce`; w spoczynku wgniecenie
+    /// wynosi δ = c · F. Cel zostaje w miejscu, więc naciągnięcie maleje o samo wgniecenie (zaniedbywalne wobec `stretch`).
+    static func bandPressedBubble(_ transaction: WorldTransaction, _ value: UInt64, y: Float, radius: Float, stretch: Float,
+                                  policy: BubbleDrivePolicy, side: WallSide = .left, mass: Float = 1,
+                                  material: PhysicsMaterialID? = nil) throws -> WorldTransaction {
+        let position = WorldPoint(side.sign * (interiorHalfSize.x - radius), y)
+        return transaction
+            .add(try bubble(value, at: position, radius: radius, mass: mass, material: material, drivePolicy: policy))
+            .beginPlayerDrive(id(value), target: WorldPoint(position.x + side.sign * stretch, y))
     }
 
     /// Wgniecenie δ = r − d, gdzie d to odległość środka od płaszczyzny ściany (może być ujemne, gdy bańka nie dotyka ściany).
