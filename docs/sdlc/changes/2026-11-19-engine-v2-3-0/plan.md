@@ -73,7 +73,7 @@ Jedna zmiana po stronie hosta (gumka i jej walidacja) i trzy w kroku natywnym. K
 +   WorldFrame.swift                 # komentarz effectiveRadius: minimum odległości konturu od środka (slice 3)
   Sources/BubblePhysicsRuntime/
 +   MotionControllers.swift          # gałąź siłowa .playerDriven; siła globalna i pola jak w .dynamic (slice 3)
-+   TransactionStager.swift          # validateBandStability przy add/replace/merge/split; requireDriveMagnitude celu gumki (slice 3)
++   TransactionStager.swift          # K·dt²/m < 1 w gałęzi .bubble prywatnego validate(_:) (add/replace/merge/split); requireDriveMagnitude celu gumki (slice 3)
   Sources/BubblePhysicsNativeMetal/
 +   NativePublicWorld.swift          # NativePublicProperties.contact(of:override:radius:dampingRatio:) wpisuje ζ_c do lane .z zawsze (także bańka twarda) (slice 1);
 +                                    #   var cachedContacts (internal, typ rekordu jest internal; testy przez @testable) — szew rekordów cache (slice 2)
@@ -93,6 +93,8 @@ Jedna zmiana po stronie hosta (gumka i jej walidacja) i trzy w kroku natywnym. K
   Tests/BubblePhysicsPublicTests/
 +   ModelValidationTests.swift       # walidacja contactDampingRatio (slice 1)
 +   MotionCommandTests.swift         # walidacja pól gumki, limit celu w trybie gumki (slice 3)
++   MigrationGuideTests.swift        # :5 i :107 — README podaje wersję 2.3.0 (slice 3)
+    IntegrationGuideTests.swift      # pilnuje bloków guide-region przewodnika; nowy opis gumki to proza, bez nowego bloku
   Tests/BubblePhysicsRuntimeTests/
 +   BandDriveTests.swift             # NEW: G1 przez publiczny świat (prędkość ustalona, masy, ściana, puszczenie, ramki) (slice 3)
 +   MotionControllersPrepareTests.swift  # gałąź siłowa: siła globalna i pola, tłumienie gumki (slice 3)
@@ -105,7 +107,8 @@ Jedna zmiana po stronie hosta (gumka i jej walidacja) i trzy w kroku natywnym. K
 +   RhoGridReportTests.swift         # NEW: raport siatki c₀ × kc (opt-in, zapis do docs/benchmarks) (slice 3)
 +   CrowdCompressionTests.swift      # NEW test: miękka para wychodzi z zawierania bez psucia świata, przeszkoda na torze wystrzału (CD-D-18) (slice 1)
 +   PairLambdaCeilingProbeTests.swift  # łańcuch: równowaga przy każdej sile, bez opt-in; pchnięcie wprost bez zmian (slice 1)
-    CrowdSceneSupport.swift          # sceny dociśnięcia do ściany (pressedBubble, wallDepth) — reużywane
++   CrowdSceneSupport.swift          # sceny dociśnięcia do ściany (pressedBubble, wallDepth) — reużywane;
++                                    #   CrowdScene.bubble dostaje parametr drivePolicy, nowy bandPressedBubble: bańka przy ścianie z gumką zamiast MotorDrive (slice 3)
   Tests/BubblePhysicsNativeMetalTests/
 +   NativeMetalShaderABITests.swift  # testHostComputesContactComplianceForBubbleRecord: lane .z = ζ_c także dla bańki twardej (slice 1)
 +   NativeMetalStructuralOperationTests.swift  # wynik scalenia z ID źródła: ρ_prev = 1 w pierwszym kroku; kontur z seeda tylko w pierwszej klatce (slice 2)
@@ -119,9 +122,12 @@ Jedna zmiana po stronie hosta (gumka i jej walidacja) i trzy w kroku natywnym. K
 +   AcceptanceEquivalenceTests.swift       # hashe konturu (i stanu, jeśli się zmienią) na Apple M1 Pro przeliczone (slice 2)
 +   AcceptanceRenderEquivalenceTests.swift # hashe pikseli przeliczone (slice 2)
   docs/
-+   integration-guide.md             # tryb gumki, ζ_c, zakres K_band, rigidifies: false, migracja z maximumSpeed (slice 3)
++   integration-guide.md             # tryb gumki, ζ_c, zakres K_band, rigidifies: false, migracja z maximumSpeed, wystrzał z zawartej pary (CD-D-18);
++                                    #   :97 bez prędkości spoczynkowej, ugięcie c·F i przestrojenie c₀ ok. 3,85× (CD-D-16) (slice 3)
 +   benchmarks/v2.3.0-rho-grid-<data>.md  # raport siatki (P-B-14) (slice 3)
-+ CHANGELOG.md                       # ## 2.3.0 (slice 3)
++ CHANGELOG.md                       # ## 2.3.0 dla całej zmiany: gumka, contactDampingRatio, c·F, ρ i kontur bez historii, limit λ tylko par twardych;
++                                    #   wystrzał z zawartej pary miękkiej do maximumLinearSpeed, skok pozycji w kroku wyjścia bez limitu, unikanie głębokich zawierań (CD-D-18) (slice 3)
++ README.md                          # :5 „Wersja 2.3.0.” (slice 3)
 ```
 
 Krok hosta. Gałąź siłowa zastępuje nadpisanie prędkości tylko przy `bandStiffness != nil`:
@@ -131,11 +137,11 @@ Krok hosta. Gałąź siłowa zastępuje nadpisanie prędkości tylko przy `bandS
  └── stepLoop, na krok stały
      ├── TransactionStager.stageBatch → StagingContext.apply
      │   ├── .add / .replace       → validate, validatePlacement, validateWorstAlpha
-+    │   │                         → validateBandStability(object)            # K·dt²/m < 1, masa z BubbleDescriptor.mass
-     │   ├── .mergeBubbles → merge → validateWorstAlpha(merged)
-+    │   │                         → validateBandStability(merged)
-     │   ├── .splitBubble  → split → validateWorstAlpha(a), (b)
-+    │   │                         → validateBandStability(a), (b)            # podział zmniejsza masę
+     │   ├── .mergeBubbles → merge → add(descriptor) → validate               # TransactionStager.swift:677
+     │   ├── .splitBubble  → split → add(a), add(b) → validate; validate(a), (b)   # :701, :708; podział zmniejsza masę
+     │   ├── validate(_ object:)                                             # :511, gałąź .bubble
++    │   │   └── bandStiffness = K → K·dt²/m < 1, inaczej valueOutOfRange("drive.bandStiffness")
++    │   │                           # dt = configuration.fixedTimeStep, m = BubbleDescriptor.mass
      │   └── .beginPlayerDrive / .updatePlayerDrive → requireFinite(target)
 +    │                             → requireDriveMagnitude(target)           # tylko gdy drivePolicy.bandStiffness != nil
      └── NativeCompleteStepper.completeStep → performStep
@@ -199,7 +205,7 @@ Gumka (G1). Kryteria bezwzględne ([G1-AC3](change-design.md#g1-ac3)) wymagają 
 | <a id="p-b-2"></a>P-B-2 | Dwie bańki o różnych masach, to samo s, D = 0, osobne światy | stosunek prędkości = odwrotność stosunku mas ±10 % | [G1-AC2](change-design.md#g1-ac2) |
 | <a id="p-b-3"></a>P-B-3 | Bańka kc = 0 dociśnięta gumką do ściany, pięć naciągnięć | poniżej limitu ugięcie/c = K·s ±10 %; powyżej limitu ta sama równowaga ±0,5 jedn. | [G1-AC3](change-design.md#g1-ac3) |
 | <a id="p-b-4"></a>P-B-4 | `endPlayerDrive` po napędzie gumką | prędkość w ramce po puszczeniu ≈ prędkość przed | [G1-AC4](change-design.md#g1-ac4) |
-| <a id="p-b-5"></a>P-B-5 | `BubbleDrivePolicy` z K ≤ 0 / ∞, D < 0 / ∞, maximumForce ≤ 0 / ∞, D ≠ 0 lub maximumForce bez K | `valueOutOfRange` z nazwą pola (`drive.bandStiffness`, `drive.bandDamping`, `drive.maximumForce`) | [G1-AC5](change-design.md#g1-ac5) |
+| <a id="p-b-5"></a>P-B-5 | `BubbleDrivePolicy` z K ≤ 0 / ∞, D < 0 / ∞, maximumForce ≤ 0 / ∞, D ≠ 0 lub maximumForce bez K | `valueOutOfRange` z nazwą pola (`drive.bandStiffness`, `drive.bandDamping`, `drive.maximumForce`), także dla ∞ i ≤ 0 (nie `requirePositive`, które rzuca `nonFiniteValue` / `nonPositiveValue`) | [G1-AC5](change-design.md#g1-ac5) |
 | <a id="p-b-6"></a>P-B-6 | Wstawienie, zamiana, scalenie, podział dają bańkę z K·dt²/m ≥ 1 | transakcja odrzucona `valueOutOfRange("drive.bandStiffness")`, świat bez zmian | [G1-AC5](change-design.md#g1-ac5), [CD-D-9](change-design.md#cd-d-9) |
 | <a id="p-b-7"></a>P-B-7 | `beginPlayerDrive` / `updatePlayerDrive` w trybie gumki z celem 1e38 | odrzucone jak siła `MotorDrive`; w trybie prędkościowym bez zmian | [G1-AC5](change-design.md#g1-ac5) |
 | <a id="p-b-8"></a>P-B-8 | Gumka, D = 0, γ = 0, cel stały, jeden krok na ramkę | Δv między ramkami = K·(target − achievedPoint)/m·dt z `DriveFeedback` ramki N, ±1 % | [G1-AC6](change-design.md#g1-ac6) |
@@ -239,7 +245,7 @@ Zgodność (G5).
 | <a id="p-b-25"></a>P-B-25 | Nagłówek `ContactComplianceTests` | bez współczynnika 3,85 i „Jacobiego”; granica liniowości F przeliczona dla nowej dynamiki | [G5-AC2](change-design.md#g5-ac2) |
 | <a id="p-b-26"></a>P-B-26 | Cały zestaw na końcu zmiany | `swift test` przechodzi; opis PR wymienia każdy test o zmienionych oczekiwaniach z powodem | [G5-AC2](change-design.md#g5-ac2) |
 | <a id="p-b-27"></a>P-B-27 | Perf guard | `swift run -c release BubblePhysicsPerfGuard` przechodzi z progami `docs/benchmarks/perf-guard.json` | [G5-AC3](change-design.md#g5-ac3) |
-| <a id="p-b-28"></a>P-B-28 | Dokumentacja | komentarz `effectiveRadius` bez „odbudowy”; przewodnik: gumka, ζ_c, zakres K_band, `rigidifies: false`, migracja; CHANGELOG 2.3.0 | [G5-AC4](change-design.md#g5-ac4) |
+| <a id="p-b-28"></a>P-B-28 | Dokumentacja | komentarz `effectiveRadius` bez „odbudowy”; przewodnik: gumka, ζ_c, zakres K_band, `rigidifies: false`, migracja, wystrzał z zawartej pary miękkiej i granica `maximumLinearSpeed`, ugięcie c·F bez prędkości spoczynkowej; CHANGELOG 2.3.0, także z wystrzałem z zawartej pary miękkiej, granicą `maximumLinearSpeed` (nie ogranicza skoku pozycji w kroku wyjścia, CCD nie chroni przed przejściem przez inną bańkę) i unikaniem głębokich zawierań; README „Wersja 2.3.0.” | [G5-AC4](change-design.md#g5-ac4) |
 
 Niezmiennik zastępowanego kodu: przy `bandStiffness == nil` napęd liczy bit w bit jak w v2.2.0 ([P-B-10](#p-b-10)), a bańka twarda dostaje tę samą korektę prędkości ([P-B-23](#p-b-23)).
 
@@ -266,7 +272,7 @@ Niezmiennik zastępowanego kodu: przy `bandStiffness == nil` napęd liczy bit w 
 |-------|------|----------|-------|------------|--------|
 | 1 | Fizyczna dynamika kontaktu miękkiego | ugięcie kontaktu miękkiego c·F, bańka w spoczynku stoi, tłumienie z `contactDampingRatio` (G4, nagłówek `ContactComplianceTests` z G5-AC2) | `PhysicsMaterial.contactDampingRatio`, `NativePublicProperties.contact`, bufor `contactCorrection` w warm starcie i Jacobim, `nativeUpdateVelocities`, `nativeDampContactNormalMotion`, limit λ pary tylko dla par twardych, sondy, `ContactDynamicsTests`, `CrowdCompressionTests` | [P-B-19](#p-b-19)–[P-B-25](#p-b-25), [P-B-29](#p-b-29), [P-B-30](#p-b-30) | done |
 | 2 | ρ bez opóźnienia i kontur z bieżących kontaktów | sprężyna twardnieje w tym samym kroku, kontur bez pamięci poprzedniej klatki ([G2-AC1](change-design.md#g2-ac1), [G2-AC2](change-design.md#g2-ac2), G3) | `nativeUpdateContactRho` (z rozpoznaniem wyniku strukturalnego), `nativeAccumulateContactPressure`, usunięcie `deformationRecoveryRate`, `ReferenceSolverInputAdapter`, `NativePublicWorld.cachedContacts`, komentarze ρ i konturu, testy ρ i konturu, hashe wzorcowe | [P-B-11](#p-b-11)–[P-B-13](#p-b-13), [P-B-15](#p-b-15)–[P-B-18](#p-b-18) | done |
-| 3 | Gumka siłowa i wydanie | gra chwyta bańkę siłą; raport siatki, perf guard, przewodnik, CHANGELOG 2.3.0 (G1, [G2-AC3](change-design.md#g2-ac3), [G5-AC1](change-design.md#g5-ac1), [G5-AC3](change-design.md#g5-ac3), [G5-AC4](change-design.md#g5-ac4), końcowe [G5-AC2](change-design.md#g5-ac2)) | `BubbleDrivePolicy`, `MotionControllers`, `TransactionStager`, `BandDriveTests`, `RhoGridReportTests`, dokumentacja | [P-B-1](#p-b-1)–[P-B-10](#p-b-10), [P-B-14](#p-b-14), [P-B-26](#p-b-26)–[P-B-28](#p-b-28) | unplanned |
+| 3 | Gumka siłowa i wydanie | gra chwyta bańkę siłą; raport siatki, perf guard, przewodnik, CHANGELOG 2.3.0 (G1, [G2-AC3](change-design.md#g2-ac3), [G5-AC1](change-design.md#g5-ac1), [G5-AC3](change-design.md#g5-ac3), [G5-AC4](change-design.md#g5-ac4), końcowe [G5-AC2](change-design.md#g5-ac2)) | `BubbleDrivePolicy`, `MotionControllers`, `TransactionStager`, `BandDriveTests`, `RhoGridReportTests`, dokumentacja, README i `MigrationGuideTests` | [P-B-1](#p-b-1)–[P-B-10](#p-b-10), [P-B-14](#p-b-14), [P-B-26](#p-b-26)–[P-B-28](#p-b-28) | unplanned |
 
 Wycinek 1 sam naprawia model kontaktu miękkiego (ugięcie c·F zamiast 3,85·c·F, zero prędkości w spoczynku), ale ρ dalej twardnieje z opóźnieniem, a kontur pamięta poprzednią klatkę. Wycinek 2 usuwa obie historie, lecz gra nie ma jeszcze chwytu siłą. Wycinek 3 dodaje gumkę, której kryteria bezwzględne i raport siatki wymagają obu poprzednich, oraz zamyka wydanie.
 
@@ -398,6 +404,23 @@ Testy o zmienionych oczekiwaniach (slice 2):
 - `ContactComplianceTests` :414 i `ContactRhoHistoryTests`: tylko komentarze (bez wygładzania ρ i `recovered`).
 - Bez zmian oczekiwań: `NativeMetalMotionRoleTests`, `NativeMetalBenchmarkTests`, hashe `AcceptanceEquivalenceTests` i `AcceptanceRenderEquivalenceTests` (M1 Pro).
 
+## Slice 3: Gumka siłowa i wydanie
+
+**Delivers:** gra może chwycić bańkę gumką siłową, a gałąź ma raport siatki, zielony perf guard, przewodnik, CHANGELOG 2.3.0 i wersję 2.3.0 w README; PR, scalenie i tag robi autor po scaleniu PR #6 ([CD-D-12](change-design.md#cd-d-12)).
+
+18. Dodać do `BubbleDrivePolicy` pola `bandStiffness`, `bandDamping`, `maximumForce` z wartościami domyślnymi i bez walidacji, i napisać w `MotionCommandTests` testy walidacji pól dla [P-B-5](#p-b-5) oraz testy celu 1e38 w trybie gumki i prędkościowym przez publiczny świat dla [P-B-7](#p-b-7) · verify: `swift build --build-tests && ! swift test --skip-build --filter BubblePhysicsPublicTests.MotionCommandTests`
+19. Walidować pola gumki w `BubbleDrivePolicy.init` z `valueOutOfRange` i nazwą pola, i dodać `requireDriveMagnitude(target)` w `.beginPlayerDrive` i `.updatePlayerDrive` przy `bandStiffness != nil`, pokrywając [P-B-5](#p-b-5) i [P-B-7](#p-b-7) · verify: `swift test --filter BubblePhysicsPublicTests.MotionCommandTests`
+20. Napisać w `TransactionStagerTests` testy odrzucenia K·dt²/m ≥ 1 przy wstawieniu, zamianie, scaleniu i podziale do zbyt małej masy, ze światem bez zmian, dla [P-B-6](#p-b-6) · verify: `swift build --build-tests && ! swift test --skip-build --filter BubblePhysicsRuntimeTests.TransactionStagerTests`
+21. Dodać sprawdzenie K·dt²/m < 1 w gałęzi `.bubble` prywatnego `validate(_:)` w `TransactionStager`, pokrywając [P-B-6](#p-b-6) · verify: `swift test --filter BubblePhysicsRuntimeTests.TransactionStagerTests`
+22. Napisać w `MotionControllersPrepareTests` testy gałęzi siłowej: przyrost F/m·dt, obcięcie do `maximumForce` z zachowaniem kierunku, tłumienie e^(−D·dt/m), siła globalna i pole kierunkowe dodane do gumki, dla [P-B-9](#p-b-9) · verify: `swift build --build-tests && ! swift test --skip-build --filter BubblePhysicsRuntimeTests.MotionControllersPrepareTests`
+23. Napisać `BandDriveTests` przez publiczny świat (prędkość ustalona przy D = 0 i D > 0, stosunek mas, pięć naciągnięć przy ścianie na materiale kc = 0 z nowym `CrowdScene.bandPressedBubble`, puszczenie, dwie kolejne ramki z `DriveFeedback`) dla [P-B-1](#p-b-1)–[P-B-4](#p-b-4) i [P-B-8](#p-b-8) · verify: `swift build --build-tests && ! swift test --skip-build --filter BubblePhysicsRuntimeTests.BandDriveTests`
+24. Dodać gałąź siłową `.playerDriven` w `MotionControllers.prepare` według widoku wywołań kroku hosta w R2, z gałęzią `bandStiffness == nil` bez zmian, pokrywając [P-B-1](#p-b-1)–[P-B-4](#p-b-4), [P-B-8](#p-b-8)–[P-B-10](#p-b-10) · verify: `swift test --filter "BubblePhysicsRuntimeTests.MotionControllersPrepareTests|BubblePhysicsRuntimeTests.BandDriveTests|BubblePhysicsRuntimeTests.TransactionStagerTests|BubblePhysicsRuntimeTests.MotionControllersFeedbackTests|BubblePhysicsPublicTests.MotionCommandTests|BubblePhysicsNativeMetalTests.NativeMetalMotionRoleTests"`
+25. Napisać opt-in `RhoGridReportTests` (`XCTSkip` bez `BUBBLE_PHYSICS_RHO_GRID_REPORT=1`, katalog repo z `#filePath` jak w `MigrationGuideTests`), uruchomić go i zacommitować raport siatki dla [P-B-14](#p-b-14) · verify: `BUBBLE_PHYSICS_RHO_GRID_REPORT=1 swift test --filter BubblePhysicsRuntimeTests.RhoGridReportTests && ls docs/benchmarks/v2.3.0-rho-grid-*.md`
+26. Poprawić komentarz `ObjectState.Kind.bubble(effectiveRadius:)` (`WorldFrame.swift:96`) i opisać w `docs/integration-guide.md` zawartość wiersza dokumentacji [P-B-28](#p-b-28), z przepisanym punktem „Prędkość w stronę kontaktu” (:97) · verify: `! grep -q "odbudow" Sources/BubblePhysicsPublic/Model/WorldFrame.swift && ! grep -q "gromadzi prędkość" docs/integration-guide.md && grep -q "bandStiffness" docs/integration-guide.md && grep -q "contactDampingRatio" docs/integration-guide.md && grep -qi "wystrz" docs/integration-guide.md && swift test --filter BubblePhysicsPublicTests.IntegrationGuideTests`
+27. Dodać sekcję `## 2.3.0` w `CHANGELOG.md` dla całej zmiany, z treścią CHANGELOG z wiersza [P-B-28](#p-b-28), i podbić wersję w `README.md:5` oraz w `MigrationGuideTests` (:5, :107) · verify: `grep -q "^## 2.3.0" CHANGELOG.md && grep -qi "wystrz" CHANGELOG.md && grep -q "maximumLinearSpeed" CHANGELOG.md && grep -q "Wersja 2.3.0" README.md && swift test --filter BubblePhysicsPublicTests.MigrationGuideTests`
+28. Uruchomić pełny zestaw i zapisać w tym pliku wpis `Lista do opisu PR:` z testami o zmienionych oczekiwaniach z wycinków 1–3 i powodami, dla [P-B-26](#p-b-26) · verify: `grep -q "^Lista do opisu PR:" docs/sdlc/changes/2026-11-19-engine-v2-3-0/plan.md && swift build --build-tests && swift test`
+29. Uruchomić perf guard na bezczynnym Macu (M1 Pro, `uptime` ≤ 2) i zapisać jego linie `PASS` w tym pliku we wpisie `Perf guard (slice 3):`, dla [P-B-27](#p-b-27) · verify: `grep -q "^Perf guard (slice 3):" docs/sdlc/changes/2026-11-19-engine-v2-3-0/plan.md && swift run -c release BubblePhysicsPerfGuard`
+
 ## Deviations from Design
 
 | ID | Type | Status | Design updated? | Note |
@@ -417,6 +440,13 @@ Testy o zmienionych oczekiwaniach (slice 2):
 | 2 | testy o zmienionych oczekiwaniach: `NativeMetalXPBDTests`, test relaksacji | pamięć konturu zakładają też `NativeMetalContourTests:160`, `NativeMetalMotionRoleTests:91`, `NativeMetalBenchmarkTests`, `NativeMetalStructuralOperationTests`; hashe wzorcowe działają na tym Macu (M1 Pro); `ContactComplianceTests:415` opisuje wygładzanie | R2, test strategy, zadanie 17 | 2026-11-19 |
 | 2 | [P-B-16](#p-b-16) i [P-B-17](#p-b-17) bez wskazanego miejsca, [P-B-17](#p-b-17) na poziomie jądra | brak testu konturu scalenia próbka po próbce i pomocnika wgniecenia geometrycznego; publiczny kontur z `debugContourSnapshot()` | [P-B-16](#p-b-16) w `NativeMetalStructuralOperationTests` (szew: wewnętrzne `NativePublicWorld.cachedContacts`), [P-B-17](#p-b-17) w nowym `ContactContourTests` | 2026-11-19 |
 | 2 | filtry `Klasa.test` (odstępstwo implementacji 11) | w swiftpm działa `Cel.Klasa/test` | filtry wycinka 2 z celem i klasą; test strategy | 2026-11-19 |
+| 3 | `validateBandStability` wołane osobno po `validateWorstAlpha` przy add, replace, merge i split | prywatne `validate(_:)` (`TransactionStager.swift:511`) ma gałąź `.bubble` z `drivePolicy` i `mass` i jest wołane we wszystkich czterech miejscach (merge i split przez `add`, :427, :677, :701, :708) | R2: sprawdzenie w `validate(_:)`; zadanie 21 | 2026-11-19 |
+| 3 | przewodnik dostaje tylko opis gumki i ζ_c | `docs/integration-guide.md:97` opisuje prędkość spoczynkową, której po wycinku 1 nie ma; brak opisu ugięcia c·F i przestrojenia c₀ ([CD-D-16](change-design.md#cd-d-16)) | R2, [P-B-28](#p-b-28), zadanie 26 | 2026-11-19 |
+| 3 | CHANGELOG `## 2.3.0` dla gumki | brak sekcji 2.3.0; zmiany wycinków 1–2 nieopisane | sekcja dla całej zmiany; R2, zadanie 27 | 2026-11-19 |
+| 3 | wydanie bez wersji w README | `README.md:5` „Wersja 2.2.0.”, pilnowane przez `MigrationGuideTests.swift:107` | R2: README i `MigrationGuideTests`; zadanie 27 | 2026-11-19 |
+| 3 | wzorzec walidacji pól polityki | dotychczasowe pola używają `requirePositive` (`nonFiniteValue` / `nonPositiveValue`), a [G1-AC5](change-design.md#g1-ac5) wymaga `valueOutOfRange` | [P-B-5](#p-b-5) nazywa wymagany błąd; zadanie 19 | 2026-11-19 |
+| 3 | raport siatki zapisuje plik w `docs/benchmarks` | żaden test nie zapisuje dziś plików; katalog repo z `#filePath` jak w `MigrationGuideTests` | zadanie 25 | 2026-11-19 |
+| 3 | wycinek 3 kończy się wydaniem | PR #6 nadal otwarty; wydanie dopiero po jego scaleniu i rebase ([CD-D-12](change-design.md#cd-d-12)); autor wybrał koniec wycinka na gotowej gałęzi | **Delivers** wycinka 3; PR, scalenie i tag poza planem; lista testów do opisu PR w zadaniu 28 | 2026-11-19 |
 
 ## Implementation deviations
 
