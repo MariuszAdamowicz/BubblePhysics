@@ -1,0 +1,188 @@
+# Change Design: BubblePhysics v2.3.0 — gumka siłowa, ρ bez opóźnienia, kontur z bieżących kontaktów, fizyczne tłumienie kontaktu
+
+**Date:** 2026-11-19
+**Artifact:** change-design
+**Status:** Draft
+**Template version:** default/0.3.2
+**References:** specyfikacja autora `2KBubbles-iOS/docs/benchmarks/stage-0/v2.3.0-engine-spec.md` (commit 6092ec3 w repo gry); punkt wyjścia: gałąź PR #6 (`feature/crowd-review-followups`, poprawki po przeglądzie v2.2.0)
+
+**Plugin version:** 0.7.10
+**Agent Sessions:** claude-code: ab52f6fb-160c-4aef-aa48-da87badbf8db
+
+---
+
+<!-- hint: Keep the `**Artifact:** change-design` line — /plan and /implement use it to recognize this as a change-design artifact (requirements + design in one file) and skip the prd.md requirement. -->
+
+> *Section audience —* 🔍 reviewer (understand the change without implementing it) · 🛠 author (implement the change). Sections without an icon serve both.
+
+## Summary 🔍
+
+Gra potrzebuje chwytu „siłą w stronę palca”. Dziś palec narzuca bańce prędkość, a przy ścianie zamienia się to w siłę rzędu 20–240 tysięcy, która miażdży bańkę. Do tego sprężyna kontaktu twardnieje z opóźnieniem o klatkę, kontur pamięta wgniecenie z poprzedniej klatki, a stałe tłumienie kontaktu 16/s sprawia, że duże bańki odjeżdżają od ściany przez dziesiątki sekund.
+
+v2.3.0 wprowadza cztery zmiany. Pierwsza to opcjonalny tryb gumki w `BubbleDrivePolicy`: siła F = K_band · naciągnięcie − D · v z górną granicą, całkowana przez masę. Druga to ρ kontaktu liczone raz na krok z pozycji przewidzianych w tym kroku, bez konturu poprzedniej klatki i bez wygładzania. Trzecia to kontur, którego głębokość wgniecenia wynika tylko z bieżących kontaktów, bez relaksacji w czasie. Czwarta to tłumienie kontaktu miękkiego jako ułamek tłumienia krytycznego (`PhysicsMaterial.contactDampingRatio`), liczone dla każdego kontaktu z jego podatności i mas.
+
+API zmienia się addytywnie, więc to wersja minor. Bez `bandStiffness` napęd działa jak w v2.2.0. Model kontaktów miękkich zmienia się celowo. Strojenie, przegląd w laboratorium i bramka przeciskania należą do repo gry.
+
+## Background & problem 🔍
+
+Pełne tło, pomiary i rachunki są w specyfikacji autora (sekcja 1). Tu zostaje tylko to, czego potrzeba, żeby ocenić projekt.
+
+- **Napęd prędkością.** Gałąź `.playerDriven` w `MotionControllers.prepare` (Sources/BubblePhysicsRuntime/MotionControllers.swift:68) co krok NADPISUJE prędkość: v = min(v_max, odległość · `distanceResponse`). Przy ścianie nasycony napęd działa jak siła m · v / dt. Dla 7168 daje to ok. 242 000 (wyliczone), czyli ściśnięcie 73 %.
+- **Opóźnione twardnienie.** `nativeUpdateContactRho` (Sources/BubblePhysicsNativeMetal/Shaders/NativePostSolveKernels.metal-source:627) bierze ρ z konturu poprzedniej klatki i wygładza je ρ += 0,25 · (ρ_kontur − ρ). Bańka rozpędzona ku ścianie dochodzi do niej, zanim sprężyna stwardnieje (pomiar).
+- **Pamięć konturu.** `nativeAccumulateContactPressure` (`:729-752` tego samego pliku) bierze max(bieżące wgniecenie, wgniecenie z poprzedniej klatki · e^(−12·dt)). Kontur nie jest więc czystym wynikiem bieżących kontaktów.
+- **Stałe tłumienie kontaktu.** `nativeDampContactNormalMotion` (Sources/BubblePhysicsNativeMetal/Shaders/NativeXPBDKernels.metal-source:1010) tłumi prędkość względną wzdłuż normalnej tempem 2 · `contactDamping` = 16/s, niezależnie od masy i sprężyny. Dla dużych baniek to wielokrotność tłumienia krytycznego, stąd pomiar 7168: 0,81 r po 20 s.
+
+Teraz, bo PRD gry wymaga chwytu siłą (FR-009) i spłaszczenia przy ścianie z powrotem kształtu, a projekt rozwiązania gry zapowiedział tę zmianę silnika.
+
+```mermaid
+flowchart LR
+  subgraph before["Before (v2.2.0)"]
+    t1["cel palca"] --> v1["v := min(v_max, d·k)<br/>(nadpisanie)"] --> p1["nativePredict"]
+    pc["kontur poprzedniej klatki"] --> r1["ρ += 0,25·(ρ_kontur − ρ)"] --> s1["solver: α = c(ρ)/dt²"]
+    s1 --> d1["tłumik normalny 16/s"] --> c1["kontur = max(bieżące, poprzednie·e^(−12dt))"]
+    c1 -.następna klatka.-> pc
+  end
+```
+
+```mermaid
+flowchart LR
+  subgraph after["After (v2.3.0)"]
+    t2["cel palca"] --> f2["v += (clamp(K·s) − D·v)/m · dt"] --> p2["nativePredict"]
+    p2 --> r2["ρ z pozycji przewidzianych<br/>(ściana d/r, para c_a:c_b)"] --> s2["solver: α = c(ρ)/dt²"]
+    s2 --> d2["tłumik 2·ζ_c·ω na kontakt"] --> c2["kontur = bieżące wgniecenie"]
+  end
+```
+
+## Goals and non-goals
+
+### Goals
+
+**G1: gumka działa siłą** — opcjonalny tryb `BubbleDrivePolicy`, w którym chwycona bańka dostaje siłę rosnącą z naciągnięciem, a prędkość wynika z siły i masy.
+- [ ] G1-AC1 — Bańka bez kontaktów ciągnięta ze stałym naciągnięciem s (cel przesuwany co krok o tyle, by naciągnięcie zostało stałe) osiąga prędkość ustaloną v = K_band · s / (m · ζ + D) z tolerancją 10 %, gdzie ζ to `PhysicsMaterial.damping`, a D to `bandDamping` · `verify: test integracyjny przez publiczne API świata, dwa zestawy (D = 0 i D > 0)`
+- [ ] G1-AC2 — Dwie bańki o różnych masach ciągnięte tym samym naciągnięciem przy D = 0 mają stosunek prędkości ustalonych równy odwrotności stosunku mas z tolerancją 10 % · `verify: test integracyjny, dwie bańki w osobnych światach`
+- [ ] G1-AC3 — Bańka dociśnięta gumką do ściany: siła dociskająca liczona z jej równowagi statycznej (odległość środka od ściany i wzór ε = a · (1 − ε)^kc, a = c₀ (r/r_ref)^s · F / r) rośnie liniowo z naciągnięciem do `maximumForce`, a przy dwóch naciągnięciach powyżej `maximumForce` / K_band równowaga jest ta sama z tolerancją 0,5 jednostki · `verify: test integracyjny, trzy naciągnięcia poniżej i dwa powyżej granicy`
+- [ ] G1-AC4 — Po `endPlayerDrive` bańka zachowuje prędkość z ostatniego kroku napędu (nie jest zerowana) · `verify: test integracyjny: prędkość w ramce po puszczeniu ≈ prędkość przed`
+- [ ] G1-AC5 — `BubbleDrivePolicy` odrzuca `bandStiffness` ≤ 0 lub nieskończone, `bandDamping` < 0 lub nieskończone i `maximumForce` ≤ 0 lub nieskończone (`ModelValidationError.valueOutOfRange` z nazwą pola). Transakcja, po której bańka z gumką ma K_band · dt² / m ≥ 1, jest odrzucana z `valueOutOfRange("drive.bandStiffness")` · `verify: testy jednostkowe modelu i transakcji (wstawienie, wynik scalenia i podziału)`
+- [ ] G1-AC6 — W trybie gumki długość `DriveFeedback.target − achievedPoint` równa się naciągnięciu użytemu do liczenia siły w tym kroku · `verify: test integracyjny`
+
+**G2: twardnienie sprężyny bez opóźnienia** — ρ każdego końca kontaktu wynika z geometrii bieżącego kroku.
+- [ ] G2-AC1 — Dwa światy o identycznym stanie bieżącym (pozycje, prędkości, kontakty), różniące się tylko historią konturu z poprzednich klatek, dają po jednym kroku identyczne pozycje i kontury · `verify: test integracyjny niezależności od historii (scena z kontaktem ze ścianą i parą baniek)`
+- [ ] G2-AC2 — Dla kontaktu bańki ze ścianą ρ rekordu w kroku równa się d / r (obcięte do [0, 1]), gdzie d to odległość przewidzianego środka od ściany, z tolerancją 1e-4. Dla pary ρ każdego końca równa się (r − nakładanie · c_self / (c_self + c_other)) / r przy tych samych pozycjach · `verify: test kernela przez diagnostykę NativeMetal`
+- [ ] G2-AC3 — Raport siatki c₀ ∈ {1e-3, 2,5e-3, 4e-3} × kc ∈ {0, 1,5, 3}: bańka „2” ciągnięta stałą siłą ku ścianie, dla każdego punktu maksimum przejściowe ściśnięcia i równowaga statyczna obok wartości ze wzoru ε = a (1 − ε)^kc. Raport powstaje bez progu, ocenia autor · `verify: polecenie benchmarku zapisuje raport w docs/benchmarks/`
+
+**G3: kontur z bieżących kontaktów** — głębokość wgniecenia konturu w kroku wynika tylko z kontaktów tego kroku.
+- [ ] G3-AC1 — Gdy kontakt zniknie (bańki rozsunięte poza próg kontaktu), w ramce tego samego kroku wgniecenie konturu w kierunku byłego kontaktu wynosi 0 (bańka bez innych kontaktów ma kontur kołowy) · `verify: test integracyjny ramki`
+- [ ] G3-AC2 — Kontur nigdy nie jest mniej wgnieciony niż wgniecenie geometryczne bieżących kontaktów, a po uspokojeniu kontury nie przenikają ścian ani siebie nawzajem (tolerancja 0,5 jednostki) · `verify: istniejące testy nieprzenikania konturu przechodzą`
+
+**G4: fizyczne tłumienie kontaktu miękkiego** — tempo tłumienia prędkości względnej wzdłuż normalnej wynika ze sprężyny kontaktu i mas.
+- [ ] G4-AC1 — Dla kontaktu bańka–ściana i bańka–bańka o różnych masach tempo zaniku prędkości względnej wzdłuż normalnej wynosi 2 · ζ_c · ω z tolerancją 10 %, gdzie ω = √(1 / (c · μ)), c to suma podatności końców, μ to masa zredukowana (przy ścianie masa bańki), a ζ_c to `contactDampingRatio` (w parze średnia z obu materiałów) · `verify: test integracyjny, pomiar spadku v_n w kolejnych krokach`
+- [ ] G4-AC2 — Przy ζ_c = 0 kontakt miękki nie ma tłumienia normalnego: bańka puszczona przy ścianie wykonuje co najmniej jedno przestrzelenie położenia równowagi · `verify: test integracyjny`
+- [ ] G4-AC3 — Kontakty twarde (podatność obu końców = 0) tłumią się jak w v2.2.0 (`contactDamping`), bez zmian wyników testów kontaktów twardych · `verify: istniejące testy kontaktów twardych przechodzą bez zmian`
+- [ ] G4-AC4 — `PhysicsMaterial` odrzuca `contactDampingRatio` < 0 lub nieskończone. Wartość domyślna to 1 · `verify: test jednostkowy modelu`
+
+**G5: zgodność i brak regresji**
+- [ ] G5-AC1 — Bez `bandStiffness` (domyślnie `nil`) napęd zachowuje się jak w v2.2.0: testy napędu z v2.2.0 przechodzą bez zmian · `verify: swift test, filtr testów napędu`
+- [ ] G5-AC2 — Cały zestaw testów repozytorium przechodzi. Każdy test, którego oczekiwania zmieniły się przez zmiany G2–G4 (ρ z poprzedniej klatki, relaksacja konturu, stałe tłumienie kontaktu miękkiego), jest wymieniony z powodem w opisie PR · `verify: swift test; lista w opisie PR`
+- [ ] G5-AC3 — Perf guard (`docs/benchmarks/perf-guard.json`) przechodzi z obecnymi progami · `verify: uruchomienie BubblePhysicsPerfGuard`
+- [ ] G5-AC4 — Dokumentacja `ObjectState.Kind.bubble(effectiveRadius:)` mówi, że to minimalna odległość konturu od środka. Przewodnik integracji opisuje tryb gumki, `contactDampingRatio`, zakres stabilności K_band oraz migrację z `maximumSpeed`/`distanceResponse` · `verify: przegląd diffu dokumentacji`
+
+### Non-goals
+
+- Zadania gry: pierścień podświetlenia z promienia niezdeformowanego, zasada „jeden palec na bańkę” w `TouchDriver` i zmiana PRD, nowa definicja drogi hamowania (G2-AC2 gry), migracja `PhysicsTuning.json`.
+- Przegląd w laboratorium, przeszukanie strojenia i bramka przeciskania 15/15 (kryteria A1, A2 i A6 specyfikacji). Robi je repo gry na wydanym v2.3.0.
+- Wygładzanie przestrzenne konturu (13 przejść, `contourSurfaceTension`) zostaje bez zmian. Pytanie otwarte autora rozstrzyga laboratorium.
+- Nowe pola promienia w `ObjectState` (decyzja 9 autora).
+- Zmiana wzoru podatności c = c₀ (r/r_ref)^s ρ^kc, krzywej masy, solvera XPBD, łączenia i podziału baniek.
+- Backendy referencyjne (`BubblePhysicsReference`, `BubblePhysicsReferenceMetal`) i ich własne `contactDamping`. Nie są backendem publicznego świata.
+- Usunięcie `maximumSpeed`/`distanceResponse` z API.
+
+## Architecture
+
+Cztery niezależne jednostki: jedna po stronie hosta (runtime) i trzy w shaderach natywnego solvera. Łączy je tylko kolejność w kroku.
+
+**1. Gumka (host, runtime).** `BubbleDrivePolicy` dostaje trzy pola opcjonalne. W `MotionControllers.prepare` gałąź `.playerDriven` sprawdza `bandStiffness`. Gdy jest `nil`, działa dotychczasowy kod. Gdy jest ustawione:
+
+- s = cel − pozycja;
+- F_band = K_band · s, obcięte do |F| ≤ `maximumForce` z zachowaniem kierunku;
+- F = F_band − D · v + siła globalna + pola (jak w gałęzi `.dynamic`);
+- v += F / m · dt.
+
+Prędkość nie jest nadpisywana, więc przechodzi z kroku na krok przez obiekt, jak w trybie `.dynamic`. Dalej działa niezmieniony `nativePredict` (tłumienie materiału e^(−ζ·dt), obcięcie do `maximumLinearSpeed`). Walidację K_band · dt² / m < 1 robi `TransactionStager.validate` dla każdej bańki z gumką po wstawieniu, zamianie, scaleniu i podziale.
+
+**2. ρ bez opóźnienia (shader).** `nativeUpdateContactRho` przestaje czytać kontur poprzedniej klatki i nie wygładza. Liczy ρ z pozycji przewidzianych w bieżącym kroku (bufor roboczy po `nativePredict`):
+
+- ściana i odcinek: ρ = clamp(d / r, 0, 1), gdzie d to odległość środka od odcinka;
+- para: ρ_self = clamp((r − nakładanie · c_self / (c_self + c_other)) / r, 0, 1), gdzie c liczone z ρ rekordu z poprzedniego kroku. To jedno przybliżenie punktu stałego na krok, bez iteracji. Para twarda albo bez nakładania ma ρ = 1.
+
+Kernel zostaje w tym samym miejscu kolejności (przed sąsiedztwem i `nativePrepareSolverContacts`), więc podatność c_a(ρ_a) + c_b(ρ_b) dalej trafia do `rho.z` raz na kontakt (LD-D-6 bez zmian). Bufory poprzedniego konturu przestają być wejściem tego kernela. Wyniki scalenia i podziału nie potrzebują już specjalnego przypadku ρ = 1, bo ρ nie zależy od historii.
+
+**3. Kontur bez relaksacji (shader).** W `nativeAccumulateContactPressure` znika składnik `recovered`: wartość to `deficit`, a dla bańki z `publicFlags.x` max(`deficit`, `directionalPressure · softness`). Parametr `deformationRecoveryRate` i jego przekazanie w `NativeContourControl.shape.y` znikają z `NativeSolverInput` (to API `package`, nie publiczne). Wygładzanie przestrzenne `nativeGenerateContours(Fused)` zostaje.
+
+**4. Tłumienie kontaktu (shader + model).** `PhysicsMaterial` dostaje `contactDampingRatio` (domyślnie 1), które trafia do wolnej składowej `NativeBubble.contact`. W `nativeDampContactNormalMotion` czynnik tłumienia przechodzi do pętli po kontaktach:
+
+- kontakt miękki (`rho.z` > 0): ω = √((m_a⁻¹ + m_b⁻¹) / rho.z), dla ściany m_b⁻¹ = 0; ζ_c to średnia z obu końców, a przy ścianie ζ_c bańki; czynnik = 1 − e^(−2 · ζ_c · ω · dt);
+- kontakt twardy (`rho.z` = 0): dotychczasowy czynnik z `contactDamping`.
+
+Forma wykładnicza jest bezwarunkowo stabilna, więc ζ_c nie potrzebuje górnej granicy. Pozostała logika kernela (restytucja, tarcie, próg `restSpeed`, podział przez `share`) bez zmian.
+
+```mermaid
+flowchart TD
+  prep["MotionControllers.prepare<br/>(1) siła gumki → v"] --> predict["nativePredict"]
+  predict --> contacts["budowa i dopasowanie kontaktów"]
+  contacts --> rho["nativeUpdateContactRho<br/>(2) ρ z pozycji przewidzianych"]
+  rho --> prepc["nativePrepareSolverContacts<br/>rho.z = c_a(ρ_a)+c_b(ρ_b)"]
+  prepc --> iters["8 iteracji XPBD"]
+  iters --> vel["nativeUpdateVelocities"]
+  vel --> damp["nativeDampContactNormalMotion<br/>(4) 2·ζ_c·ω na kontakt"]
+  damp --> contour["nativeAccumulateContactPressure<br/>(3) bez recovered"]
+```
+
+## Components
+
+- **`Sources/BubblePhysicsPublic/Model/Motion.swift`** — `BubbleDrivePolicy`: pola `bandStiffness`, `bandDamping`, `maximumForce` i ich walidacja w init.
+- **`Sources/BubblePhysicsPublic/Model/Resources.swift`** — `PhysicsMaterial.contactDampingRatio` z walidacją.
+- **`Sources/BubblePhysicsPublic/Model/WorldFrame.swift`** — komentarz `effectiveRadius`: minimum odległości konturu od środka.
+- **`Sources/BubblePhysicsRuntime/MotionControllers.swift`** — gałąź siłowa `.playerDriven`.
+- **`Sources/BubblePhysicsRuntime/TransactionStager.swift`** — walidacja K_band · dt² / m < 1 dla baniek z gumką.
+- **`Sources/BubblePhysicsNativeMetal/NativePublicWorld.swift`**, **`NativeSolverInput.swift`**, **`NativeMetalBufferLayout.swift`** — przekazanie ζ_c do `NativeBubble.contact`; usunięcie `deformationRecoveryRate`.
+- **`Sources/BubblePhysicsNativeMetal/NativeMetalSolver.swift`** — nowe bufory wejściowe `nativeUpdateContactRho` (segmenty zamiast konturu poprzedniej klatki); `shape.y` konturu nieużywane.
+- **`Sources/BubblePhysicsNativeMetal/Shaders/NativePostSolveKernels.metal-source`** — `nativeUpdateContactRho` z bieżącej geometrii, usunięcie stałej wygładzania i `nativePreviousContourRatio`; usunięcie `recovered` w `nativeAccumulateContactPressure`.
+- **`Sources/BubblePhysicsNativeMetal/Shaders/NativeXPBDKernels.metal-source`** — `nativeDampContactNormalMotion`: czynnik na kontakt z ζ_c i ω.
+- **`Tests/…`** — nowe testy G1–G4; testy ABI (`NativeMetalShaderABITests`) i testy zależne od ρ, relaksacji i stałego tłumienia zaktualizowane.
+- **`Benchmarks/…` + `docs/benchmarks/`** — raport siatki twardnienia (G2-AC3).
+- **`docs/integration-guide.md`**, **`CHANGELOG`/notatka wydania** — tryb gumki, ζ_c, migracja.
+
+## Error handling
+
+- Nieprawidłowe parametry gumki i ζ_c są odrzucane przy tworzeniu modelu (G1-AC5, G4-AC4). Za duże K_band względem masy jest odrzucane na poziomie transakcji, więc świat nigdy nie dostaje niestabilnego stanu.
+- Siła gumki nieskończona nie może powstać: pola są skończone, a naciągnięcie przechodzi istniejące `requireFinite` celu i prędkości w `prepare`.
+
+## Testing & verification
+
+- Testy G1 jadą przez publiczne API świata na backendzie natywnym (Mac, GPU), jak dotychczasowe testy napędu.
+- Przed scaleniem: pełne `swift test` i perf guard (G5-AC2, G5-AC3). Opis PR wymienia zmienione testy z powodem.
+- Po wydaniu, w repo gry (poza tą zmianą): laboratorium, przeszukanie strojenia i bramka przeciskania.
+
+## Decisions 🔍
+
+| ID | Title | Context | Options | Choice | Rationale | Source | Goal impact | Consequences |
+|----|-------|---------|---------|--------|-----------|--------|-------------|--------------|
+| CD-D-1 | Granica zakresu: silnik a gra | Kryteria A1, A2 i A6 specyfikacji wymagają plików strojenia i bramek gry | wszystko w silniku; tylko testy silnika; wydanie RC przed laboratorium | silnik zamyka kryteria sprawdzalne w swoim repo (A3, A4, A5, A7, A8) i wydaje v2.3.0; laboratorium, strojenie i bramka przeciskania idą w repo gry | tak przebiegały v2.1.0 i v2.2.0; strojenie wymaga gotowego silnika | user | G1–G5; non-goals | problem z laboratorium → v2.3.1 |
+| CD-D-2 | Kształt API gumki | Specyfikacja: pola w `BubbleDrivePolicy` albo osobny przypadek | pola opcjonalne; enum `Response`; pola + `maximumSpeed` jako limit | trzy pola opcjonalne: `bandStiffness: Float?`, `bandDamping: Float = 0`, `maximumForce: Float?` | addytywne, wersja minor, gra przypięta `exact` się nie psuje; enum łamie API | user | G1, G5-AC1 | w trybie siłowym `maximumSpeed`/`distanceResponse` są ignorowane |
+| CD-D-3 | Tłumienie gumki | Specyfikacja: „względem palca”, silnik nie zna prędkości palca | względem świata; względem prędkości celu | F_D = −D · v_bańki (tarcie proporcjonalne do prędkości bańki) | autor: „tłumienie jak tarcie, proporcjonalnie do prędkości bańki”; bez stanu i bez szumu dotyku | user | G1-AC1 | v_ustalona = K·s / (m·ζ + D) |
+| CD-D-4 | Częstość liczenia ρ | Specyfikacja proponuje przeliczanie co iterację; PR #6 (LD-D-6) liczy podatność raz na kontakt | co iterację; raz na krok z pozycji przewidzianych; raz + w połowie | raz na krok, z pozycji po `nativePredict`, w `nativeUpdateContactRho` | usuwa oba źródła opóźnienia (kontur poprzedniej klatki, wygładzanie 0,25), nie zmienia α w iteracjach (zbieżność przy kc 3), zachowuje LD-D-6 | auto (rekomendacja, autor oddał decyzję) | G2 | jeśli siatka G2-AC3 pokaże przelot, przejście na liczenie co iterację jest lokalne |
+| CD-D-5 | ρ pary: punkt stały | ρ zależy od c(ρ) (uwikłanie) | iteracja do zbieżności; jedno przybliżenie z ρ poprzedniego kroku | jedno przybliżenie: podział c_a : c_b z ρ rekordu z poprzedniego kroku | ρ zmienia się płynnie między krokami; ściana (najważniejszy przypadek) nie ma uwikłania | auto (specyfikacja, zmiana 2) | G2-AC2 | to nie jest opóźnienie geometrii: pozycje są bieżące |
+| CD-D-6 | Miejsce ζ_c | Specyfikacja: „materiał albo konfiguracja” | pole materiału (domyślnie 1); wartość na świat; pole materiału z `nil` = 16/s | `PhysicsMaterial.contactDampingRatio`, domyślnie 1, średnia w parze, przy ścianie wartość bańki | parametr leży obok sprężyny, którą tłumi; gra może różnicować klasy | user | G4 | zmiana zachowania kontaktów miękkich dla wszystkich użytkowników; ujęte w G5-AC2 |
+| CD-D-7 | Tłumienie kontaktu twardego | Kontakt twardy (c = 0) nie ma ω | stałe `contactDamping`; nowy model | dotychczasowe `contactDamping` | zgodność z v2.1.0 (specyfikacja, zmiana 3 b) | auto (specyfikacja) | G4-AC3 | dwie ścieżki w kernelu, rozróżniane `rho.z` |
+| CD-D-8 | Los `deformationRecoveryRate` | Po usunięciu `recovered` parametr jest martwy | zostawić nieczynny; usunąć | usunąć z `NativeSolverInput` i sterowania konturem | API `package`, bez zgodności zewnętrznej; martwy parametr myli | auto (specyfikacja zostawia autorowi silnika) | G3 | zmiana testów ABI |
+| CD-D-9 | Walidacja stabilności gumki | Jawne całkowanie wymaga K·dt²/m ≪ 1; specyfikacja: silnik ma walidować | brak; obcięcie; odrzucenie transakcji | odrzucenie transakcji przy K_band · dt² / m ≥ 1 | błędna konfiguracja widoczna od razu, a nie jako drgania; dla m ≈ 1,4 granica to ok. 500 000, z dużym zapasem wobec przewidywanego strojenia | auto (specyfikacja, „Ryzyko” zmiany 1) | G1-AC5 | podział może dać lżejszą bańkę: walidacja obejmuje wyniki podziału |
+| CD-D-10 | Siły globalne w trybie gumki | Dziś `.playerDriven` ignoruje siłę globalną i pola | ignorować; dodawać | dodawać jak w `.dynamic` | gumka to zwykła siła zewnętrzna (model autora); bańka nie ma być wyjęta spod pozostałych sił | auto (specyfikacja, „siła jest całką zewnętrzną”) | G1 | tryb prędkościowy bez zmian |
+| CD-D-11 | Puszczenie bańki | Czy po `endPlayerDrive` zerować prędkość | zerować; zachować | zachować | wynika z modelu siłowego; dzisiejsze `endPlayerDrive` też nie zeruje | auto (kod `TransactionStager.swift:362`) | G1-AC4 | rzut bańki jest możliwy, hamuje go tłumienie materiału |
+| CD-D-12 | Gałąź bazowa | PR #6 otwarty i zmienia te same shadery | od main; od PR #6 | `feature/engine-v2-3-0` od gałęzi PR #6 | projekt opiera się na kodzie, który trafi do main (LD-D-6) | user | none | po scaleniu PR #6 rebase na main; wydanie v2.3.0 po PR #6 |
+
+## Key facts & assumptions
+
+- **Niezmiennik:** bez `bandStiffness` napęd zachowuje się bit w bit jak w v2.2.0. Zmiany G2–G4 dotyczą kontaktów i konturu niezależnie od napędu.
+- `nativePredict` zapisuje przewidzianą pozycję do `bubbles[].position.xy`, zanim zbudowane zostaną kontakty, więc `nativeUpdateContactRho` widzi geometrię bieżącego kroku (sprawdzone w kodzie).
+- Ryzyko niepotwierdzone, nieblokujące: bez `recovered` kontur w tłumie w spoczynku może migotać przy kontaktach, które pojawiają się i znikają. Ocenia to autor w laboratorium gry.
+- Rachunki ω i siły w specyfikacji to estymaty, a nie pomiary. Tolerancje 10 % w G1 i G4 to estymaty progu ze specyfikacji.
