@@ -332,7 +332,9 @@ kernel void nativeBuildAdjacency(constant NativeControl &control [[buffer(0)]],
 }
 
 // Limit λ pary bańka–bańka (CD-D-9): ruch pary w stronę kontaktu w kroku plus 0,25·min r, przez większą odwrotność masy.
-// Jedno λ dla obu końców, więc pęd pary jest zachowany. Ściany i odcinki są poza limitem.
+// Jedno λ dla obu końców, więc pęd pary jest zachowany. Ściany i odcinki są poza limitem. Dotyczy tylko par twardych
+// (rho.z = 0): para miękka przenosi siłę przez bańkę bez własnej siły, a limit dałby jej sufit 0,25·min r·m_min/dt²;
+// jej przyrost λ w iteracji ogranicza podatność α = c/dt² w mianowniku (CD-D-17).
 float nativePairLambdaLimit(NativeBubble a, NativeBubble b, float2 normal, float dt) {
     float approach = (max(0.0f, dot(a.motion.xy, normal)) + max(0.0f, -dot(b.motion.xy, normal))) * dt;
     float slack = 0.25f * min(a.physical.z, b.physical.z);
@@ -358,12 +360,13 @@ kernel void nativePrepareSolverContacts(device NativeBubble *bubbles [[buffer(0)
     if (limited) {
         // Jedna wspólna lambda obu końców. Kontakt ze ścianą albo odcinkiem i para baniek bez limitu pary (v2.1.0) mają
         // λ ≤ r / (invMass · stopień) dla każdego końca, więc suma warm korekcji bańki nie przekracza jej promienia.
-        // Z limitem pary λ pary baniek ogranicza tylko nativePairLambdaLimit: korekta jednej pary jest ograniczona, ale suma
+        // Z limitem pary λ pary baniek twardych ogranicza tylko nativePairLambdaLimit: korekta jednej pary jest ograniczona, ale suma
         // korekt bańki nie jest ograniczona promieniem i może go przekroczyć; bez ruchu wynosi co najwyżej k · 0,25 · min r
-        // przy k kontaktach (LD-D-1, testWarmStartOfBubbleWithFourContactsAddsUpThePairLimits).
+        // przy k kontaktach (LD-D-1, testWarmStartOfBubbleWithFourContactsAddsUpThePairLimits). Para miękka (rho.z > 0) jest
+        // poza tym limitem i dostaje ograniczenie z v2.1.0 (CD-D-17).
         float maximum = bubbles[a].physical.z / (bubbles[a].physical.y * max(1u, degrees[a]));
         if (record.metadata.x == 0) {
-            if (control.contactDamping.y != 0)
+            if (control.contactDamping.y != 0 && record.rho.z == 0)
                 maximum = nativePairLambdaLimit(bubbles[a], bubbles[b], record.geometry.xy, control.physics.x);
             else
                 maximum = min(maximum, bubbles[b].physical.z / (bubbles[b].physical.y * max(1u, degrees[b])));
@@ -447,7 +450,7 @@ kernel void nativeUpdateContactMultipliers(device NativeBubble *bubbles [[buffer
     uint degree = edge.z == 0 ? max(degrees[edge.x], degrees[edge.y]) : degrees[edge.x];
     // Wspólna relaksacja obu końców utrzymuje równe/opposite impulsy i stabilizuje gęste grafy.
     float next = max(0.0f, record.response.x + delta / max(1u, degree));
-    if (edge.z == 0 && control.contactDamping.y != 0)
+    if (edge.z == 0 && control.contactDamping.y != 0 && record.rho.z == 0)
         next = min(next, nativePairLambdaLimit(bubbles[edge.x], bubbles[edge.y], geometry.xy, control.physics.x));
     corrections[index] = float4(geometry.xy * (next - record.response.x), 0, 0);
     record.response.x = next;

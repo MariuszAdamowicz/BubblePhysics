@@ -3,21 +3,19 @@ import Metal
 import simd
 import XCTest
 
-/// Sonda sufitu siły pary miękkiej po zmianie z wycinka 1 planu v2.3.0 (pełna korekta XPBD w prędkości bańki miękkiej).
+/// Siła przenoszona przez pary miękkie w łańcuchu (P-B-29, G4-AC6, CD-D-17).
 ///
 /// `nativePairLambdaLimit` ogranicza λ pary do (zbliżenie + 0,25 · min r) / max(m⁻¹), a zbliżenie liczy z prędkości przewidzianej,
 /// która zawiera przyrost F · dt / m od siły zewnętrznej bańki. W spoczynku para musi przenieść λ = F · dt².
 /// - Pchnięcie wprost: siła działa na lżejszą bańkę pary, więc zbliżenie F · dt² / m · m pokrywa całe λ i sufitu nie ma.
 /// - Łańcuch: siła przechodzi przez bańkę środkową bez własnej siły. Para środkowa–sąsiadka ma zbliżenie ≈ 0, gdy bańki stoją,
-///   więc siła ma sufit F_max = 0,25 · min r · m_min / dt² (r = 12, m = 0,36, dt = 1/60: ≈ 3 888).
-/// Dziś bańka w spoczynku ma prędkość w stronę sąsiadki (`ContactVelocityCorrectionProbeTests`), która podnosi limit.
+///   więc limit dałby siłom sufit F_max = 0,25 · min r · m_min / dt² (r = 12, m = 0,36, dt = 1/60: ≈ 3 888). Dlatego limit
+///   dotyczy tylko par twardych, a parze miękkiej przyrost λ ogranicza podatność.
 ///
 /// Scena: sąsiadka r = 20, m = 1 przy lewej ścianie; za nią mała bańka r = 12, m = 0,36; w łańcuchu za małą jeszcze pchacz
 /// r = 20, m = 1. `MotorDrive` pcha w lewo siłą F ostatnią bańkę. Materiał c₀ = 1e-3, r_ref = 20, s = 1, kc = 0, więc nakładanie
-/// pary mała–sąsiadka w równowadze to (c_small + c_big) · F. Kontrola: ten sam świat bez limitu λ pary.
-///
-/// Test działa tylko z `BUBBLE_PHYSICS_PAIR_CEILING_PROBE=1` i z pełną korektą w `nativeUpdateVelocities` (zmiana z wycinka 1
-/// albo tymczasowa łatka `correctionScale = 1` dla `contact.x > 0`). Na kodzie sprzed wycinka 1 oczekiwania nie obowiązują.
+/// pary mała–sąsiadka w równowadze to (c_small + c_big) · F, przy każdym F, także powyżej dawnego sufitu. Kontrola: ten sam
+/// świat bez limitu λ pary.
 @MainActor
 final class PairLambdaCeilingProbeTests: XCTestCase {
     private let dt = 1.0 / 60
@@ -66,7 +64,6 @@ final class PairLambdaCeilingProbeTests: XCTestCase {
         return Measurement(overlap: overlaps.last ?? .nan, drift: (overlaps.max() ?? 0) - (overlaps.min() ?? 0), smallSpeed: speed)
     }
 
-    private var enabled: Bool { ProcessInfo.processInfo.environment["BUBBLE_PHYSICS_PAIR_CEILING_PROBE"] == "1" }
     private let forces: [Float] = [2_000, 3_500, 4_500, 6_000]
 
     private func run(chain: Bool) async throws -> (limited: [Float: Measurement], free: [Float: Measurement]) {
@@ -88,24 +85,20 @@ final class PairLambdaCeilingProbeTests: XCTestCase {
     }
 
     func testDirectPushOnTheLighterBubbleHasNoCeilingBecauseApproachCoversTheForce() async throws {
-        try XCTSkipUnless(enabled, "sonda wymaga pełnej korekty XPBD w prędkości i BUBBLE_PHYSICS_PAIR_CEILING_PROBE=1")
         let (limited, _) = try await run(chain: false)
         for (force, m) in limited {
             XCTAssertEqual(m.overlap, pairCompliance * force, accuracy: 0.1 * pairCompliance * force, "wprost, F = \(force)")
         }
     }
 
-    func testChainThroughAMiddleBubbleHasCeilingFromPairLambdaLimit() async throws {
-        try XCTSkipUnless(enabled, "sonda wymaga pełnej korekty XPBD w prędkości i BUBBLE_PHYSICS_PAIR_CEILING_PROBE=1")
-        print("[pair-ceiling-probe] sufit z modelu F_max = \(ceiling), c_pary = \(pairCompliance)")
+    // P-B-29: równowaga (c_środkowej + c_sąsiadki) · F przy każdej sile, także powyżej sufitu 0,25 · min r · m_min / dt².
+    func testChainThroughAMiddleBubbleKeepsEquilibriumAtEveryForce() async throws {
+        XCTAssertTrue(forces.contains { $0 > ceiling }, "zestaw sił obejmuje siły powyżej dawnego sufitu \(ceiling)")
         let (limited, _) = try await run(chain: true)
-        for force in forces where force < ceiling {
+        for force in forces {
             let m = try XCTUnwrap(limited[force])
-            XCTAssertEqual(m.overlap, pairCompliance * force, accuracy: 0.1 * pairCompliance * force, "łańcuch, F = \(force) < sufit")
-        }
-        for force in forces where force > ceiling {
-            let m = try XCTUnwrap(limited[force])
-            XCTAssertGreaterThan(m.overlap, 1.5 * pairCompliance * force, "łańcuch, F = \(force) > sufit: przenikanie ponad równowagę")
+            XCTAssertEqual(m.overlap, pairCompliance * force, accuracy: 0.1 * pairCompliance * force, "łańcuch, F = \(force)")
+            XCTAssertLessThan(m.drift, 0.5, "łańcuch, F = \(force): para stoi")
         }
     }
 }

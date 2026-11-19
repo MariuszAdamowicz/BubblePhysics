@@ -156,4 +156,37 @@ final class CrowdCompressionTests: XCTestCase {
         let hard = try await singleCornerDepth(material: CrowdScene.softBubblePhysics(base: 0))
         XCTAssertGreaterThan(soft, hard + 0.05, "wgniecenie δ pchanej bańki: miękka \(soft), twarda \(hard)")
     }
+
+    // P-B-30 (G4-AC7, CD-D-17): para miękka nie ma limitu λ pary, a rozsuwa się z zawierania bez skoku. Bańka r = 12 w całości
+    // wewnątrz miękkiej r = 40, oba c₀ = 1e-3 i kc = 0: żaden krok nie jest odrzucony, środek żadnej z nich nie przesuwa się
+    // w kroku o więcej niż 0,25 · min r = 3, a po rozsunięciu nakładanie wraca do zera (bez siły zewnętrznej równowaga to brak nakładania).
+    func testSoftContainedPairSeparatesWithoutAJump() async throws {
+        // Bez `CrowdScene.makeWorld`: ten pierwszy krok z wstawieniem baniek jest właśnie tym, w którym zawieranie się rozwiązuje.
+        let world = try BubbleWorld(configuration: CrowdScene.configuration())
+        var setup = try CrowdScene.resources(bubble: CrowdScene.softBubblePhysics(base: 1e-3))
+        for wall in try CrowdScene.walls() { setup = setup.add(wall) }
+        _ = world.submit(setup.add(try CrowdScene.bubble(1, at: [0, 0], radius: 40))
+            .add(try CrowdScene.bubble(2, at: [6, 0], radius: 12)))
+        let jumpLimit = 0.25 * Float(12)
+        var previous: [UInt64: WorldPoint] = [1: [0, 0], 2: [6, 0]]
+        var largestJump: Float = 0
+        var frame = await world.advance(by: CrowdScene.step)
+        XCTAssertEqual(frame.transactionReceipts.count, 1, "przygotowanie sceny musi zostać przyjęte")
+        for index in 0..<300 {
+            if index > 0 { frame = await world.advance(by: CrowdScene.step) }
+            XCTAssertNil(world.diagnostics.lastAdvanceIssue,
+                         "krok \(index) odrzucony: \(String(describing: world.diagnostics.lastRejectionReason))")
+            if world.diagnostics.lastAdvanceIssue != nil { break }
+            for identifier: UInt64 in [1, 2] {
+                let state = try XCTUnwrap(frame.objects[CrowdScene.id(identifier)], "bańka \(identifier) zniknęła w kroku \(index)")
+                largestJump = max(largestJump, simd_distance(state.position, try XCTUnwrap(previous[identifier])))
+                previous[identifier] = state.position
+            }
+        }
+        XCTAssertLessThanOrEqual(largestJump, jumpLimit, "największe przesunięcie środka w kroku")
+        let big = try XCTUnwrap(frame.objects[CrowdScene.id(1)]), small = try XCTUnwrap(frame.objects[CrowdScene.id(2)])
+        let overlap = 40 + 12 - simd_distance(big.position, small.position)
+        XCTAssertLessThan(overlap, 0.5, "nakładanie po rozsunięciu")
+        XCTAssertEqual(world.diagnostics.containedBubblePairCount, 0, "para zawarta po ostatnim kroku")
+    }
 }
