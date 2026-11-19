@@ -84,4 +84,94 @@ final class MotionControllersPrepareTests: XCTestCase {
             }
         }
     }
+
+    // MARK: gałąź siłowa .playerDriven (P-B-9, P-B-10)
+
+    private let bubbleMaterial = PhysicsMaterialID(rawValue: 1)
+    private let driven = ObjectID(rawValue: 1)
+
+    /// Bańka m = 2 w (0, 0) z prędkością `velocity` chwycona gumką/napędem prędkościowym, plus ewentualne pola i siła globalna.
+    private func drivenState(policy: BubbleDrivePolicy, target: WorldPoint, velocity: WorldPoint = .zero, globalForce: WorldPoint = .zero,
+                             fields: [ForceFieldDescriptor] = []) throws -> RuntimeState {
+        var transaction = WorldTransaction()
+            .updatePhysicsMaterial(bubbleMaterial, material: try PhysicsMaterial(kind: .bubble))
+            .updateRenderMaterial(RenderMaterialID(rawValue: 1), material: try RenderMaterial())
+            .add(.bubble(try BubbleDescriptor(id: driven, position: .zero, velocity: velocity, targetRadius: 1, mass: 2,
+                physicsMaterialID: bubbleMaterial, renderMaterialID: RenderMaterialID(rawValue: 1), drivePolicy: policy)))
+        for field in fields { transaction = transaction.add(.forceField(field)) }
+        transaction = transaction.beginPlayerDrive(driven, target: target)
+        let state = RuntimeState(configuration: try WorldConfiguration(
+            simulationRegion: WorldRectangle(min: [-1000, -1000], max: [1000, 1000]), globalForce: globalForce))
+        return try TransactionStager.stage(transaction, against: state).state
+    }
+
+    private func preparedVelocity(_ state: RuntimeState) throws -> WorldPoint {
+        var prepared = state
+        try MotionControllers.prepare(&prepared, duration: duration)
+        return try XCTUnwrap(prepared.objects[driven]).velocity
+    }
+
+    private func assertEqual(_ a: WorldPoint, _ b: WorldPoint, accuracy: Float = 1e-4, _ message: String = "",
+                             file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertEqual(a.x, b.x, accuracy: accuracy, message, file: file, line: line)
+        XCTAssertEqual(a.y, b.y, accuracy: accuracy, message, file: file, line: line)
+    }
+
+    /// Przyrost prędkości to F / m · dt z F = K · (cel − położenie), bez tłumienia i bez limitu.
+    func testBandForceAddsForceOverMassTimesDtToTheVelocity() throws {
+        let policy = try BubbleDrivePolicy(bandStiffness: 100)
+        // Naciągnięcie (3, 4): F = (300, 400), m = 2.
+        let velocity = try preparedVelocity(drivenState(policy: policy, target: [3, 4], velocity: [1, -2]))
+        assertEqual(velocity, WorldPoint(1 + 300 / 2 / 60, -2 + 400 / 2 / 60))
+    }
+
+    func testBandForceIsClampedToMaximumForceKeepingTheDirection() throws {
+        let policy = try BubbleDrivePolicy(bandStiffness: 100, maximumForce: 250)
+        // |F| = 500 → obcięte do 250 w kierunku (0,6; 0,8): F = (150, 200).
+        let velocity = try preparedVelocity(drivenState(policy: policy, target: [3, 4]))
+        assertEqual(velocity, WorldPoint(150 / 2 / 60, 200 / 2 / 60))
+        // Poniżej limitu siła nie jest obcinana: naciągnięcie (1, 0) → F = 100.
+        let below = try preparedVelocity(drivenState(policy: policy, target: [1, 0]))
+        assertEqual(below, WorldPoint(100 / 2 / 60, 0))
+    }
+
+    /// Tłumienie gumki to −D · v całkowane wykładniczo: v ← (v + F/m · dt) · e^(−D · dt / m).
+    func testBandDampingDecaysTheVelocityExponentiallyAfterTheForceIncrement() throws {
+        let policy = try BubbleDrivePolicy(bandStiffness: 100, bandDamping: 6)
+        let velocity = try preparedVelocity(drivenState(policy: policy, target: [3, 4], velocity: [1, -2]))
+        let decay = Float(exp(-6.0 / 60 / 2))
+        assertEqual(velocity, WorldPoint((1 + 300 / 2 / 60) * decay, (-2 + 400 / 2 / 60) * decay))
+    }
+
+    /// CD-D-10 (P-B-9): siła globalna i pole kierunkowe dodają się do siły gumki jak w `.dynamic`; pole z filtrem na inny ID nie działa.
+    func testBandForceAddsGlobalForceAndFieldsLikeADynamicBubble() throws {
+        let policy = try BubbleDrivePolicy(bandStiffness: 100)
+        let own = try ForceFieldDescriptor(id: ObjectID(rawValue: 10), position: .zero,
+            geometry: RangeGeometry(shape: .circle(radius: 100)), field: .directional(force: [0, 40]),
+            filter: ObjectFilter(objectIDs: [driven]))
+        let foreign = try ForceFieldDescriptor(id: ObjectID(rawValue: 11), position: .zero,
+            geometry: RangeGeometry(shape: .circle(radius: 100)), field: .directional(force: [999, 999]),
+            filter: ObjectFilter(objectIDs: [ObjectID(rawValue: 77)]))
+        let state = try drivenState(policy: policy, target: [3, 4], globalForce: [20, -10], fields: [own, foreign])
+        let velocity = try preparedVelocity(state)
+        // F = (300, 400) + (20, −10) + (0, 40) = (320, 430).
+        assertEqual(velocity, WorldPoint(320 / 2 / 60, 430 / 2 / 60))
+    }
+
+    /// Siła globalna wchodzi do `maximumForce` dopiero po obcięciu samej gumki: limit dotyczy gumki, nie sumy sił.
+    func testMaximumForceLimitsOnlyTheBandNotTheGlobalForce() throws {
+        let policy = try BubbleDrivePolicy(bandStiffness: 100, maximumForce: 250)
+        let velocity = try preparedVelocity(drivenState(policy: policy, target: [3, 4], globalForce: [0, -50]))
+        assertEqual(velocity, WorldPoint(150 / 2 / 60, (200 - 50) / 2 / 60))
+    }
+
+    /// P-B-10 (G5-AC1): bez `bandStiffness` napęd zostaje prędkościowy: prędkość narzucona, siła globalna ignorowana.
+    func testPolicyWithoutBandKeepsTheV220VelocityDrive() throws {
+        let policy = try BubbleDrivePolicy(maximumSpeed: 12)
+        let velocity = try preparedVelocity(drivenState(policy: policy, target: [3, 4], velocity: [1, -2], globalForce: [20, -10]))
+        assertEqual(velocity, WorldPoint(12 * 0.6, 12 * 0.8))
+        // Odległość 5 · odpowiedź 1 = prędkość 5 w kierunku (0,6; 0,8).
+        let response = try BubbleDrivePolicy(maximumSpeed: 12, distanceResponse: 1)
+        assertEqual(try preparedVelocity(drivenState(policy: response, target: [3, 4])), WorldPoint(3, 4))
+    }
 }
