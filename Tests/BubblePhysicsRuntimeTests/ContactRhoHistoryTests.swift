@@ -56,8 +56,8 @@ final class ContactRhoHistoryTests: XCTestCase {
         XCTAssertEqual(CrowdScene.effectiveRadius(of: a), CrowdScene.effectiveRadius(of: b), accuracy: 1e-3)
     }
 
-    // G2-AC1: kontur po jednym kroku też. Dopóki `nativeAccumulateContactPressure` bierze max(wgniecenie, recovered) z konturu
-    // poprzedniej klatki (G3, usuwane osobno), świat A ma szerszy kontur na bokach niż świat B.
+    // G2-AC1: kontur po jednym kroku też. `nativeAccumulateContactPressure` liczy wgniecenie tylko z bieżących kontaktów (G3),
+    // więc świat A (z historią) i świat B (nowa bańka) mają ten sam kontur.
     func testWallContactContourAfterOneStepIsTheSameWithAndWithoutHistory() async throws {
         let (history, fresh, _, _) = try await oneStepAfterRest()
         let contourA = try XCTUnwrap(history.debugContourSnapshot()[CrowdScene.id(1)])

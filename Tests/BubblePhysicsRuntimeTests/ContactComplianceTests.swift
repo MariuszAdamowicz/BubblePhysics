@@ -411,7 +411,7 @@ final class ContactComplianceTests: XCTestCase {
         XCTAssertLessThan(ratio, linearRatio - 0.1, "k = 2 (\(ratio)×) ma rosnąć wyraźnie wolniej niż k = 0 (\(linearRatio)×)")
     }
 
-    // P-B-24 dla k > 0: ρ^k reaguje z opóźnieniem jednego kroku, a wygładzenie ρ ma to uspokoić.
+    // P-B-24 dla k > 0: ρ liczy się z geometrii bieżącego kroku (G2), więc ρ^k nie opóźnia sprężyny i bańka osiada w oknie 1–2 s.
     func testSettlesWithCompressionExponentInWindowBetweenOneAndTwoSeconds() async throws {
         for exponent in [Float(1), 2] {
             let result = try await doubledForce(material: CrowdScene.softBubblePhysics(base: base, compressionExponent: exponent))

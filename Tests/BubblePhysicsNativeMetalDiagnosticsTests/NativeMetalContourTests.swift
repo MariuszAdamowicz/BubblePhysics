@@ -165,7 +165,9 @@ final class NativeMetalContourTests: XCTestCase {
         let inserted = try await solver.executeFrame(world: world, scenarioStep: 2)
         let original = inserted.bubbles.first { $0.id == bubble.id }!
         let points = try XCTUnwrap(inserted.contours[bubble.id])
-        XCTAssertLessThan((points[0] - original.center).length, 0.9)
+        // Kontur nie ma pamięci poprzedniej klatki (G3-AC1): po zniknięciu ściany bańka dotychczasowa jest od razu kołowa,
+        // także gdy wstawienie innej bańki przesunęło jej indeks.
+        XCTAssertTrue(points.allSatisfy { abs(($0 - original.center).length - 1) < 0.00001 })
         let added = inserted.bubbles[0]
         XCTAssertTrue(try XCTUnwrap(inserted.contours[added.id]).allSatisfy { abs(($0 - added.center).length - 3) < 0.00001 })
         world = ReferenceWorld(configuration: world.configuration, broadPhase: BruteForceBroadPhase())

@@ -49,29 +49,32 @@ final class HitTestTests: XCTestCase {
         XCTAssertEqual(world.pendingHitTestCount, 0)
     }
 
-    // P-B-31: wgłębienie deformacji. Deformowalna bańka dociśnięta do ściany ma spłaszczony kontur, więc punkt z jej koła
-    // nominalnego, który leży już poza konturem, nie należy do bańki (id 20, wygrałaby jako największy `ObjectID`).
+    // P-B-31: wgłębienie deformacji. Bańka o miękkim kontakcie dociśnięta stałą siłą do cienkiej ściany ma kontur ścięty ścianą,
+    // więc punkt z jej koła nominalnego, który leży już za ścianą, nie należy do bańki (id 20, wygrałaby jako największy `ObjectID`).
+    // Kontur nie ma pamięci poprzedniej klatki (G3), więc docisk trwa przez cały test: hitTest wykonuje jeszcze jeden krok.
     func testDeformationRecessIsOutsideTheBubbleContour() async throws {
         let region = try WorldRectangle(min: [-10, -10], max: [10, 10])
         let world = try B.makeWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()), region: region)
-        // Materiał bez deformowalności daje bańkę sztywną, bez wgłębienia; tu bańka musi być deformowalna.
+        // Materiał bez deformowalności i podatności daje bańkę sztywną, bez wgłębienia; tu kontakt jest sprężyną o c = 3e-3 (δ = c · F = 0,3).
         world.submit(try B.baseTransaction()
-            .updatePhysicsMaterial(B.bubbleMaterial, material: PhysicsMaterial(kind: .bubble, deformability: 1))
-            .add(B.box(10, at: [1, 0], half: [1, 10]))
-            .add(B.bubble(20, at: [-0.6, 0], radius: 1)))
-        let frame = await world.advance(by: B.step)
-        // Warunek wstępny: punkt wgłębienia leży w kole nominalnym (promień 1), a poza konturem spłaszczonej bańki.
+            .updatePhysicsMaterial(B.bubbleMaterial, material: PhysicsMaterial(kind: .bubble, deformability: 1,
+                contactCompliance: BubbleContactCompliance(base: 3e-3)))
+            .add(B.box(10, at: [0.05, 0], half: [0.05, 10]))
+            .add(B.bubble(20, at: [-0.9, 0], radius: 1))
+            .setGlobalForce([100, 0]))
+        let frame = await B.advance(world, steps: 90).frame
+        // Warunek wstępny: punkt wgłębienia leży w kole nominalnym (promień 1), a poza konturem ściętej bańki.
         // Efektywny promień jest najmniejszą odległością konturu, więc koło o tym promieniu leży w całości w konturze
         // i nie może zawierać wgłębienia; punkt leży poza nim, a `objects(at:)` (koło efektywne) też go nie obejmuje.
         let bubble = try XCTUnwrap(frame.objects[id(20)])
         guard case .bubble(let effectiveRadius) = bubble.kind else { return XCTFail("obiekt 20 nie jest bańką") }
-        let recess = WorldPoint(-0.1, 0)
+        let recess = WorldPoint(0.15, 0)
         let offset = recess - bubble.position
         let distance = (offset * offset).sum().squareRoot()
         XCTAssertLessThan(distance, 1, "punkt wgłębienia leży w kole nominalnym (promień 1)")
         XCTAssertGreaterThan(distance, effectiveRadius, "punkt wgłębienia leży poza kołem efektywnego promienia")
-        XCTAssertLessThan(bubble.bounds.max.x, recess.x, "kontur spłaszczonej bańki nie sięga punktu wgłębienia")
-        let results = await hitTests(world, [recess, [-0.5, 0], [0.05, 0], [-3, 0]])
+        XCTAssertLessThan(bubble.bounds.max.x, recess.x, "kontur ściętej bańki nie sięga punktu wgłębienia")
+        let results = await hitTests(world, [recess, [-0.5, 0], [0.05, 0.2], [-3, 0]])
         XCTAssertEqual(results, [nil, id(20), id(10), nil])
         XCTAssertEqual(world.benchmarkContourCPUReadbackCount, 0)
     }
