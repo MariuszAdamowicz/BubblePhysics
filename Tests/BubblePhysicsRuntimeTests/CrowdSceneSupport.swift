@@ -94,13 +94,14 @@ enum CrowdScene {
     static let secondBubbleMaterial = PhysicsMaterialID(rawValue: 3)
 
     /// Materiał baniek z podatnością kontaktu c = base · (r / referenceRadius)^s · ρ^k; reszta jak w `bubblePhysics`.
-    /// Bez tłumienia, `maximumLinearSpeed` = 600 jak w scenie tłoku.
+    /// Bez tłumienia, `maximumLinearSpeed` = 600 jak w scenie tłoku. `dampingRatio` to ζ_c kontaktu miękkiego (domyślnie 1, jak w materiale).
     static func softBubblePhysics(base: Float, radiusExponent: Float = 1, compressionExponent: Float = 0,
                                   referenceRadius: Float = 20, maximumLinearSpeed: Float? = 600,
-                                  damping: Float = 0) throws -> PhysicsMaterial {
+                                  damping: Float = 0, dampingRatio: Float = 1) throws -> PhysicsMaterial {
         try PhysicsMaterial(kind: .bubble, damping: damping, maximumLinearSpeed: maximumLinearSpeed,
                             contactCompliance: BubbleContactCompliance(base: base, referenceRadius: referenceRadius,
-                                radiusExponent: radiusExponent, compressionExponent: compressionExponent))
+                                radiusExponent: radiusExponent, compressionExponent: compressionExponent),
+                            contactDampingRatio: dampingRatio)
     }
 
     /// Materiał miękki tłoku z P-B-27 i P-B-28: s = 1, k = 1, c₀ = 1e-3 przy r_ref = 20. Przy kroku 1/60 α pary to rząd wielkości
