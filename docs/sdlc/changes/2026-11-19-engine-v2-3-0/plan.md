@@ -303,6 +303,11 @@ Wycinek 1 sam naprawia model kontaktu miękkiego (ugięcie c·F zamiast 3,85·c�
     CrowdCompressionTests.testSoftContainedPairSeparatesWithoutAJump   # P-B-30, wiersz odstępstwa 6
     ```
 
+Testy o zmienionych oczekiwaniach (slice 1):
+- `ContactComplianceTests` (5 testów: `testCompressionExponentMakesDoubledForceDentLessThanTwice`, `testOverrideOfBaseComplianceInDescriptorBendsOnlyThatBubble`, `testOverrideOfBaseComplianceInMergeResultBendsOnlyThatResult`, `testOverrideOfBaseComplianceInSplitPartsBendsOnlyThatPart`, `testRadiusLawWithExponent0DentsTheSmallerBubbleMoreInRelativeTerms`): kontakt miękki ugina się o pełne c · F zamiast 3,85 · c · F (CD-D-16), więc ich c₀ = 1e-3 dawało δ = 0,3 zamiast 1,16 i progi nie przechodziły. Wspólne `base` przeliczone na 3,85e-3 (δ = 1,155 jak dawniej). Pary B1 i CD-D-12 mają osobne `pairBase` = 4e-3 jak w v2.2.0. Nagłówek bez współczynnika 3,85 i „Jacobiego”; granica liniowości zmierzona sondą: δ / (c · F) = 1,000 do F = 2 500 (dawna F ≈ 600 wynikała z prędkości spoczynkowej wyłączającej tłumik, której już nie ma).
+- `CrowdCompressionTests.testSoftCrowdBalance2_5KeepsStepsAcceptedAndOverlapsMoreThanHard` przemianowany na `testSoftCrowdBalance2_5KeepsStepsAcceptedAndCompressesContoursUnlikeHard` (2 asercje zastąpione): dawny rozkład nakładania wynikał z częściowej korekty prędkości i limitu λ pary; sprężynowy kontakt w gęstym tłoku daje 670 par wobec 729 i maksimum 93,3 wobec 81,2 (c₀ = 3,85e-3). Dowodem działania materiału jest kontur: średni promień efektywny / docelowy < twardy − 0,1 (probe 0,16 wobec 1,00). `CrowdScene.softCrowdPhysics` ma c₀ = 3,85e-3.
+- `NativeMetalRestDampingTests` i `ContactComplianceTests.testHard*` przeszły bez zmian oczekiwań (pełny zestaw @007fb17 nie wykazał ich w porażkach); `testHard*` używają wspólnego `base` = 3,85e-3 przy niezmienionych progach.
+
 ## Deviations from Design
 
 | ID | Type | Status | Design updated? | Note |
