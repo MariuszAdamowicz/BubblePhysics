@@ -133,6 +133,9 @@ package final class NativePublicWorld {
         solver = try NativeMetalSolver(device: device, commandExecutor: commandExecutor, configuration: configuration)
     }
     package var hasSensorPairHistory: Bool { solver.hasSensorPairHistory }
+    /// Rekordy cache kontaktów po ostatnim kroku (ρ końców, λ). Szew testów ρ wyników scalenia i podziału; typ rekordu jest
+    /// wewnętrzny, więc testy czytają go przez `@testable`.
+    var cachedContacts: [NativeContactCacheRecord] { solver.cachedContacts }
     /// Krok bez GPU (brak ciał z masą) kończy wszystkie pary w `EventCompactor`, więc i tu historia par musi zniknąć;
     /// inaczej para o tych samych ID dodana później nie dostałaby `contactBegan`.
     package func forgetContactHistory() { contactHistory = [] }
