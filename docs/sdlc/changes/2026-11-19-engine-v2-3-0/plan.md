@@ -8,7 +8,7 @@
 **References:** specyfikacja autora `2KBubbles-iOS/docs/benchmarks/stage-0/v2.3.0-engine-spec.md` (commit 6092ec3 w repo gry); gałąź bazowa PR #6 `feature/crowd-review-followups` ([CD-D-12](change-design.md#cd-d-12))
 **Strategy:** slices
 **Test command:** `swift build --build-tests && swift test`
-**Status:** Draft
+**Status:** Approved
 **Template version:** default/0.3.3
 
 **Plugin version:** 0.7.10
