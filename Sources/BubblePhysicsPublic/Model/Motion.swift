@@ -31,6 +31,17 @@ public struct BubbleDrivePolicy: Equatable, Sendable {
         }
         try requirePositive(maximumSpeed, "drive.maximumSpeed")
         if let distanceResponse { try requirePositive(distanceResponse, "drive.distanceResponse") }
+        // Pola gumki zgłaszają `valueOutOfRange` także dla ∞ i NaN, bo gra wybiera tryb przez `bandStiffness`.
+        if let bandStiffness {
+            guard bandStiffness.isFinite, bandStiffness > 0 else { throw ModelValidationError.valueOutOfRange("drive.bandStiffness") }
+            guard bandDamping.isFinite, bandDamping >= 0 else { throw ModelValidationError.valueOutOfRange("drive.bandDamping") }
+            if let maximumForce {
+                guard maximumForce.isFinite, maximumForce > 0 else { throw ModelValidationError.valueOutOfRange("drive.maximumForce") }
+            }
+        } else {
+            guard bandDamping == 0 else { throw ModelValidationError.valueOutOfRange("drive.bandDamping") }
+            guard maximumForce == nil else { throw ModelValidationError.valueOutOfRange("drive.maximumForce") }
+        }
         self.rigidifies = rigidifies; self.rigidificationDuration = rigidificationDuration
         self.relaxationDuration = relaxationDuration
         self.maximumSpeed = maximumSpeed; self.distanceResponse = distanceResponse
