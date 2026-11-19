@@ -122,7 +122,7 @@ Kernel zostaje w tym samym miejscu kolejności (przed sąsiedztwem i `nativePrep
 
 **4. Dynamika kontaktu miękkiego (shader + model).** Dwie części.
 
-*a) Pełna korekta XPBD w prędkości (CD-D-16).* Przeguby i bryły działają w tej samej pętli iteracji co `nativeSolveJacobi` (`NativeMetalSolver.swift:723-751`), więc nie ma chwili „po Jacobim, przed przegubami”. Nowy bufor `contactCorrection` startuje od przesunięcia warm startu (`nativeApplyWarmStart`), a po każdym `nativeSolveJacobi`, przed przegubami i bryłami, nowy kernel `nativeAccumulateContactCorrection` dodaje do niego przesunięcie tej iteracji; solved oznacza dalej predicted + `contactCorrection`. `nativeUpdateVelocities` dla bańki z podatnością (`contact.x` > 0) liczy:
+*a) Pełna korekta XPBD w prędkości (CD-D-16).* Przeguby i bryły działają w tej samej pętli iteracji co `nativeSolveJacobi` (`NativeMetalSolver.swift:723-751`), więc nie ma chwili „po Jacobim, przed przegubami”. Nowy bufor `contactCorrection` inicjalizuje `nativeApplyWarmStart` swoim przesunięciem, a `nativeSolveJacobi` w każdej iteracji, przed przegubami i bryłami, dopisuje do niego to samo `correction`, które już liczy (bez nowego kernela); solved oznacza dalej predicted + `contactCorrection`. `nativeUpdateVelocities` dla bańki z podatnością (`contact.x` > 0) liczy:
 
 - v += (solved − predicted) / dt, czyli pełna korekta kontaktów XPBD; wszystkie kontakty takiej bańki są miękkie, bo c_self > 0;
 - v += (final − solved) · s / dt, czyli korekty przegubów, brył, CCD i strażników z dotychczasową skalą s, tak jak chroni przed tym komentarz kernela.
