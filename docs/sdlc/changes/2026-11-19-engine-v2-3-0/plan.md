@@ -420,7 +420,35 @@ Testy o zmienionych oczekiwaniach (slice 2):
 26. Poprawić komentarz `ObjectState.Kind.bubble(effectiveRadius:)` (`WorldFrame.swift:96`) i opisać w `docs/integration-guide.md` zawartość wiersza dokumentacji [P-B-28](#p-b-28), z przepisanym punktem „Prędkość w stronę kontaktu” (:97) · verify: `! grep -q "odbudow" Sources/BubblePhysicsPublic/Model/WorldFrame.swift && ! grep -q "gromadzi prędkość" docs/integration-guide.md && grep -q "bandStiffness" docs/integration-guide.md && grep -q "contactDampingRatio" docs/integration-guide.md && grep -qi "wystrz" docs/integration-guide.md && grep -q "skok" docs/integration-guide.md && swift test --filter BubblePhysicsPublicTests.IntegrationGuideTests`
 27. Dodać sekcję `## 2.3.0` w `CHANGELOG.md` dla całej zmiany, z treścią CHANGELOG z wiersza [P-B-28](#p-b-28), i podbić wersję w `README.md:5` oraz w `MigrationGuideTests` (:5, :107) · verify: `grep -q "^## 2.3.0" CHANGELOG.md && grep -qi "wystrz" CHANGELOG.md && grep -q "maximumLinearSpeed" CHANGELOG.md && grep -q "Wersja 2.3.0" README.md && swift test --filter BubblePhysicsPublicTests.MigrationGuideTests`
 28. Uruchomić pełny zestaw i zapisać w tym pliku wpis `Lista do opisu PR:` z testami o zmienionych oczekiwaniach z wycinków 1–3 i powodami, dla [P-B-26](#p-b-26) · verify: `grep -q "^Lista do opisu PR:" docs/sdlc/changes/2026-11-19-engine-v2-3-0/plan.md && swift build --build-tests && swift test`
+    ```text
+    $ swift build --build-tests && swift test   # @a0dcca6
+    Executed 1459 tests, with 2 tests skipped and 0 failures (0 unexpected) in 556.750 (556.894) seconds
+    $ grep -c "^Lista do opisu PR:" docs/sdlc/changes/2026-11-19-engine-v2-3-0/plan.md
+    1
+    ```
 29. Uruchomić perf guard na bezczynnym Macu (M1 Pro, `uptime` ≤ 2) i zapisać jego linie `PASS` w tym pliku we wpisie `Perf guard (slice 3):`, dla [P-B-27](#p-b-27). Jeśli perf guard nie przechodzi, zatrzymać implement bez zmiany progów w `docs/benchmarks/perf-guard.json` ([G5-AC3](change-design.md#g5-ac3)) · verify: `grep -q "^Perf guard (slice 3):" docs/sdlc/changes/2026-11-19-engine-v2-3-0/plan.md && swift run -c release BubblePhysicsPerfGuard`
+
+Lista do opisu PR: testy o zmienionych oczekiwaniach z wycinków 1–3, każdy z powodem (szczegóły we wpisach „Testy o zmienionych oczekiwaniach” wycinków 1 i 2 wyżej).
+
+Wycinek 1 (G4, kontakt miękki jak sprężyna):
+- `ContactComplianceTests`: `testCompressionExponentMakesDoubledForceDentLessThanTwice`, `testOverrideOfBaseComplianceInDescriptorBendsOnlyThatBubble`, `testOverrideOfBaseComplianceInMergeResultBendsOnlyThatResult`, `testOverrideOfBaseComplianceInSplitPartsBendsOnlyThatPart`, `testRadiusLawWithExponent0DentsTheSmallerBubbleMoreInRelativeTerms` oraz cztery `testHard*` (wspólne `base`): ugięcie c · F zamiast 3,85 · c · F (CD-D-16), więc c₀ przeliczone 3,85×; pary B1 i CD-D-12 mają `pairBase` = 4e-3 jak w v2.2.0. Nagłówek bez „Jacobiego”, granica liniowości zmierzona sondą (F do 2 500).
+- `CrowdCompressionTests.testSoftCrowdBalance2_5KeepsStepsAcceptedAndOverlapsMoreThanHard` przemianowany na `testSoftCrowdBalance2_5KeepsStepsAcceptedAndCompressesContoursUnlikeHard`: sprężynowy kontakt w tłoku daje mniej par nakładających się niż twardy, więc dowodem materiału jest kontur. `CrowdScene.softCrowdPhysics` ma c₀ = 3,85e-3 (zmienia materiał wszystkich testów tłoku miękkiego).
+- `ContactVelocityCorrectionProbeTests`: przepisana na ugięcie c · F i prędkość ≈ 0 w spoczynku (P-B-19).
+- `PairLambdaCeilingProbeTests`: łańcuch na równowagę przy każdej sile bez bramki środowiskowej (P-B-29); `CrowdCompressionTests.testSoftContainedPairReleasesWithoutBreakingTheWorld` (P-B-30, CD-D-18): limit λ tylko dla par twardych.
+- `NativeMetalShaderABITests.testHostComputesContactComplianceForBubbleRecord`: lane `.z` = ζ_c także dla bańki twardej.
+
+Wycinek 2 (G2, G3, ρ i kontur bez historii):
+- `NativeMetalContourTests` :160: po zniknięciu ściany kontur jest od razu kołowy; test relaksacji 30 klatek zastąpiony testem wgniecenia 0 w klatce zniknięcia kontaktu.
+- `HitTestTests.testDeformationRecessIsOutsideTheBubbleContour`: bez pamięci konturu bańka rozsunięta od ściany ma kontur kołowy; scena na kontakt miękki ze stałą siłą.
+- `MaterialTextureRenderTests.testAttachedModeKeepsTexturePointAtTheContourPoint`: pomiar w pierwszym kroku po `replace`, gdy kontakt trwa.
+- `NativeMetalXPBDTests`, `NativeMetalStructuralOperationTests`: ρ z pozycji przewidzianych, podział c pary, ρ_prev = 1 dla nowego rekordu i wyniku strukturalnego.
+- `ContactComplianceTests` :414 i `ContactRhoHistoryTests`: tylko komentarze.
+
+Wycinek 3 (G1, wydanie):
+- `MigrationGuideTests` (:5, :107): README podaje „Wersja 2.3.0”.
+- Bez zmian oczekiwań: testy napędu v2.2.0 (`MotionControllersPrepareTests`, `MotionControllersFeedbackTests`, `MotionCommandTests`, `NativeMetalMotionRoleTests`) przechodzą bez zmian (P-B-10); nowe są `BandDriveTests`, testy gałęzi siłowej, walidacji pól i odrzucenia K · dt² / m ≥ 1.
+
+Bez zmian oczekiwań (sprawdzone): `NativeMetalRestDampingTests`, `NativeMetalMotionRoleTests`, `NativeMetalBenchmarkTests`, hashe `AcceptanceEquivalenceTests` i `AcceptanceRenderEquivalenceTests` (Apple M1 Pro).
 
 ## Deviations from Design
 
