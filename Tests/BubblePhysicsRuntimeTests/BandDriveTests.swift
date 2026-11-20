@@ -87,7 +87,7 @@ final class BandDriveTests: XCTestCase {
         var speed: Float
     }
 
-    /// Bańka kc = 0 przy lewej ścianie, ciągnięta w nią gumką `K` z limitem `maximumForce`; stan po 6 s.
+    /// Bańka z liniową podatnością c₀·r/r_ref przy lewej ścianie, ciągnięta w nią gumką `K` z limitem `maximumForce`; stan po 6 s.
     private func pressedAgainstTheWall(stretch: Float) async throws -> Rest {
         let compliance: Float = 0.01
         let (world, base) = try world(material: CrowdScene.softBubblePhysics(base: compliance))

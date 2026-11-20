@@ -181,6 +181,15 @@ final class ContactContourTests: XCTestCase {
                 for point in contour { deepestBetweenBubbles = max(deepestBetweenBubbles, depth(of: point, in: other)) }
             }
         }
+        // Po uspokojeniu: tłok prawie się nie rusza (szczyt prędkości w trakcie osiadania to ok. 180), a bańka najbliższa narożnika
+        // (−x, −y) styka się z obiema ścianami (okrąg o promieniu docelowym sięga ściany albo ją przekracza).
+        let maxSpeed = frame.objects.values.map { length($0.velocity) }.max() ?? .infinity
+        XCTAssertLessThan(maxSpeed, 5, "tłok ma być uspokojony, największa prędkość w ostatniej klatce \(maxSpeed)")
+        let corner = try XCTUnwrap(placed.min { length(try XCTUnwrap(frame.objects[CrowdScene.id($0.id)]).position + half)
+                                                < length(try XCTUnwrap(frame.objects[CrowdScene.id($1.id)]).position + half) })
+        let cornerPosition = try XCTUnwrap(frame.objects[CrowdScene.id(corner.id)]).position
+        XCTAssertLessThanOrEqual(cornerPosition.x - corner.radius + half.x, 0.5, "bańka przy narożniku styka się z lewą ścianą")
+        XCTAssertLessThanOrEqual(cornerPosition.y - corner.radius + half.y, 0.5, "bańka przy narożniku styka się z dolną ścianą")
         XCTAssertGreaterThan(mostDented, 1, "tłok ma być wyraźnie ściśnięty, najgłębsze wgniecenie \(mostDented)")
         XCTAssertLessThanOrEqual(deepestBetweenBubbles, 0.5, "kontury baniek się przenikają")
         XCTAssertLessThanOrEqual(deepestIntoWall, 0.5, "kontur przenika ścianę")

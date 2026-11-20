@@ -9,12 +9,12 @@ import XCTest
 /// XPBD, więc:
 /// - ugięcie w równowadze to c · F, niezależnie od masy, kroku i tłumienia ζ_c (zmierzony stan ustalony nie zależy od dashpotu);
 /// - opublikowana prędkość spoczynkowa jest zerem.
-/// Warunki G4-AC5: kc = 0, `damping` materiału = 0, restytucja 0, prędkości poniżej `restSpeed`.
+/// Warunki G4-AC5: podatność liniowa c₀·r/r_ref, `damping` materiału = 0, restytucja 0, prędkości poniżej `restSpeed`.
 @MainActor
 final class ContactVelocityCorrectionProbeTests: XCTestCase {
     private let force: Float = 300
     private let radius: Float = 20
-    /// c₀ = 1e-3 przy r_ref = 20 i r = 20, s = 1, kc = 0: c = 1e-3.
+    /// c₀ = 1e-3 przy r_ref = 20 i r = 20: c = c₀·r/r_ref = 1e-3.
     private let compliance: Float = 1e-3
 
     private struct Measurement {

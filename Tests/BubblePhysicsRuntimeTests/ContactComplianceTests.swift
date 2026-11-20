@@ -188,13 +188,13 @@ final class ContactComplianceTests: XCTestCase {
         try CrowdScene.softBubblePhysics(base: 2e34, referenceRadius: 1)
     }
     /// Ta sama podatność przy c₀ = 0: kontakt twardy, więc nic nie przepełnia.
-    private func overflowingExponentWithoutCompliance() throws -> PhysicsMaterial {
+    private func hardWithoutCompliance() throws -> PhysicsMaterial {
         try CrowdScene.softBubblePhysics(base: 0, referenceRadius: 1)
     }
 
     // P-B-19 (G3-AC8): `add`, `replace`, scalenie i podział z podatnością przepełniającą Float.
     func testWorstAlphaRejectsAddReplaceMergeAndSplitWhenAlphaOverflows() async throws {
-        let world = try await transactionWorld(material: overflowing(), hardMaterial: overflowingExponentWithoutCompliance()) {
+        let world = try await transactionWorld(material: overflowing(), hardMaterial: hardWithoutCompliance()) {
             // Źródła i bańka do podmiany stoją na materiale z c₀ = 0 albo na małym promieniu (c = 2e34, α = 1,4e38).
             $0.add(try bubble(1, at: [-10, 0], radius: 3.5, material: hard)).add(try bubble(2, at: [10, 0], radius: 3.5, material: hard))
                 .add(try bubble(3, at: [100, 100], radius: 6, material: hard))
@@ -223,7 +223,7 @@ final class ContactComplianceTests: XCTestCase {
 
     // Nadpisanie c₀ na bańce wchodzi do najgorszej α: c₀ = 0 na materiale przepełniającym przechodzi, a duże nadpisanie nie.
     func testWorstAlphaUsesTheBubbleOverrideOfBaseCompliance() async throws {
-        let world = try await transactionWorld(material: overflowing(), hardMaterial: overflowingExponentWithoutCompliance())
+        let world = try await transactionWorld(material: overflowing(), hardMaterial: hardWithoutCompliance())
         assertAccepted(await run(world, WorldTransaction().add(try bubble(1, at: [200, 0], radius: 4, override: 0))), "add z nadpisaniem 0")
         let reason = TransactionRejectionReason.invalidValue(.valueOutOfRange("contactCompliance"))
         assertRejected(await run(world, WorldTransaction().add(try bubble(2, at: [200, 100], radius: 4, override: 2e34))), at: 0, reason,
@@ -252,7 +252,7 @@ final class ContactComplianceTests: XCTestCase {
 
     // Przejście promienia, które już trwa, wchodzi do przedziału: stan końcowy przepełnia α także wtedy, gdy bieżący promień jest mały.
     func testWorstAlphaIncludesTheScheduledEndOfARunningRadiusTransition() async throws {
-        let world = try await transactionWorld(material: overflowing(), hardMaterial: overflowingExponentWithoutCompliance()) {
+        let world = try await transactionWorld(material: overflowing(), hardMaterial: hardWithoutCompliance()) {
             $0.add(try bubble(1, at: [0, 0], radius: 1))
         }
         // Wolne przejście do r = 2 (c = 4e34, α = 2,9e38 mieści się w Float przy r_ref = 1): trwa przez cały test.
@@ -265,7 +265,7 @@ final class ContactComplianceTests: XCTestCase {
             material: try CrowdScene.softBubblePhysics(base: 2e34, referenceRadius: 0.5))), at: 0, reason,
             "updatePhysicsMaterial z celem przejścia r = 2")
         // Bez przejścia ten sam materiał dla bańki r = 1 jest przyjęty: c = 4e34.
-        let calm = try await transactionWorld(material: overflowing(), hardMaterial: overflowingExponentWithoutCompliance()) {
+        let calm = try await transactionWorld(material: overflowing(), hardMaterial: hardWithoutCompliance()) {
             $0.add(try bubble(1, at: [0, 0], radius: 1))
         }
         assertAccepted(await run(calm, WorldTransaction().updatePhysicsMaterial(soft,
@@ -274,7 +274,7 @@ final class ContactComplianceTests: XCTestCase {
 
     // P-B-20 (G3-AC9): `startTransition` promienia po przepełnieniu odrzucone; promień bez zmian.
     func testWorstAlphaRejectsRadiusTransitionThatOverflowsAndKeepsTheRadius() async throws {
-        let world = try await transactionWorld(material: overflowing(), hardMaterial: overflowingExponentWithoutCompliance()) {
+        let world = try await transactionWorld(material: overflowing(), hardMaterial: hardWithoutCompliance()) {
             $0.add(try bubble(1, at: [0, 0], radius: 1))
         }
         let reason = TransactionRejectionReason.invalidValue(.valueOutOfRange("contactCompliance"))
@@ -293,7 +293,7 @@ final class ContactComplianceTests: XCTestCase {
     // P-B-20 (G3-AC9): `updatePhysicsMaterial`, po którym α przepełnia Float, odrzucone; materiał bez zmian.
     func testWorstAlphaRejectsMaterialUpdateThatOverflowsAndKeepsTheMaterial() async throws {
         let moderate = try CrowdScene.softBubblePhysics(base: 1e-3, referenceRadius: 20)
-        let world = try await transactionWorld(material: moderate, hardMaterial: overflowingExponentWithoutCompliance()) {
+        let world = try await transactionWorld(material: moderate, hardMaterial: hardWithoutCompliance()) {
             $0.add(try bubble(1, at: [0, 0], radius: 4))
         }
         let reason = TransactionRejectionReason.invalidValue(.valueOutOfRange("contactCompliance"))
@@ -308,7 +308,7 @@ final class ContactComplianceTests: XCTestCase {
             material: try CrowdScene.softBubblePhysics(base: 2e-3, referenceRadius: 20))), "updatePhysicsMaterial skończone")
     }
 
-    // MARK: prawo promienia i wykładnik ściśnięcia (P-B-21 – P-B-24)
+    // MARK: prawo promienia (P-B-21 – P-B-24)
 
     private func twoRadii(material: PhysicsMaterial, steps: Int = 120) async throws -> [UInt64: [Float]] {
         let world = try await pressWorld(material: material) {
@@ -499,8 +499,8 @@ final class ContactComplianceTests: XCTestCase {
 
     // MARK: model 3.0.0: c = c₀ · r / r_ref (P-B-1, P-B-2)
 
-    /// c₀ i r_ref z kryteriów G3-AC1 i G3-AC2. Materiał z samych `base` i `referenceRadius`: ugięcie ma wynikać z modelu, a nie z
-    /// domyślnych wykładników pomocnika `softBubblePhysics`.
+    /// c₀ i r_ref z kryteriów G3-AC1 i G3-AC2. Materiał z samych `base` i `referenceRadius`: ugięcie ma wynikać z modelu c₀ · r / r_ref,
+    /// a nie z pomocnika `softBubblePhysics`.
     private let modelBase: Float = 0.0108
     private let modelReferenceRadius: Float = 20
 
@@ -511,12 +511,22 @@ final class ContactComplianceTests: XCTestCase {
 
     /// Ściana statyczna o grubości 300 (co najmniej 2r także dla r = 148), czoło w x = −100, w świecie bez ram `CrowdScene`.
     private func thickWallWorld(_ build: (WorldTransaction) throws -> WorldTransaction) async throws -> BubbleWorld {
+        try await modelWorld(withWall: true, build)
+    }
+
+    /// Świat ±500 bez żadnych ścian ani ram: nic poza polami sceny nie działa na bańki (P-B-2: para ściskana bez ścian).
+    private func openWorld(_ build: (WorldTransaction) throws -> WorldTransaction) async throws -> BubbleWorld {
+        try await modelWorld(withWall: false, build)
+    }
+
+    private func modelWorld(withWall: Bool, _ build: (WorldTransaction) throws -> WorldTransaction) async throws -> BubbleWorld {
         let world = try BubbleWorld(configuration: WorldConfiguration(
             simulationRegion: WorldRectangle(min: [-500, -500], max: [500, 500]), fixedTimeStep: CrowdScene.step, eventBufferCapacity: 4096))
         let wall = WorldObject.rigidBody(try RigidBodyDescriptor(id: CrowdScene.wallIDs[0],
             vertices: [[-400, -450], [-100, -450], [-100, 450], [-400, 450]], motionRole: .static,
             physicsMaterialID: CrowdScene.wallMaterial, renderMaterialID: CrowdScene.style))
-        _ = world.submit(try build(CrowdScene.resources(bubble: modelMaterial()).add(wall)))
+        let resources = try CrowdScene.resources(bubble: modelMaterial())
+        _ = world.submit(try build(withWall ? resources.add(wall) : resources))
         let frame = await world.advance(by: CrowdScene.step)
         XCTAssertNil(world.diagnostics.lastAdvanceIssue, "przygotowanie sceny")
         XCTAssertEqual(frame.transactionReceipts.count, 1, "przygotowanie sceny musi zostać przyjęte")
@@ -567,15 +577,23 @@ final class ContactComplianceTests: XCTestCase {
                     geometry: RangeGeometry(shape: .circle(radius: 200)), field: .directional(force: [direction * pressForce, 0]),
                     filter: ObjectFilter(objectIDs: [CrowdScene.id(target)])))
             }
-            let world = try await CrowdScene.makeWorld(bubble: modelMaterial()) { setup in
+            let world = try await openWorld { setup in
                 setup.add(try CrowdScene.bubble(1, at: [-distance / 2, 0], radius: radiusA))
                     .add(try CrowdScene.bubble(2, at: [distance / 2, 0], radius: radiusB))
                     .add(try field(500, target: 1, direction: 1)).add(try field(501, target: 2, direction: -1))
             }
             var frame = await world.advance(by: CrowdScene.step)
-            for _ in 0..<600 { frame = await world.advance(by: CrowdScene.step) }
+            var tail: [Float] = []
+            for index in 0..<600 {
+                frame = await world.advance(by: CrowdScene.step)
+                guard index >= 540 else { continue }
+                tail.append(simd_distance(try XCTUnwrap(frame.objects[CrowdScene.id(1)]).position,
+                                          try XCTUnwrap(frame.objects[CrowdScene.id(2)]).position))
+            }
             XCTAssertNil(world.diagnostics.lastAdvanceIssue, "(\(radiusA), \(radiusB))")
             let first = try XCTUnwrap(frame.objects[CrowdScene.id(1)]), second = try XCTUnwrap(frame.objects[CrowdScene.id(2)])
+            XCTAssertLessThan((tail.max() ?? 0) - (tail.min() ?? 0), 0.005 * overlap,
+                              "(\(radiusA), \(radiusB)): nakładanie ma być uspokojone w ostatnich 60 krokach")
             let measuredOverlap = radiusA + radiusB - simd_distance(first.position, second.position)
             XCTAssertEqual(measuredOverlap, overlap, accuracy: 0.02 * overlap,
                            "(\(radiusA), \(radiusB)): nakładanie \(measuredOverlap), oczekiwane (c_a + c_b) · F = \(overlap)")

@@ -13,7 +13,7 @@ import XCTest
 ///   dotyczy tylko par twardych, a parze miękkiej przyrost λ ogranicza podatność.
 ///
 /// Scena: sąsiadka r = 20, m = 1 przy lewej ścianie; za nią mała bańka r = 12, m = 0,36; w łańcuchu za małą jeszcze pchacz
-/// r = 20, m = 1. `MotorDrive` pcha w lewo siłą F ostatnią bańkę. Materiał c₀ = 1e-3, r_ref = 20, s = 1, kc = 0, więc nakładanie
+/// r = 20, m = 1. `MotorDrive` pcha w lewo siłą F ostatnią bańkę. Materiał c₀ = 1e-3, r_ref = 20 (podatność c₀·r/r_ref), więc nakładanie
 /// pary mała–sąsiadka w równowadze to (c_small + c_big) · F, przy każdym F, także powyżej dawnego sufitu. Kontrola: ten sam
 /// świat bez limitu λ pary.
 @MainActor
