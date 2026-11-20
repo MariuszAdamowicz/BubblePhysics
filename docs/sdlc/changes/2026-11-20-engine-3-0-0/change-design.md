@@ -12,6 +12,7 @@
 **Self-review po bramce (2026-11-20, nowa pętla):** CAP_REACHED — round-2 findings fixed, not re-reviewed: (1) G1-AC1 i G1-AC3 nie ustalały kierunku celu gumki; cel na prostej prostopadłej do czoła ściany przez środek bańki; (2) G2-AC4 bez długości ściany, punktu startu i definicji „za ścianą”; dopisano długość 800, start 200 przed czołem i definicję; (3) G3-AC5 podawało nieistniejący przypadek odrzucenia; poprawiono na `invalidValue(.valueOutOfRange("contactCompliance"))`; cytowanie bramki deformowalności poprawione na :734.
 **Self-review po jednym tłumieniu ruchu (2026-11-20, pętla 3):** CAP_REACHED — round-2 findings fixed, not re-reviewed: (1) G2-AC5 nie wykrywa błędu w pojedynczym kroku (impuls ok. 4,6 % c·F); dodano G2-AC7, wewnętrzny test budowy kontaktów na granicach obszarów; (2) G3-AC4 i non-goal kontaktu twardego przeczyły G2; wyjątek rozszerzony o CD-D-3/CD-D-4, non-goal zawężony do rozwiązywania; (3) G5-AC3 wskazywało test bez sceny tłoku; nowy test tłoku i przepisane `ContactContourTests`; (4) G1-AC4 bez warunku na `maximumForce`; dopisano `nil`; (5) cytowanie `TransactionStager.swift:53-58`; (6) CD-D-5 uzupełnione o G2-AC6.
 **Self-review po prędkości narzuconej (2026-11-20, pętla 4):** CAP_REACHED — round-2 findings fixed, not re-reviewed: (1) fałszywa teza, że bryła kinematyczna jest dziś tłumiona (host wpisuje jej tłumienie 0, NativeRigidPolygonState.swift:235); teza ograniczona do baniek `.pathDriven`, część G1-AC6 dla bryły opisana jako test braku regresji, konsekwencje CD-D-8 poprawione; (2) G5-AC2 opiera się na `maxContourSegmentLength` spoza publicznego API; oznaczone jako weryfikacja wewnętrzna.
+**Self-review po bryle na torze (2026-11-20, pętla 5):** CAP_REACHED — round-2 findings fixed, not re-reviewed: (1) przykład `BubblePhysicsShowcase` tworzy bańki i wyniki scalenia bez `drivePolicy`, więc po 3.0.0 chwyt byłby po cichu odrzucany; dodano plik do Components i kryterium G6-AC4.
 
 ---
 
@@ -99,6 +100,7 @@ flowchart LR
 - [ ] <a id="g6-ac1"></a>G6-AC1 — Cały zestaw testów repozytorium przechodzi. Opis PR wymienia z powodem każdy test usunięty albo zmieniony przez G1–G5 (napęd prędkością, `rigidifies`, kc, s, ρ, krawędzie dwustronne, walidacja konturu) · `verify: swift test; lista w opisie PR`
 - [ ] <a id="g6-ac2"></a>G6-AC2 — CHANGELOG ma sekcję 3.0.0, a nowy przewodnik migracji (`docs/MIGRATION-v3.md`) mówi, co gra musi zmienić: przestroić c₀ po usunięciu s i kc, zastąpić napęd prędkością gumką, zastąpić `bandDamping` tłumieniem materiału γ (które teraz w spoczynku nie zabiera siły), usunąć `rigidifies` i czasy usztywniania, podawać `drivePolicy` bańkom, które gracz chwyta, że bryły sztywne nie dają się już chwycić `beginPlayerDrive`, oraz że krawędzie statycznych wielokątów odpychają tylko od zewnątrz. `docs/integration-guide.md` opisuje model 3.0.0 · `verify: przegląd diffu dokumentacji`
 - [ ] <a id="g6-ac3"></a>G6-AC3 — Wynik perf guarda (`BubblePhysicsPerfGuard`) i obciążenie maszyny w chwili pomiaru są w opisie PR · `verify: opis PR`
+- [ ] <a id="g6-ac4"></a>G6-AC4 — Przykład `BubblePhysicsShowcase` buduje się na 3.0.0, jego bańki i wyniki scalenia mają `drivePolicy`, więc chwyt nie jest odrzucany, a fragmenty kodu cytowane w przewodniku zgadzają się z przykładem · `verify: build przykładu; IntegrationGuideTests przechodzi; przegląd diffu`
 
 ### Non-goals
 
@@ -168,6 +170,7 @@ flowchart TD
 - **`Sources/BubblePhysicsNativeMetalDiagnostics/…`** — dostosowanie do nowego wejścia solvera (bez kc i `rigidity`).
 - **`Tests/…`** — nowe testy G1–G5. Usunięte albo przepisane: testy napędu prędkością i usztywniania, `ContactRhoHistoryTests`, `RhoGridReportTests`, testy zależne od kc i s, testy ABI (`NativeMetalShaderABITests`), testy odrzucenia kroku przez kontur. Sonda `ZZWallPressProbeTests.swift` nie wchodzi do repozytorium.
 - **`CHANGELOG.md`**, **`docs/MIGRATION-v3.md`** (nowy), **`docs/integration-guide.md`** — wydanie 3.0.0 i migracja.
+- **`Examples/BubblePhysicsShowcase/App/BubbleScene.swift`** — bańki (:105-109) i wyniki scalenia (`BubbleResult`, :156-161) dostają `drivePolicy` z `bandStiffness`, bo bez niej `beginPlayerDrive` (:176) byłby odrzucany; regiony przewodnika z tego pliku zgodne z `docs/integration-guide.md` (G6-AC4).
 
 ## Decisions 🔍
 
