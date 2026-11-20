@@ -305,18 +305,67 @@ Każdy wycinek zostawia zestaw testów zielony i dopisuje swoją część do CHA
 **Delivers:** w spoczynku kontakt dostaje pełną siłę gumki, `MotorDrive` i siły globalnej, chwyt nie zmienia promienia ani kształtu, a prędkość narzucona torem nie jest tłumiona.
 
 10. Utwórz `Tests/BubblePhysicsRuntimeTests/MotionDampingTests.swift` z testami ugięcia w spoczynku: gumka w nasyceniu w 9 kombinacjach γ i m, `MotorDrive` i siła globalna, gumka a `MotorDrive` (położenie i kontur), na ścianie grubości co najmniej 2r i z `BubbleDrivePolicy(rigidifies: false, bandStiffness:maximumForce:)`, obejmujące [P-B-7](#p-b-7), [P-B-8](#p-b-8) i [P-B-11](#p-b-11) · verify: `swift test --filter "MotionDampingTests/testRest"` pada na asercji
+
+   ```text
+   (faza czerwona w 2021234: pada na asercji; po wycinku, HEAD 70d30ef:)
+   $ swift test --filter "MotionDampingTests/testRest"
+   Executed 3 tests, with 0 failures (0 unexpected) in 13.813 (13.815) seconds
+   ```
 11. Dodaj do `MotionDampingTests` testy przebiegu prędkości: dwie kolejne ramki dla bańki z gumką, bańki z `MotorDrive` i bryły z `MotorDrive`, prędkość ustalona gumki przy stałym naciągnięciu, bańka i bryła na torze z γ 4 oraz bryła kinematyczna `.velocity` (ten jeden test przechodzi już dziś, bo host zeruje jej tłumienie w `motion.w`, NativeRigidPolygonState.swift:235; chroni przed regresją po rozdzieleniu mnożnika), obejmujące [P-B-9](#p-b-9), [P-B-10](#p-b-10) i [P-B-12](#p-b-12) · verify: `swift test --filter "MotionDampingTests/testVelocity"` pada na asercji
+
+   ```text
+   (faza czerwona w 2021234: pada na asercji poza testem bryły kinematycznej, który przechodził zgodnie z planem; po wycinku, HEAD 70d30ef:)
+   $ swift test --filter "MotionDampingTests/testVelocity"
+   Executed 5 tests, with 0 failures (0 unexpected) in 2.935 (2.937) seconds
+   ```
 12. Dodaj do `TransactionStagerTests` test odrzucenia `beginPlayerDrive` dla bryły wielokątnej z `incompatibleObjectKind(id)` i bez zmiany ruchu, część [P-B-14](#p-b-14) · verify: `swift test --filter TransactionStagerTests/testBeginPlayerDriveIsRejectedForARigidPolygon` pada na asercji
+
+   ```text
+   (faza czerwona w 2021234: chwyt bryły przyjęty, pada na asercji; po wycinku, HEAD 70d30ef:)
+   $ swift test --filter TransactionStagerTests/testBeginPlayerDriveIsRejectedForARigidPolygon
+   Executed 1 test, with 0 failures (0 unexpected) in 0.001 (0.002) seconds
+   ```
 13. Napisz testy nowego API, które jeszcze się nie kompilują: w `MotionCommandTests` `testBandPolicyHasOnlyStiffnessAndMaximumForce` (pola i `valueOutOfRange` z nazwą pola), w `TransactionStagerTests` `testBeginPlayerDriveIsRejectedForABubbleWithoutDrivePolicy` oraz `testReplaceMergeAndSplitOfAGrabbedBubbleEndTheDriveWithAndWithoutPolicy` (bez `DriveFeedback`, `driveNotActive` albo `objectNotFound`, ponowny chwyt tylko z polityką), obejmujące [P-B-13](#p-b-13), [P-B-14](#p-b-14) i [P-B-16](#p-b-16) · verify: `grep -q testBeginPlayerDriveIsRejectedForABubbleWithoutDrivePolicy Tests/BubblePhysicsRuntimeTests/TransactionStagerTests.swift && ! swift build --build-tests`
+
+   ```text
+   (faza czerwona w 721fa52: grep trafia, `swift build --build-tests` się nie kompiluje; po wycinku, HEAD 70d30ef:)
+   $ grep -q testBeginPlayerDriveIsRejectedForABubbleWithoutDrivePolicy Tests/BubblePhysicsRuntimeTests/TransactionStagerTests.swift && echo OK
+   OK
+   ```
 14. W jednym kroku zmień API napędu i hosta: `BubbleDrivePolicy(bandStiffness:maximumForce:)` bez `.standard`, `drivePolicy: BubbleDrivePolicy?` = nil w `BubbleDescriptor` i `BubbleResult`, odrzucenie chwytu bańki bez polityki i bryły po `physicalObject(id)` w `beginPlayerDrive`, `validateBandStability` i `requireBandDriveTarget` na polityce opcjonalnej, w `MotionControllers` bez gałęzi prędkościowej, `bubbleDriveSpeed`, usztywniania i `bandDamping` (z `collisionRadius = targetRadius` bez warunku), bez pięciu pól usztywniania w `RuntimeObject`, bez `NativePublicObject.rigidity` (`material.z` = 0) i bez trzech użyć `material.z` w `nativeAccumulateContactPressure` (z komentarzami: „Bramka `material.z >= 1` zostaje” w NativePostSolveKernels.metal-source:680 i „rigidity” w opisie pasa `material` w NativePublicWorld.swift:70), a testy i pomocniki z usuniętym API przepisz albo usuń (`MotionCommandTests`, `BandDriveTests`, `MotionControllersPrepareTests`, `TransactionStagerTests`, `NativeMetalMotionRoleTests`, `JointStagingTests`, `MotionControllersFeedbackTests` z bańkami z polityką, `CrowdScene.bubble`, `rigidifies: false` w `MotionDampingTests`) · verify: `! grep -rnE 'bandDamping|rigidifies|rigidificationDuration|relaxationDuration|distanceResponse|capturedRadius|rigidityBlendStart|bubbleDriveSpeed|material\.z|\.rigidity|var rigidity' Sources Tests Examples && swift test --filter "MotionCommandTests|TransactionStagerTests|MotionControllersPrepareTests|NativeMetalMotionRoleTests|JointStagingTests|MotionControllersFeedbackTests" && swift test --list-tests > /tmp/slice2-tests.txt && grep -q testBandPolicyHasOnlyStiffnessAndMaximumForce /tmp/slice2-tests.txt && grep -q testBeginPlayerDriveIsRejectedForABubbleWithoutDrivePolicy /tmp/slice2-tests.txt && grep -q testReplaceMergeAndSplitOfAGrabbedBubbleEndTheDriveWithAndWithoutPolicy /tmp/slice2-tests.txt`
+
+   ```text
+   $ ! grep -rnE 'bandDamping|rigidifies|…|var rigidity' Sources Tests Examples        (HEAD 70d30ef)
+   (brak trafień, exit 0)
+   $ swift test --filter "MotionCommandTests|TransactionStagerTests|MotionControllersPrepareTests|NativeMetalMotionRoleTests|JointStagingTests|MotionControllersFeedbackTests"
+   Executed 77 tests, with 0 failures (0 unexpected) in 0.917 (0.923) seconds
+   $ swift test --list-tests > $CLAUDE_JOB_DIR/tmp/slice2-tests.txt && grep -q … (trzy testy)
+   listed testBandPolicyHasOnlyStiffnessAndMaximumForce
+   listed testBeginPlayerDriveIsRejectedForABubbleWithoutDrivePolicy
+   listed testReplaceMergeAndSplitOfAGrabbedBubbleEndTheDriveWithAndWithoutPolicy
+   ```
 15. Przenieś tłumienie ruchu liniowego do hosta: `MotionControllers.prepare` przekazuje γ z materiału obiektu i mnoży prędkość przez e^(−γ·dt) przed F/m·dt dla `.dynamic`, `.motorDriven` i `.playerDriven`, `nativePredict` traci człon liniowy :173 na ścieżce publicznej, a `nativeRigidPredict` tłumi `motion.w` tylko `motion.z`; przepisz oczekiwania `NativeMetalPublicObjectTests.testMaterialUpdateAffectsEveryReferencingObjectOnNextCompleteFrame`, `BandDriveTests` i `MotionControllersPrepareTests` pod nową kolejność · verify: `swift test --filter "MotionDampingTests|BandDriveTests|MotionControllersPrepareTests|NativeMetalPublicObjectTests|ContainmentResolutionTests"`
+
+   ```text
+   $ swift test --filter "MotionDampingTests|BandDriveTests|MotionControllersPrepareTests|NativeMetalPublicObjectTests|ContainmentResolutionTests"        (HEAD 70d30ef)
+   Executed 44 tests, with 0 failures (0 unexpected) in 23.535 (23.541) seconds
+   ```
 16. Dodaj `drivePolicy` z `bandStiffness` bańkom i `BubbleResult` w `BubbleScene.swift` (region `merge-events` przenieś do bloku przewodnika), przepisz w `docs/integration-guide.md` „Chwyt gumką” i opis `drivePolicy` pod model 3.0.0, a do CHANGELOG i `docs/MIGRATION-v3.md` dopisz napęd tylko gumką, `bandDamping` → γ, koniec `rigidifies`, politykę dla chwytanych baniek i koniec chwytu brył; obejmuje [P-B-17](#p-b-17) · verify: `xcodebuild -project Examples/BubblePhysicsShowcase/BubblePhysicsShowcase.xcodeproj -scheme BubblePhysicsShowcase -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build && grep -q "bandDamping" docs/MIGRATION-v3.md && grep -q "drivePolicy" docs/MIGRATION-v3.md && sed -n '/^## 3.0.0/,/^## 2.3.0/p' CHANGELOG.md | grep -q bandDamping && sed -n '/^## 3.0.0/,/^## 2.3.0/p' CHANGELOG.md | grep -q drivePolicy && ! grep -nE 'rigidifies|maximumSpeed:|distanceResponse' docs/integration-guide.md && swift test --filter IntegrationGuideTests`
+
+   ```text
+   $ xcodebuild -project Examples/BubblePhysicsShowcase/BubblePhysicsShowcase.xcodeproj … build        (HEAD 70d30ef)
+   ** BUILD SUCCEEDED **
+   $ grep … docs/MIGRATION-v3.md, CHANGELOG.md (sekcja 3.0.0); ! grep … docs/integration-guide.md
+   greps OK
+   $ swift test --filter IntegrationGuideTests
+   Executed 3 tests, with 0 failures (0 unexpected) in 0.012 (0.013) seconds
+   ```
 17. Uruchom cały zestaw, potwierdź, że testy stabilności gumki w stagerze (`testAddRejectsABandBubbleWithTooSmallAMass`, `testReplaceRejectsABandBubbleWithTooSmallAMass`, `testMergeRejectsAResultWithTooSmallAMass`, `testSplitRejectsAPartWithTooSmallAMass`) oraz limitu celu w `MotionCommandTests.testReasonableDriveTargetIsAcceptedInBandMode` przechodzą bez zmiany oczekiwań, i zapisz w `plan.md` pod nagłówkiem „Usunięte i zmienione testy wycinka 2” listę z powodami do opisu PR, obejmuje [P-B-15](#p-b-15) · verify: `grep -q "Usunięte i zmienione testy wycinka 2" docs/sdlc/changes/2026-11-20-engine-3-0-0/plan.md && swift build --build-tests && swift test`
 
    ```text
-   $ swift build --build-tests && swift test        (HEAD 60c1f15)
+   $ grep -q "Usunięte i zmienione testy wycinka 2" docs/sdlc/changes/2026-11-20-engine-3-0-0/plan.md && swift build --build-tests && swift test        (HEAD 70d30ef)
    exit 0
-   Executed 1460 tests, with 1 test skipped and 0 failures (0 unexpected) in 575.141 (575.281) seconds
+   Executed 1461 tests, with 1 test skipped and 0 failures (0 unexpected) in 567.860 (567.995) seconds
    ```
 
    Stabilność gumki w stagerze (`testAddRejectsABandBubbleWithTooSmallAMass`, `testReplaceRejectsABandBubbleWithTooSmallAMass`, `testMergeRejectsAResultWithTooSmallAMass`, `testSplitRejectsAPartWithTooSmallAMass`) i `MotionCommandTests.testReasonableDriveTargetIsAcceptedInBandMode` przechodzą bez zmiany oczekiwań ([P-B-15](#p-b-15)).
@@ -334,6 +383,7 @@ Każdy wycinek zostawia zestaw testów zielony i dopisuje swoją część do CHA
    - `JointStagingTests`: bańka chwytana w teście więzów ma politykę gumki (`grabbableBubble`) i jest końcem dodanego więzu dystansowego; test zmiany ról używa `setMotion(.motorDriven)` zamiast `beginPlayerDrive` na bańce bez polityki.
    - `CrowdScene.bubble` (pomocnik): `drivePolicy` nil. `MotionDampingTests`: bez `rigidifies: false`.
    - Zmiany bez udziału testów: `Examples/BubblePhysicsShowcase/App/BubbleScene.swift` i `docs/integration-guide.md` (region `merge-events`) dostały `drivePolicy` w bańkach i wynikach scalenia, `IntegrationGuideTests` zgodne.
+   - Po przeglądzie końcowym (70d30ef): w `MotionDampingTests.testVelocityStepIsPreviousVelocityTimesDecayPlusForceOverMassTimesStep` materiał bryły ma inne γ niż materiał baniek; nowy `MotionControllersPrepareTests.testHostDampsDynamicAndPlayerDrivenVelocityBeforeAddingForceAndLeavesPathDrivenAlone`. `MotionControllersFeedbackTests` bez zmian.
 
 ## Deviations from Design
 
@@ -358,3 +408,11 @@ None.
 | 3 | 1 | 5 | change | W `ContactComplianceTests` testy oparte na s, k i ρ_min są usunięte, nie przeniesione; test podziału wgniecenia w parze dzieli przez nadpisanie `contactCompliance` jednej bańki (proporcja 3) zamiast przez kc. | approved | 2026-11-20 |
 | 4 | 1 | 5 | change | Test konturu przy ścianie w `ContactContourTests`: c₀ 0,2 → 0,06 (c · F = 0,3 r), bo bez kc dawne c₀ dawałoby ugięcie równe całemu promieniowi. | approved | 2026-11-20 |
 | 5 | 1 | przegląd końcowy (491ee99) | change | Test pary ([P-B-2](#p-b-2)) przeniesiony z `CrowdScene.makeWorld` (rama ścian; bańka r 148 startowała 26 jednostek w ścianie) do otwartego świata ±500 bez ścian, z asercją uspokojenia. Test tłoku ([P-B-6](#p-b-6)) dostał asercję uspokojenia (maks. prędkość < 5) i dotyku obu ścian przez bańkę w narożniku. | approved | 2026-11-20 |
+| 6 | 2 | 10 | change | Testy gumki w nasyceniu ([P-B-7](#p-b-7)) i gumki a `MotorDrive` ([P-B-11](#p-b-11)): naciągnięcie gumki narasta przez 120 kroków, dopiero potem cel skacze 1 000 jednostek za lico ściany. Planowana pełna siła 1 200 od pierwszej ramki daje lekkiej bańce (m 0,34, γ 0 i 0,6) przestrzał do ugięcia ≈ r i środek na licu ściany, także z `MotorDrive` 1 200 i także na kodzie sprzed zmiany; stan ustalony mierzony jest ten sam. Przestrzał lekkiej bańki przy dużym impulsie zostaje do sprawdzenia w wycinku 3 (dwustronne krawędzie) albo do opisu PR. | pending | 2026-11-21 |
+| 7 | 2 | 10 | change | Testy `MotorDrive` i siły globalnej ([P-B-8](#p-b-8)) oraz gumki a `MotorDrive` ([P-B-11](#p-b-11)) obok γ 0,6 ze specyfikacji liczą też γ 4, bo przy γ 0,6 stara kolejność traci tylko ok. 1 % siły, w tolerancji 2 %. Test [P-B-11](#p-b-11) sprawdza też bezwzględne ugięcie c · F, bo sama równość gumki i `MotorDrive` przechodziła na starym kodzie. | pending | 2026-11-21 |
+| 8 | 2 | 10–11 | change | Świat testów spoczynku ma własną scenę: region ±1 500, ściana grubości 300 z licem x = −100 (cel 1 000 jednostek za ścianą nie mieści się w regionie ±456 `CrowdScene`). Testy toru i bryły kinematycznej nie robią kroku przygotowania, a 1 % na każdym kroku toru sprawdza jedna asercja najgorszego odchylenia, bez ostatnich kroków przed punktem toru. | pending | 2026-11-21 |
+| 9 | 2 | 14 | change | `NativeMetalMotionRoleTests`: chwycona gumką bańka dostaje siłę globalną i pola jak `.dynamic` (test przemianowany), a w teście ściany tolerancja wnikania 1,001 → 1,01, bo gumka K 60 dociska bańkę siłą ok. 420. `MotionControllersFeedbackTests`, wymienione w zadaniu, nie wymagało zmian (ustawia cel na bryłach wprost i testuje tylko feedback). | pending | 2026-11-21 |
+| 10 | 2 | 15 | change | `NativeMetalPublicObjectTests.testMaterialUpdateAffectsEveryReferencingObjectOnNextCompleteFrame` przepisany na dwie bryły dynamiczne z `angularVelocity` 4 zamiast baniek z `velocity` 4: kernel tłumi już tylko obrót, a bańki nie mają prędkości kątowej w publicznym API. | pending | 2026-11-21 |
+| 11 | 2 | 15, przegląd końcowy (bb2fbe6) | change | Wywołania z R2 zbudowane inaczej: γ trafia do `prepare` obiektu jako niewychodzące domknięcie (odczyt leniwy tylko dla `.dynamic`, `.motorDriven` i `.playerDriven`, uwaga przeglądu o odczycie słownika w każdym kroku), a nie jako wartość; `dampedVelocity(_ velocity:damping:dt:)` przyjmuje prędkość, nie obiekt; `requireDrivePolicy(_ id:)` sam wyszukuje obiekt i go zwraca, żeby `beginPlayerDrive` nie szukał dwa razy. Zachowanie bez zmian. | pending | 2026-11-21 |
+| 12 | 2 | 16, przegląd końcowy (bb2fbe6) | change | Przykład: polityka chwytu K 20, `maximumForce` 600 (plan nie podawał wartości) jako region przewodnika `grip-policy` pokazany w „Chwyt gumką”, zamiast przenoszenia regionu `merge-events`. Materiał baniek przykładu dostał `damping` 1,5, bo bez γ chwycona bańka byłaby nietłumioną sprężyną; opadanie pod siłą globalną to teraz ok. 6,7 j/s. W przewodniku przepisany też akapit o `BubbleResult.drivePolicy` i punkt „Ramki” (z e^(−γ·dt)). | pending | 2026-11-21 |
+| 13 | 2 | przegląd końcowy (bb2fbe6) | change | Dodatki z przeglądu: w teście [P-B-9](#p-b-9) materiał bryły ma γ + 1,3, inne niż materiał baniek, żeby test łapał γ z niewłaściwego materiału (sprawdzone celowo błędnym odczytem); nowy test hosta `MotionControllersPrepareTests.testHostDampsDynamicAndPlayerDrivenVelocityBeforeAddingForceAndLeavesPathDrivenAlone`; w `docs/MIGRATION-v3.md` przepis przestrojenia napędu prędkością: K = v · m · γ / s, `maximumForce` = v_max · m · γ. | pending | 2026-11-21 |
