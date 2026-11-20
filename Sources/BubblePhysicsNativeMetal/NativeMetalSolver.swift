@@ -688,9 +688,6 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         dispatchContacts("nativeCompactContactCache", buffers: [state.mergedCache, state.workingCache, state.contactControl,
             state.scanValues, state.scanOffsets, state.dispatchStatistics], argument: 2)
         prepareIndirectArguments()
-        // ρ obu końców każdego kontaktu z geometrii bieżącego kroku (pozycje przewidziane, CD-D-4), przed solverem, który liczy z niego α.
-        dispatchContacts("nativeUpdateContactRho", buffers: [state.workingBubbles, state.workingCache, state.control,
-            state.contactControl, state.contourControl, structuralHeaderBuffer], argument: 3)
         dispatch("nativeClearAdjacency", buffers: [state.control, state.adjacencyCounts], threads: count)
         dispatchContacts("nativeEmitAdjacency", buffers: [state.workingBubbles, state.workingSegments, state.workingCache,
             state.control, state.contactControl, state.adjacency, state.contactEndpoints, state.dispatchStatistics,
@@ -1234,7 +1231,7 @@ enum NativeMetalPipelineCache {
     static let stageNames: [String] = ["nativePrepareGrid", "nativeBuildGrid", "nativeSortGrid", "nativeSortGridChunk", "nativeEmitCandidates",
         "nativePrepareCandidateCounts", "nativeCompactCandidates", "nativeBuildContacts",
         "nativePrepareContactFlags", "nativeCompactActiveContacts", "nativeMatchContactCache",
-        "nativeRetainContactCache", "nativeCompactContactCache", "nativeUpdateContactRho", "nativeScanBlocks", "nativePrepareIndirectArguments",
+        "nativeRetainContactCache", "nativeCompactContactCache", "nativeScanBlocks", "nativePrepareIndirectArguments",
         "nativeAddScanBlockOffsets", "nativeFinishScan", "nativeScanSingleGroup", "nativeClearAdjacency", "nativeEmitAdjacency", "nativeBuildAdjacency",
         "nativePrepareSolverContacts", "nativeApplyWarmStart", "nativeUpdateContactMultipliers",
         "nativeSolveJacobi", "nativeMeasureResidual", "nativeReduceSolverResidual",

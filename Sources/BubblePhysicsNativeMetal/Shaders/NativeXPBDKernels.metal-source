@@ -201,7 +201,7 @@ kernel void nativeMatchContactCache(device NativeContactCache *previous [[buffer
         uint elapsed = contacts.limits.x - previous[old].metadata.z;
         if (elapsed > 0 && elapsed - 1 > contacts.limits.y) invalid |= 8;
         if (invalid) { result.metadata.w = invalid; reset = 1; }
-        else { result.response.x = previous[old].response.x; result.rho = previous[old].rho;
+        else { result.response.x = previous[old].response.x; result.compliance = previous[old].compliance;
             result.metadata.y = previous[old].metadata.y + 1;
             result.metadata.w |= 16; hit = 1; }
     }
@@ -333,7 +333,7 @@ kernel void nativeBuildAdjacency(constant NativeControl &control [[buffer(0)]],
 
 // Limit λ pary bańka–bańka (CD-D-9): ruch pary w stronę kontaktu w kroku plus 0,25·min r, przez większą odwrotność masy.
 // Jedno λ dla obu końców, więc pęd pary jest zachowany. Ściany i odcinki są poza limitem. Dotyczy tylko par twardych
-// (rho.z = 0): para miękka przenosi siłę przez bańkę bez własnej siły, a limit dałby jej sufit 0,25·min r·m_min/dt²;
+// (compliance.x = 0): para miękka przenosi siłę przez bańkę bez własnej siły, a limit dałby jej sufit 0,25·min r·m_min/dt²;
 // jej przyrost λ w iteracji ogranicza podatność α = c/dt² w mianowniku (CD-D-17).
 float nativePairLambdaLimit(NativeBubble a, NativeBubble b, float2 normal, float dt) {
     float approach = (max(0.0f, dot(a.motion.xy, normal)) + max(0.0f, -dot(b.motion.xy, normal))) * dt;
@@ -349,12 +349,12 @@ kernel void nativePrepareSolverContacts(device NativeBubble *bubbles [[buffer(0)
     if (index >= contacts.counts.z) return;
     NativeContactCache record = cache[index];
     uint a = endpoints[index].x, b = endpoints[index].y;
-    // ρ jest już policzone z geometrii kroku (nativeUpdateContactRho) i stałe w klatce, więc suma podatności końców c_a(ρ_a) + c_b(ρ_b)
-    // trafia do rho.z raz na kontakt; nativeContactAlpha czyta ją w każdej iteracji bez pow() (LD-D-6).
+    // Podatność końca to jego `contact.x` (c₀·r/r_ref), stała w klatce, więc suma c_a + c_b trafia do compliance.x raz na kontakt;
+    // nativeContactAlpha czyta ją w każdej iteracji (LD-D-6).
     if (endpoints[index].w) {
-        float compliance = nativeContactCompliance(bubbles[a], record.rho.x);
-        if (record.metadata.x == 0) compliance += nativeContactCompliance(bubbles[b], record.rho.y);
-        record.rho.z = compliance;
+        float compliance = nativeContactCompliance(bubbles[a]);
+        if (record.metadata.x == 0) compliance += nativeContactCompliance(bubbles[b]);
+        record.compliance.x = compliance;
     }
     bool limited = record.metadata.z == contacts.limits.x;
     if (limited) {
@@ -362,18 +362,18 @@ kernel void nativePrepareSolverContacts(device NativeBubble *bubbles [[buffer(0)
         // λ ≤ r / (invMass · stopień) dla każdego końca, więc suma warm korekcji bańki nie przekracza jej promienia.
         // Z limitem pary λ pary baniek twardych ogranicza tylko nativePairLambdaLimit: korekta jednej pary jest ograniczona, ale suma
         // korekt bańki nie jest ograniczona promieniem i może go przekroczyć; bez ruchu wynosi co najwyżej k · 0,25 · min r
-        // przy k kontaktach (LD-D-1, testWarmStartOfBubbleWithFourContactsAddsUpThePairLimits). Para miękka (rho.z > 0) jest
+        // przy k kontaktach (LD-D-1, testWarmStartOfBubbleWithFourContactsAddsUpThePairLimits). Para miękka (compliance.x > 0) jest
         // poza tym limitem i dostaje ograniczenie z v2.1.0 (CD-D-17).
         float maximum = bubbles[a].physical.z / (bubbles[a].physical.y * max(1u, degrees[a]));
         if (record.metadata.x == 0) {
-            if (control.contactDamping.y != 0 && record.rho.z == 0)
+            if (control.contactDamping.y != 0 && record.compliance.x == 0)
                 maximum = nativePairLambdaLimit(bubbles[a], bubbles[b], record.geometry.xy, control.physics.x);
             else
                 maximum = min(maximum, bubbles[b].physical.z / (bubbles[b].physical.y * max(1u, degrees[b])));
         }
         record.response.x = min(record.response.x, maximum);
     }
-    // Jeden zapis rekordu, gdy zmieniło się rho.z albo limit λ.
+    // Jeden zapis rekordu, gdy zmieniło się compliance.x albo limit λ.
     if (endpoints[index].w || limited) cache[index] = record;
 }
 
@@ -427,10 +427,10 @@ float4 nativeReadConstraint(device NativeBubble *bubbles, device NativeSegment *
     return nativeConstraintGeometry(bubbles[a], positions[a].xy, kind, other, positionB, segment, fallback);
 }
 
-// α kontaktu (CD-D-5): α_cfg + (c_a(ρ_a) + c_b(ρ_b)) / dt² dla pary bańka–bańka, α_cfg + c_a(ρ_a) / dt² dla bańki i odcinka
-// (ściany albo bryły statycznej). Suma podatności końców jest w rho.z, zapisana przez nativePrepareSolverContacts.
-float nativeContactAlpha(float alphaConfiguration, float dt, float4 rho) {
-    return alphaConfiguration + rho.z / (dt * dt);
+// α kontaktu (CD-D-5): α_cfg + (c_a + c_b) / dt² dla pary bańka–bańka, α_cfg + c_a / dt² dla bańki i odcinka
+// (ściany albo bryły statycznej). Suma podatności końców jest w compliance.x, zapisana przez nativePrepareSolverContacts.
+float nativeContactAlpha(float alphaConfiguration, float dt, float4 compliance) {
+    return alphaConfiguration + compliance.x / (dt * dt);
 }
 
 kernel void nativeUpdateContactMultipliers(device NativeBubble *bubbles [[buffer(0)]],
@@ -444,13 +444,13 @@ kernel void nativeUpdateContactMultipliers(device NativeBubble *bubbles [[buffer
     uint4 edge = endpoints[index]; NativeContactCache record = cache[index];
     float4 geometry = nativeReadConstraint(bubbles, segments, positions, edge.x, edge.y, edge.z, record.geometry.xy);
     float weight = bubbles[edge.x].physical.y + (edge.z == 0 ? bubbles[edge.y].physical.y : 0);
-    float alpha = nativeContactAlpha(solver.physics.x, control.physics.x, record.rho);
+    float alpha = nativeContactAlpha(solver.physics.x, control.physics.x, record.compliance);
     if (weight + alpha <= 0) { corrections[index] = 0; return; }
     float delta = (geometry.z - alpha * record.response.x) / (weight + alpha);
     uint degree = edge.z == 0 ? max(degrees[edge.x], degrees[edge.y]) : degrees[edge.x];
     // Wspólna relaksacja obu końców utrzymuje równe/opposite impulsy i stabilizuje gęste grafy.
     float next = max(0.0f, record.response.x + delta / max(1u, degree));
-    if (edge.z == 0 && control.contactDamping.y != 0 && record.rho.z == 0)
+    if (edge.z == 0 && control.contactDamping.y != 0 && record.compliance.x == 0)
         next = min(next, nativePairLambdaLimit(bubbles[edge.x], bubbles[edge.y], geometry.xy, control.physics.x));
     corrections[index] = float4(geometry.xy * (next - record.response.x), 0, 0);
     record.response.x = next;
@@ -492,7 +492,7 @@ kernel void nativeMeasureResidual(device NativeBubble *bubbles [[buffer(0)]],
         uint a = edge.w && edge.z == 0 ? edge.y : index;
         uint b = edge.w && edge.z == 0 ? index : edge.y;
         float4 geometry = nativeReadConstraint(bubbles, segments, positions, a, b, edge.z, record.geometry.xy);
-        float alpha = nativeContactAlpha(solver.physics.x, control.physics.x, record.rho);
+        float alpha = nativeContactAlpha(solver.physics.x, control.physics.x, record.compliance);
         float residual = geometry.z - alpha * record.response.x;
         maximum = max(maximum, record.response.x > 0 ? abs(residual) : max(0.0f, residual));
     }
@@ -1056,14 +1056,14 @@ kernel void nativeDampContactNormalMotion(device NativeBubble *bubbles [[buffer(
         float restSpeed = max(40.0f, 2.0f * bubble.physical.z);
         float inverseMassSum = bubble.physical.y + otherInverseMass;
         float share = inverseMassSum > 0 ? bubble.physical.y / inverseMassSum : 0;
-        // Czynnik tłumienia liczony na kontakt (CD-D-6, CD-D-7). Kontakt miękki (rho.z > 0) to sprężyna o podatności c = rho.z
+        // Czynnik tłumienia liczony na kontakt (CD-D-6, CD-D-7). Kontakt miękki (compliance.x > 0) to sprężyna o podatności c = compliance.x
         // i masie zredukowanej 1 / inverseMassSum, więc ω = √(inverseMassSum / c), a dashpot tłumi ułamek ζ_c tłumienia
         // krytycznego: 1 − e^(−2·ζ_c·ω·dt), bezwarunkowo stabilny. ζ_c to wartość bańki przy odcinku (bez uśredniania z materiałem
-        // bryły) i średnia z obu końców w parze. Kontakt twardy (rho.z = 0) zostaje przy stałym `contactDamping` z v2.1.0.
+        // bryły) i średnia z obu końców w parze. Kontakt twardy (compliance.x = 0) zostaje przy stałym `contactDamping` z v2.1.0.
         float factor = hardFactor;
-        if (record.rho.z > 0) {
+        if (record.compliance.x > 0) {
             float ratio = edge.z == 0 ? 0.5f * (bubble.contact.z + bubbles[edge.y].contact.z) : bubble.contact.z;
-            float frequency = sqrt(inverseMassSum / record.rho.z);
+            float frequency = sqrt(inverseMassSum / record.compliance.x);
             factor = clamp(1.0f - exp(-2.0f * ratio * frequency * control.physics.x), 0.0f, 1.0f);
         }
         // Szybki kontakt nadal ma materialną odpowiedź; próg dotyczy wyłącznie

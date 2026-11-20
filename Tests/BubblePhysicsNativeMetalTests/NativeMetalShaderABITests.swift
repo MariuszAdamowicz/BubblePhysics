@@ -88,7 +88,7 @@ final class NativeMetalShaderABITests: XCTestCase {
                 ("metadata", MemoryLayout<NativeContactCacheRecord>.offset(of: \.metadata)),
                 ("geometry", MemoryLayout<NativeContactCacheRecord>.offset(of: \.geometry)),
                 ("response", MemoryLayout<NativeContactCacheRecord>.offset(of: \.response)),
-                ("rho", MemoryLayout<NativeContactCacheRecord>.offset(of: \.rho))]),
+                ("compliance", MemoryLayout<NativeContactCacheRecord>.offset(of: \.compliance))]),
             Probe(name: "candidate", mslSize: "NativeCandidate", swiftSize: MemoryLayout<NativeMetalCandidate>.stride, fields: [
                 ("metadata", MemoryLayout<NativeMetalCandidate>.offset(of: \.metadata))]),
             Probe(name: "grid", mslSize: "NativeGridEntry", swiftSize: MemoryLayout<NativeMetalGridEntry>.stride, fields: [

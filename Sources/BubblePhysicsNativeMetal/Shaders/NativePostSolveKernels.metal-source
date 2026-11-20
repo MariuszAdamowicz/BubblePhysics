@@ -348,7 +348,7 @@ kernel void nativeCheckFinite(device NativeBubble *bubbles [[buffer(0)]],
     }
     if (i < contacts.counts.z) {
         NativeContactCache c = cache[i];
-        if (!all(isfinite(c.geometry)) || !all(isfinite(c.response)) || !all(isfinite(c.rho))) nativeSafetyFailure(safety, 1);
+        if (!all(isfinite(c.geometry)) || !all(isfinite(c.response)) || !all(isfinite(c.compliance))) nativeSafetyFailure(safety, 1);
         // Skończony ujemny mnożnik to wartość poza zakresem: bit 4 (`.invalidFrame`), nie bit 1 (`.nonFinite`).
         else if (c.response.x < 0) nativeSafetyFailure(safety, 4);
     }
@@ -593,56 +593,6 @@ kernel void nativeRigidApplyCCD(device NativeRigidBody *bodies [[buffer(0)]],
 
 struct NativeContourControl { uint4 counts; float4 shape; };
 
-// Wynik merge/split o ponownie użytym ID nie dziedziczy ρ rekordu starego ID (R2, P-B-13): jego ρ_prev = 1. Bańka bieżącej klatki
-// jest szukana po ID w `bubbles`, bo nagłówek strukturalny ma jej indeks.
-bool nativeIsStructuralResult(long identity, device NativeBubble *bubbles, constant NativeControl &control,
-    device NativeStructuralHeader *structuralHeaders, constant NativeContourControl &contour) {
-    if (contour.counts.z == 0) return false;
-    uint current = nativeFindBubble(bubbles, control.counts.x, identity);
-    return current < control.counts.x && structuralHeaders[current].range.y != 0;
-}
-
-// ρ każdego końca kontaktu bieżącego kroku wynika z geometrii tego kroku, bez historii konturu (CD-D-4, G2). `response.y` to
-// penetracja z pozycji przewidzianych (nativeBuildContacts), więc ρ twardnieje w tym samym kroku, w którym bańka wchodzi w kontakt.
-// - odcinek (metadata.x = 1): ρ = clamp((r − penetracja) / r, 0, 1) = d / r, gdzie d to odległość przewidzianego środka od odcinka;
-// - para (metadata.x = 0): nakładanie dzieli się między końce wg podatności, ρ_self = clamp((r_self − nakładanie · c_self /
-//   (c_self + c_other)) / r_self, 0, 1). Podatności liczone są z ρ rekordu z poprzedniego kroku (CD-D-5); nowy rekord ma
-//   ρ_prev = 1. Dla końca będącego wynikiem scalenia lub podziału ρ_prev = 1 gwarantuje host: unieważnia każdy rekord cache
-//   takiego ID (NativeMetalSolver), więc rekord startuje od ρ (1, 1); gałąź `nativeIsStructuralResult` poniżej jest tylko
-//   drugą zaporą (backstop) na wypadek rekordu, który przeżyłby unieważnienie. Para twarda
-//   (c_a + c_b = 0) ma ρ = 1, a w parze miękka–twarda całe nakładanie przypada na koniec miękki.
-// Jedno zadanie na rekord cache, więc bez atomików.
-kernel void nativeUpdateContactRho(device NativeBubble *bubbles [[buffer(0)]],
-    device NativeContactCache *cache [[buffer(1)]], constant NativeControl &control [[buffer(2)]],
-    device NativeContactControl &contacts [[buffer(3)]], constant NativeContourControl &contour [[buffer(4)]],
-    device NativeStructuralHeader *structuralHeaders [[buffer(5)]], uint index [[thread_position_in_grid]]) {
-    if (index >= contacts.counts.z) return;
-    NativeContactCache record = cache[index];
-    if (record.metadata.z != contacts.limits.x) return;
-    uint a = nativeFindBubble(bubbles, control.counts.x, record.participants.x);
-    if (a >= control.counts.x || bubbles[a].identity.x != record.participants.x) return;
-    float overlap = record.response.y;
-    float radiusA = bubbles[a].physical.z;
-    if (record.metadata.x != 0) {
-        record.rho.x = radiusA > 0 ? clamp((radiusA - overlap) / radiusA, 0.0f, 1.0f) : 1.0f;
-        cache[index] = record;
-        return;
-    }
-    uint b = nativeFindBubble(bubbles, control.counts.x, record.participants.y);
-    if (b >= control.counts.x || bubbles[b].identity.x != record.participants.y) return;
-    float radiusB = bubbles[b].physical.z;
-    // Zapora: dla wyniku strukturalnego ρ_prev = 1 zapewnia już unieważnienie rekordu przez hosta, ta gałąź jest tylko zabezpieczeniem.
-    float previousA = nativeIsStructuralResult(record.participants.x, bubbles, control, structuralHeaders, contour) ? 1.0f : record.rho.x;
-    float previousB = nativeIsStructuralResult(record.participants.y, bubbles, control, structuralHeaders, contour) ? 1.0f : record.rho.y;
-    float complianceA = nativeContactCompliance(bubbles[a], previousA);
-    float complianceB = nativeContactCompliance(bubbles[b], previousB);
-    float total = complianceA + complianceB;
-    float shareA = total > 0 ? complianceA / total : 0;
-    record.rho.x = radiusA > 0 && total > 0 ? clamp((radiusA - overlap * shareA) / radiusA, 0.0f, 1.0f) : 1.0f;
-    record.rho.y = radiusB > 0 && total > 0 ? clamp((radiusB - overlap * (1 - shareA)) / radiusB, 0.0f, 1.0f) : 1.0f;
-    cache[index] = record;
-}
-
 float nativeContourRayLimit(float2 center, float2 direction, float2 a, float2 b,
     float radius, float clearance) {
     float2 edge = b - a, offset = a - center;
@@ -688,12 +638,9 @@ kernel void nativeAccumulateContactPressure(device NativeBubble *bubbles [[buffe
         float towardLength = length(toward);
         // Każda para idzie jedną drogą konturu (CD-D-12): para miękka (podatność choć jednego końca > 0) dzieli wgniecenie wg c_a : c_b,
         // a para twarda i kontakt twardej bańki ze ścianą liczą nacisk z λ i cięciwę radykalną jak w v2.1.0.
-        // ρ_self i ρ_other to ρ tej bańki i jej partnera w rekordzie cache, z geometrii bieżącego kroku (nativeUpdateContactRho). Sąsiedztwo daje końcowi a pary bańka–bańka
-        // edge.w = 0, a końcowi b edge.w = 1; bańka przy odcinku jest końcem a i ma edge.w = 1 (ρ_self = rho.x, bez partnera).
-        float rhoSelf = (edge.z == 0 && edge.w) ? contact.rho.y : contact.rho.x;
-        float rhoOther = edge.w ? contact.rho.x : contact.rho.y;
-        float complianceSelf = nativeContactCompliance(bubble, rhoSelf);
-        float complianceOther = edge.z == 0 ? nativeContactCompliance(bubbles[edge.y], rhoOther) : 0;
+        // Podatność końca to `contact.x` bańki (c₀·r/r_ref), więc para dzieli wgniecenie wg c_self : c_other bez historii kontaktu.
+        float complianceSelf = nativeContactCompliance(bubble);
+        float complianceOther = edge.z == 0 ? nativeContactCompliance(bubbles[edge.y]) : 0;
         bool softPair = complianceSelf + complianceOther > 0;
         if (towardLength > FLT_EPSILON && !softPair) {
             float alignment = max(0.0f, dot(direction, toward / towardLength));
@@ -730,7 +677,7 @@ kernel void nativeAccumulateContactPressure(device NativeBubble *bubbles [[buffe
         float softness = bubble.material.y * (1 - bubble.material.z);
         value = float4(max(deficit, directionalPressure * softness), deficit, 0, 0);
         // Bańka z podatnością kontaktu omija bramkę deformowalności: bez niej materiał z domyślnym `deformability` = 0 nie miałby
-        // konturu, a ρ zostałoby 1. Bramka `material.z >= 1` zostaje.
+        // konturu. Bramka `material.z >= 1` zostaje.
         if (softness == 0 && bubble.material.z == 0 && bubble.contact.x <= 0) value.xy = 0;
         if (bubble.material.z >= 1) value.xy = 0;
     }
