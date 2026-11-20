@@ -574,4 +574,93 @@ final class ContactComplianceTests: XCTestCase {
         XCTAssertGreaterThan(softDepth, 0.3, "część bez nadpisania ugina się jak materiał: δ = \(softDepth)")
         XCTAssertLessThan(hardDepth, 0.3 * softDepth, "część z nadpisaniem 0 jest twarda: δ = \(hardDepth) wobec \(softDepth)")
     }
+
+    // MARK: model 3.0.0: c = c₀ · r / r_ref (P-B-1, P-B-2)
+
+    /// c₀ i r_ref z kryteriów G3-AC1 i G3-AC2. Materiał z samych `base` i `referenceRadius`: ugięcie ma wynikać z modelu, a nie z
+    /// domyślnych wykładników pomocnika `softBubblePhysics`.
+    private let modelBase: Float = 0.0108
+    private let modelReferenceRadius: Float = 20
+
+    private func modelMaterial(deformability: Float = 0) throws -> PhysicsMaterial {
+        try PhysicsMaterial(kind: .bubble, deformability: deformability, maximumLinearSpeed: 600,
+                            contactCompliance: BubbleContactCompliance(base: modelBase, referenceRadius: modelReferenceRadius))
+    }
+
+    /// Ściana statyczna o grubości 300 (co najmniej 2r także dla r = 148), czoło w x = −100, w świecie bez ram `CrowdScene`.
+    private func thickWallWorld(_ build: (WorldTransaction) throws -> WorldTransaction) async throws -> BubbleWorld {
+        let world = try BubbleWorld(configuration: WorldConfiguration(
+            simulationRegion: WorldRectangle(min: [-500, -500], max: [500, 500]), fixedTimeStep: CrowdScene.step, eventBufferCapacity: 4096))
+        let wall = WorldObject.rigidBody(try RigidBodyDescriptor(id: CrowdScene.wallIDs[0],
+            vertices: [[-400, -450], [-100, -450], [-100, 450], [-400, 450]], motionRole: .static,
+            physicsMaterialID: CrowdScene.wallMaterial, renderMaterialID: CrowdScene.style))
+        _ = world.submit(try build(CrowdScene.resources(bubble: modelMaterial()).add(wall)))
+        let frame = await world.advance(by: CrowdScene.step)
+        XCTAssertNil(world.diagnostics.lastAdvanceIssue, "przygotowanie sceny")
+        XCTAssertEqual(frame.transactionReceipts.count, 1, "przygotowanie sceny musi zostać przyjęte")
+        return world
+    }
+
+    // P-B-1 (G3-AC1): ta sama siła ściska każdą bańkę o ten sam ułamek promienia, ε = δ / r = c₀ · F / r_ref, także gdy ε · r
+    // przekracza grubość ściany ram (r = 148, δ ≈ 48).
+    func testRelativeDeflectionIsTheSameForEveryRadius() async throws {
+        let radii: [(id: UInt64, radius: Float, y: Float)] = [(1, 12, 120), (2, 24, 40), (3, 48, -60), (4, 148, -300)]
+        let pressForce: Float = 600
+        let world = try await thickWallWorld { setup in
+            try radii.reduce(setup) { transaction, bubble in
+                transaction
+                    .add(try CrowdScene.bubble(bubble.id, at: [-100 + bubble.radius, bubble.y], radius: bubble.radius))
+                    .setMotorDrive(CrowdScene.id(bubble.id), drive: try MotorDrive(force: [-pressForce, 0]))
+            }
+        }
+        var frame = await world.advance(by: CrowdScene.step)
+        var tail: [UInt64: [Float]] = [:]
+        for index in 0..<900 {
+            frame = await world.advance(by: CrowdScene.step)
+            XCTAssertNil(world.diagnostics.lastAdvanceIssue, "krok \(index): \(String(describing: world.diagnostics.lastRejectionReason))")
+            guard index >= 840 else { continue }
+            for bubble in radii {
+                let state = try XCTUnwrap(frame.objects[CrowdScene.id(bubble.id)])
+                tail[bubble.id, default: []].append((bubble.radius - (state.position.x + 100)) / bubble.radius)
+            }
+        }
+        let expected = modelBase * pressForce / modelReferenceRadius
+        for bubble in radii {
+            let series = try XCTUnwrap(tail[bubble.id])
+            let last = try XCTUnwrap(series.last)
+            XCTAssertEqual(last, expected, accuracy: 0.02 * expected, "r = \(bubble.radius): ε = \(last), oczekiwane c₀ · F / r_ref = \(expected)")
+            XCTAssertLessThan((series.max() ?? 0) - (series.min() ?? 0), 0.005 * expected, "r = \(bubble.radius): ε ma być uspokojone")
+        }
+    }
+
+    // P-B-2 (G3-AC2): para z jednego materiału, ściskana dwoma polami kierunkowymi wzdłuż osi. Nakładanie to (c_a + c_b) · F,
+    // a wgniecenie konturu każdej bańki dzieli je w proporcji promieni: nakładanie · r_self / (r_a + r_b).
+    func testSoftPairOverlapIsTheSumOfCompliancesAndDentsSplitByRadius() async throws {
+        let pressForce: Float = 600
+        for (radiusA, radiusB) in [(Float(12), Float(24)), (24, 24), (24, 148)] {
+            let overlap = modelBase * pressForce * (radiusA + radiusB) / modelReferenceRadius
+            let distance = radiusA + radiusB - overlap
+            func field(_ value: UInt64, target: UInt64, direction: Float) throws -> WorldObject {
+                .forceField(try ForceFieldDescriptor(id: CrowdScene.id(value), position: .zero,
+                    geometry: RangeGeometry(shape: .circle(radius: 200)), field: .directional(force: [direction * pressForce, 0]),
+                    filter: ObjectFilter(objectIDs: [CrowdScene.id(target)])))
+            }
+            let world = try await CrowdScene.makeWorld(bubble: modelMaterial()) { setup in
+                setup.add(try CrowdScene.bubble(1, at: [-distance / 2, 0], radius: radiusA))
+                    .add(try CrowdScene.bubble(2, at: [distance / 2, 0], radius: radiusB))
+                    .add(try field(500, target: 1, direction: 1)).add(try field(501, target: 2, direction: -1))
+            }
+            var frame = await world.advance(by: CrowdScene.step)
+            for _ in 0..<600 { frame = await world.advance(by: CrowdScene.step) }
+            XCTAssertNil(world.diagnostics.lastAdvanceIssue, "(\(radiusA), \(radiusB))")
+            let first = try XCTUnwrap(frame.objects[CrowdScene.id(1)]), second = try XCTUnwrap(frame.objects[CrowdScene.id(2)])
+            let measuredOverlap = radiusA + radiusB - simd_distance(first.position, second.position)
+            XCTAssertEqual(measuredOverlap, overlap, accuracy: 0.02 * overlap,
+                           "(\(radiusA), \(radiusB)): nakładanie \(measuredOverlap), oczekiwane (c_a + c_b) · F = \(overlap)")
+            let dentA = radiusA - CrowdScene.effectiveRadius(of: first), dentB = radiusB - CrowdScene.effectiveRadius(of: second)
+            let expectedA = overlap * radiusA / (radiusA + radiusB), expectedB = overlap * radiusB / (radiusA + radiusB)
+            XCTAssertEqual(dentA, expectedA, accuracy: 0.02 * expectedA, "(\(radiusA), \(radiusB)): wgniecenie a \(dentA), oczekiwane \(expectedA)")
+            XCTAssertEqual(dentB, expectedB, accuracy: 0.02 * expectedB, "(\(radiusA), \(radiusB)): wgniecenie b \(dentB), oczekiwane \(expectedB)")
+        }
+    }
 }

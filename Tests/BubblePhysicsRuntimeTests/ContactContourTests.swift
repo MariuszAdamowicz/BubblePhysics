@@ -14,8 +14,16 @@ final class ContactContourTests: XCTestCase {
     private let depthTolerance: Float = 0.02
 
     private func softWorld(compressionExponent: Float, base: Float, _ build: (WorldTransaction) throws -> WorldTransaction) throws -> BubbleWorld {
+        try softWorld(material: CrowdScene.softBubblePhysics(base: base, compressionExponent: compressionExponent), build)
+    }
+
+    private func softWorld(base: Float, _ build: (WorldTransaction) throws -> WorldTransaction) throws -> BubbleWorld {
+        try softWorld(material: CrowdScene.softBubblePhysics(base: base), build)
+    }
+
+    private func softWorld(material: PhysicsMaterial, _ build: (WorldTransaction) throws -> WorldTransaction) throws -> BubbleWorld {
         let world = try BubbleWorld(configuration: CrowdScene.configuration())
-        var setup = try CrowdScene.resources(bubble: CrowdScene.softBubblePhysics(base: base, compressionExponent: compressionExponent))
+        var setup = try CrowdScene.resources(bubble: material)
         for wall in try CrowdScene.walls() { setup = setup.add(wall) }
         _ = world.submit(try build(setup))
         return world
@@ -43,8 +51,9 @@ final class ContactContourTests: XCTestCase {
     }
 
     /// Najgłębsze wgniecenie konturu w promieniach, żeby test nie przechodził na konturze kołowym.
-    private func deepestDent(_ contour: [WorldPoint], center: WorldPoint) -> Float {
-        radius - (contour.map { length($0 - center) }.min() ?? radius)
+    private func deepestDent(_ contour: [WorldPoint], center: WorldPoint, radius: Float? = nil) -> Float {
+        let full = radius ?? self.radius
+        return full - (contour.map { length($0 - center) }.min() ?? full)
     }
 
     // P-B-17, ściana: bańka dociśnięta siłą globalną do lewej ściany (kc = 3, więc ρ i wgniecenie są wyraźne).
@@ -107,5 +116,76 @@ final class ContactContourTests: XCTestCase {
             }
         }
         XCTAssertGreaterThan(checked, 350)
+    }
+
+    // MARK: tłok w narożniku (P-B-6, G5-AC3)
+
+    /// Odległość punktu od odcinka.
+    private func distance(from point: WorldPoint, toSegment start: WorldPoint, _ end: WorldPoint) -> Float {
+        let edge = end - start
+        let lengthSquared = edge.x * edge.x + edge.y * edge.y
+        let t = lengthSquared > 0 ? max(0, min(1, ((point - start).x * edge.x + (point - start).y * edge.y) / lengthSquared)) : 0
+        return length(point - (start + edge * t))
+    }
+
+    /// Głębokość, na jaką punkt wchodzi w zamknięty wielokąt `polygon` (0, gdy leży na zewnątrz): odległość od jego brzegu.
+    private func depth(of point: WorldPoint, in polygon: [WorldPoint]) -> Float {
+        var inside = false
+        var nearest = Float.infinity
+        for index in polygon.indices {
+            let a = polygon[index], b = polygon[(index + 1) % polygon.count]
+            if (a.y > point.y) != (b.y > point.y), point.x < (b.x - a.x) * (point.y - a.y) / (b.y - a.y) + a.x { inside.toggle() }
+            nearest = min(nearest, distance(from: point, toSegment: a, b))
+        }
+        return inside ? nearest : 0
+    }
+
+    // P-B-6 (G5-AC3): co najmniej 20 baniek r 12–48 (c₀ 0,0108, r_ref 20) dociśniętych siłą globalną do narożnika pudła. Po uspokojeniu
+    // kontury nie przenikają się nawzajem ani ścian o więcej niż 0,5.
+    func testCrowdInBoxCornerContoursDoNotPenetrateEachOtherOrWalls() async throws {
+        let count = 24
+        var generator = CrowdScene.SeededGenerator(seed: 3_850)
+        var placed: [(id: UInt64, position: WorldPoint, radius: Float)] = []
+        var attempts = 0
+        while placed.count < count, attempts < 20_000 {
+            attempts += 1
+            let bubbleRadius = Float.random(in: 12...48, using: &generator)
+            let limit = CrowdScene.interiorHalfSize - WorldPoint(repeating: bubbleRadius + 1)
+            let point = WorldPoint(Float.random(in: -limit.x...limit.x, using: &generator),
+                                   Float.random(in: -limit.y...limit.y, using: &generator))
+            guard placed.allSatisfy({ length($0.position - point) >= $0.radius + bubbleRadius + 2 }) else { continue }
+            placed.append((UInt64(placed.count + 1), point, bubbleRadius))
+        }
+        XCTAssertEqual(placed.count, count, "scena ma mieć co najmniej 20 baniek")
+        let world = try softWorld(base: 0.0108) { setup in
+            try placed.reduce(setup) { transaction, bubble in
+                transaction.add(try CrowdScene.bubble(bubble.id, at: bubble.position, radius: bubble.radius, mass: bubble.radius * bubble.radius / 400))
+            }.setGlobalForce([-40, -40])
+        }
+        var frame = await world.advance(by: CrowdScene.step)
+        for index in 0..<1_500 {
+            frame = await world.advance(by: CrowdScene.step)
+            XCTAssertNil(world.diagnostics.lastAdvanceIssue, "krok \(index): \(String(describing: world.diagnostics.lastRejectionReason))")
+            if world.diagnostics.lastAdvanceIssue != nil { return }
+        }
+        let snapshot = world.debugContourSnapshot()
+        XCTAssertEqual(snapshot.count, count)
+        var deepestBetweenBubbles: Float = 0, deepestIntoWall: Float = 0, mostDented: Float = 0
+        let half = CrowdScene.interiorHalfSize
+        for first in placed {
+            let contour = try XCTUnwrap(snapshot[CrowdScene.id(first.id)], "kontur bańki \(first.id)")
+            let state = try XCTUnwrap(frame.objects[CrowdScene.id(first.id)])
+            mostDented = max(mostDented, deepestDent(contour, center: state.position, radius: first.radius))
+            for point in contour { deepestIntoWall = max(deepestIntoWall, abs(point.x) - half.x, abs(point.y) - half.y) }
+            for second in placed where second.id != first.id {
+                let other = try XCTUnwrap(snapshot[CrowdScene.id(second.id)])
+                guard length(try XCTUnwrap(frame.objects[CrowdScene.id(second.id)]).position - state.position) < first.radius + second.radius + 1
+                else { continue }
+                for point in contour { deepestBetweenBubbles = max(deepestBetweenBubbles, depth(of: point, in: other)) }
+            }
+        }
+        XCTAssertGreaterThan(mostDented, 1, "tłok ma być wyraźnie ściśnięty, najgłębsze wgniecenie \(mostDented)")
+        XCTAssertLessThanOrEqual(deepestBetweenBubbles, 0.5, "kontury baniek się przenikają")
+        XCTAssertLessThanOrEqual(deepestIntoWall, 0.5, "kontur przenika ścianę")
     }
 }

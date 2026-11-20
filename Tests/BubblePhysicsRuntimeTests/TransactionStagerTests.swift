@@ -404,6 +404,42 @@ final class TransactionStagerTests: XCTestCase {
         } catch { XCTFail("Unexpected fixture failure: \(error)", file: file, line: line) }
     }
 
+    // MARK: najgorsza α przy największym promieniu (P-B-5, G3-AC5)
+
+    /// Bańka miękka z c₀ i r_ref = 1; r_ref = 1 daje c = c₀ · r. Przy dt = 1/60 2 / dt² = 7200, więc α = 7200 · c przepełnia Float
+    /// (3,4e38) od c ≈ 4,7e34: c₀ = 1e34 przy r_max = 8 (c = 8e34) jest po złej stronie granicy, a ten sam c₀ przy r = 2 (c = 2e34)
+    /// i c₀ = 1e33 przy r_max = 8 (c = 8e33) po dobrej. Model sprzed 3.0.0 (s = 0 z domyślnych wykładników) nie widział promienia.
+    private func softBubbleState(base: Float, radius: Float) throws -> (RuntimeState, rejection: TransactionRejectionReason?) {
+        let material = try PhysicsMaterial(kind: .bubble,
+                                           contactCompliance: BubbleContactCompliance(base: base, referenceRadius: 1))
+        let bubble = try BubbleDescriptor(id: id(1), position: .zero, targetRadius: radius, mass: 2,
+                                          physicsMaterialID: materialID, renderMaterialID: styleID, eventInterest: [.didAdd])
+        let setup = WorldTransaction().updatePhysicsMaterial(materialID, material: material)
+            .updateRenderMaterial(styleID, material: try RenderMaterial()).add(.bubble(bubble))
+        do { return (try TransactionStager.stage(setup, against: state()).state, nil) }
+        catch let rejection as TransactionRejection { return (try state(), rejection.reason) }
+    }
+
+    func testSoftBubbleIsRejectedWhenWorstAlphaAtMaximumRadiusIsNotFinite() throws {
+        let overflow = TransactionRejectionReason.invalidValue(.valueOutOfRange("contactCompliance"))
+        XCTAssertEqual(try softBubbleState(base: 1e34, radius: 8).rejection, overflow, "c₀ · r_max / r_ref = 8e34, α = 5,8e38")
+        XCTAssertNil(try softBubbleState(base: 1e34, radius: 2).rejection, "ten sam c₀ przy r = 2: c = 2e34, α = 1,4e38")
+        XCTAssertNil(try softBubbleState(base: 1e33, radius: 8).rejection, "c₀ dziesięć razy mniejszy przy r_max = 8")
+    }
+
+    /// r_max to największy z promieni: bieżącego, docelowego i końca przejścia, także trwającego (nowy promień, który mieści się
+    /// w Float tylko dla mniejszego końca, jest odrzucany, a mniejszy cel przyjęty).
+    func testWorstAlphaUsesTheLargestRadiusOfTheRunningAndTheNewRadiusTransition() throws {
+        let overflow = TransactionRejectionReason.invalidValue(.valueOutOfRange("contactCompliance"))
+        let (initial, rejection) = try softBubbleState(base: 1e34, radius: 2)
+        XCTAssertNil(rejection)
+        assertRejected(WorldTransaction().startTransition(ParameterTransition(target: .bubbleRadius(id(1)), value: .scalar(8), duration: 1)),
+                       against: initial, reason: overflow)
+        XCTAssertNoThrow(try TransactionStager.stage(
+            WorldTransaction().startTransition(ParameterTransition(target: .bubbleRadius(id(1)), value: .scalar(3), duration: 1)),
+            against: initial))
+    }
+
     // MARK: stabilność gumki (P-B-6, CD-D-9)
 
     /// Przy dt = 1/60 granica K · dt² / m < 1 to K < 3600 · m: K = 1000 przechodzi dla m = 2 (0,14), a nie dla m = 0,2 (1,39).
