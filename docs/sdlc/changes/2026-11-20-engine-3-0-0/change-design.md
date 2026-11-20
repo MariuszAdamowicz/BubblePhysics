@@ -2,7 +2,7 @@
 
 **Date:** 2026-11-20
 **Artifact:** change-design
-**Status:** Draft
+**Status:** Approved
 **Template version:** default/0.3.2
 **References:** dokument wejściowy autora `2KBubbles-iOS/docs/benchmarks/stage-0/v2.3.0-engine-3.0.0-input.md` (pomiary i dane surowe w `v2.3.0/wall/` repo gry); punkt wyjścia: `main` = v2.3.0 (e669fb1)
 
