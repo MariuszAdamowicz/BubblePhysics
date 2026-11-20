@@ -18,6 +18,7 @@ package final class NativeCompleteStepper: CompleteStepper {
         configuredContactCompliance = configuration.sanitized.contactCompliance
     }
     package var baseContactCompliance: Float { configuredContactCompliance }
+    package var positionTolerance: Float { NativePublicWorld.positionTolerance }
     /// Pary z dostarczonym `contactBegan` po ostatnio opublikowanym kroku; szew testów `didPublish`.
     package var publishedContactPairs: Set<ContactPair> { previousContacts }
     package var publishedRenderHandoff: NativeMetalRenderHandoff? { native?.publishedRenderHandoff }

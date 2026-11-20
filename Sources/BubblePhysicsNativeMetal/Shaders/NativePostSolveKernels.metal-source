@@ -1,5 +1,6 @@
-// ABI: cztery atomiki uint, wyłącznie liczniki i bity statusu. Bit 2 to odrzucenie przez strażnika; razem z nim bit 8
-// (centerCrossing) albo bit 16 (rigidRotationBudget) podaje przyczynę.
+// ABI: bufor safety to 8 atomików uint (NativeMetalSafetyControl, stride 32). safety+0..3 to liczniki i bity błędów
+// (safety+3: bity błędów), safety+4..7 to diagnostyka: safety+4 to licznik par bańka w bańce, safety+5..7 rezerwa.
+// Bit 2 to odrzucenie przez strażnika; razem z nim bit 8 (centerCrossing) albo bit 16 (rigidRotationBudget) podaje przyczynę.
 // Każdy wątek bańki zapisuje tylko własną pozycję oraz rząd kandydatów.
 void nativeSafetyEvent(device atomic_uint *safety, uint slot) {
     atomic_fetch_add_explicit(safety + slot, 1, memory_order_relaxed);
@@ -137,15 +138,18 @@ bool nativeInsideOwner(float2 p, device NativeSegment *segments, uint count, lon
 }
 
 // CD-D-17: rzut środka z wnętrza wielokąta. Właściciel (identity.y), w którego wnętrzu leży `p`, albo -1.
-// Wielokąty niewidoczne dla bańki (filtr) są pomijane; każdy właściciel jest sprawdzany raz (przy pierwszej krawędzi).
+// Wielokąty niewidoczne dla bańki (filtr) są pomijane. Krawędzie wielokąta leżą w buforze kolejno, więc właściciel jest
+// sprawdzany przy pierwszej krawędzi ciągu: pamięć ostatniego właściciela w wątku zamiast przeglądu wcześniejszych krawędzi
+// (LD-D-7). Ponowny test tego samego właściciela dałby ten sam wynik, więc wynik nie zależy od tej pamięci.
 long nativeContainingOwner(float2 p, uint4 filter, device NativeSegment *segments, uint count) {
+    long testedOwner = -1;
     for (uint j = 0; j < count; ++j) {
         NativeSegment s = segments[j];
-        if (!s.flags.y || !nativeFilterAccepts(filter, s.filter)) continue;
-        bool first = true;
-        for (uint k = 0; k < j; ++k)
-            if (segments[k].flags.y && segments[k].identity.y == s.identity.y) first = false;
-        if (first && nativeInsideOwner(p, segments, count, s.identity.y, false)) return s.identity.y;
+        if (!s.flags.y) continue;
+        bool first = s.identity.y != testedOwner;
+        testedOwner = s.identity.y;
+        if (!first || !nativeFilterAccepts(filter, s.filter)) continue;
+        if (nativeInsideOwner(p, segments, count, s.identity.y, false)) return s.identity.y;
     }
     return -1;
 }

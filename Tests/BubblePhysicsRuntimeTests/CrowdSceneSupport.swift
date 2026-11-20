@@ -187,8 +187,10 @@ enum CrowdScene {
         var vanishedBubbles = 0
         /// Środki poza ramą (klatka, bańka, położenie).
         var outsideFrame: [(step: Int, id: ObjectID, position: WorldPoint)] = []
-        var minimumContainedPairs = Int.max
-        var wasContainedCountFinite = true
+        /// `containedBubblePairCount` z ostatniego kroku przebiegu (-1, dopóki żaden krok się nie wykonał).
+        var lastContainedPairs = -1
+        /// Największy `containedBubblePairCount` w przebiegu: odróżnia spadek licznika do 0 od licznika, który nigdy nie wzrósł.
+        var peakContainedPairs = 0
         /// Promienie docelowe dodanych baniek.
         var targetRadii: [ObjectID: Float] = [:]
         /// Stany baniek z ostatnich `lastSecondSteps` klatek przebiegu (po jednej tablicy na klatkę).
@@ -301,8 +303,8 @@ enum CrowdScene {
             }
             report.lastSecond.append(sample)
             if report.lastSecond.count > lastSecondSteps { report.lastSecond.removeFirst() }
-            report.minimumContainedPairs = min(report.minimumContainedPairs, diagnostics.containedBubblePairCount)
-            if diagnostics.containedBubblePairCount < 0 { report.wasContainedCountFinite = false }
+            report.lastContainedPairs = diagnostics.containedBubblePairCount
+            report.peakContainedPairs = max(report.peakContainedPairs, diagnostics.containedBubblePairCount)
             if let after = stepsAfterLastAdd {
                 if after >= extraSteps { break }
                 stepsAfterLastAdd = after + 1

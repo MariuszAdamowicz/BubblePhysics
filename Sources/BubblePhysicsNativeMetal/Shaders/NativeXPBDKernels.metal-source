@@ -347,9 +347,20 @@ kernel void nativePrepareSolverContacts(device NativeBubble *bubbles [[buffer(0)
     if (index >= contacts.counts.z) return;
     NativeContactCache record = cache[index];
     uint a = endpoints[index].x, b = endpoints[index].y;
-    if (record.metadata.z == contacts.limits.x) {
-        // Jedna wspólna lambda obu końców: suma długości warm korekcji każdej bańki
-        // nie może przekroczyć jej promienia, niezależnie od liczby kontaktów.
+    // ρ jest już wygładzone (nativeUpdateContactRho) i stałe w klatce, więc suma podatności końców c_a(ρ_a) + c_b(ρ_b)
+    // trafia do rho.z raz na kontakt; nativeContactAlpha czyta ją w każdej iteracji bez pow() (LD-D-6).
+    if (endpoints[index].w) {
+        float compliance = nativeContactCompliance(bubbles[a], record.rho.x);
+        if (record.metadata.x == 0) compliance += nativeContactCompliance(bubbles[b], record.rho.y);
+        record.rho.z = compliance;
+    }
+    bool limited = record.metadata.z == contacts.limits.x;
+    if (limited) {
+        // Jedna wspólna lambda obu końców. Kontakt ze ścianą albo odcinkiem i para baniek bez limitu pary (v2.1.0) mają
+        // λ ≤ r / (invMass · stopień) dla każdego końca, więc suma warm korekcji bańki nie przekracza jej promienia.
+        // Z limitem pary λ pary baniek ogranicza tylko nativePairLambdaLimit: korekta jednej pary jest ograniczona, ale suma
+        // korekt bańki nie jest ograniczona promieniem i może go przekroczyć; bez ruchu wynosi co najwyżej k · 0,25 · min r
+        // przy k kontaktach (LD-D-1, testWarmStartOfBubbleWithFourContactsAddsUpThePairLimits).
         float maximum = bubbles[a].physical.z / (bubbles[a].physical.y * max(1u, degrees[a]));
         if (record.metadata.x == 0) {
             if (control.contactDamping.y != 0)
@@ -358,8 +369,9 @@ kernel void nativePrepareSolverContacts(device NativeBubble *bubbles [[buffer(0)
                 maximum = min(maximum, bubbles[b].physical.z / (bubbles[b].physical.y * max(1u, degrees[b])));
         }
         record.response.x = min(record.response.x, maximum);
-        cache[index] = record;
     }
+    // Jeden zapis rekordu, gdy zmieniło się rho.z albo limit λ.
+    if (endpoints[index].w || limited) cache[index] = record;
 }
 
 kernel void nativeApplyWarmStart(device NativeBubble *bubbles [[buffer(0)]],
@@ -410,11 +422,9 @@ float4 nativeReadConstraint(device NativeBubble *bubbles, device NativeSegment *
 }
 
 // α kontaktu (CD-D-5): α_cfg + (c_a(ρ_a) + c_b(ρ_b)) / dt² dla pary bańka–bańka, α_cfg + c_a(ρ_a) / dt² dla bańki i odcinka
-// (ściany albo bryły statycznej). `a` to bańka kontaktu, `other` druga bańka (tylko dla `kind == 0`).
-float nativeContactAlpha(float alphaConfiguration, float dt, NativeBubble a, NativeBubble other, uint kind, float4 rho) {
-    float compliance = nativeContactCompliance(a, rho.x);
-    if (kind == 0) compliance += nativeContactCompliance(other, rho.y);
-    return alphaConfiguration + compliance / (dt * dt);
+// (ściany albo bryły statycznej). Suma podatności końców jest w rho.z, zapisana przez nativePrepareSolverContacts.
+float nativeContactAlpha(float alphaConfiguration, float dt, float4 rho) {
+    return alphaConfiguration + rho.z / (dt * dt);
 }
 
 kernel void nativeUpdateContactMultipliers(device NativeBubble *bubbles [[buffer(0)]],
@@ -428,8 +438,7 @@ kernel void nativeUpdateContactMultipliers(device NativeBubble *bubbles [[buffer
     uint4 edge = endpoints[index]; NativeContactCache record = cache[index];
     float4 geometry = nativeReadConstraint(bubbles, segments, positions, edge.x, edge.y, edge.z, record.geometry.xy);
     float weight = bubbles[edge.x].physical.y + (edge.z == 0 ? bubbles[edge.y].physical.y : 0);
-    float alpha = nativeContactAlpha(solver.physics.x, control.physics.x, bubbles[edge.x],
-        edge.z == 0 ? bubbles[edge.y] : bubbles[edge.x], edge.z, record.rho);
+    float alpha = nativeContactAlpha(solver.physics.x, control.physics.x, record.rho);
     if (weight + alpha <= 0) { corrections[index] = 0; return; }
     float delta = (geometry.z - alpha * record.response.x) / (weight + alpha);
     uint degree = edge.z == 0 ? max(degrees[edge.x], degrees[edge.y]) : degrees[edge.x];
@@ -474,8 +483,7 @@ kernel void nativeMeasureResidual(device NativeBubble *bubbles [[buffer(0)]],
         uint a = edge.w && edge.z == 0 ? edge.y : index;
         uint b = edge.w && edge.z == 0 ? index : edge.y;
         float4 geometry = nativeReadConstraint(bubbles, segments, positions, a, b, edge.z, record.geometry.xy);
-        float alpha = nativeContactAlpha(solver.physics.x, control.physics.x, bubbles[a],
-            edge.z == 0 ? bubbles[b] : bubbles[a], edge.z, record.rho);
+        float alpha = nativeContactAlpha(solver.physics.x, control.physics.x, record.rho);
         float residual = geometry.z - alpha * record.response.x;
         maximum = max(maximum, record.response.x > 0 ? abs(residual) : max(0.0f, residual));
     }

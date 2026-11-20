@@ -101,14 +101,20 @@ final class AcceptanceEquivalenceTests: XCTestCase {
 
     /// Sam wzorzec nic nie znaczy, gdy hash jest stały albo przebieg nie jest powtarzalny: scena się rusza,
     /// hash to widzi, a dwa przebiegi na tym samym urządzeniu są identyczne (podstawa porównania z wzorcem).
+    /// Test działa na każdym GPU, więc jest sprawdzeniem domyślnej ścieżki z limitem λ pary także poza urządzeniem wzorca
+    /// (F-11): oba przebiegi z limitem mają każdy krok przyjęty (asercja w `run`), a stan różni się od bliźniaka bez limitu,
+    /// czyli limit naprawdę działa w tej scenie.
     func testHashSeesTheSceneMoveAndTwoRunsAreIdentical() async throws {
         let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
         let early = try await run(steps: 1, device: device)
-        let first = try await run(steps: Self.referenceSteps, device: device)
-        let second = try await run(steps: Self.referenceSteps, device: device)
+        let first = try await run(steps: Self.referenceSteps, device: device, pairCorrectionLimit: true)
+        let second = try await run(steps: Self.referenceSteps, device: device, pairCorrectionLimit: true)
+        let twin = try await run(steps: Self.referenceSteps, device: device, pairCorrectionLimit: false)
         XCTAssertNotEqual(early.objectHash, first.objectHash)
         XCTAssertNotEqual(early.contourHash, first.contourHash)
         XCTAssertEqual(first.objectHash, second.objectHash, "stan obiektów różni się między przebiegami")
         XCTAssertEqual(first.contourHash, second.contourHash, "kontury różnią się między przebiegami")
+        XCTAssertEqual(first.frame.objects.count, 305)
+        XCTAssertNotEqual(first.objectHash, twin.objectHash, "limit λ pary nie zmienia stanu sceny akceptacyjnej")
     }
 }
