@@ -78,23 +78,25 @@ Pliki po całej zmianie. Każdy wpis mówi, co się w nim zmienia, i który wyci
 +   WorldTransaction.swift       # BubbleResult.drivePolicy: BubbleDrivePolicy? = nil (slice 2)
   Sources/BubblePhysicsRuntime/
 +   TransactionStager.swift      # validateWorstAlpha z r_max (slice 1); chwyt bez polityki odrzucany, RuntimeObject bez pól usztywniania (slice 2)
-+   MotionControllers.swift      # tłumienie γ w hoście przed F/m·dt; bez gałęzi prędkościowej i usztywniania (slice 2)
-+   NativeCompleteStepper.swift  # NativePublicObject bez rigidity (slice 2)
++   MotionControllers.swift      # tłumienie γ w hoście przed F/m·dt, γ z materiału obiektu; bez gałęzi prędkościowej, usztywniania i `bandDamping` (slice 2)
++   NativeCompleteStepper.swift  # bez przepisywania rigidity do NativePublicObject :130 (slice 2)
     StructuralOperations.swift   # bez zmian: czyta collisionRadius, które jest teraz zawsze targetRadius
   Sources/BubblePhysicsNativeMetal/
-+   NativePublicWorld.swift      # contact.x = c₀·r/r_ref, contact.y wolne (slice 1); material.z = 0 (slice 2); krawędzie z NativeStaticPolygonEdges (slice 3)
++   NativePublicWorld.swift      # contact.x = c₀·r/r_ref, contact.y wolne (slice 1); bez pola NativePublicObject.rigidity :18 i material.z = 0 (slice 2); krawędzie z NativeStaticPolygonEdges (slice 3)
 +   NativeStaticPolygonEdges.swift # NOWY: wielokąt statyczny → odcinki z obiegiem, wypukłością końców i sąsiadem (slice 3)
 +   NativeSolverInput.swift      # NativeSolverSegment.polygonEdge (strona zewnętrzna, wypukłość, sąsiad) (slice 3)
 +   NativeMetalBufferLayout.swift # cache: rho → compliance, x = c_a + c_b (slice 1); segment: nowy pas `region`, 112 → 128 B (slice 3)
     NativeRigidPolygonState.swift # bez zmian: motion.w (0 dla .kinematic) tłumi już tylko obrót
 +   NativeMetalSolver.swift      # bez dyspozycji nativeUpdateContactRho (slice 1); odczyt ramki bez walidacji konturu (slice 4)
   Sources/BubblePhysicsNativeMetal/Shaders/
-+   NativeGeometryKernels.metal-source  # nativeContactCompliance = contact.x (slice 1); nativePredict bez tłumienia liniowego (slice 2); nativeBuildContacts według obszarów (slice 3)
++   NativeGeometryKernels.metal-source  # nativeContactCompliance = contact.x (slice 1); nativePredict bez członu liniowego :173 na ścieżce publicznej, obrót :178 dalej z material.x = γ (slice 2); nativeBuildContacts według obszarów (slice 3)
 +   NativeXPBDKernels.metal-source      # cache i α na compliance.x (slice 1); nativeConstraintGeometry według cechy z budowy (slice 3)
-+   NativePostSolveKernels.metal-source # bez nativeUpdateContactRho i nativeIsStructuralResult (slice 1); nativeRigidPredict tłumi tylko obrót, bez bramki material.z (slice 2); kontur bez nativeSafetyFailure (slice 4)
++   NativePostSolveKernels.metal-source # bez nativeUpdateContactRho i nativeIsStructuralResult (slice 1); nativeRigidPredict tłumi tylko obrót, bez trzech użyć material.z :677, :681, :682 (slice 2); kontur bez nativeSafetyFailure (slice 4)
   Tests/
 +   BubblePhysicsRuntimeTests/CrowdSceneSupport.swift # softBubblePhysics bez wykładników (slice 1)
 +   BubblePhysicsRuntimeTests/…  # nowe testy G1–G5; usunięte ContactRhoHistoryTests, RhoGridReportTests (slice 1)
++   BubblePhysicsRuntimeTests/MotionDampingTests.swift # NOWY: ugięcie w spoczynku i przebieg prędkości przy jednym tłumieniu (slice 2)
++   BubblePhysicsRuntimeTests/CrowdSceneSupport.swift:68 # `CrowdScene.bubble` z `drivePolicy` nil (slice 2)
 +   BubblePhysicsNativeMetalTests/NativeMetalShaderABITests.swift # układy cache (slice 1) i segmentu (slice 3)
 +   BubblePhysicsNativeMetalTests/NativeStaticPolygonEdgesTests.swift # NOWY: znak obiegu, wypukłość końców, sąsiad, tolerancja scalania (slice 3)
 -   BubblePhysicsRuntimeTests/ZZWallPressProbeTests.swift # sonda spoza repo, przenoszona poza pakiet w slice 1 (nie kasowana)
@@ -116,14 +118,15 @@ Krok świata po zmianie. `+` to nowe wywołanie, `-` usunięte, a komentarz mów
   │  └─ validateWorstAlpha                         # :566, r_max z promieni, c₀·r_max/r_ref, bez ρ_min^kc (slice 1)
   └─ NativeCompleteStepper.performStep             # NativeCompleteStepper.swift:100
      ├─ MotionControllers.prepare                  # MotionControllers.swift:13
--    │  ├─ blok usztywniania                       # :40-51 (slice 2)
--    │  ├─ bubbleDriveSpeed / velocity(to:)        # gałąź prędkościowa :79-83 (slice 2)
-+    │  ├─ dampedVelocity(object, γ, dt)           # v·e^(−γ·dt) dla .dynamic, .motorDriven, .playerDriven (slice 2)
+-    │  ├─ blok usztywniania                       # :40-49 (slice 2)
+     │  ├─ collisionRadius = targetRadius          # :50 zostaje, już bez warunku: tędy przejścia promienia docierają do fizyki
+-    │  ├─ bubbleDriveSpeed / velocity(to:)        # gałąź prędkościowa :79-83; `.playerDriven` z celem bez polityki gumki dostaje prędkość 0 jak bez celu (:66), stager go nie dopuszcza (slice 2)
++    │  ├─ dampedVelocity(object, γ, dt)           # v·e^(−γ·dt) dla .dynamic, .motorDriven, .playerDriven; γ = physicsMaterials[object.material.id].damping, przekazane do prepare obiektu :37 (slice 2)
      │  └─ velocity += F/m·dt                      # gumka bez e^(−D·dt/m), MotorDrive, siła globalna, pola
      └─ NativePublicWorld.step                     # NativePublicWorld.swift:151
 +       ├─ NativeStaticPolygonEdges.segments(…)    # zamiast pętli .fixed :213-227 (slice 3)
         └─ NativeMetalSolver.executeSnapshot       # NativeMetalSolver.swift:316
-           ├─ nativePredict                        # tłumienie liniowe tylko z control.physics.y, gdy publicFlags.x == 0 (slice 2)
+           ├─ nativePredict                        # tłumienie liniowe tylko z control.physics.y, gdy publicFlags.x == 0; obrót bez zmian (slice 2)
            ├─ nativeRigidPredict                   # mnożnik e^(−motion.w·dt) tylko dla motion.z (slice 2)
            ├─ nativeBuildContacts                  # obszar wnętrza krawędzi albo wierzchołka, cecha w response.w (slice 3)
            ├─ nativeMatchContactCache              # przy trafieniu kopiuje compliance zamiast rho (slice 1)
@@ -131,7 +134,7 @@ Krok świata po zmianie. `+` to nowe wywołanie, `-` usunięte, a komentarz mów
            ├─ nativePrepareSolverContacts          # compliance.x = contact.x_a + contact.x_b (slice 1)
            ├─ XPBD × 8: nativeConstraintGeometry   # cecha z budowy obowiązuje do końca kroku (slice 3)
            ├─ CCD, strażniki                       # bez zmian
-           ├─ nativeAccumulateContactPressure      # podział wg contact.x (slice 1), bez bramki material.z (slice 2), bez safety (slice 4)
+           ├─ nativeAccumulateContactPressure      # podział wg contact.x (slice 1); miękkość = material.y, bramka deformowalności bez członu material.z, bez bramki material.z >= 1 (slice 2); bez safety (slice 4)
            ├─ kontury, nativePrepareRenderData*    # bez nativeSafetyFailure 1 i 4 (slice 4)
            ├─ nativeApplyPublicRegion              # bez sprawdzenia skończoności punktów konturu POST:994; :987 (pozycja) zostaje (slice 4)
            └─ odczyt ramki                         # bez sprawdzeń :1013-1016, :1019-1025, :1031-1032 (slice 4)
@@ -296,6 +299,19 @@ Każdy wycinek zostawia zestaw testów zielony i dopisuje swoją część do CHA
    - `NativeMetalStructuralOperationTests`: `testMergeResultWithSourceIDStartsItsPairEndAtRhoOne` i `testSplitResultWithSourceIDStartsItsPairEndAtRhoOne` → `…StartsItsPairWithAFreshRecordAndTheComplianceOfItsOwnRadius` (świeży rekord, `compliance.x` = c₀ · (r_a + r_b) / r_ref, bez dziedziczenia ρ).
    - Zmienione tylko wywołania (bez wykładników), oczekiwania bez zmian: `NativeMetalStructuralOperationTests` (materiały), `ContainmentResolutionTests`, `MotionControllersPrepareTests`, `CrowdScene.softBubblePhysics`. Materiał tłoku `CrowdScene.softCrowdPhysics` traci k = 1; `CrowdCompressionTests` i pokrewne przechodzą bez zmiany oczekiwań.
 
+## Slice 2: Jedno tłumienie ruchu i gumka jako jedyny napęd
+
+**Delivers:** w spoczynku kontakt dostaje pełną siłę gumki, `MotorDrive` i siły globalnej, chwyt nie zmienia promienia ani kształtu, a prędkość narzucona torem nie jest tłumiona.
+
+10. Utwórz `Tests/BubblePhysicsRuntimeTests/MotionDampingTests.swift` z testami ugięcia w spoczynku: gumka w nasyceniu w 9 kombinacjach γ i m, `MotorDrive` i siła globalna, gumka a `MotorDrive` (położenie i kontur), na ścianie grubości co najmniej 2r i z `BubbleDrivePolicy(rigidifies: false, bandStiffness:maximumForce:)`, obejmujące [P-B-7](#p-b-7), [P-B-8](#p-b-8) i [P-B-11](#p-b-11) · verify: `swift test --filter "MotionDampingTests/testRest"` pada na asercji
+11. Dodaj do `MotionDampingTests` testy przebiegu prędkości: dwie kolejne ramki dla bańki z gumką, bańki z `MotorDrive` i bryły z `MotorDrive`, prędkość ustalona gumki przy stałym naciągnięciu, bańka i bryła na torze z γ 4 oraz bryła kinematyczna `.velocity`, obejmujące [P-B-9](#p-b-9), [P-B-10](#p-b-10) i [P-B-12](#p-b-12) · verify: `swift test --filter "MotionDampingTests/testVelocity"` pada na asercji
+12. Dodaj do `TransactionStagerTests` test odrzucenia `beginPlayerDrive` dla bryły wielokątnej z `incompatibleObjectKind(id)` i bez zmiany ruchu, część [P-B-14](#p-b-14) · verify: `swift test --filter TransactionStagerTests/testBeginPlayerDriveIsRejectedForARigidPolygon` pada na asercji
+13. Napisz testy nowego API, które jeszcze się nie kompilują: w `MotionCommandTests` `testBandPolicyHasOnlyStiffnessAndMaximumForce` (pola i `valueOutOfRange` z nazwą pola), w `TransactionStagerTests` `testBeginPlayerDriveIsRejectedForABubbleWithoutDrivePolicy` oraz `testReplaceMergeAndSplitOfAGrabbedBubbleEndTheDriveWithAndWithoutPolicy` (bez `DriveFeedback`, `driveNotActive` albo `objectNotFound`, ponowny chwyt tylko z polityką), obejmujące [P-B-13](#p-b-13), [P-B-14](#p-b-14) i [P-B-16](#p-b-16) · verify: `grep -q testBeginPlayerDriveIsRejectedForABubbleWithoutDrivePolicy Tests/BubblePhysicsRuntimeTests/TransactionStagerTests.swift && ! swift build --build-tests`
+14. W jednym kroku zmień API napędu i hosta: `BubbleDrivePolicy(bandStiffness:maximumForce:)` bez `.standard`, `drivePolicy: BubbleDrivePolicy?` = nil w `BubbleDescriptor` i `BubbleResult`, odrzucenie chwytu bańki bez polityki i bryły po `physicalObject(id)` w `beginPlayerDrive`, `validateBandStability` i `requireBandDriveTarget` na polityce opcjonalnej, w `MotionControllers` bez gałęzi prędkościowej, `bubbleDriveSpeed`, usztywniania i `bandDamping` (z `collisionRadius = targetRadius` bez warunku), bez pięciu pól usztywniania w `RuntimeObject`, bez `NativePublicObject.rigidity` (`material.z` = 0) i bez trzech użyć `material.z` w `nativeAccumulateContactPressure`, a testy i pomocniki z usuniętym API przepisz albo usuń (`MotionCommandTests`, `BandDriveTests`, `MotionControllersPrepareTests`, `TransactionStagerTests`, `NativeMetalMotionRoleTests`, `JointStagingTests`, `MotionControllersFeedbackTests` z bańkami z polityką, `CrowdScene.bubble`, `rigidifies: false` w `MotionDampingTests`) · verify: `! grep -rnE 'bandDamping|rigidifies|rigidificationDuration|relaxationDuration|distanceResponse|capturedRadius|rigidityBlendStart|bubbleDriveSpeed|material\.z|\.rigidity|var rigidity' Sources Tests Examples && swift test --filter "MotionCommandTests|TransactionStagerTests|MotionControllersPrepareTests|NativeMetalMotionRoleTests|JointStagingTests|MotionControllersFeedbackTests" && swift test --list-tests > /tmp/slice2-tests.txt && grep -q testBandPolicyHasOnlyStiffnessAndMaximumForce /tmp/slice2-tests.txt && grep -q testBeginPlayerDriveIsRejectedForABubbleWithoutDrivePolicy /tmp/slice2-tests.txt && grep -q testReplaceMergeAndSplitOfAGrabbedBubbleEndTheDriveWithAndWithoutPolicy /tmp/slice2-tests.txt`
+15. Przenieś tłumienie ruchu liniowego do hosta: `MotionControllers.prepare` przekazuje γ z materiału obiektu i mnoży prędkość przez e^(−γ·dt) przed F/m·dt dla `.dynamic`, `.motorDriven` i `.playerDriven`, `nativePredict` traci człon liniowy :173 na ścieżce publicznej, a `nativeRigidPredict` tłumi `motion.w` tylko `motion.z`; przepisz oczekiwania `NativeMetalPublicObjectTests.testMaterialUpdateAffectsEveryReferencingObjectOnNextCompleteFrame`, `BandDriveTests` i `MotionControllersPrepareTests` pod nową kolejność · verify: `swift test --filter "MotionDampingTests|BandDriveTests|MotionControllersPrepareTests|NativeMetalPublicObjectTests|ContainmentResolutionTests"`
+16. Dodaj `drivePolicy` z `bandStiffness` bańkom i `BubbleResult` w `BubbleScene.swift` (region `merge-events` przenieś do bloku przewodnika), przepisz w `docs/integration-guide.md` „Chwyt gumką” i opis `drivePolicy` pod model 3.0.0, a do CHANGELOG i `docs/MIGRATION-v3.md` dopisz napęd tylko gumką, `bandDamping` → γ, koniec `rigidifies`, politykę dla chwytanych baniek i koniec chwytu brył; obejmuje [P-B-17](#p-b-17) · verify: `xcodebuild -project Examples/BubblePhysicsShowcase/BubblePhysicsShowcase.xcodeproj -scheme BubblePhysicsShowcase -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build && grep -q "bandDamping" docs/MIGRATION-v3.md && grep -q "drivePolicy" docs/MIGRATION-v3.md && ! grep -nE 'rigidifies|maximumSpeed:|distanceResponse' docs/integration-guide.md && swift test --filter IntegrationGuideTests`
+17. Uruchom cały zestaw, potwierdź, że testy stabilności gumki i limitu celu w stagerze (`testAddRejectsABandBubbleWithTooSmallAMass`, `testReplaceRejectsABandBubbleWithTooSmallAMass`, `testMergeRejectsAResultWithTooSmallAMass`, `testSplitRejectsAPartWithTooSmallAMass`, `testReasonableDriveTargetIsAcceptedInBandMode`) przechodzą bez zmiany oczekiwań, i zapisz w `plan.md` pod nagłówkiem „Usunięte i zmienione testy wycinka 2” listę z powodami do opisu PR, obejmuje [P-B-15](#p-b-15) · verify: `grep -q "Usunięte i zmienione testy wycinka 2" docs/sdlc/changes/2026-11-20-engine-3-0-0/plan.md && swift build --build-tests && swift test`
+
 ## Deviations from Design
 
 None.
@@ -304,7 +320,11 @@ None.
 
 | Slice | Assumed | Found | Plan change | Date |
 |-------|---------|-------|-------------|------|
-|       |         |       |             |      |
+| 2 | `nativePredict` przestaje tłumić ruch liniowy, obrót jak dziś | na ścieżce publicznej oba człony czytają `material.x` = γ (NativeGeometryKernels.metal-source:173 i :178) | R2: znika tylko człon liniowy :173, `material.x` zostaje γ dla obrotu | 2026-11-20 |
+| 2 | jedna bramka `material.z` w kernelu nacisku (projekt cytuje :735) | trzy użycia: miękkość :677, człon bramki deformowalności :681, bramka konturu :682 (NativePostSolveKernels.metal-source) | R2 i zadanie 13: usunięte wszystkie trzy | 2026-11-20 |
+| 2 | γ dostępne w `MotionControllers.prepare` ze `state.physicsMaterials` | `prepare` obiektu (MotionControllers.swift:37) nie dostaje stanu | R2: γ z `RuntimeObject.material` przekazane do `prepare` obiektu | 2026-11-20 |
+| 2 | testy do przepisania to testy gumki i napędu prędkością | także dokładna prędkość po tłumieniu w kernelu (`NativeMetalPublicObjectTests:184`) i domyślne `.standard` z `beginPlayerDrive` w `MotionCommandTests`, `NativeMetalMotionRoleTests`, `JointStagingTests`, `TransactionStagerTests`, `MotionControllersFeedbackTests`, `CrowdScene.bubble:68` | zadania 13 i 14 wymieniają te pliki | 2026-11-20 |
+| 2 | bryły nie da się chwycić | bryłę z rolą `.playerDriven` bez celu można dalej dodać (`RegionPolicyTests:131`, `ModelValidationTests:78`), stoi z prędkością 0; projekt mówi tylko o `beginPlayerDrive` | none | 2026-11-20 |
 
 ## Implementation deviations
 
