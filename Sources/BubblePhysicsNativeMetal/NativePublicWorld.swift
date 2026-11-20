@@ -76,16 +76,20 @@ struct NativePublicProperties: Equatable, Sendable {
     var speedLimits: SIMD2<Float> = .zero
     /// Warstwa obiektu; w rekordzie bańki jako `filter.w` (`NativeMetalFilter.encodeLayer`).
     var layer: Int32 = 0
-    /// Podatność kontaktu bańki: część bazowa c₀·(r/r_ref)^s (0 = kontakt twardy), wykładnik ściśnięcia k; w rekordzie bańki jako `contact`.
+    /// Kontakt bańki: część bazowa podatności c₀·(r/r_ref)^s (0 = kontakt twardy), wykładnik ściśnięcia k, współczynnik tłumienia
+    /// kontaktu miękkiego ζ_c (zawsze, także dla bańki twardej: czyta go tłumik pary); w rekordzie bańki jako `contact`.
     var contact: SIMD4<Float> = .zero
 
     /// c₀ (po nadpisaniu na bańce) · (r / r_ref)^s dla bieżącego promienia fizycznego `radius`. Przy c₀ = 0 potęg się nie liczy,
-    /// więc skrajny wykładnik nie daje NaN z 0 · ∞ (CD-D-8). Przepełnienie Float wyklucza stager (CD-D-15).
-    static func contact(of compliance: BubbleContactCompliance, override: Float?, radius: Float) -> SIMD4<Float> {
+    /// więc skrajny wykładnik nie daje NaN z 0 · ∞ (CD-D-8).
+    /// Lane `.z` zawsze niesie ζ_c, także przy c₀ = 0 (gałąź `guard`): tłumik pary czyta go też dla bańki twardej.
+    /// Przepełnienie Float wyklucza stager (CD-D-15).
+    static func contact(of compliance: BubbleContactCompliance, override: Float?, radius: Float,
+                        dampingRatio: Float) -> SIMD4<Float> {
         let base = override ?? compliance.base
-        guard base > 0 else { return .zero }
+        guard base > 0 else { return SIMD4(0, 0, dampingRatio, 0) }
         // Ten sam wzór w Double co walidacja stagera (`validateWorstAlpha`).
-        return SIMD4(Float(compliance.scaledBase(base, radius: radius)), compliance.compressionExponent, 0, 0)
+        return SIMD4(Float(compliance.scaledBase(base, radius: radius)), compliance.compressionExponent, dampingRatio, 0)
     }
 }
 
@@ -129,6 +133,9 @@ package final class NativePublicWorld {
         solver = try NativeMetalSolver(device: device, commandExecutor: commandExecutor, configuration: configuration)
     }
     package var hasSensorPairHistory: Bool { solver.hasSensorPairHistory }
+    /// Rekordy cache kontaktów po ostatnim kroku (ρ końców, λ). Szew testów ρ wyników scalenia i podziału; typ rekordu jest
+    /// wewnętrzny, więc testy czytają go przez `@testable`.
+    var cachedContacts: [NativeContactCacheRecord] { solver.cachedContacts }
     /// Krok bez GPU (brak ciał z masą) kończy wszystkie pary w `EventCompactor`, więc i tu historia par musi zniknąć;
     /// inaczej para o tych samych ID dodana później nie dostałaby `contactBegan`.
     package func forgetContactHistory() { contactHistory = [] }
@@ -191,7 +198,8 @@ package final class NativePublicWorld {
                     speedLimits: SIMD2(material.maximumLinearSpeed ?? 0, material.maximumAngularSpeed ?? 0),
                     layer: object.layer,
                     contact: NativePublicProperties.contact(of: material.contactCompliance, override: b.contactCompliance,
-                                                            radius: object.collisionRadius))
+                                                            radius: object.collisionRadius,
+                                                            dampingRatio: material.contactDampingRatio))
                 if let shape = object.structuralShape { structuralShapes[b.id] = shape }
             case .rigidBody(let p):
                 guard let material = materials[p.physicsMaterialID] else { throw NativeMetalSolverError.invalidSnapshot }

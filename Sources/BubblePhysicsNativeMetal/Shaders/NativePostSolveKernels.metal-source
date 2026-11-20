@@ -593,27 +593,8 @@ kernel void nativeRigidApplyCCD(device NativeRigidBody *bodies [[buffer(0)]],
 
 struct NativeContourControl { uint4 counts; float4 shape; };
 
-// Wygładzone ρ (CD-D-16): β = 0,25 na krok; ρ_min = 0,01 stosuje `nativeContactCompliance`, kontur nie ma dolnej granicy.
-constant float kNativeContactRhoSmoothing = 0.25f;
-
-// Stosunek promienia konturu poprzedniej klatki do r w kierunku `direction`, czyli 1 − publishedDeformation.x.
-// Bańka bez konturu z poprzedniej klatki (nowa, wynik scalenia lub podziału) ma 1.
-float nativePreviousContourRatio(long identity, float2 direction, device NativeBubble *previousBubbles,
-    device float4 *previousDeformation, device uint *previousCounts, constant NativeContourControl &contour) {
-    uint old = nativeSafetyBubbleIndex(identity, previousBubbles, contour.counts.y);
-    if (old >= contour.counts.y || previousCounts[old] == 0) return 1;
-    uint oldCount = previousCounts[old];
-    float angle = atan2(direction.y, direction.x);
-    if (angle < 0) angle += 2 * M_PI_F;
-    float location = angle / (2 * M_PI_F) * float(oldCount);
-    uint first = uint(location) % oldCount, second = (first + 1) % oldCount;
-    float deficit = mix(previousDeformation[old * contour.counts.x + first].x,
-        previousDeformation[old * contour.counts.x + second].x, fract(location));
-    return clamp(1 - deficit, 0.0f, 1.0f);
-}
-
-// Wynik merge/split o ponownie użytym ID nie dziedziczy konturu starego ID (R2), jak w `nativeAccumulateContactPressure`:
-// jego ρ_konturu = 1. Bańka bieżącej klatki jest szukana po ID w `bubbles`, bo nagłówek strukturalny ma jej indeks.
+// Wynik merge/split o ponownie użytym ID nie dziedziczy ρ rekordu starego ID (R2, P-B-13): jego ρ_prev = 1. Bańka bieżącej klatki
+// jest szukana po ID w `bubbles`, bo nagłówek strukturalny ma jej indeks.
 bool nativeIsStructuralResult(long identity, device NativeBubble *bubbles, constant NativeControl &control,
     device NativeStructuralHeader *structuralHeaders, constant NativeContourControl &contour) {
     if (contour.counts.z == 0) return false;
@@ -621,28 +602,44 @@ bool nativeIsStructuralResult(long identity, device NativeBubble *bubbles, const
     return current < control.counts.x && structuralHeaders[current].range.y != 0;
 }
 
-// ρ każdego końca kontaktu bieżącej klatki: ρ += β·(ρ_konturu − ρ), gdzie ρ_konturu pochodzi z konturu poprzedniej klatki w kierunku
-// normalnej kontaktu (koniec a patrzy w stronę partnera, czyli wzdłuż normalnej, koniec b przeciwnie; bańka przy odcinku w stronę
-// odcinka, czyli przeciwnie do normalnej). Jedno zadanie na rekord cache, więc bez atomików.
+// ρ każdego końca kontaktu bieżącego kroku wynika z geometrii tego kroku, bez historii konturu (CD-D-4, G2). `response.y` to
+// penetracja z pozycji przewidzianych (nativeBuildContacts), więc ρ twardnieje w tym samym kroku, w którym bańka wchodzi w kontakt.
+// - odcinek (metadata.x = 1): ρ = clamp((r − penetracja) / r, 0, 1) = d / r, gdzie d to odległość przewidzianego środka od odcinka;
+// - para (metadata.x = 0): nakładanie dzieli się między końce wg podatności, ρ_self = clamp((r_self − nakładanie · c_self /
+//   (c_self + c_other)) / r_self, 0, 1). Podatności liczone są z ρ rekordu z poprzedniego kroku (CD-D-5); nowy rekord ma
+//   ρ_prev = 1. Dla końca będącego wynikiem scalenia lub podziału ρ_prev = 1 gwarantuje host: unieważnia każdy rekord cache
+//   takiego ID (NativeMetalSolver), więc rekord startuje od ρ (1, 1); gałąź `nativeIsStructuralResult` poniżej jest tylko
+//   drugą zaporą (backstop) na wypadek rekordu, który przeżyłby unieważnienie. Para twarda
+//   (c_a + c_b = 0) ma ρ = 1, a w parze miękka–twarda całe nakładanie przypada na koniec miękki.
+// Jedno zadanie na rekord cache, więc bez atomików.
 kernel void nativeUpdateContactRho(device NativeBubble *bubbles [[buffer(0)]],
     device NativeContactCache *cache [[buffer(1)]], constant NativeControl &control [[buffer(2)]],
     device NativeContactControl &contacts [[buffer(3)]], constant NativeContourControl &contour [[buffer(4)]],
-    device NativeBubble *previousBubbles [[buffer(5)]], device float4 *previousDeformation [[buffer(6)]],
-    device uint *previousCounts [[buffer(7)]], device NativeStructuralHeader *structuralHeaders [[buffer(8)]],
-    uint index [[thread_position_in_grid]]) {
+    device NativeStructuralHeader *structuralHeaders [[buffer(5)]], uint index [[thread_position_in_grid]]) {
     if (index >= contacts.counts.z) return;
     NativeContactCache record = cache[index];
     if (record.metadata.z != contacts.limits.x) return;
-    float2 normal = record.geometry.xy;
-    float2 towardPartner = record.metadata.x == 0 ? normal : -normal;
-    float ratioA = nativeIsStructuralResult(record.participants.x, bubbles, control, structuralHeaders, contour) ? 1
-        : nativePreviousContourRatio(record.participants.x, towardPartner, previousBubbles, previousDeformation, previousCounts, contour);
-    record.rho.x = clamp(record.rho.x + kNativeContactRhoSmoothing * (ratioA - record.rho.x), 0.0f, 1.0f);
-    if (record.metadata.x == 0) {
-        float ratioB = nativeIsStructuralResult(record.participants.y, bubbles, control, structuralHeaders, contour) ? 1
-            : nativePreviousContourRatio(record.participants.y, -normal, previousBubbles, previousDeformation, previousCounts, contour);
-        record.rho.y = clamp(record.rho.y + kNativeContactRhoSmoothing * (ratioB - record.rho.y), 0.0f, 1.0f);
+    uint a = nativeFindBubble(bubbles, control.counts.x, record.participants.x);
+    if (a >= control.counts.x || bubbles[a].identity.x != record.participants.x) return;
+    float overlap = record.response.y;
+    float radiusA = bubbles[a].physical.z;
+    if (record.metadata.x != 0) {
+        record.rho.x = radiusA > 0 ? clamp((radiusA - overlap) / radiusA, 0.0f, 1.0f) : 1.0f;
+        cache[index] = record;
+        return;
     }
+    uint b = nativeFindBubble(bubbles, control.counts.x, record.participants.y);
+    if (b >= control.counts.x || bubbles[b].identity.x != record.participants.y) return;
+    float radiusB = bubbles[b].physical.z;
+    // Zapora: dla wyniku strukturalnego ρ_prev = 1 zapewnia już unieważnienie rekordu przez hosta, ta gałąź jest tylko zabezpieczeniem.
+    float previousA = nativeIsStructuralResult(record.participants.x, bubbles, control, structuralHeaders, contour) ? 1.0f : record.rho.x;
+    float previousB = nativeIsStructuralResult(record.participants.y, bubbles, control, structuralHeaders, contour) ? 1.0f : record.rho.y;
+    float complianceA = nativeContactCompliance(bubbles[a], previousA);
+    float complianceB = nativeContactCompliance(bubbles[b], previousB);
+    float total = complianceA + complianceB;
+    float shareA = total > 0 ? complianceA / total : 0;
+    record.rho.x = radiusA > 0 && total > 0 ? clamp((radiusA - overlap * shareA) / radiusA, 0.0f, 1.0f) : 1.0f;
+    record.rho.y = radiusB > 0 && total > 0 ? clamp((radiusB - overlap * (1 - shareA)) / radiusB, 0.0f, 1.0f) : 1.0f;
     cache[index] = record;
 }
 
@@ -662,11 +659,10 @@ float nativeContourRayLimit(float2 center, float2 direction, float2 a, float2 b,
 kernel void nativeAccumulateContactPressure(device NativeBubble *bubbles [[buffer(0)]],
     device NativeSegment *segments [[buffer(1)]], device NativeContactCache *cache [[buffer(2)]],
     constant NativeControl &control [[buffer(3)]], device NativeContactControl &contacts [[buffer(4)]],
-    constant NativeContourControl &contour [[buffer(5)]], device NativeBubble *previousBubbles [[buffer(6)]],
-    device float4 *previousDeformation [[buffer(7)]], device uint *previousCounts [[buffer(8)]],
-    device float4 *pressure [[buffer(9)]], device uint *counts [[buffer(10)]],
-    device uint4 *adjacency [[buffer(11)]], device uint *degrees [[buffer(12)]],
-    device atomic_uint *safety [[buffer(13)]], device NativeStructuralHeader *structuralHeaders [[buffer(14)]],
+    constant NativeContourControl &contour [[buffer(5)]],
+    device float4 *pressure [[buffer(6)]], device uint *counts [[buffer(7)]],
+    device uint4 *adjacency [[buffer(8)]], device uint *degrees [[buffer(9)]],
+    device atomic_uint *safety [[buffer(10)]],
     uint index [[thread_position_in_grid]]) {
     uint bubbleIndex = index / contour.counts.x, sample = index % contour.counts.x;
     if (bubbleIndex >= control.counts.x || atomic_load_explicit(safety + 3, memory_order_relaxed)) return;
@@ -692,7 +688,7 @@ kernel void nativeAccumulateContactPressure(device NativeBubble *bubbles [[buffe
         float towardLength = length(toward);
         // Każda para idzie jedną drogą konturu (CD-D-12): para miękka (podatność choć jednego końca > 0) dzieli wgniecenie wg c_a : c_b,
         // a para twarda i kontakt twardej bańki ze ścianą liczą nacisk z λ i cięciwę radykalną jak w v2.1.0.
-        // ρ_self i ρ_other to wygładzone ρ tej bańki i jej partnera w rekordzie cache. Sąsiedztwo daje końcowi a pary bańka–bańka
+        // ρ_self i ρ_other to ρ tej bańki i jej partnera w rekordzie cache, z geometrii bieżącego kroku (nativeUpdateContactRho). Sąsiedztwo daje końcowi a pary bańka–bańka
         // edge.w = 0, a końcowi b edge.w = 1; bańka przy odcinku jest końcem a i ma edge.w = 1 (ρ_self = rho.x, bez partnera).
         float rhoSelf = (edge.z == 0 && edge.w) ? contact.rho.y : contact.rho.x;
         float rhoOther = edge.w ? contact.rho.x : contact.rho.y;
@@ -726,30 +722,13 @@ kernel void nativeAccumulateContactPressure(device NativeBubble *bubbles [[buffe
             point + tangent * halfLength, limit, contour.shape.w);
     }
     float deficit = clamp(1 - limit / bubble.physical.z, 0.0f, 1.0f);
-    float recovered = 0;
-    // Wynik merge/split o ponownie użytym ID nie dziedziczy starego konturu tego ID.
-    // Jego źródła fizyczne są próbkowane jawnie przez nativeSeedStructuralContours.
-    bool hasStructuralShape = contour.counts.z != 0 && structuralHeaders[bubbleIndex].range.y != 0;
-    uint old = hasStructuralShape ? contour.counts.y
-        : nativeSafetyBubbleIndex(bubble.identity.x, previousBubbles, contour.counts.y);
-    if (old < contour.counts.y && previousCounts[old] > 0) {
-        // Resampling przy zmianie promienia/liczby punktów zachowuje lokalność nacisku.
-        uint oldCount = previousCounts[old];
-        float location = float(sample) * float(oldCount) / float(count);
-        uint first = uint(location) % oldCount, second = (first + 1) % oldCount;
-        float oldDeficit = mix(previousDeformation[old * contour.counts.x + first].x,
-            previousDeformation[old * contour.counts.x + second].x, fract(location));
-        // Zmiana promienia zachowuje światowy kontur, a dopiero potem relaksuje go w czasie.
-        recovered = max(0.0f, 1 - previousBubbles[old].physical.z * (1-oldDeficit) / bubble.physical.z)
-            * exp(-contour.shape.y * max(0.0f, bubble.physical.w) * control.physics.x);
-    }
     // Wartość lambda jest używana przez solver, ale nie jest dodatkową
     // geometrią konturu. Jej lokalne maksima poruszały kontur mimo prawie
     // niezmienionej geometrii zatwierdzonej klatki.
-    float4 value = float4(max(deficit, recovered), deficit, 0, 0);
+    float4 value = float4(deficit, deficit, 0, 0);
     if (bubble.publicFlags.x) {
         float softness = bubble.material.y * (1 - bubble.material.z);
-        value = float4(max(max(deficit, directionalPressure * softness), recovered), deficit, 0, 0);
+        value = float4(max(deficit, directionalPressure * softness), deficit, 0, 0);
         // Bańka z podatnością kontaktu omija bramkę deformowalności: bez niej materiał z domyślnym `deformability` = 0 nie miałby
         // konturu, a ρ zostałoby 1. Bramka `material.z >= 1` zostaje.
         if (softness == 0 && bubble.material.z == 0 && bubble.contact.x <= 0) value.xy = 0;

@@ -176,4 +176,125 @@ final class NativeMetalStructuralOperationTests: XCTestCase {
         let reused = try await mergedRadius(2)
         XCTAssertEqual(reused, fresh, accuracy: 0.0001)
     }
+
+    // P-B-13: wynik scalenia z ID źródła ma w pierwszym kroku ρ_prev = 1 na końcu pary, więc podział nakładania liczy c(1), a nie
+    // c(ρ źródła). Materiał z kc = 3, żeby c zależało od ρ. Test sprawdza ścieżkę hosta, nie gałąź shadera: host unieważnia rekordy
+    // cache ID strukturalnych (`NativeMetalSolver`, invalidationRecords), więc rekord pary jest nowy (wiek 1) i oba końce, także
+    // partnera, mają ρ_prev = 1. Gałąź `nativeIsStructuralResult` jest tylko drugą zaporą i tu nie jest wykonywana.
+    func testMergeResultWithSourceIDStartsItsPairEndAtRhoOne() async throws {
+        let softMaterial = try PhysicsMaterial(kind: .bubble, deformability: 1,
+            contactCompliance: BubbleContactCompliance(base: 0.002, referenceRadius: 1, radiusExponent: 0, compressionExponent: 3))
+        func soft(_ n: UInt64, x: Float) throws -> BubbleDescriptor {
+            try BubbleDescriptor(id: id(n), position: [x, 0], targetRadius: 1, physicsMaterialID: material, renderMaterialID: style)
+        }
+        let base = RuntimeState(configuration: try WorldConfiguration(simulationRegion: WorldRectangle(min: [-100, -100], max: [100, 100])))
+        var tx = try WorldTransaction().updatePhysicsMaterial(material, material: softMaterial).updateRenderMaterial(style, material: try RenderMaterial())
+        for bubble in [try soft(1, x: -1.5), try soft(2, x: 1), try soft(5, x: 1.5)] { tx = tx.add(.bubble(bubble)) }
+        let state = try TransactionStager.stage(tx, against: base).state
+        let native = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
+        _ = try await native.step(objects: state.objects.values.map { NativePublicObject(descriptor: $0.descriptor) },
+            materials: state.physicsMaterials, region: state.configuration.simulationRegion, duration: 1.0 / 60)
+        let before = try XCTUnwrap(native.cachedContacts.first { $0.metadata.x == 0 && $0.participants == SIMD2<Int64>(2, 5) })
+        XCTAssertLessThan(before.rho.x, 0.9, "źródło niesie ściśnięty koniec, więc dziedziczenie ρ byłoby widoczne")
+        XCTAssertLessThan(before.rho.y, 0.9)
+
+        let merged = try TransactionStager.stage(WorldTransaction().mergeBubbles([id(1), id(2)],
+            result: .init(id: id(2), physicsMaterialID: material, renderMaterialID: style)), against: state).state
+        let object = try XCTUnwrap(merged.objects[id(2)])
+        var input = NativePublicObject(descriptor: object.descriptor)
+        input.position = object.position
+        input.structuralShape = object.structuralShape
+        let partner = NativePublicObject(descriptor: try XCTUnwrap(merged.objects[id(5)]).descriptor)
+        _ = try await native.step(objects: [input, partner], materials: merged.physicsMaterials,
+            region: merged.configuration.simulationRegion, duration: 1.0 / 60)
+        let after = try XCTUnwrap(native.cachedContacts.first { $0.metadata.x == 0 && $0.participants == SIMD2<Int64>(2, 5) })
+
+        let radius = object.targetRadius, otherRadius = partner.collisionRadius
+        let overlap = radius + otherRadius - (partner.position - input.position).euclideanLength
+        XCTAssertGreaterThan(overlap, 0.3)
+        func compliance(_ rho: Float) -> Float { 0.002 * pow(max(rho, 0.01), 3) }
+        XCTAssertEqual(after.metadata.y, 1, "rekord pary wyniku jest nowy: host unieważnił rekord ID strukturalnego")
+        let cSelf = compliance(1), cOther = compliance(1)
+        XCTAssertEqual(after.rho.x, (radius - overlap * cSelf / (cSelf + cOther)) / radius, accuracy: 1e-3)
+        XCTAssertEqual(after.rho.y, (otherRadius - overlap * cOther / (cSelf + cOther)) / otherRadius, accuracy: 1e-3)
+    }
+
+    // P-B-13 dla podziału: część, która zachowuje ID źródła, w pierwszym kroku ma ρ_prev = 1 na końcu pary, a nie ρ źródła.
+    // Jak wyżej: sprawdza ścieżkę hosta (unieważnienie rekordu), nie gałąź shadera. Partner leży nad źródłem, więc oba kawałki
+    // (po ±0,7 w poziomie) nadal na niego nachodzą.
+    func testSplitResultWithSourceIDStartsItsPairEndAtRhoOne() async throws {
+        let softMaterial = try PhysicsMaterial(kind: .bubble, deformability: 1,
+            contactCompliance: BubbleContactCompliance(base: 0.002, referenceRadius: 1, radiusExponent: 0, compressionExponent: 3))
+        func soft(_ n: UInt64, y: Float) throws -> BubbleDescriptor {
+            try BubbleDescriptor(id: id(n), position: [0, y], targetRadius: 1, physicsMaterialID: material, renderMaterialID: style)
+        }
+        let base = RuntimeState(configuration: try WorldConfiguration(simulationRegion: WorldRectangle(min: [-100, -100], max: [100, 100])))
+        var tx = try WorldTransaction().updatePhysicsMaterial(material, material: softMaterial).updateRenderMaterial(style, material: try RenderMaterial())
+        for bubble in [try soft(1, y: 0), try soft(5, y: 1.3)] { tx = tx.add(.bubble(bubble)) }
+        let state = try TransactionStager.stage(tx, against: base).state
+        let native = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
+        _ = try await native.step(objects: state.objects.values.map { NativePublicObject(descriptor: $0.descriptor) },
+            materials: state.physicsMaterials, region: state.configuration.simulationRegion, duration: 1.0 / 60)
+        let before = try XCTUnwrap(native.cachedContacts.first { $0.metadata.x == 0 && $0.participants == SIMD2<Int64>(1, 5) })
+        XCTAssertLessThan(before.rho.x, 0.9, "źródło niesie ściśnięty koniec, więc dziedziczenie ρ byłoby widoczne")
+
+        let split = try TransactionStager.stage(WorldTransaction().splitBubble(id(1),
+            first: .init(result: result(1), share: 0.5), second: .init(result: result(6), share: 0.5)), against: state).state
+        var parts: [NativePublicObject] = []
+        for objectID in [id(1), id(6)] {
+            let object = try XCTUnwrap(split.objects[objectID])
+            var input = NativePublicObject(descriptor: object.descriptor)
+            input.position = object.position
+            input.structuralShape = object.structuralShape
+            parts.append(input)
+        }
+        let partner = NativePublicObject(descriptor: try XCTUnwrap(split.objects[id(5)]).descriptor)
+        _ = try await native.step(objects: parts + [partner], materials: split.physicsMaterials,
+            region: split.configuration.simulationRegion, duration: 1.0 / 60)
+        let after = try XCTUnwrap(native.cachedContacts.first { $0.metadata.x == 0 && $0.participants == SIMD2<Int64>(1, 5) })
+
+        let radius = parts[0].collisionRadius, otherRadius = partner.collisionRadius
+        let overlap = radius + otherRadius - (partner.position - parts[0].position).euclideanLength
+        XCTAssertGreaterThan(overlap, 0.1)
+        XCTAssertEqual(after.metadata.y, 1, "rekord pary części jest nowy: host unieważnił rekord ID strukturalnego")
+        func compliance(_ rho: Float) -> Float { 0.002 * pow(max(rho, 0.01), 3) }
+        let cSelf = compliance(1), cOther = compliance(1)
+        XCTAssertEqual(after.rho.x, (radius - overlap * cSelf / (cSelf + cOther)) / radius, accuracy: 1e-3)
+        XCTAssertEqual(after.rho.y, (otherRadius - overlap * cOther / (cSelf + cOther)) / otherRadius, accuracy: 1e-3)
+    }
+
+    // P-B-16: kontur wyniku scalenia pochodzi z seeda źródeł tylko w pierwszej klatce; w drugiej, bez żadnego kontaktu,
+    // jest już kołem o promieniu docelowym (bez relaksacji w czasie).
+    func testMergeContourComesFromTheSeedOnlyInTheFirstFrame() async throws {
+        let left = try BubbleDescriptor(id: id(1), position: [-0.2, 0], targetRadius: 1,
+            motionRole: .static, physicsMaterialID: material, renderMaterialID: style)
+        let right = try BubbleDescriptor(id: id(2), position: [0, 0], targetRadius: 1,
+            motionRole: .static, physicsMaterialID: material, renderMaterialID: style)
+        var state = try initial([left, right])
+        let wallMaterial = PhysicsMaterialID(rawValue: 2)
+        let wall = try RigidBodyDescriptor(id: id(100), vertices: [[0.5, -4], [2, -4], [2, 4], [0.5, 4]],
+            physicsMaterialID: wallMaterial, renderMaterialID: style)
+        state = try TransactionStager.stage(WorldTransaction()
+            .updatePhysicsMaterial(wallMaterial, material: PhysicsMaterial(kind: .rigid))
+            .add(.rigidBody(wall)), against: state).state
+        let native = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
+        _ = try await native.step(objects: state.objects.values.map { NativePublicObject(descriptor: $0.descriptor) },
+            materials: state.physicsMaterials, region: state.configuration.simulationRegion, duration: 1.0 / 60)
+        let merged = try TransactionStager.stage(WorldTransaction().mergeBubbles([id(1), id(2)],
+            result: .init(id: id(3), physicsMaterialID: material, renderMaterialID: style, motionRole: .static)),
+            against: state).state
+        let object = try XCTUnwrap(merged.objects[id(3)])
+        var input = NativePublicObject(descriptor: object.descriptor)
+        input.position = object.position
+        input.structuralShape = object.structuralShape
+        let first = try await native.step(objects: [input], materials: merged.physicsMaterials,
+            region: merged.configuration.simulationRegion, duration: 1.0 / 60)
+        XCTAssertLessThan(try XCTUnwrap(first.objects[id(3)]).effectiveRadius, 0.7, "pierwsza klatka: kontur z seeda")
+        // Kształt strukturalny dostaje tylko krok, w którym operacja jest wykonana; kolejny krok go nie niesie.
+        input.structuralShape = nil
+        let second = try await native.step(objects: [input], materials: merged.physicsMaterials,
+            region: merged.configuration.simulationRegion, duration: 1.0 / 60)
+        XCTAssertEqual(try XCTUnwrap(second.objects[id(3)]).effectiveRadius, object.targetRadius, accuracy: 0.001,
+            "druga klatka bez kontaktów: kontur kołowy, bez pamięci seeda")
+    }
 }

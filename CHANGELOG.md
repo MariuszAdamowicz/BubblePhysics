@@ -2,6 +2,27 @@
 
 Zmiany w wydaniach `BubblePhysics`. Przejście z 1.x na 2.0.0 opisuje [docs/MIGRATION-v2.md](docs/MIGRATION-v2.md).
 
+## 2.3.0
+
+### Dodane
+
+- Gumka siłowa w `BubbleDrivePolicy`: `bandStiffness: Float?` (K_band), `bandDamping: Float` (D, domyślnie 0) i `maximumForce: Float?`. Przy `bandStiffness` != `nil` chwycona bańka (`beginPlayerDrive`) dostaje siłę K · (cel − położenie), obciętą do `maximumForce` z zachowaniem kierunku, zamiast narzuconej prędkości; dochodzą do niej siła globalna i pola sił jak przy bańce `.dynamic`. Prędkość: `v ← (v + F / m · dt) · e^(−D · dt / m)`. Prędkość ustalona bez kontaktów to K · s / (m · γ + D), γ to `damping` materiału. Bez `bandStiffness` (domyślnie) napęd działa jak w 2.2.0; w trybie gumki `maximumSpeed` i `distanceResponse` są ignorowane.
+- Walidacja gumki: `bandStiffness`, `bandDamping` i `maximumForce` rzucają `ModelValidationError.valueOutOfRange` z nazwą pola (`drive.bandStiffness`, `drive.bandDamping`, `drive.maximumForce`) dla wartości niedodatnich, ujemnej D i nieskończonych, a `bandDamping` ≠ 0 albo `maximumForce` bez `bandStiffness` też. Transakcja z bańką, której K_band · dt² / m ≥ 1 (wstawienie, zamiana, wynik scalenia, część podziału), jest odrzucana z `invalidValue(.valueOutOfRange("drive.bandStiffness"))`. W trybie gumki `beginPlayerDrive` i `updatePlayerDrive` odrzucają cel poza limitem jak siła `MotorDrive`.
+- `PhysicsMaterial.contactDampingRatio` (ζ_c, ostatni parametr `init`, domyślnie 1): ułamek tłumienia krytycznego sprężyny kontaktu miękkiego, średnia w parze, przy ścianie wartość bańki. Ujemna, NaN albo nieskończona wartość rzuca `valueOutOfRange`; materiał `.rigid` przyjmuje tylko 1.
+
+### Zmienione
+
+- Kontakt miękki działa jak sprężyna: bańka ugina się o c · F (wcześniej o około 3,85 · c · F przy kroku 1/60), w spoczynku stoi (wcześniej raportowała prędkość w stronę kontaktu), a drgania tłumi ζ_c i masy zamiast stałego tłumienia. Do prędkości trafia pełna korekta kontaktów XPBD; bańki twarde i pozostałe korekty (przeguby, bryły, CCD, strażniki) bez zmian. **Gra musi przestroić `base` (c₀) mniej więcej 3,85 razy w górę, żeby zachować dotychczasowy wygląd.**
+- ρ kontaktu liczy się z pozycji przewidzianych w bieżącym kroku, bez wygładzania i opóźnienia o klatkę, a kontur pokazuje tylko bieżące kontakty: wgniecenie znika w tej samej klatce co kontakt, bez relaksacji w czasie. Usunięte `deformationRecoveryRate` z solvera natywnego i jego adaptera (w `BubblePhysicsReference` zostaje). Pierwsza klatka wyniku scalenia lub podziału bierze kontur z seeda źródeł jak dotąd.
+- Limit λ pary z 2.2.0 obowiązuje tylko pary twarde. Para miękka (także miękka–twarda) nie ma limitu, bo po zmianie sprężyny bańka w spoczynku stoi i limit stawiał sufit siły przenoszonej łańcuchem baniek (ok. 3 888 dla r = 12, m = 0,36).
+- Komentarz `ObjectState.Kind.bubble(effectiveRadius:)`: to minimalna odległość konturu od środka, bez „odbudowy”.
+
+### Uwagi
+
+- Zawarta para miękka wystrzeliwuje mniejszą bańkę z prędkością do `maximumLinearSpeed`: energia ściśnięcia się uwalnia, a krok nie jest odrzucany. `maximumLinearSpeed` ogranicza prędkość po wystrzale, ale nie skok pozycji w kroku wyjścia z zawierania. Przy bardzo małej podatności skok może sięgnąć pełnego nakładania, a CCD nie chroni przed przejściem przez inną bańkę. Gwarancja 0,25 · min r na krok z 2.2.0 zostaje dla par twardych. Wystrzałów unika się, nie dopuszczając do głębokich zawierań.
+- Z gumką używaj `rigidifies: false`: bańka z `rigidifies = true` ma przy chwycie wyzerowany kontur i dociśnięta do ściany wygląda jak koło nachodzące na ścianę.
+- Szczegóły: [docs/integration-guide.md](docs/integration-guide.md), sekcja „Chwyt gumką”. Raport siatki twardnienia: `docs/benchmarks/v2.3.0-rho-grid-2026-11-19.md`.
+
 ## 2.2.0
 
 ### Dodane

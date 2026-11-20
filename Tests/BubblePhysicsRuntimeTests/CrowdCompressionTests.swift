@@ -91,11 +91,13 @@ final class CrowdCompressionTests: XCTestCase {
         return 20 - min(corner.x - state.position.x, corner.y - state.position.y)
     }
 
-    // P-B-27: tłok B = 2,5 z materiałem miękkim jak P-B-13, a materiał naprawdę działa. Plan oczekiwał większego średniego nakładania
-    // par niż przy c₀ = 0, ale w tym tłoku twardy kontakt zostawia mało par nakładających się głęboko (bańka wewnątrz innej, nakładanie
-    // do 86), a miękki wiele płytszych (probe, c₀ = 1e-3: 807 par na klatkę wobec 729, średnie nakładanie 13,8 wobec 16,8, największe
-    // 61 wobec 86). Dlatego dowodem działania jest rozkład nakładania: więcej par nakłada się płyciej, a największe nakładanie maleje.
-    func testSoftCrowdBalance2_5KeepsStepsAcceptedAndOverlapsMoreThanHard() async throws {
+    // P-B-27: tłok B = 2,5 z materiałem miękkim jak P-B-13, a materiał naprawdę działa. Od v2.3.0 (G4, CD-D-16) kontakt miękki jest
+    // sprężyną z pełną korektą prędkości, więc rozkład nakładania nie dowodzi już działania materiału: probe (c₀ = 3,85e-3, to samo
+    // ziarno) dał 670 par nakładających się na klatkę wobec 729 dla c₀ = 0, średnie nakładanie 23,3 wobec 16,7 i największe 93,3 wobec
+    // 81,2, bo sprężyny w gęstym tłoku zostawiają część par zawartych (58 po ostatnim kroku), a dawne oczekiwanie (więcej par płyciej,
+    // mniejsze maksimum) wynikało z częściowej korekty prędkości i limitu λ pary. Dowodem działania jest kontur: tylko bańka z c > 0
+    // ma wgniecenie, więc średni promień efektywny / docelowy spada poniżej 1 (probe: 0,16 wobec 1,00 przy c₀ = 0).
+    func testSoftCrowdBalance2_5KeepsStepsAcceptedAndCompressesContoursUnlikeHard() async throws {
         let softWorld = try await CrowdScene.makeWorld(bubble: CrowdScene.softCrowdPhysics())
         let soft = try await CrowdScene.runCrowd(world: softWorld, balance: 2.5, seed: 2_500, extraSteps: 600)
         assertCrowdKeptStepsAccepted(soft, world: softWorld, balance: 2.5)
@@ -104,10 +106,11 @@ final class CrowdCompressionTests: XCTestCase {
         XCTAssertNil(hard.firstIssue?.issue, "przebieg odniesienia z c₀ = 0")
         XCTAssertEqual(soft.lastSecond.count, CrowdScene.lastSecondSteps)
         XCTAssertEqual(hard.lastSecond.count, CrowdScene.lastSecondSteps)
-        XCTAssertGreaterThan(soft.overlappingPairsPerFrameInLastSecond, hard.overlappingPairsPerFrameInLastSecond,
-                             "pary nakładające się na klatkę w ostatniej sekundzie: miękki \(soft.overlappingPairsPerFrameInLastSecond), twardy \(hard.overlappingPairsPerFrameInLastSecond)")
-        XCTAssertLessThan(soft.maximumOverlapInLastSecond, hard.maximumOverlapInLastSecond,
-                          "największe nakładanie w ostatniej sekundzie: miękki \(soft.maximumOverlapInLastSecond), twardy \(hard.maximumOverlapInLastSecond)")
+        let hardRatio = hard.meanEffectiveRadiusRatioInLastSecond, softRatio = soft.meanEffectiveRadiusRatioInLastSecond
+        XCTAssertEqual(hardRatio, 1, accuracy: 0.01, "c₀ = 0: bez wgniecenia konturu, średni promień efektywny / docelowy \(hardRatio)")
+        // Pomiar 0,16; próg 0,5 odrzuca materiał, którego siła spadła kilkukrotnie, a nie tylko c = 0.
+        XCTAssertLessThan(softRatio, 0.5,
+                          "średni promień efektywny / docelowy w ostatniej sekundzie: miękki \(softRatio), twardy \(hardRatio)")
     }
 
     // P-B-28: silniejszy nacisk (B = 2,5 wobec 1,5, to samo ziarno) mocniej ściska kontury.
@@ -155,5 +158,51 @@ final class CrowdCompressionTests: XCTestCase {
         let soft = try await singleCornerDepth(material: material)
         let hard = try await singleCornerDepth(material: CrowdScene.softBubblePhysics(base: 0))
         XCTAssertGreaterThan(soft, hard + 0.05, "wgniecenie δ pchanej bańki: miękka \(soft), twarda \(hard)")
+    }
+
+    // P-B-30 (G4-AC7, CD-D-17, CD-D-18): zawarta para miękka wystrzeliwuje mniejszą bańkę i nie psuje świata. Duża r = 40 w (0, 0),
+    // mała r = 12 w całości wewnątrz w (6, 0), przeszkoda r = 20 w (100, 0) na osi wystrzału (+x); masy r² / 400, c₀ = 1e-3, kc = 0,
+    // ζ_c = 1, `damping` = 0, `maximumLinearSpeed` = 600. Granicy przesunięcia środka w kroku nie ma: wystrzał jest zamierzony.
+    func testSoftContainedPairReleasesWithoutBreakingTheWorld() async throws {
+        // Bez `CrowdScene.makeWorld`: krok z wstawieniem baniek jest właśnie tym, w którym zawieranie się rozwiązuje.
+        let world = try BubbleWorld(configuration: CrowdScene.configuration())
+        var setup = try CrowdScene.resources(bubble: CrowdScene.softBubblePhysics(base: 1e-3))
+        for wall in try CrowdScene.walls() { setup = setup.add(wall) }
+        _ = world.submit(setup.add(try CrowdScene.bubble(1, at: [0, 0], radius: 40))
+            .add(try CrowdScene.bubble(2, at: [6, 0], radius: 12))
+            .add(try CrowdScene.bubble(3, at: [100, 0], radius: 20)))
+        let radii: [UInt64: Float] = [1: 40, 2: 12, 3: 20]
+        let speedLimit: Float = 600 * (1 + 1e-3)
+        var frame = await world.advance(by: CrowdScene.step)
+        XCTAssertEqual(frame.transactionReceipts.count, 1, "przygotowanie sceny musi zostać przyjęte")
+        var closestToObstacle = Float.greatestFiniteMagnitude
+        var firstFreeStep: Int?
+        for index in 0..<300 {
+            if index > 0 { frame = await world.advance(by: CrowdScene.step) }
+            XCTAssertNil(world.diagnostics.lastAdvanceIssue,
+                         "krok \(index) odrzucony: \(String(describing: world.diagnostics.lastRejectionReason))")
+            if world.diagnostics.lastAdvanceIssue != nil { break }
+            for (identifier, radius) in radii {
+                let state = try XCTUnwrap(frame.objects[CrowdScene.id(identifier)], "bańka \(identifier) zniknęła w kroku \(index)")
+                XCTAssertLessThanOrEqual(simd_length(state.velocity), speedLimit, "krok \(index), bańka \(identifier): prędkość")
+                // Nakładanie ze ścianą: r − (odległość środka od wewnętrznej krawędzi), większe z dwóch osi; < r, gdy środek jest w ramie.
+                let depth = radius - min(CrowdScene.interiorHalfSize.x - abs(state.position.x),
+                                         CrowdScene.interiorHalfSize.y - abs(state.position.y))
+                XCTAssertLessThan(depth, radius, "krok \(index), bańka \(identifier): przeszła przez ścianę, \(state.position)")
+            }
+            let big = try XCTUnwrap(frame.objects[CrowdScene.id(1)]), small = try XCTUnwrap(frame.objects[CrowdScene.id(2)])
+            let obstacle = try XCTUnwrap(frame.objects[CrowdScene.id(3)])
+            closestToObstacle = min(closestToObstacle, simd_distance(small.position, obstacle.position))
+            XCTAssertLessThan(small.position.x, obstacle.position.x, "krok \(index): mała bańka minęła przeszkodę na osi wystrzału")
+            let contained = world.diagnostics.containedBubblePairCount
+            if contained == 0, firstFreeStep == nil { firstFreeStep = index }
+            if firstFreeStep != nil {
+                XCTAssertEqual(contained, 0, "krok \(index): para zawarta po tym, jak przestała być zawarta")
+                XCTAssertGreaterThanOrEqual(simd_distance(big.position, small.position) + 12, 40 - 1e-3,
+                                            "krok \(index): para duża–mała znów zawarta")
+            }
+        }
+        XCTAssertNotNil(firstFreeStep, "para przestaje być zawarta")
+        XCTAssertLessThanOrEqual(closestToObstacle, 32.5, "mała bańka dotyka przeszkody (wystrzał dotarł do celu)")
     }
 }

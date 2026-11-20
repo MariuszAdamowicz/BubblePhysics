@@ -345,6 +345,7 @@ private struct StagingContext {
         case .beginPlayerDrive(let id, let target):
             try requireFinite(target, "playerDrive.target")
             var existing = try physicalObject(id)
+            try requireBandDriveTarget(target, of: existing)
             guard existing.playerDriveTarget == nil else { throw TransactionRejectionReason.driveAlreadyActive(id) }
             existing.motionBeforeDrive = existing.motionRole == .playerDriven ? .dynamic : existing.motionRole
             existing.motionRole = .playerDriven; existing.playerDriveTarget = target
@@ -357,6 +358,7 @@ private struct StagingContext {
         case .updatePlayerDrive(let id, let target):
             try requireFinite(target, "playerDrive.target")
             var existing = try physicalObject(id)
+            try requireBandDriveTarget(target, of: existing)
             guard existing.playerDriveTarget != nil else { throw TransactionRejectionReason.driveNotActive(id) }
             existing.playerDriveTarget = target
             state.objects[id] = existing
@@ -522,6 +524,7 @@ private struct StagingContext {
             guard object.motionRole != .kinematic else {
                 throw TransactionRejectionReason.unsupportedMotionRole(value.id, .kinematic)
             }
+            try validateBandStability(of: value)
             // Rola runtime może różnić się od roli przy dodaniu deskryptora.
             if object.motionRole == .static {
                 var maximumRadius = object.targetRadius
@@ -540,6 +543,16 @@ private struct StagingContext {
             }
         case .forceField(let value): try state.configuration.validate(value)
         case .sensor(let value): try state.configuration.validate(value)
+        }
+    }
+
+    /// Gumka całkuje siłę jawnie, więc wymaga K · dt² / m < 1 (CD-D-9). `validate(_:)` widzi masę każdej bańki po dodaniu, zamianie,
+    /// scaleniu i podziale (podział zmniejsza masę), więc jedno sprawdzenie obejmuje wszystkie cztery ścieżki.
+    private func validateBandStability(of bubble: BubbleDescriptor) throws {
+        guard let stiffness = bubble.drivePolicy.bandStiffness else { return }
+        let step = Double(state.configuration.fixedTimeStep)
+        guard Double(stiffness) * step * step / Double(bubble.mass) < 1 else {
+            throw ModelValidationError.valueOutOfRange("drive.bandStiffness")
         }
     }
 
@@ -581,6 +594,12 @@ private struct StagingContext {
     /// Ta sama granica obejmuje napęd silnikowy oraz kotwice, kąt odniesienia i parametry dystansu więzu
     /// (solver liczy z nich różnice pozycji, przesunięcia dzielone przez `dt` i mnożniki XPBD).
     private static let maximumDriveMagnitude: Float = 1_000_000
+
+    /// Siła gumki K·(cel − położenie) musi być skończona, więc w trybie gumki cel podlega temu samemu limitowi co siła `MotorDrive`.
+    private func requireBandDriveTarget(_ target: WorldPoint, of object: RuntimeObject) throws {
+        guard case .bubble(let bubble) = object.descriptor, bubble.drivePolicy.bandStiffness != nil else { return }
+        try requireDriveMagnitude(target.x, "playerDrive.target"); try requireDriveMagnitude(target.y, "playerDrive.target")
+    }
 
     private func requireDriveMagnitude(_ value: Float, _ name: String) throws {
         try requireFinite(value, name)

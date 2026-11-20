@@ -90,7 +90,6 @@ package struct NativeSolverConfiguration: Equatable, Sendable {
     package var separationTolerance: Float
     package var positionTolerance: Float
     package var maxContourSegmentLength: Float
-    package var deformationRecoveryRate: Float
     package var contactStiffness: Float
     package var contactDamping: Float
     package var contourSurfaceTension: Float
@@ -98,7 +97,7 @@ package struct NativeSolverConfiguration: Equatable, Sendable {
     package init(timeStep: Float = 1 / 60, linearDamping: Float = 1.5, angularDamping: Float = 2,
                  contactTolerance: Float = 0.001, separationTolerance: Float = 0.002,
                  positionTolerance: Float = 0.0001, maxContourSegmentLength: Float = 8,
-                 deformationRecoveryRate: Float = 12, contactStiffness: Float = 120,
+                 contactStiffness: Float = 120,
                  contactDamping: Float = 8, contourSurfaceTension: Float = 20) {
         self.timeStep = timeStep
         self.linearDamping = linearDamping
@@ -107,7 +106,6 @@ package struct NativeSolverConfiguration: Equatable, Sendable {
         self.separationTolerance = separationTolerance
         self.positionTolerance = positionTolerance
         self.maxContourSegmentLength = maxContourSegmentLength
-        self.deformationRecoveryRate = deformationRecoveryRate
         self.contactStiffness = contactStiffness
         self.contactDamping = contactDamping
         self.contourSurfaceTension = contourSurfaceTension
@@ -125,7 +123,6 @@ package struct NativeSolverConfiguration: Equatable, Sendable {
         value.linearDamping = nonnegative(linearDamping, 1.5)
         value.angularDamping = nonnegative(angularDamping, 2)
         value.maxContourSegmentLength = positive(maxContourSegmentLength, 8)
-        value.deformationRecoveryRate = nonnegative(deformationRecoveryRate, 12)
         value.contactStiffness = positive(contactStiffness, 120)
         value.contactDamping = nonnegative(contactDamping, 8)
         value.contourSurfaceTension = nonnegative(contourSurfaceTension, 20)

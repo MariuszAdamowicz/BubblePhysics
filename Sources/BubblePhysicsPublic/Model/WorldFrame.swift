@@ -93,7 +93,9 @@ public enum WorldEvent: Equatable, Sendable {
 /// Stan jednej bańki albo bryły po ostatnim ukończonym kroku. Czujniki i pola sił nie mają stanu.
 public struct ObjectState: Equatable, Sendable {
     public enum Kind: Equatable, Sendable {
-        /// Efektywny promień po deformacji i odbudowie; nie jest promieniem docelowym.
+        /// Minimalna odległość konturu od środka po deformacji w bieżącym kroku; nie jest promieniem docelowym. Kontur pokazuje tylko
+        /// kontakty z bieżącego kroku, więc bez kontaktu wynosi tyle co promień bańki (wyjątek: w pierwszej ramce wyniku scalenia lub
+        /// podziału kontur pochodzi z zalążka).
         case bubble(effectiveRadius: Float)
         case polygon
         case circle(radius: Float)

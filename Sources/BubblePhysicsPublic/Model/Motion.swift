@@ -15,18 +15,37 @@ public struct BubbleDrivePolicy: Equatable, Sendable {
     public let maximumSpeed: Float
     /// Prędkość na jednostkę odległości od celu. `nil` zachowuje historyczny stały napęd.
     public let distanceResponse: Float?
+    /// Sztywność gumki K_band (siła na jednostkę naciągnięcia). `nil` zachowuje napęd prędkościowy (`maximumSpeed`, `distanceResponse`).
+    public let bandStiffness: Float?
+    /// Tłumienie gumki D: siła −D · v bańki. Dozwolone tylko z `bandStiffness`.
+    public let bandDamping: Float
+    /// Górna granica modułu siły gumki. `nil` oznacza brak limitu; dozwolone tylko z `bandStiffness`.
+    public let maximumForce: Float?
     public static let standard = try! BubbleDrivePolicy()
     public init(rigidifies: Bool = true, rigidificationDuration: Double = 0.15,
                 relaxationDuration: Double = 0.25, maximumSpeed: Float = 12,
-                distanceResponse: Float? = nil) throws {
+                distanceResponse: Float? = nil, bandStiffness: Float? = nil, bandDamping: Float = 0,
+                maximumForce: Float? = nil) throws {
         for duration in [rigidificationDuration, relaxationDuration] {
             guard duration.isFinite, duration >= 0 else { throw ModelValidationError.valueOutOfRange("drive.duration") }
         }
         try requirePositive(maximumSpeed, "drive.maximumSpeed")
         if let distanceResponse { try requirePositive(distanceResponse, "drive.distanceResponse") }
+        // Pola gumki zgłaszają `valueOutOfRange` także dla ∞ i NaN, G1-AC5 wymaga `valueOutOfRange` także dla ∞ i NaN, inaczej niż `requirePositive`.
+        if let bandStiffness {
+            guard bandStiffness.isFinite, bandStiffness > 0 else { throw ModelValidationError.valueOutOfRange("drive.bandStiffness") }
+            guard bandDamping.isFinite, bandDamping >= 0 else { throw ModelValidationError.valueOutOfRange("drive.bandDamping") }
+            if let maximumForce {
+                guard maximumForce.isFinite, maximumForce > 0 else { throw ModelValidationError.valueOutOfRange("drive.maximumForce") }
+            }
+        } else {
+            guard bandDamping == 0 else { throw ModelValidationError.valueOutOfRange("drive.bandDamping") }
+            guard maximumForce == nil else { throw ModelValidationError.valueOutOfRange("drive.maximumForce") }
+        }
         self.rigidifies = rigidifies; self.rigidificationDuration = rigidificationDuration
         self.relaxationDuration = relaxationDuration
         self.maximumSpeed = maximumSpeed; self.distanceResponse = distanceResponse
+        self.bandStiffness = bandStiffness; self.bandDamping = bandDamping; self.maximumForce = maximumForce
     }
 }
 

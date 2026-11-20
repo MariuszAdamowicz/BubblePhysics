@@ -65,11 +65,14 @@ public struct PhysicsMaterial: Equatable, Sendable {
     public let maximumAngularSpeed: Float?
     /// Podatność kontaktu bańki; materiał `.rigid` przyjmuje tylko `.hard`.
     public let contactCompliance: BubbleContactCompliance
+    /// Współczynnik tłumienia kontaktu miękkiego ζ_c ≥ 0 jako ułamek tłumienia krytycznego sprężyny kontaktu (1 = krytyczne,
+    /// 0 = bez tłumienia). Dotyczy tylko kontaktów z podatnością > 0; materiał `.rigid` przyjmuje tylko wartość domyślną 1.
+    public let contactDampingRatio: Float
 
     public init(kind: PhysicsMaterialKind, deformability: Float = 0, damping: Float = 0,
                 friction: Float = 0, restitution: Float = 0,
                 maximumLinearSpeed: Float? = nil, maximumAngularSpeed: Float? = nil,
-                contactCompliance: BubbleContactCompliance = .hard) throws {
+                contactCompliance: BubbleContactCompliance = .hard, contactDampingRatio: Float = 1) throws {
         try requireNonnegative(deformability, "deformability")
         try requireNonnegative(damping, "damping")
         try requireNonnegative(friction, "friction")
@@ -79,6 +82,7 @@ public struct PhysicsMaterial: Equatable, Sendable {
         if let maximumLinearSpeed { try requirePositive(maximumLinearSpeed, "maximumLinearSpeed") }
         if let maximumAngularSpeed { try requirePositive(maximumAngularSpeed, "maximumAngularSpeed") }
         try contactCompliance.validate(for: kind)
+        try Self.validateContactDampingRatio(contactDampingRatio, for: kind)
         self.kind = kind
         self.deformability = deformability
         self.damping = damping
@@ -87,6 +91,14 @@ public struct PhysicsMaterial: Equatable, Sendable {
         self.maximumLinearSpeed = maximumLinearSpeed
         self.maximumAngularSpeed = maximumAngularSpeed
         self.contactCompliance = contactCompliance
+        self.contactDampingRatio = contactDampingRatio
+    }
+
+    /// ζ_c skończone i ≥ 0 (NaN też daje `valueOutOfRange`). Materiał `.rigid` przyjmuje tylko 1, jak podatność kontaktu: kontakt
+    /// bańka–bryła używa tylko ζ_c bańki (CD-D-15).
+    private static func validateContactDampingRatio(_ ratio: Float, for kind: PhysicsMaterialKind) throws {
+        guard ratio.isFinite, ratio >= 0 else { throw ModelValidationError.valueOutOfRange("contactDampingRatio") }
+        guard kind == .bubble || ratio == 1 else { throw ModelValidationError.valueOutOfRange("contactDampingRatio") }
     }
 }
 

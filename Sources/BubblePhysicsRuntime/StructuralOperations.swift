@@ -2,7 +2,7 @@ import Foundation
 import BubblePhysicsModel
 import BubblePhysicsNativeMetal
 
-/// Staging masy, pędu i intencji kształtu. Próbowanie i relaksacja konturu należą do GPU.
+/// Staging masy, pędu i intencji kształtu. Próbowanie konturu pierwszej klatki wyniku należy do GPU.
 enum StructuralOperations {
     static func sources(_ object: RuntimeObject) -> [NativeStructuralSource] {
         object.structuralShape?.sources ?? [.init(id: object.descriptor.id, center: object.position, radius: object.collisionRadius)]

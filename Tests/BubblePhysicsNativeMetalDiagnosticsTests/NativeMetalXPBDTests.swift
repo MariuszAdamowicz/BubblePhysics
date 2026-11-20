@@ -319,6 +319,98 @@ final class NativeMetalXPBDTests: XCTestCase {
         XCTAssertEqual(record.rho.z, expected, accuracy: expected * 1e-5, "rho.z = c_a(ρ_a) + c_b(ρ_b)")
     }
 
+    // MARK: ρ rekordu z geometrii bieżącego kroku (G2-AC2, P-B-12, P-B-13)
+
+    /// Wejście solvera z własnościami `contact` (c₀·(r/r_ref)^s, k, ζ_c) dla każdej bańki; `damping` = 0 i bez sił, więc pozycja
+    /// przewidziana to center + velocity · dt.
+    private func contactInput(_ bubbles: [(id: Int, center: SIMD2<Float>, velocity: SIMD2<Float>, radius: Float, contact: SIMD4<Float>)],
+                              segments: [NativeSolverSegment] = []) throws -> NativeSolverInput {
+        var properties: [NativeSolverBubbleID: NativePublicProperties] = [:]
+        for bubble in bubbles {
+            var property = NativePublicProperties(flags: SIMD4(1, 0, 0, 0), material: SIMD4(0, 0.5, 0, 0), restitution: 0,
+                resources: .zero, eventData: .zero)
+            property.contact = bubble.contact
+            properties[.init(rawValue: bubble.id)] = property
+        }
+        var input = NativeSolverInput(configuration: .init(linearDamping: 0), bubbles: bubbles.map {
+            NativeSolverBubble(id: .init(rawValue: $0.id), center: $0.center, velocity: $0.velocity, mass: 1, targetRadius: $0.radius)
+        }, segments: segments, publicSettings: NativePublicSettings(properties: properties,
+            region: try WorldRectangle(min: [-100, -100], max: [100, 100])))
+        input.hitTests = []
+        return input
+    }
+
+    private func compliance(_ contact: SIMD4<Float>, _ rho: Float) -> Float { contact.x * pow(max(rho, 0.01), contact.y) }
+
+    private func pairRecord(_ solver: NativeMetalSolver) throws -> NativeContactCacheRecord {
+        let record = try XCTUnwrap(solver.cachedContacts.first { $0.metadata.x == 0 })
+        XCTAssertEqual(record.participants, SIMD2<Int64>(1, 2), "koniec a to bańka 1")
+        return record
+    }
+
+    // P-B-12: ρ ściany = d / r z przewidzianego środka (x + v·dt), a nie z pozycji z końca poprzedniego kroku. Bańka r = 1 stoi
+    // w x = -0,6 (d = 0,6) i leci w ścianę z v = 12, więc przewidziany środek to -0,4 i d = 0,4.
+    func testWallRhoComesFromThePredictedCenter() async throws {
+        let solver = try makeSolver(iterations: 8)
+        let wall = NativeSolverSegment(id: 7, previousA: SIMD2(0, -10), previousB: SIMD2(0, 10),
+            currentA: SIMD2(0, -10), currentB: SIMD2(0, 10))
+        let input = try contactInput([(1, SIMD2(-0.6, 0), SIMD2(12, 0), 1, SIMD4(0.002, 1.5, 1, 0))], segments: [wall])
+        _ = try await solver.executeFrame(input: input, scenarioStep: 1)
+        let record = try XCTUnwrap(solver.cachedContacts.first { $0.metadata.x == 1 })
+        XCTAssertEqual(record.rho.x, 0.4, accuracy: 1e-4)
+    }
+
+    // P-B-12: płytki kontakt (środek r − 0,05 od ściany, v = 0) ma ρ = d / r = 0,95, bez dodatkowego wygładzania ku 1.
+    func testWallRhoOfShallowContactIsDistanceOverRadius() async throws {
+        let solver = try makeSolver(iterations: 8)
+        let wall = NativeSolverSegment(id: 7, previousA: SIMD2(0, -10), previousB: SIMD2(0, 10),
+            currentA: SIMD2(0, -10), currentB: SIMD2(0, 10))
+        let input = try contactInput([(1, SIMD2(-0.95, 0), .zero, 1, SIMD4(0.002, 1.5, 1, 0))], segments: [wall])
+        _ = try await solver.executeFrame(input: input, scenarioStep: 1)
+        let record = try XCTUnwrap(solver.cachedContacts.first { $0.metadata.x == 1 })
+        XCTAssertEqual(record.rho.x, 0.95, accuracy: 1e-4)
+    }
+
+    // P-B-13: nowy rekord ma ρ poprzedniego kroku = 1, więc nakładanie 0,5 dzieli się wg c(1): ρ_a = (1 − 0,5·0,8)/1,
+    // ρ_b = (1,5 − 0,5·0,2)/1,5 (promienie 1 i 1,5, c₀ 0,002 i 0,0005). Drugi krok z tego samego wejścia: c z ρ kroku pierwszego.
+    func testPairRhoSplitsTheOverlapByComplianceFromThePreviousStep() async throws {
+        let solver = try makeSolver(iterations: 8)
+        let contact: [SIMD4<Float>] = [SIMD4(0.002, 1.5, 1, 0), SIMD4(0.0005, 3, 1, 0)]
+        let input = try contactInput([(1, SIMD2(0, 0), .zero, 1, contact[0]), (2, SIMD2(2.0, 0), .zero, 1.5, contact[1])])
+        _ = try await solver.executeFrame(input: input, scenarioStep: 1)
+        let first = try pairRecord(solver)
+        XCTAssertEqual(first.rho.x, 1 - 0.5 * 0.8, accuracy: 1e-4)
+        XCTAssertEqual(first.rho.y, (1.5 - 0.5 * 0.2) / 1.5, accuracy: 1e-4)
+        // Krok drugi startuje z pozycji po kroku pierwszym (solver trwały), więc nakładanie nie jest znane z wejścia; podział
+        // nie zależy od niego: (r_a − r_a·ρ_a) / (r_b − r_b·ρ_b) = c_a / c_b, z c z ρ rekordu z kroku pierwszego.
+        _ = try await solver.executeFrame(input: input, scenarioStep: 2)
+        let second = try pairRecord(solver)
+        XCTAssertEqual(second.metadata.y, 2, "rekord dopasowany z kroku pierwszego")
+        let cA = compliance(contact[0], first.rho.x), cB = compliance(contact[1], first.rho.y)
+        let shareA = 1 * (1 - second.rho.x), shareB = 1.5 * (1 - second.rho.y)
+        XCTAssertGreaterThan(shareA + shareB, 0.05)
+        XCTAssertEqual(shareA / (shareA + shareB), cA / (cA + cB), accuracy: 1e-3)
+        let freshShare = 0.8 as Float
+        XCTAssertGreaterThan(abs(shareA / (shareA + shareB) - freshShare), 0.05, "podział zależy od ρ poprzedniego kroku, nie od c(1)")
+    }
+
+    // P-B-13: para twarda (c = 0 na obu końcach) ma ρ = 1 na obu końcach, a para miękka–twarda przerzuca całe nakładanie
+    // na koniec miękki: ρ_a = (1 − 0,5)/1, ρ_b = 1.
+    func testHardPairKeepsRhoOneAndSoftHardPairPutsTheWholeOverlapOnTheSoftEnd() async throws {
+        let hard = try makeSolver(iterations: 8)
+        let hardInput = try contactInput([(1, SIMD2(0, 0), .zero, 1, SIMD4(0, 0, 1, 0)), (2, SIMD2(1.5, 0), .zero, 1, SIMD4(0, 0, 1, 0))])
+        _ = try await hard.executeFrame(input: hardInput, scenarioStep: 1)
+        let hardRecord = try pairRecord(hard)
+        XCTAssertEqual(hardRecord.rho.x, 1, accuracy: 1e-6)
+        XCTAssertEqual(hardRecord.rho.y, 1, accuracy: 1e-6)
+        let mixed = try makeSolver(iterations: 8)
+        let mixedInput = try contactInput([(1, SIMD2(0, 0), .zero, 1, SIMD4(0.002, 1.5, 1, 0)), (2, SIMD2(1.5, 0), .zero, 1, SIMD4(0, 0, 1, 0))])
+        _ = try await mixed.executeFrame(input: mixedInput, scenarioStep: 1)
+        let mixedRecord = try pairRecord(mixed)
+        XCTAssertEqual(mixedRecord.rho.x, 0.5, accuracy: 1e-4)
+        XCTAssertEqual(mixedRecord.rho.y, 1, accuracy: 1e-6)
+    }
+
     /// `pairCorrectionLimit: false` daje bliźniaki z oczekiwaniem z v2.1.0 (CD-D-20).
     private func makeSolver(iterations: Int, pairCorrectionLimit: Bool = true) throws -> NativeMetalSolver {
         var configuration = NativeMetalConfiguration(solverIterationCount: iterations)

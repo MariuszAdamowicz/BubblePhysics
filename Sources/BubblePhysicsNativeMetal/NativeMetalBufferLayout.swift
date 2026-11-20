@@ -13,7 +13,7 @@ struct NativeMetalBubble: Equatable, Sendable {
     var eventData = SIMD2<UInt64>.zero // interest, merge groups
     var bounds = SIMD4<Float>.zero // AABB zdeformowanego konturu po kroku: min.xy, max.xy
     var filter = NativeMetalFilter.default // kategoria, maska, reserved, warstwa (`NativeMetalFilter.encodeLayer`)
-    var contact = SIMD4<Float>.zero // część bazowa podatności c₀·(r/r_ref)^s (0 = kontakt twardy), wykładnik ściśnięcia k, reserved, reserved
+    var contact = SIMD4<Float>.zero // część bazowa podatności c₀·(r/r_ref)^s (0 = kontakt twardy), wykładnik ściśnięcia k, ζ_c (współczynnik tłumienia kontaktu miękkiego, także dla bańki twardej), reserved
 
     init(_ bubble: NativeSolverBubble) {
         identity = SIMD2(Int64(bubble.id.rawValue), 0)
@@ -92,7 +92,7 @@ struct NativeContactCacheRecord: Equatable, Sendable {
     var metadata: SIMD4<UInt32> // kind, age, lastSeenFrame, flags
     var geometry: SIMD4<Float> // normal.xy, point.xy
     var response: SIMD4<Float> // lambda, penetration, allowedSide (0 = nil), reserved
-    /// x, y: wygładzone ρ końców a i b (stosunek promienia konturu do r w kierunku normalnej).
+    /// x, y: ρ końców a i b z geometrii bieżącego kroku (stosunek promienia konturu do r w kierunku normalnej), bez wygładzania.
     /// z: suma podatności końców c_a(ρ_a) + c_b(ρ_b) (dla kontaktu z odcinkiem tylko c_a), liczona raz na kontakt aktywny
     /// w `nativePrepareSolverContacts` i czytana przez `nativeContactAlpha` w każdej iteracji solvera. w: reserved.
     var rho: SIMD4<Float> = SIMD4(1, 1, 0, 0)
@@ -168,7 +168,7 @@ struct NativeMetalRenderPacket: Equatable, Sendable {
 
 struct NativeMetalContourControl: Sendable {
     var counts: SIMD4<UInt32> // stride punktów, poprzednia liczba baniek, reserved
-    var shape: SIMD4<Float> // maksymalna krawędź, recovery rate, napięcie, clearance
+    var shape: SIMD4<Float> // maksymalna krawędź, reserved (0), napięcie, clearance
 }
 
 /// Wynik hit-testu jednego punktu: zwycięzca to największa para (warstwa, ObjectID); `found` 0 to puste miejsce.

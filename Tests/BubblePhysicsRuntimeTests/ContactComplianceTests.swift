@@ -7,10 +7,14 @@ import XCTest
 /// bańki dociśniętej do ściany. Wszystko przez publiczny `BubbleWorld` na urządzeniu Metal.
 ///
 /// Sceny docisku są z `CrowdSceneSupport.swift`: bańka stoi przy wewnętrznej krawędzi ściany, a `MotorDrive` pcha ją w ścianę stałą
-/// siłą F. W stanie ustalonym wgniecenie jest proporcjonalne do c · F, gdzie c = c₀ · (r / r_ref)^s · ρ^k, ze współczynnikiem
-/// solvera ≈ 3,85 (8 iteracji Jacobiego nie domyka α ≫ invMass): przy r_ref = 20, c₀ = 1e-3 i F = 300 bańka r = 20 (s = 1)
-/// ugina się o 1,156. Siła musi zostać w zakresie liniowym: powyżej F ≈ 600 (m = 1) prędkość w stronę ściany przekracza
-/// `restSpeed` tłumika kontaktu (max(40, 2r)), tłumik się wyłącza i bańka dochodzi do δ = r (probe przy F = 1000, c₀ = 4e-3).
+/// siłą F. Kontakt miękki działa jak sprężyna o podatności c = c₀ · (r / r_ref)^s · ρ^k z tłumieniem ζ_c (CD-D-16): do prędkości
+/// trafia pełna korekta kontaktów XPBD, więc w stanie ustalonym wgniecenie to dokładnie c · F, bez współczynnika solvera, a bańka
+/// stoi (prędkość spoczynkowa 0). Przy r_ref = 20, c₀ = 3,85e-3 i F = 300 bańka r = 20 (s = 1) ugina się o 1,155, czyli tyle samo
+/// co przed v2.3.0 przy c₀ = 1e-3 (stary współczynnik 3,85 wynikał z częściowej korekty prędkości, nie z iteracji solvera).
+/// Granica liniowości (zmierzona sondą, m = 1, c = 3,85e-3, wgniecenie po 4 s): δ / (c · F) = 1,000 dla F = 300, 1 000, 1 700 i 2 500
+/// (δ = 9,6, prawie pół promienia), a dla F = 4 000 bańka dochodzi do δ = r i stosunek rośnie do 1,30. Dawna granica F ≈ 600
+/// wynikała z prędkości spoczynkowej w stronę ściany, która wyłączała tłumik kontaktu; teraz bańka stoi. Testy zostają przy
+/// F = 300 i 2F = 600, daleko w zakresie liniowym.
 @MainActor
 final class ContactComplianceTests: XCTestCase {
     private let soft = PhysicsMaterialID(rawValue: 1)
@@ -19,9 +23,12 @@ final class ContactComplianceTests: XCTestCase {
     private let step = 1.0 / 60
     private func id(_ value: UInt64) -> ObjectID { ObjectID(rawValue: value) }
 
-    /// Docisk i skala wgnieceń: δ ≈ 3,85 · c₀ · F · (r / 20)^s · ρ^k, w zakresie liniowym także dla 2F.
+    /// Docisk i skala wgnieceń: δ = c₀ · F · (r / 20)^s · ρ^k, w zakresie liniowym także dla 2F. c₀ = 3,85e-3 daje dla F = 300
+    /// to samo wgniecenie ≈ 1,155 co dawne c₀ = 1e-3 ze współczynnikiem 3,85 (G4, CD-D-16).
     private let force: Float = 300
-    private let base: Float = 1e-3
+    private let base: Float = 3.85e-3
+    /// c₀ pary miękkich baniek w testach B1 i CD-D-12: bez zmian względem v2.2.0.
+    private let pairBase: Float = 4e-3
     /// 2 s symulacji (pomiar po 2 s), okno uspokojenia od 1 s do 2 s.
     private let steps = 120
     private let settleWindow = 60..<120
@@ -404,7 +411,7 @@ final class ContactComplianceTests: XCTestCase {
         XCTAssertLessThan(ratio, linearRatio - 0.1, "k = 2 (\(ratio)×) ma rosnąć wyraźnie wolniej niż k = 0 (\(linearRatio)×)")
     }
 
-    // P-B-24 dla k > 0: ρ^k reaguje z opóźnieniem jednego kroku, a wygładzenie ρ ma to uspokoić.
+    // P-B-24 dla k > 0: ρ liczy się z geometrii bieżącego kroku (G2), więc ρ^k nie opóźnia sprężyny i bańka osiada w oknie 1–2 s.
     func testSettlesWithCompressionExponentInWindowBetweenOneAndTwoSeconds() async throws {
         for exponent in [Float(1), 2] {
             let result = try await doubledForce(material: CrowdScene.softBubblePhysics(base: base, compressionExponent: exponent))
@@ -418,8 +425,8 @@ final class ContactComplianceTests: XCTestCase {
     // z wgnieceniem b, a c_a = c₀ stałe. W stanie ustalonym głębokości wgnieceń na normalnej dzielą się wg c_a : c_b, czyli
     // d_a / d_b = 1 / ρ_b³ z ρ_b = 1 − d_b / r. Zamienione indeksy ρ w `nativeAccumulateContactPressure` dawały 1 / ρ_a³.
     func testSoftPairSplitsTheDentByComplianceOfEachEndWithItsOwnRho() async throws {
-        let strong = try CrowdScene.softBubblePhysics(base: 4 * base, compressionExponent: 0)
-        let hardening = try CrowdScene.softBubblePhysics(base: 4 * base, compressionExponent: 3)
+        let strong = try CrowdScene.softBubblePhysics(base: pairBase, compressionExponent: 0)
+        let hardening = try CrowdScene.softBubblePhysics(base: pairBase, compressionExponent: 3)
         let world = try await CrowdScene.makeWorld(bubble: strong) { setup in
             setup.updatePhysicsMaterial(CrowdScene.secondBubbleMaterial, material: hardening)
                 .add(try CrowdScene.bubble(1, at: [-19, 0], radius: 20, mass: 1))
@@ -491,7 +498,7 @@ final class ContactComplianceTests: XCTestCase {
 
     // CD-D-12: w parze miękkiej bańka o c = 0 nie dostaje wgniecenia, nawet gdy jej materiał jest deformowalny (`deformability` > 0).
     func testHardDeformableBubbleGetsNoDentFromASoftPair() async throws {
-        let soft = try CrowdScene.softBubblePhysics(base: 4 * base)
+        let soft = try CrowdScene.softBubblePhysics(base: pairBase)
         let hardDeformable = try PhysicsMaterial(kind: .bubble, deformability: 0.5, maximumLinearSpeed: 600)
         let pressed = try await pushedAgainstWall(first: soft, second: hardDeformable)
         XCTAssertEqual(CrowdScene.effectiveRadius(of: pressed.second), 20, accuracy: 0.2,

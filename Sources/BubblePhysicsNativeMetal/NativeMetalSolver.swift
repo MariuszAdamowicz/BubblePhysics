@@ -81,6 +81,9 @@ final class NativeMetalPersistentState {
     let adjacencyCounts: MTLBuffer
     let contactEndpoints: MTLBuffer
     let contactCorrections: MTLBuffer
+    /// float2 na bańkę: suma przesunięć kontaktów XPBD (warm start i każda iteracja Jacobiego), bez przegubów i brył; w
+    /// `nativeUpdateVelocities` bańka miękka przenosi ją w całości do prędkości (CD-D-16).
+    let bubbleContactCorrection: MTLBuffer
     let solverControl: MTLBuffer
     let guardedBubbles: MTLBuffer
     let safetyControl: MTLBuffer
@@ -193,6 +196,7 @@ final class NativeMetalPersistentState {
         adjacencyCounts = try buffer("solver.adjacencyCounts", bubbleCapacity, MemoryLayout<UInt32>.stride)
         contactEndpoints = try buffer("solver.endpoints", contactCapacity, MemoryLayout<SIMD4<UInt32>>.stride)
         contactCorrections = try buffer("solver.corrections", contactCapacity, MemoryLayout<SIMD4<Float>>.stride)
+        bubbleContactCorrection = try buffer("solver.bubbleContactCorrection", bubbleCapacity, MemoryLayout<SIMD2<Float>>.stride)
         solverControl = try buffer("solver.control", 1, MemoryLayout<NativeMetalSolverControl>.stride)
         guardedBubbles = try buffer("safety.guardedBubbles", bubbleCapacity, MemoryLayout<UInt32>.stride)
         safetyControl = try buffer("safety.control", 1, MemoryLayout<NativeMetalSafetyControl>.stride)
@@ -407,7 +411,7 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         state.control.contents().storeBytes(of: parameters, as: NativeMetalControl.self)
         var contourParameters = NativeMetalContourControl(
             counts: SIMD4(UInt32(state.contourStride), UInt32(lastSnapshot?.sourceBubbles.count ?? 0), 0, 0),
-            shape: SIMD4(contourConfiguration.maxContourSegmentLength, contourConfiguration.deformationRecoveryRate,
+            shape: SIMD4(contourConfiguration.maxContourSegmentLength, 0,
                          contourConfiguration.contourSurfaceTension, contourConfiguration.positionTolerance))
         let solverParameters = NativeMetalSolverControl(
             counts: SIMD4(1, 0, 0, UInt32(clamping: configuration.solverIterationCount)),
@@ -684,10 +688,9 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         dispatchContacts("nativeCompactContactCache", buffers: [state.mergedCache, state.workingCache, state.contactControl,
             state.scanValues, state.scanOffsets, state.dispatchStatistics], argument: 2)
         prepareIndirectArguments()
-        // Wygładzone ρ obu końców każdego kontaktu z konturu poprzedniej klatki (CD-D-16), przed solverem, który liczy z niego α.
+        // ρ obu końców każdego kontaktu z geometrii bieżącego kroku (pozycje przewidziane, CD-D-4), przed solverem, który liczy z niego α.
         dispatchContacts("nativeUpdateContactRho", buffers: [state.workingBubbles, state.workingCache, state.control,
-            state.contactControl, state.contourControl, state.publishedBubbles, state.publishedDeformation,
-            state.publishedContourCounts, structuralHeaderBuffer], argument: 3)
+            state.contactControl, state.contourControl, structuralHeaderBuffer], argument: 3)
         dispatch("nativeClearAdjacency", buffers: [state.control, state.adjacencyCounts], threads: count)
         dispatchContacts("nativeEmitAdjacency", buffers: [state.workingBubbles, state.workingSegments, state.workingCache,
             state.control, state.contactControl, state.adjacency, state.contactEndpoints, state.dispatchStatistics,
@@ -697,7 +700,8 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         dispatchContacts("nativePrepareSolverContacts", buffers: [state.workingBubbles, state.workingSegments, state.workingCache,
             state.control, state.contactControl, state.contactEndpoints, state.adjacencyCounts], argument: 3)
         dispatch("nativeApplyWarmStart", buffers: [state.workingBubbles, state.workingCache, state.control,
-            state.contactControl, state.adjacency, state.adjacencyCounts, state.solverPositionsPing], threads: count)
+            state.contactControl, state.adjacency, state.adjacencyCounts, state.solverPositionsPing,
+            state.bubbleContactCorrection], threads: count)
         var inputPositions = state.solverPositionsPing
         var outputPositions = state.solverPositionsPong
         func measureResidual() {
@@ -725,7 +729,7 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
                 state.contactEndpoints, state.adjacencyCounts, state.contactCorrections], argument: 3)
             dispatch("nativeSolveJacobi", buffers: [state.workingBubbles, inputPositions, outputPositions, state.control,
                 state.contactControl, state.solverControl, state.adjacency, state.adjacencyCounts,
-                state.contactCorrections, state.scratch], threads: count)
+                state.contactCorrections, state.scratch, state.bubbleContactCorrection], threads: count)
             swap(&inputPositions, &outputPositions)
             measureResidual()
             if hasRigidBodies {
@@ -781,7 +785,8 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
                 threadsPerThreadgroup: .init(width: min(pipeline.threadExecutionWidth, pipeline.maxTotalThreadsPerThreadgroup),
                                              height: 1, depth: 1))
         }
-        dispatch("nativeUpdateVelocities", buffers: [state.workingBubbles, inputPositions, state.control], threads: count)
+        dispatch("nativeUpdateVelocities", buffers: [state.workingBubbles, inputPositions, state.control,
+            state.bubbleContactCorrection], threads: count)
         dispatch("nativeDampContactNormalMotion", buffers: [state.workingBubbles, state.workingSegments,
             state.workingCache, state.control, state.contactControl, state.adjacency, state.adjacencyCounts], threads: count)
         dispatchContacts("nativeInvalidateSafetyCache", buffers: [state.workingBubbles, state.workingCache,
@@ -790,9 +795,8 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
             state.control, state.contactControl, state.solverControl, state.safetyControl],
             argument: 4)
         dispatch("nativeAccumulateContactPressure", buffers: [state.workingBubbles, state.workingSegments,
-            state.workingCache, state.control, state.contactControl, state.contourControl, state.publishedBubbles,
-            state.publishedDeformation, state.publishedContourCounts, state.contourScratch, state.workingContourCounts,
-            state.adjacency, state.adjacencyCounts, state.safetyControl, structuralHeaderBuffer],
+            state.workingCache, state.control, state.contactControl, state.contourControl, state.contourScratch,
+            state.workingContourCounts, state.adjacency, state.adjacencyCounts, state.safetyControl],
             threads: count * state.contourStride)
         if !structuralSources.isEmpty {
             dispatch("nativeSeedStructuralContours", buffers: [state.workingBubbles, structuralHeaderBuffer,

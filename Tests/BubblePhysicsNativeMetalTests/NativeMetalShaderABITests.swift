@@ -253,28 +253,33 @@ final class NativeMetalShaderABITests: XCTestCase {
     /// P-B-33: host liczy c₀·(r/r_ref)^s tylko dla c₀ > 0 (z nadpisaniem), a rekord bańki niesie wynik i wykładnik k w `contact`.
     func testHostComputesContactComplianceForBubbleRecord() throws {
         let compliance = BubbleContactCompliance(base: 2, referenceRadius: 10, radiusExponent: 2, compressionExponent: 1.5)
-        XCTAssertEqual(NativePublicProperties.contact(of: compliance, override: nil, radius: 20), SIMD4(8, 1.5, 0, 0))
-        XCTAssertEqual(NativePublicProperties.contact(of: compliance, override: 0.5, radius: 20), SIMD4(2, 1.5, 0, 0), "nadpisanie c₀")
-        XCTAssertEqual(NativePublicProperties.contact(of: compliance, override: 0, radius: 20), .zero, "nadpisanie 0 daje kontakt twardy")
+        // Lane .z niesie ζ_c każdej bańki (CD-D-6), także twardej: tłumik kontaktu miękkiego pary czyta ζ_c obu końców.
+        XCTAssertEqual(NativePublicProperties.contact(of: compliance, override: nil, radius: 20, dampingRatio: 0.7), SIMD4(8, 1.5, 0.7, 0))
+        XCTAssertEqual(NativePublicProperties.contact(of: compliance, override: 0.5, radius: 20, dampingRatio: 0.7), SIMD4(2, 1.5, 0.7, 0), "nadpisanie c₀")
+        XCTAssertEqual(NativePublicProperties.contact(of: compliance, override: 0, radius: 20, dampingRatio: 0.7), SIMD4(0, 0, 0.7, 0),
+                       "nadpisanie 0 daje kontakt twardy, ale ζ_c zostaje")
         let hardWithExtremeExponent = BubbleContactCompliance(base: 0, referenceRadius: 1, radiusExponent: .infinity, compressionExponent: 3)
-        XCTAssertEqual(NativePublicProperties.contact(of: hardWithExtremeExponent, override: nil, radius: 5), .zero, "c₀ = 0 bez potęg")
-        XCTAssertEqual(NativePublicProperties.contact(of: .hard, override: nil, radius: 5), .zero)
+        XCTAssertEqual(NativePublicProperties.contact(of: hardWithExtremeExponent, override: nil, radius: 5, dampingRatio: 0.2),
+                       SIMD4(0, 0, 0.2, 0), "c₀ = 0 bez potęg")
+        XCTAssertEqual(NativePublicProperties.contact(of: .hard, override: nil, radius: 5, dampingRatio: 1), SIMD4(0, 0, 1, 0))
+        XCTAssertEqual(NativePublicProperties.contact(of: .hard, override: nil, radius: 5, dampingRatio: 0), .zero)
         // A2: stager liczy w Double i przepuszcza c₀ = 1e-30, r/r_ref = 4, s = 70 (c = 1,4e12); host w Float dawał tam nieskończoność.
         let overflowingInFloat = BubbleContactCompliance(base: 1e-30, referenceRadius: 1, radiusExponent: 70)
-        let large = NativePublicProperties.contact(of: overflowingInFloat, override: nil, radius: 4)
+        let large = NativePublicProperties.contact(of: overflowingInFloat, override: nil, radius: 4, dampingRatio: 1)
         XCTAssertTrue(large.x.isFinite)
         XCTAssertEqual(large.x, 1.3937966e12, accuracy: 1e7, "c₀ · 4^70 = 1e-30 · 1,3937965749081639e42")
+        XCTAssertEqual(large.z, 1)
 
         let id = NativeSolverBubbleID(rawValue: 4)
         var properties = NativePublicProperties(flags: SIMD4(1, 0, 0, 0), material: .zero, restitution: 0,
             resources: .zero, eventData: .zero)
-        properties.contact = SIMD4(8, 1.5, 0, 0)
+        properties.contact = SIMD4(8, 1.5, 0.7, 0)
         var input = NativeSolverInput(configuration: .init(), bubbles: [NativeSolverBubble(id: id, center: .zero, mass: 1, targetRadius: 1)],
             segments: [], publicSettings: NativePublicSettings(properties: [id: properties],
                 region: try WorldRectangle(min: [-10, -10], max: [10, 10])))
         input.hitTests = []
         let record = try XCTUnwrap(NativeMetalSnapshot(input: input).bubbleChanges.first).value
-        XCTAssertEqual(record.contact, SIMD4(8, 1.5, 0, 0))
+        XCTAssertEqual(record.contact, SIMD4(8, 1.5, 0.7, 0))
     }
 
     /// P-B-71: rekord bańki niesie warstwę w `filter.w` bez zmiany kategorii i maski ani rozmiaru rekordu.

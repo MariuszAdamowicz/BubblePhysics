@@ -403,4 +403,88 @@ final class TransactionStagerTests: XCTestCase {
             }
         } catch { XCTFail("Unexpected fixture failure: \(error)", file: file, line: line) }
     }
+
+    // MARK: stabilność gumki (P-B-6, CD-D-9)
+
+    /// Przy dt = 1/60 granica K · dt² / m < 1 to K < 3600 · m: K = 1000 przechodzi dla m = 2 (0,14), a nie dla m = 0,2 (1,39).
+    private let bandStiffness: Float = 1000
+    private func band() throws -> BubbleDrivePolicy { try BubbleDrivePolicy(bandStiffness: bandStiffness) }
+    private func bandBubble(_ value: UInt64, mass: Float, position: WorldPoint = .zero) throws -> BubbleDescriptor {
+        try BubbleDescriptor(id: id(value), position: position, targetRadius: 2, mass: mass,
+                             physicsMaterialID: materialID, renderMaterialID: styleID, drivePolicy: band())
+    }
+    private func assertBandUnstable(_ transaction: WorldTransaction, against initial: RuntimeState, file: StaticString = #filePath,
+                                    line: UInt = #line) {
+        assertRejected(transaction, against: initial, reason: .invalidValue(.valueOutOfRange("drive.bandStiffness")),
+                       file: file, line: line)
+        // Odrzucona transakcja nie zostawia nic w stanie wsadu (G1-AC5: świat bez zmian).
+        let boundary = TransactionStager.stageBatch([PendingTransaction(token: TransactionToken(rawValue: 1), transaction: transaction)],
+                                                    against: initial)
+        XCTAssertEqual(boundary.state.objects.keys.sorted { $0.rawValue < $1.rawValue },
+                       initial.objects.keys.sorted { $0.rawValue < $1.rawValue }, file: file, line: line)
+        XCTAssertTrue(boundary.frame.transactionReceipts.isEmpty, file: file, line: line)
+    }
+
+    func testAddRejectsABandBubbleWithTooSmallAMass() throws {
+        let initial = try TransactionStager.stage(resources(), against: state()).state
+        assertBandUnstable(WorldTransaction().add(.bubble(try bandBubble(1, mass: 0.2))), against: initial)
+        // Tuż poniżej granicy K = 3600 · m (m = 0,3 → 1 080 > 1 000 jest jeszcze stabilne).
+        XCTAssertNoThrow(try TransactionStager.stage(WorldTransaction().add(.bubble(try bandBubble(1, mass: 0.3))), against: initial))
+        XCTAssertNoThrow(try TransactionStager.stage(WorldTransaction().add(.bubble(try bandBubble(1, mass: 2))), against: initial))
+        // Granica leży przy K = 3600 · m: m = 1 przy K = 3599 przechodzi, przy 3601 nie.
+        func descriptor(_ value: UInt64, stiffness: Float) throws -> BubbleDescriptor {
+            try BubbleDescriptor(id: id(value), position: .zero, targetRadius: 2, mass: 1, physicsMaterialID: materialID,
+                                 renderMaterialID: styleID, drivePolicy: BubbleDrivePolicy(bandStiffness: stiffness))
+        }
+        XCTAssertNoThrow(try TransactionStager.stage(WorldTransaction().add(.bubble(try descriptor(2, stiffness: 3599))), against: initial))
+        assertBandUnstable(WorldTransaction().add(.bubble(try descriptor(2, stiffness: 3601))), against: initial)
+    }
+
+    func testBubbleWithoutBandIsNotCheckedForBandStability() throws {
+        let initial = try TransactionStager.stage(resources(), against: state()).state
+        let light = try BubbleDescriptor(id: id(1), position: .zero, targetRadius: 2, mass: 0.001,
+                                         physicsMaterialID: materialID, renderMaterialID: styleID)
+        XCTAssertNoThrow(try TransactionStager.stage(WorldTransaction().add(.bubble(light)), against: initial))
+    }
+
+    func testReplaceRejectsABandBubbleWithTooSmallAMass() throws {
+        let initial = try TransactionStager.stage(resources().add(.bubble(bandBubble(1, mass: 2))), against: state()).state
+        assertBandUnstable(WorldTransaction().replace(id(1), with: .bubble(try bandBubble(1, mass: 0.2))), against: initial)
+        XCTAssertNoThrow(try TransactionStager.stage(WorldTransaction().replace(id(1), with: .bubble(try bandBubble(1, mass: 1))),
+                                                     against: initial))
+    }
+
+    func testMergeRejectsAResultWithTooSmallAMass() throws {
+        let initial = try TransactionStager.stage(resources().add(.bubble(bubble(1))).add(.bubble(bubble(2, position: [3, 0]))),
+                                                  against: state()).state
+        func result(mass: Float?) throws -> BubbleResult {
+            BubbleResult(id: id(3), physicsMaterialID: materialID, renderMaterialID: styleID, drivePolicy: try band(), mass: mass)
+        }
+        // Masa nadpisana przy scaleniu i masa z sumy źródeł (2 + 2 = 4 jest stabilne).
+        assertBandUnstable(WorldTransaction().mergeBubbles([id(1), id(2)], result: try result(mass: 0.2)), against: initial)
+        XCTAssertNoThrow(try TransactionStager.stage(WorldTransaction().mergeBubbles([id(1), id(2)], result: try result(mass: nil)),
+                                                     against: initial))
+        let light = try TransactionStager.stage(resources()
+            .add(.bubble(try BubbleDescriptor(id: id(1), position: .zero, targetRadius: 2, mass: 0.05,
+                                              physicsMaterialID: materialID, renderMaterialID: styleID)))
+            .add(.bubble(try BubbleDescriptor(id: id(2), position: [3, 0], targetRadius: 2, mass: 0.05,
+                                              physicsMaterialID: materialID, renderMaterialID: styleID))), against: state()).state
+        assertBandUnstable(WorldTransaction().mergeBubbles([id(1), id(2)], result: try result(mass: nil)), against: light)
+    }
+
+    /// Podział zmniejsza masę: źródło m = 2 jest stabilne, ale część o udziale 0,1 ma m = 0,2.
+    func testSplitRejectsAPartWithTooSmallAMass() throws {
+        let initial = try TransactionStager.stage(resources().add(.bubble(bubble(1))), against: state()).state
+        func part(_ value: UInt64, band banded: Bool, share: Float) throws -> BubbleSplitPart {
+            BubbleSplitPart(result: BubbleResult(id: id(value), physicsMaterialID: materialID, renderMaterialID: styleID,
+                drivePolicy: banded ? try band() : .standard), share: share)
+        }
+        assertBandUnstable(WorldTransaction().splitBubble(id(1), first: try part(4, band: true, share: 0.1),
+                                                          second: try part(5, band: false, share: 0.9)), against: initial)
+        assertBandUnstable(WorldTransaction().splitBubble(id(1), first: try part(4, band: false, share: 0.9),
+                                                          second: try part(5, band: true, share: 0.1)), against: initial)
+        XCTAssertNoThrow(try TransactionStager.stage(WorldTransaction().splitBubble(id(1), first: try part(4, band: true, share: 0.5),
+                                                                                    second: try part(5, band: true, share: 0.5)),
+                                                     against: initial))
+    }
 }

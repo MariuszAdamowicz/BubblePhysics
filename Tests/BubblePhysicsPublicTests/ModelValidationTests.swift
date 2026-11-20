@@ -171,6 +171,32 @@ final class ModelValidationTests: XCTestCase {
         }
     }
 
+    // P-B-24 (G4-AC4, CD-D-15): współczynnik tłumienia kontaktu miękkiego ζ_c w materiale.
+    func testContactDampingRatioDefaultsToOneAndAcceptsNonnegativeFiniteValues() throws {
+        XCTAssertEqual(try PhysicsMaterial(kind: .bubble).contactDampingRatio, 1)
+        XCTAssertEqual(try PhysicsMaterial(kind: .rigid).contactDampingRatio, 1)
+        for value: Float in [0, 0.2, 1, 3.5] {
+            XCTAssertEqual(try PhysicsMaterial(kind: .bubble, contactDampingRatio: value).contactDampingRatio, value)
+        }
+    }
+
+    func testContactDampingRatioRejectsNegativeAndNonFiniteWithValueOutOfRange() throws {
+        for invalid: Float in [-0.1, -1e-6, .nan, .infinity, -.infinity] {
+            XCTAssertThrowsError(try PhysicsMaterial(kind: .bubble, contactDampingRatio: invalid), "ζ_c \(invalid)") {
+                XCTAssertEqual($0 as? ModelValidationError, .valueOutOfRange("contactDampingRatio"))
+            }
+        }
+    }
+
+    func testRigidMaterialRejectsContactDampingRatioOtherThanDefault() throws {
+        for value: Float in [0, 0.2, 2] {
+            XCTAssertThrowsError(try PhysicsMaterial(kind: .rigid, contactDampingRatio: value), "ζ_c \(value)") {
+                XCTAssertEqual($0 as? ModelValidationError, .valueOutOfRange("contactDampingRatio"))
+            }
+        }
+        XCTAssertNoThrow(try PhysicsMaterial(kind: .rigid, contactDampingRatio: 1))
+    }
+
     func testBubbleDescriptorValidatesContactComplianceOverride() throws {
         func descriptor(_ override: Float?) throws -> BubbleDescriptor {
             try BubbleDescriptor(id: ObjectID(rawValue: 1), position: .zero, targetRadius: 1, physicsMaterialID: material,

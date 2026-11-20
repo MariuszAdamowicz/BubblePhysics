@@ -250,7 +250,6 @@ final class MaterialTextureRenderTests: XCTestCase {
         // Ruch wymuszony: zamiana bańki na taką o innym położeniu i prędkości, potem kolejne kroki i render.
         scene.world.submit(try WorldTransaction().replace(id(1), with: B.bubble(1, at: [-3.6, 3], radius: 8,
             velocity: [4, 12], render: materialID)))
-        await scene.step()
         let frame = await scene.step()
         let moved = try XCTUnwrap(frame.objects[id(1)]).position
         let movedContour = try XCTUnwrap(scene.world.debugContourSnapshot()[id(1)])

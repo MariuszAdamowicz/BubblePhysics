@@ -64,10 +64,12 @@ enum CrowdScene {
 
     static func bubble(_ value: UInt64, at position: WorldPoint, radius: Float, velocity: WorldPoint = .zero,
                        mass: Float? = nil, interest: EventInterest = [.didAdd, .didExitSimulationRegion],
-                       material: PhysicsMaterialID? = nil, contactCompliance: Float? = nil) throws -> WorldObject {
+                       material: PhysicsMaterialID? = nil, contactCompliance: Float? = nil,
+                       drivePolicy: BubbleDrivePolicy = .standard) throws -> WorldObject {
         .bubble(try BubbleDescriptor(id: id(value), position: position, velocity: velocity, targetRadius: radius,
                                      mass: mass ?? radius * radius / 400, physicsMaterialID: material ?? bubbleMaterial,
-                                     renderMaterialID: style, eventInterest: interest, contactCompliance: contactCompliance))
+                                     renderMaterialID: style, eventInterest: interest, drivePolicy: drivePolicy,
+                                     contactCompliance: contactCompliance))
     }
 
     /// Świat z ramą ścian i zasobami, po jednym kroku przyjmującym przygotowanie sceny.
@@ -94,19 +96,21 @@ enum CrowdScene {
     static let secondBubbleMaterial = PhysicsMaterialID(rawValue: 3)
 
     /// Materiał baniek z podatnością kontaktu c = base · (r / referenceRadius)^s · ρ^k; reszta jak w `bubblePhysics`.
-    /// Bez tłumienia, `maximumLinearSpeed` = 600 jak w scenie tłoku.
+    /// Bez tłumienia, `maximumLinearSpeed` = 600 jak w scenie tłoku. `dampingRatio` to ζ_c kontaktu miękkiego (domyślnie 1, jak w materiale).
     static func softBubblePhysics(base: Float, radiusExponent: Float = 1, compressionExponent: Float = 0,
                                   referenceRadius: Float = 20, maximumLinearSpeed: Float? = 600,
-                                  damping: Float = 0) throws -> PhysicsMaterial {
+                                  damping: Float = 0, dampingRatio: Float = 1) throws -> PhysicsMaterial {
         try PhysicsMaterial(kind: .bubble, damping: damping, maximumLinearSpeed: maximumLinearSpeed,
                             contactCompliance: BubbleContactCompliance(base: base, referenceRadius: referenceRadius,
-                                radiusExponent: radiusExponent, compressionExponent: compressionExponent))
+                                radiusExponent: radiusExponent, compressionExponent: compressionExponent),
+                            contactDampingRatio: dampingRatio)
     }
 
-    /// Materiał miękki tłoku z P-B-27 i P-B-28: s = 1, k = 1, c₀ = 1e-3 przy r_ref = 20. Przy kroku 1/60 α pary to rząd wielkości
-    /// sumy odwrotności mas, więc kontakt realnie ustępuje, a bańki nie wchodzą w siebie bez granic.
+    /// Materiał miękki tłoku z P-B-27 i P-B-28: s = 1, k = 1, c₀ = 3,85e-3 przy r_ref = 20. Od v2.3.0 kontakt miękki ugina się
+    /// o pełne c · F (CD-D-16), czyli 3,85× mniej niż dawne c₀ = 1e-3 z częściową korektą prędkości; c₀ przeskalowane o ten
+    /// współczynnik zachowuje dawny wygląd: kontakt realnie ustępuje, a bańki nie wchodzą w siebie bez granic.
     static func softCrowdPhysics() throws -> PhysicsMaterial {
-        try softBubblePhysics(base: 1e-3, radiusExponent: 1, compressionExponent: 1)
+        try softBubblePhysics(base: 3.85e-3, radiusExponent: 1, compressionExponent: 1)
     }
 
     /// Ściana, w którą bańka jest dociskana.
@@ -126,6 +130,18 @@ enum CrowdScene {
             .add(try bubble(value, at: position, radius: radius, mass: mass, material: material,
                             contactCompliance: contactCompliance))
             .setMotorDrive(id(value), drive: try MotorDrive(force: [side.sign * force, 0]))
+    }
+
+    /// Bańka przy ścianie chwycona gumką zamiast `MotorDrive` (v2.3.0, G1-AC3): środek stoi w odległości r od płaszczyzny ściany,
+    /// a cel leży o `stretch` głębiej w ścianie. Siła gumki to K · naciągnięcie, obcięta do `maximumForce`; w spoczynku wgniecenie
+    /// wynosi δ = c · F. Cel zostaje w miejscu, więc naciągnięcie maleje o samo wgniecenie (zaniedbywalne wobec `stretch`).
+    static func bandPressedBubble(_ transaction: WorldTransaction, _ value: UInt64, y: Float, radius: Float, stretch: Float,
+                                  policy: BubbleDrivePolicy, side: WallSide = .left, mass: Float = 1,
+                                  material: PhysicsMaterialID? = nil) throws -> WorldTransaction {
+        let position = WorldPoint(side.sign * (interiorHalfSize.x - radius), y)
+        return transaction
+            .add(try bubble(value, at: position, radius: radius, mass: mass, material: material, drivePolicy: policy))
+            .beginPlayerDrive(id(value), target: WorldPoint(position.x + side.sign * stretch, y))
     }
 
     /// Wgniecenie δ = r − d, gdzie d to odległość środka od płaszczyzny ściany (może być ujemne, gdy bańka nie dotyka ściany).

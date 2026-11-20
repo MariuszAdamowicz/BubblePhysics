@@ -53,10 +53,7 @@ package enum MotionControllers {
         case .static: object.velocity = .zero; object.angularVelocity = 0
         case .kinematic: applyKinematicDrive(&object, duration: duration)
         case .dynamic, .motorDriven:
-            var force = globalForce
-            for (source, field) in fields where field.filter.objectIDs?.contains(id) ?? true {
-                force += fieldForce(field, source: source, point: object.position)
-            }
+            var force = externalForce(id: id, at: object.position, fields: fields, globalForce: globalForce)
             if object.motionRole == .motorDriven, let motor = object.motorDrive {
                 force += motor.force
                 let inertia: Float
@@ -66,14 +63,24 @@ package enum MotionControllers {
             }
             object.velocity += force / mass * dt
         case .playerDriven:
-            object.velocity = object.playerDriveTarget.map { target in
+            guard let target = object.playerDriveTarget else { object.velocity = .zero; break }
+            let policy: BubbleDrivePolicy?
+            if case .bubble(let bubble) = object.descriptor { policy = bubble.drivePolicy } else { policy = nil }
+            if let policy, let stiffness = policy.bandStiffness {
+                // Gumka siłowa: prędkość wynika z siły i masy (v2.3.0). Siła globalna i pola działają jak w `.dynamic` (CD-D-10);
+                // `maximumForce` ogranicza samą gumkę. Tłumienie gumki −D · v jest całkowane wykładniczo, jak tłumienie materiału.
+                var band = (target - object.position) * stiffness
+                if let maximumForce = policy.maximumForce {
+                    let magnitude = length(band)
+                    if magnitude > maximumForce { band *= maximumForce / magnitude }
+                }
+                let force = band + externalForce(id: id, at: object.position, fields: fields, globalForce: globalForce)
+                object.velocity = (object.velocity + force / mass * dt) * exp(-policy.bandDamping * dt / mass)
+            } else {
                 let delta = target - object.position
-                let speed = bubbleDriveSpeed(distance: length(delta), policy: {
-                    guard case .bubble(let bubble) = object.descriptor else { return nil }
-                    return bubble.drivePolicy
-                }())
-                return velocity(to: target, from: object.position, speed: speed, dt: dt)
-            } ?? .zero
+                let speed = bubbleDriveSpeed(distance: length(delta), policy: policy)
+                object.velocity = velocity(to: target, from: object.position, speed: speed, dt: dt)
+            }
         case .pathDriven:
             if let path = object.pathDrive, !object.pathStopped {
                 while object.pathIndex < path.points.count - 1 && length(path.points[object.pathIndex] - object.position) <= 0.0001 {
@@ -84,6 +91,16 @@ package enum MotionControllers {
         }
         try requireFinite(object.velocity, "motion.velocity")
         try requireFinite(object.angularVelocity, "motion.angularVelocity")
+    }
+
+    /// Siła globalna i pola kierunkowe, radialne i wirowe działające na obiekt w `point` (pola z filtrem na inne ID nie działają).
+    private static func externalForce(id: ObjectID, at point: WorldPoint, fields: [(RuntimeObject, ForceFieldDescriptor)],
+                                      globalForce: WorldPoint) -> WorldPoint {
+        var force = globalForce
+        for (source, field) in fields where field.filter.objectIDs?.contains(id) ?? true {
+            force += fieldForce(field, source: source, point: point)
+        }
+        return force
     }
 
     /// Narzucona prędkość kinematycznej bryły: ruch zawsze wynika z `KinematicDrive`, nigdy z sił ani kontaktów.
@@ -226,7 +243,8 @@ package enum MotionControllers {
                         damping: parameter == .damping ? scalar : m.damping,
                         friction: parameter == .friction ? scalar : m.friction,
                         restitution: parameter == .restitution ? scalar : m.restitution,
-                        maximumLinearSpeed: m.maximumLinearSpeed, maximumAngularSpeed: m.maximumAngularSpeed)
+                        maximumLinearSpeed: m.maximumLinearSpeed, maximumAngularSpeed: m.maximumAngularSpeed,
+                        contactCompliance: m.contactCompliance, contactDampingRatio: m.contactDampingRatio)
                 }
             default: break
             }

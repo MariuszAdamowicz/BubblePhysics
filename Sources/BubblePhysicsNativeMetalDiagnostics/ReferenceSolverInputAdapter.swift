@@ -44,7 +44,6 @@ extension NativeSolverConfiguration {
                   separationTolerance: configuration.separationTolerance,
                   positionTolerance: configuration.positionTolerance,
                   maxContourSegmentLength: configuration.maxContourSegmentLength,
-                  deformationRecoveryRate: configuration.deformationRecoveryRate,
                   contactStiffness: configuration.contactStiffness, contactDamping: configuration.contactDamping,
                   contourSurfaceTension: configuration.contourSurfaceTension)
     }
