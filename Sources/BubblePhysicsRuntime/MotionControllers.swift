@@ -23,13 +23,15 @@ package enum MotionControllers {
         // kopii obiektu i ponownego szukania po haszu. Błąd zgłasza obiekt o najmniejszym ID, jak przy przejściu po
         // posortowanych kluczach.
         var failure: (id: UInt64, error: Error)?
+        let materials = state.physicsMaterials
         for index in state.objects.values.indices {
             let id = state.objects.keys[index]
             do {
-                // γ z materiału fizycznego obiektu; obiekt bez materiału (np. pole sił) i tak nie ma masy, więc nie jest tłumiony.
-                let damping = state.objects.values[index].material.flatMap { state.physicsMaterials[$0.0]?.damping } ?? 0
-                try prepare(&state.objects.values[index], id: id, fields: fields, globalForce: globalForce, damping: damping,
-                            duration: duration, dt: dt)
+                // γ z materiału fizycznego obiektu czyta dopiero rola, która tłumi (`.dynamic`, `.motorDriven`, `.playerDriven`),
+                // więc pozostałe role nie szukają materiału po haszu. Obiekt bez materiału (np. pole sił) nie ma masy i nie jest tłumiony.
+                let materialID = state.objects.values[index].material?.0
+                try prepare(&state.objects.values[index], id: id, fields: fields, globalForce: globalForce,
+                            damping: { materialID.flatMap { materials[$0]?.damping } ?? 0 }, duration: duration, dt: dt)
             } catch {
                 if failure.map({ id.rawValue < $0.id }) ?? true { failure = (id.rawValue, error) }
             }
@@ -38,7 +40,7 @@ package enum MotionControllers {
     }
 
     private static func prepare(_ object: inout RuntimeObject, id: ObjectID, fields: [(RuntimeObject, ForceFieldDescriptor)],
-                                globalForce: WorldPoint, damping: Float, duration: Double, dt: Float) throws {
+                                globalForce: WorldPoint, damping: () -> Float, duration: Double, dt: Float) throws {
         guard let mass = object.mass else { return }
         // Promień kolizji zawsze równa się docelowemu: tędy przejścia promienia docierają do fizyki (chwyt go nie zmienia).
         if case .bubble = object.descriptor { object.collisionRadius = object.targetRadius }
@@ -46,7 +48,7 @@ package enum MotionControllers {
         case .static: object.velocity = .zero; object.angularVelocity = 0
         case .kinematic: applyKinematicDrive(&object, duration: duration)
         case .dynamic, .motorDriven:
-            object.velocity = dampedVelocity(object.velocity, damping: damping, dt: dt)
+            object.velocity = dampedVelocity(object.velocity, damping: damping(), dt: dt)
             var force = externalForce(id: id, at: object.position, fields: fields, globalForce: globalForce)
             if object.motionRole == .motorDriven, let motor = object.motorDrive {
                 force += motor.force
@@ -58,7 +60,7 @@ package enum MotionControllers {
             object.velocity += force / mass * dt
         case .playerDriven:
             guard let target = object.playerDriveTarget else { object.velocity = .zero; break }
-            object.velocity = dampedVelocity(object.velocity, damping: damping, dt: dt)
+            object.velocity = dampedVelocity(object.velocity, damping: damping(), dt: dt)
             // Gumka siłowa: prędkość wynika z siły i masy (v2.3.0). Siła globalna i pola działają jak w `.dynamic` (CD-D-10);
             // `maximumForce` ogranicza samą gumkę. Chwycona bańka bez polityki nie istnieje (stager odrzuca chwyt), więc brak
             // polityki znaczy brak napędu.

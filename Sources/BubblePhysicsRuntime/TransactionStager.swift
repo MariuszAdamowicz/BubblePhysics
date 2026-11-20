@@ -338,11 +338,7 @@ private struct StagingContext {
             state.objects[id] = existing
         case .beginPlayerDrive(let id, let target):
             try requireFinite(target, "playerDrive.target")
-            var existing = try physicalObject(id)
-            // Chwycić można tylko bańkę z gumką: bańka bez `drivePolicy` i bryła nie mają czym jechać (G4-AC2).
-            guard case .bubble(let bubble) = existing.descriptor, bubble.drivePolicy != nil else {
-                throw TransactionRejectionReason.incompatibleObjectKind(id)
-            }
+            var existing = try requireDrivePolicy(id)
             try requireBandDriveTarget(target, of: existing)
             guard existing.playerDriveTarget == nil else { throw TransactionRejectionReason.driveAlreadyActive(id) }
             existing.motionBeforeDrive = existing.motionRole == .playerDriven ? .dynamic : existing.motionRole
@@ -580,6 +576,16 @@ private struct StagingContext {
     /// Ta sama granica obejmuje napęd silnikowy oraz kotwice, kąt odniesienia i parametry dystansu więzu
     /// (solver liczy z nich różnice pozycji, przesunięcia dzielone przez `dt` i mnożniki XPBD).
     private static let maximumDriveMagnitude: Float = 1_000_000
+
+    /// Chwycić można tylko bańkę z gumką: bańka bez `drivePolicy` i bryła nie mają czym jechać (G4-AC2), więc dostają
+    /// `incompatibleObjectKind(id)`. Zwraca obiekt, żeby wywołujący nie szukał go drugi raz.
+    private func requireDrivePolicy(_ id: ObjectID) throws -> RuntimeObject {
+        let object = try physicalObject(id)
+        guard case .bubble(let bubble) = object.descriptor, bubble.drivePolicy != nil else {
+            throw TransactionRejectionReason.incompatibleObjectKind(id)
+        }
+        return object
+    }
 
     /// Siła gumki K·(cel − położenie) musi być skończona, więc w trybie gumki cel podlega temu samemu limitowi co siła `MotorDrive`.
     private func requireBandDriveTarget(_ target: WorldPoint, of object: RuntimeObject) throws {

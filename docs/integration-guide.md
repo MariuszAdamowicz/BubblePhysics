@@ -102,14 +102,26 @@ Od 2.2.0 krok z bańkami w poprawnych punktach nie jest odrzucany z powodu banie
 
 Chwyt jest jedynym napędem baniek z palca, a jego narzędziem jest gumka siłowa: `BubbleDrivePolicy(bandStiffness: K, maximumForce: F)`. Polityka należy do bańki (`BubbleDescriptor.drivePolicy`, a dla wyniku scalenia albo części podziału `BubbleResult.drivePolicy`). Bańka z `drivePolicy` równym `nil` (domyślnie) i bryła nie dają się chwycić: `beginPlayerDrive` odrzuca je z `incompatibleObjectKind(id)`, ruch zostaje bez zmian. Chwycona bańka dostaje siłę K · (cel − położenie), obciętą do `maximumForce` z zachowaniem kierunku. Do niej dochodzą siła globalna i pola sił jak przy bańce `.dynamic`. Chwyt nie zmienia promienia ani kształtu bańki: nie ma usztywniania ani narzuconej prędkości.
 
+Polityka chwytu w przykładzie (K = 20, siła obcięta do 600):
+
+<!-- guide-region: grip-policy -->
+```swift
+/// Gumka chwytu: siła K · naciągnięcie, obcięta do 600. Bańka bez `drivePolicy` nie daje się chwycić.
+/// Tłumienie ruchu bańki to `damping` jej materiału (γ), bo gumka nie ma własnego tłumienia: bez γ chwycona bańka
+/// krąży wokół palca jak sprężyna bez tłumienia.
+private static func gripPolicy() throws -> BubbleDrivePolicy {
+    try BubbleDrivePolicy(bandStiffness: 20, maximumForce: 600)
+}
+```
+
 Jedno tłumienie ruchu: `damping` materiału (γ). Host mnoży prędkość przez e^(−γ · dt) przed dodaniem przyrostu z sił, więc `v ← v · e^(−γ · dt) + F / m · dt`. Siła działa w całości, także w spoczynku przy ścianie: bańka dociśnięta gumką w nasyceniu ugina się dokładnie o c · `maximumForce`, tak samo jak przy `MotorDrive` albo sile globalnej o tym samym module, bez względu na γ i masę. Prędkość narzucona torem (`.pathDriven`, bryła kinematyczna) nie jest tłumiona.
 
-- **Prędkość ustalona.** Bez kontaktów, przy stałym naciągnięciu s i sile poniżej `maximumForce`, bańka ustala się na v = K · s · dt / (m · (1 − e^(−γ · dt))), w przybliżeniu K · s / (m · γ). Lżejsza jedzie szybciej w odwrotnej proporcji do masy. Przy γ = 0 nie ma tłumienia i bańka przyspiesza do `maximumLinearSpeed`, więc ustaw γ w materiale, jeśli chcesz prędkość ustaloną.
+- **Prędkość ustalona.** Bez kontaktów, przy stałym naciągnięciu s i sile poniżej `maximumForce`, bańka ustala się na v = K · s · dt / (m · (1 − e^(−γ · dt))), w przybliżeniu K · s / (m · γ). Lżejsza jedzie szybciej w odwrotnej proporcji do masy. Przy γ = 0 nie ma tłumienia i bańka przyspiesza do `maximumLinearSpeed`, więc ustaw γ w materiale, jeśli chcesz prędkość ustaloną. Przykład ustawia γ = 1,5 w materiale baniek; przy γ za małym chwycona bańka krąży wokół palca jak sprężyna, a przy dużym spada wolno pod siłą globalną (prędkość spadania F / (m · γ)).
 - **Zakres K.** Siła jest całkowana jawnie, więc K · dt² / m musi być mniejsze od 1. Przy kroku 1/60 to K < 3600 · m (dla m = 1,36 około 4 900). Wstawienie, zamiana, scalenie i podział, które dają bańkę z polityką poza zakresem, odrzucają transakcję z `invalidValue(.valueOutOfRange("drive.bandStiffness"))`, a podział zmniejsza masę, więc może wyjść poza zakres. Rozsądne strojenie to K rzędu 0,4–50 przy naciągnięciu rzędu 100–700 jednostek, z zapasem około 100 razy do granicy.
 - **Pola.** `bandStiffness` i `maximumForce` rzucają `valueOutOfRange("drive.bandStiffness")` i `("drive.maximumForce")` dla wartości niedodatnich albo nieskończonych. Pola `bandDamping` nie ma. Cel w `beginPlayerDrive` i `updatePlayerDrive` o składowej poza limitem `MotorDrive` jest odrzucany.
 - **Puszczenie.** `endPlayerDrive` nie zmienia prędkości: w ramce po puszczeniu bańka ma prędkość z ostatniego kroku napędu i leci dalej, hamowana tylko tłumieniem materiału.
 - **Zmiana struktury.** `replace`, scalenie i podział chwyconej bańki kończą chwyt: nie ma `DriveFeedback`, a `updatePlayerDrive` i `endPlayerDrive` dają `driveNotActive` albo `objectNotFound`. Ponowny chwyt wyniku jest możliwy tylko wtedy, gdy wynik ma `drivePolicy`.
-- **Ramki.** `DriveFeedback.target` i `achievedPoint` ramki N podają naciągnięcie, z którego liczona jest siła w kroku N + 1: przyrost prędkości między ramkami to K · (target − achievedPoint) / m · dt.
+- **Ramki.** `DriveFeedback.target` i `achievedPoint` ramki N podają naciągnięcie, z którego liczona jest siła w kroku N + 1: prędkość między ramkami wynika z v_{N+1} = v_N · e^(−γ · dt) + K · (target − achievedPoint) / m · dt (przy γ = 0 przyrost to sam składnik K · (target − achievedPoint) / m · dt).
 
 ### Wystrzał z zawartej pary miękkiej
 
@@ -127,7 +139,7 @@ func prepare(assets: AssetRegistry) throws -> WorldTransaction {
     let font = try assets.register(font: "Helvetica-Bold", characters: "0123456789")
     self.font = font
     var transaction = WorldTransaction()
-        .updatePhysicsMaterial(Self.bubblePhysics, material: try PhysicsMaterial(kind: .bubble, deformability: 0.6))
+        .updatePhysicsMaterial(Self.bubblePhysics, material: try PhysicsMaterial(kind: .bubble, deformability: 0.6, damping: 1.5))
         .updatePhysicsMaterial(Self.wallPhysics, material: try PhysicsMaterial(kind: .rigid))
         .updateRenderMaterial(Self.wallLook, material: try RenderMaterial(color: RGBA(0.25, 0.27, 0.33, 1)))
     for (index, texture) in textures.enumerated() {

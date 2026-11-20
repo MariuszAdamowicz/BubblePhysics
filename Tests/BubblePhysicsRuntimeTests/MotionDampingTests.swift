@@ -181,14 +181,16 @@ final class MotionDampingTests: XCTestCase {
     private let square: [WorldPoint] = [[-10, -10], [10, -10], [10, 10], [-10, 10]]
 
     /// Dwie kolejne ramki bez kontaktów: v_{N+1} = v_N · e^(−γ·dt) + F / m · dt dla gumki (z `DriveFeedback` ramki N), `MotorDrive` bańki
-    /// i `MotorDrive` dynamicznej bryły wielokątnej (γ z jej materiału), dla γ ∈ {0, 0,6, 4}.
+    /// i `MotorDrive` dynamicznej bryły wielokątnej (γ z jej materiału), dla γ baniek ∈ {0, 0,6, 4}. Materiał bryły ma γ + 1,3, więc
+    /// odczyt γ z cudzego materiału (bańki zamiast bryły albo odwrotnie) zmienia wynik i test go wykrywa.
     func testVelocityStepIsPreviousVelocityTimesDecayPlusForceOverMassTimesStep() async throws {
         let mass: Float = 2, stiffness: Float = 30, target: WorldPoint = [20, 12], motorForce: WorldPoint = [40, 10]
         for kind in Driven.allCases {
             for gamma: Float in [0, 0.6, 4] {
                 let name = "\(kind), γ = \(gamma)"
                 let policy = try BubbleDrivePolicy(bandStiffness: stiffness)
-                let world = try await world(bubble: bubbleMaterial(damping: gamma, maximumLinearSpeed: nil), rigidDamping: gamma,
+                let rigidGamma = gamma + 1.3
+                let world = try await world(bubble: bubbleMaterial(damping: gamma, maximumLinearSpeed: nil), rigidDamping: rigidGamma,
                                             wall: false, extent: 500) {
                     switch kind {
                     case .band:
@@ -216,7 +218,8 @@ final class MotionDampingTests: XCTestCase {
                     }
                     let before = try XCTUnwrap(previous.objects[id(1)]).velocity
                     let after = try XCTUnwrap(next.objects[id(1)]).velocity
-                    let expected = before * exp(-gamma * Float(dt)) + force / mass * Float(dt)
+                    let ownGamma = kind == .rigidMotor ? rigidGamma : gamma
+                    let expected = before * exp(-ownGamma * Float(dt)) + force / mass * Float(dt)
                     XCTAssertEqual(after.x, expected.x, accuracy: 0.01 * abs(expected.x) + 1e-4, "\(name), ramka \(index) x")
                     XCTAssertEqual(after.y, expected.y, accuracy: 0.01 * abs(expected.y) + 1e-4, "\(name), ramka \(index) y")
                     previous = next

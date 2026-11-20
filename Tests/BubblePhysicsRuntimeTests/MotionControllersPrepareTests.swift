@@ -117,6 +117,33 @@ final class MotionControllersPrepareTests: XCTestCase {
         XCTAssertEqual(a.y, b.y, accuracy: accuracy, message, file: file, line: line)
     }
 
+    /// G1-AC3 na poziomie hosta, γ > 0: `.dynamic` i `.playerDriven` dostają v · e^(−γ · dt) + F / m · dt (siła globalna i gumka w całości),
+    /// a prędkość `.pathDriven` pochodzi z toru, więc po kroku nie ma w niej ani śladu poprzedniej prędkości.
+    func testHostDampsDynamicAndPlayerDrivenVelocityBeforeAddingForceAndLeavesPathDrivenAlone() throws {
+        let gamma: Float = 0.6, step = Float(duration), mass: Float = 2
+        let dynamicID = ObjectID(rawValue: 11), pathID = ObjectID(rawValue: 13)
+        let startVelocity: WorldPoint = [30, -20], globalForce: WorldPoint = [4, -10]
+        let policy = try BubbleDrivePolicy(bandStiffness: 100)
+        func bubble(_ id: ObjectID, at x: Float) throws -> WorldObject {
+            .bubble(try BubbleDescriptor(id: id, position: [x, 0], velocity: startVelocity, targetRadius: 1, mass: mass,
+                physicsMaterialID: bubbleMaterial, renderMaterialID: RenderMaterialID(rawValue: 1), drivePolicy: policy))
+        }
+        let transaction = WorldTransaction()
+            .updatePhysicsMaterial(bubbleMaterial, material: try PhysicsMaterial(kind: .bubble, damping: gamma))
+            .updateRenderMaterial(RenderMaterialID(rawValue: 1), material: try RenderMaterial())
+            .add(try bubble(dynamicID, at: 0)).add(try bubble(driven, at: 50)).add(try bubble(pathID, at: 100))
+            .beginPlayerDrive(driven, target: [53, 54])
+            .setPathDrive(pathID, drive: try PathDrive(points: [[100, 500]], speed: 5))
+        var prepared = try TransactionStager.stage(transaction, against: RuntimeState(configuration: try WorldConfiguration(
+            simulationRegion: WorldRectangle(min: [-1000, -1000], max: [1000, 1000]), globalForce: globalForce))).state
+        try MotionControllers.prepare(&prepared, duration: duration)
+        let decayed = startVelocity * exp(-gamma * step)
+        assertEqual(try XCTUnwrap(prepared.objects[dynamicID]).velocity, decayed + globalForce / mass * step, "dynamic")
+        // Gumka: cel (53, 54), położenie (50, 0), naciągnięcie (3, 54), F_band = K · (3, 54).
+        assertEqual(try XCTUnwrap(prepared.objects[driven]).velocity, decayed + (WorldPoint(3, 54) * 100 + globalForce) / mass * step, "playerDriven")
+        assertEqual(try XCTUnwrap(prepared.objects[pathID]).velocity, WorldPoint(0, 5), "pathDriven: prędkość z toru, bez tłumienia")
+    }
+
     /// Przyrost prędkości to F / m · dt z F = K · (cel − położenie), bez tłumienia i bez limitu.
     func testBandForceAddsForceOverMassTimesDtToTheVelocity() throws {
         let policy = try BubbleDrivePolicy(bandStiffness: 100)

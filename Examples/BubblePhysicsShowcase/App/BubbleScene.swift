@@ -15,10 +15,14 @@ final class BubbleScene: ShowcaseScene {
     /// Najwyższa liczba na bańce; bańka o tej liczbie przestaje się scalać.
     private static let maximumValue = 8
     private static let mergeGroup = MergeGroupSet(rawValue: 1)
+    // guide-region: grip-policy
     /// Gumka chwytu: siła K · naciągnięcie, obcięta do 600. Bańka bez `drivePolicy` nie daje się chwycić.
+    /// Tłumienie ruchu bańki to `damping` jej materiału (γ), bo gumka nie ma własnego tłumienia: bez γ chwycona bańka
+    /// krąży wokół palca jak sprężyna bez tłumienia.
     private static func gripPolicy() throws -> BubbleDrivePolicy {
         try BubbleDrivePolicy(bandStiffness: 20, maximumForce: 600)
     }
+    // guide-region-end
     /// Kolory gradientów: wartość 1, 2–3, 4–7, 8.
     private static let tints: [(top: SIMD3<Float>, bottom: SIMD3<Float>)] = [
         ([0.55, 0.85, 1.0], [0.20, 0.45, 0.95]), ([0.65, 1.0, 0.70], [0.15, 0.65, 0.35]),
@@ -84,7 +88,7 @@ final class BubbleScene: ShowcaseScene {
         let font = try assets.register(font: "Helvetica-Bold", characters: "0123456789")
         self.font = font
         var transaction = WorldTransaction()
-            .updatePhysicsMaterial(Self.bubblePhysics, material: try PhysicsMaterial(kind: .bubble, deformability: 0.6))
+            .updatePhysicsMaterial(Self.bubblePhysics, material: try PhysicsMaterial(kind: .bubble, deformability: 0.6, damping: 1.5))
             .updatePhysicsMaterial(Self.wallPhysics, material: try PhysicsMaterial(kind: .rigid))
             .updateRenderMaterial(Self.wallLook, material: try RenderMaterial(color: RGBA(0.25, 0.27, 0.33, 1)))
         for (index, texture) in textures.enumerated() {
