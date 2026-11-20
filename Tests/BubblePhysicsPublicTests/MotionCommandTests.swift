@@ -176,6 +176,28 @@ final class MotionCommandTests: XCTestCase {
         }
     }
 
+    /// P-B-13 (G4-AC1): polityka ma tylko `bandStiffness` (wymagane) i `maximumForce` (domyślnie nil); pola spoza zakresu dają
+    /// `valueOutOfRange` z nazwą pola także dla ∞ i NaN. Pól `bandDamping` i `rigidifies` nie ma w typie (użycie to błąd kompilacji),
+    /// a deskryptor i wynik scalenia mają domyślnie `drivePolicy` nil.
+    func testBandPolicyHasOnlyStiffnessAndMaximumForce() throws {
+        let policy = try BubbleDrivePolicy(bandStiffness: 10, maximumForce: 500)
+        XCTAssertEqual(policy.bandStiffness, 10)
+        XCTAssertEqual(policy.maximumForce, 500)
+        XCTAssertNil(try BubbleDrivePolicy(bandStiffness: 10).maximumForce, "bez limitu domyślnie")
+        XCTAssertEqual(Mirror(reflecting: policy).children.compactMap(\.label).sorted(), ["bandStiffness", "maximumForce"])
+        for value: Float in [0, -1, .infinity, .nan] {
+            assertOutOfRange("drive.bandStiffness") { try BubbleDrivePolicy(bandStiffness: value) }
+            assertOutOfRange("drive.maximumForce") { try BubbleDrivePolicy(bandStiffness: 10, maximumForce: value) }
+        }
+        let descriptor = try BubbleDescriptor(id: ObjectID(rawValue: 1), position: .zero, targetRadius: 1,
+            physicsMaterialID: .init(rawValue: 1), renderMaterialID: .init(rawValue: 1))
+        let defaultPolicy: BubbleDrivePolicy? = descriptor.drivePolicy
+        XCTAssertNil(defaultPolicy)
+        let resultPolicy: BubbleDrivePolicy? = BubbleResult(id: ObjectID(rawValue: 2), physicsMaterialID: .init(rawValue: 1),
+                                                           renderMaterialID: .init(rawValue: 1)).drivePolicy
+        XCTAssertNil(resultPolicy)
+    }
+
     /// P-B-5 (G1-AC5): `valueOutOfRange` z nazwą pola także dla ∞, 0 i wartości ujemnych (nie `nonFiniteValue` / `nonPositiveValue`).
     func testBandPolicyRejectsOutOfRangeFieldsWithTheFieldName() throws {
         for value: Float in [0, -1, .infinity, .nan] {

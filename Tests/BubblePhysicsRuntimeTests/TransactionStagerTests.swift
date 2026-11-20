@@ -524,6 +524,102 @@ final class TransactionStagerTests: XCTestCase {
                                                      against: initial))
     }
 
+    // MARK: chwyt bańki bez polityki i koniec chwytu przy zmianie struktury (P-B-14, P-B-16, G4-AC2, G4-AC4)
+
+    /// Bańka z `drivePolicy` nil (wartość domyślna deskryptora) nie daje się chwycić: odrzucenie `incompatibleObjectKind(id)`,
+    /// ruch (rola, prędkość, brak celu) bez zmian, identyfikator napędu nie zużyty.
+    func testBeginPlayerDriveIsRejectedForABubbleWithoutDrivePolicy() throws {
+        let descriptor = try BubbleDescriptor(id: id(1), position: .zero, velocity: [3, 0], targetRadius: 2, mass: 2,
+                                              physicsMaterialID: materialID, renderMaterialID: styleID, drivePolicy: nil)
+        let initial = try TransactionStager.stage(resources().add(.bubble(descriptor)), against: state()).state
+        let transaction = WorldTransaction().beginPlayerDrive(id(1), target: [5, 5])
+        assertRejected(transaction, against: initial, reason: .incompatibleObjectKind(id(1)))
+        let boundary = TransactionStager.stageBatch([PendingTransaction(token: TransactionToken(rawValue: 1), transaction: transaction)],
+                                                    against: initial)
+        XCTAssertTrue(boundary.frame.transactionReceipts.isEmpty)
+        let after = try XCTUnwrap(boundary.state.objects[id(1)])
+        XCTAssertEqual(after.motionRole, .dynamic, "rola bez zmian")
+        XCTAssertEqual(after.velocity, [3, 0], "prędkość bez zmian")
+        XCTAssertNil(after.playerDriveTarget)
+        XCTAssertNil(after.playerDriveID)
+        XCTAssertEqual(boundary.state.nextDriveID, initial.nextDriveID, "identyfikator napędu nie został zużyty")
+        // Ta sama bańka z polityką daje się chwycić.
+        let withPolicy = try TransactionStager.stage(WorldTransaction().replace(id(1), with: .bubble(bandBubble(1, mass: 2))),
+                                                     against: initial).state
+        XCTAssertNoThrow(try TransactionStager.stage(WorldTransaction().beginPlayerDrive(id(1), target: [5, 5]), against: withPolicy))
+    }
+
+    /// Zamiana, scalenie i podział chwyconej bańki kończą chwyt (G4-AC4): w kolejnej ramce nie ma `DriveFeedback`, `updatePlayerDrive`
+    /// na ID, które wciąż istnieje, to `driveNotActive`, a na ID, które zniknęło, to `objectNotFound`. Ponowny chwyt wyniku jest
+    /// możliwy tylko z polityką; bez niej `incompatibleObjectKind`.
+    func testReplaceMergeAndSplitOfAGrabbedBubbleEndTheDriveWithAndWithoutPolicy() throws {
+        let base = try TransactionStager.stage(resources().add(.bubble(bandBubble(1, mass: 2)))
+            .add(.bubble(bandBubble(2, mass: 2, position: [3, 0]))), against: state()).state
+        let grabbed = try TransactionStager.stage(WorldTransaction().beginPlayerDrive(id(1), target: [5, 5]), against: base).state
+        var probe = grabbed
+        XCTAssertEqual(MotionControllers.feedback(&probe, contacts: [:]).map(\.objectID), [id(1)], "chwyt jest aktywny przed transakcją")
+
+        func assertNoFeedback(_ state: RuntimeState, file: StaticString = #filePath, line: UInt = #line) {
+            var copy = state
+            XCTAssertTrue(MotionControllers.feedback(&copy, contacts: [:]).isEmpty, "brak DriveFeedback po transakcji", file: file, line: line)
+        }
+        func policyResult(_ value: UInt64, mass: Float? = nil) throws -> BubbleResult {
+            BubbleResult(id: id(value), physicsMaterialID: materialID, renderMaterialID: styleID, drivePolicy: try band(), mass: mass)
+        }
+        func plainResult(_ value: UInt64) -> BubbleResult {
+            BubbleResult(id: id(value), physicsMaterialID: materialID, renderMaterialID: styleID, drivePolicy: nil)
+        }
+        /// Obiekt `value` jest po transakcji niechwycony; ponowny chwyt przechodzi tylko z polityką.
+        func assertEnded(_ state: RuntimeState, _ value: UInt64, hasPolicy: Bool, file: StaticString = #filePath, line: UInt = #line) {
+            assertRejected(WorldTransaction().updatePlayerDrive(id(value), target: .zero), against: state,
+                           reason: .driveNotActive(id(value)), file: file, line: line)
+            if hasPolicy {
+                XCTAssertNoThrow(try TransactionStager.stage(WorldTransaction().beginPlayerDrive(id(value), target: [1, 1]), against: state),
+                                 file: file, line: line)
+            } else {
+                assertRejected(WorldTransaction().beginPlayerDrive(id(value), target: [1, 1]), against: state,
+                               reason: .incompatibleObjectKind(id(value)), file: file, line: line)
+            }
+        }
+
+        // Zamiana: to samo ID, z polityką i bez.
+        for hasPolicy in [true, false] {
+            let replacement = try BubbleDescriptor(id: id(1), position: .zero, targetRadius: 2, mass: 2, physicsMaterialID: materialID,
+                renderMaterialID: styleID, drivePolicy: hasPolicy ? band() : nil)
+            let replaced = try TransactionStager.stage(WorldTransaction().replace(id(1), with: .bubble(replacement)), against: grabbed).state
+            assertNoFeedback(replaced)
+            assertEnded(replaced, 1, hasPolicy: hasPolicy)
+        }
+        // Scalenie: wynik pod nowym ID (źródła znikają) i wynik, który ponownie używa ID chwyconego źródła.
+        for hasPolicy in [true, false] {
+            let merged = try TransactionStager.stage(WorldTransaction().mergeBubbles([id(1), id(2)],
+                result: hasPolicy ? policyResult(3) : plainResult(3)), against: grabbed).state
+            assertNoFeedback(merged)
+            assertRejected(WorldTransaction().updatePlayerDrive(id(1), target: .zero), against: merged, reason: .objectNotFound(id(1)))
+            assertEnded(merged, 3, hasPolicy: hasPolicy)
+            let reused = try TransactionStager.stage(WorldTransaction().mergeBubbles([id(1), id(2)],
+                result: hasPolicy ? policyResult(1) : plainResult(1)), against: grabbed).state
+            assertNoFeedback(reused)
+            assertEnded(reused, 1, hasPolicy: hasPolicy)
+        }
+        // Podział: części pod nowymi ID i część, która ponownie używa ID chwyconego źródła.
+        for hasPolicy in [true, false] {
+            func part(_ value: UInt64) throws -> BubbleSplitPart {
+                BubbleSplitPart(result: hasPolicy ? try policyResult(value) : plainResult(value), share: 0.5)
+            }
+            let split = try TransactionStager.stage(WorldTransaction().splitBubble(id(1), first: part(4), second: part(5)),
+                                                    against: grabbed).state
+            assertNoFeedback(split)
+            assertRejected(WorldTransaction().updatePlayerDrive(id(1), target: .zero), against: split, reason: .objectNotFound(id(1)))
+            assertEnded(split, 4, hasPolicy: hasPolicy)
+            assertEnded(split, 5, hasPolicy: hasPolicy)
+            let reused = try TransactionStager.stage(WorldTransaction().splitBubble(id(1), first: part(1), second: part(5)),
+                                                     against: grabbed).state
+            assertNoFeedback(reused)
+            assertEnded(reused, 1, hasPolicy: hasPolicy)
+        }
+    }
+
     // MARK: chwyt bryły (P-B-14, G4-AC2)
 
     /// Bryła wielokątna nie daje się chwycić: `beginPlayerDrive` jest odrzucany z `incompatibleObjectKind(id)`, a jej ruch (rola,
