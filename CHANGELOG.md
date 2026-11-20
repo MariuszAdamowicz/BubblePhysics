@@ -2,6 +2,20 @@
 
 Zmiany w wydaniach `BubblePhysics`. Przejście z 1.x na 2.0.0 opisuje [docs/MIGRATION-v2.md](docs/MIGRATION-v2.md).
 
+## 3.0.0
+
+Wydanie w toku: ta sekcja zbiera zmiany wycinek po wycinku, tag powstaje po ostatnim wycinku.
+
+### Zmienione (łamiące)
+
+- `BubbleContactCompliance` ma tylko `base` (c₀) i `referenceRadius` (r_ref). Podatność bańki to c = c₀ · r / r_ref, gdzie r to bieżący promień fizyczny, bez wykładników i bez ρ. Ta sama siła ściska więc każdą bańkę o ten sam ułamek promienia, ε = c₀ · F / r_ref, a para dzieli wgniecenie w proporcji promieni.
+- Walidacja stagera liczy najgorszą α pary z największego promienia (bieżącego, docelowego, celu trwającego przejścia i `endRadius`) jako c₀ · r_max / r_ref, bez ρ_min^kc.
+- Rekord cache kontaktu niesie sumę podatności końców (`compliance.x` = c_a + c_b) zamiast ρ końców. `nativeUpdateContactRho` znika z kroku, a kontur pary dzieli wgniecenie według podatności z `contact.x`.
+
+### Usunięte
+
+- `BubbleContactCompliance.radiusExponent` (s) i `BubbleContactCompliance.compressionExponent` (k). Przestrojenie podatności opisuje [docs/MIGRATION-v3.md](docs/MIGRATION-v3.md).
+
 ## 2.3.0
 
 ### Dodane
