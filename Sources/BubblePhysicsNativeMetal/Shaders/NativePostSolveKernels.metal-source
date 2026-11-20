@@ -401,7 +401,7 @@ kernel void nativeRigidPredict(device NativeRigidBody *bodies [[buffer(0)]],
     uint entity=counts.y+index;
     NativeRigidBody b=bodies[index];b.previous.xy=b.pose.xy;b.pose.w=b.pose.z;b.flags.z=0;
     if(b.flags.x){b.motion.xyz=0;bodies[index]=b;return;}
-    float dt=control.physics.x;b.motion.xyz*=exp(-b.motion.w*dt);
+    float dt=control.physics.x;b.motion.z*=exp(-b.motion.w*dt);
     // Limity prędkości z materiału dotyczą każdej bryły, także kinematycznej: napęd szybszy niż limit jest przycinany.
     b.motion.xy=nativeClampLinearSpeed(b.motion.xy,b.limits.x);b.motion.z=nativeClampAngularSpeed(b.motion.z,b.limits.y);
     float3 start=b.pose.xyz;b.pose.xyz+=b.motion.xyz*dt;

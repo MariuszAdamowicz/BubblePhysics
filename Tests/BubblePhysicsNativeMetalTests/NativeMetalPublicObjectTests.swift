@@ -164,22 +164,27 @@ final class NativeMetalPublicObjectTests: XCTestCase {
         let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         let material = PhysicsMaterialID(rawValue: UInt64.max)
         let style = RenderMaterialID(rawValue: 1)
+        // Tłumienie obrotu zostaje w kernelu i czyta materiał na bieżąco; ruch liniowy tłumi host (`MotionControllers.prepare`),
+        // więc sam świat natywny zostawia prędkość liniową bez zmian. Obrót ma publicznie tylko bryła.
         let objects = try [UInt64(1), UInt64.max].enumerated().map { index, id in
-            NativePublicObject(descriptor: .bubble(try BubbleDescriptor(id: .init(rawValue: id),
-                position: [Float(index) * 10, 0], velocity: [4, 0], targetRadius: 1,
-                physicsMaterialID: material, renderMaterialID: style)))
+            NativePublicObject(descriptor: .rigidBody(try RigidBodyDescriptor(id: .init(rawValue: id),
+                vertices: [[-1, -1], [1, -1], [1, 1], [-1, 1]], position: [Float(index) * 10, 0], velocity: [4, 0],
+                angularVelocity: 4, motionRole: .dynamic, physicsMaterialID: material, renderMaterialID: style)))
         }
         let region = try WorldRectangle(min: [-100, -100], max: [100, 100])
-        let first = try await world.step(objects: objects, materials: [material: PhysicsMaterial(kind: .bubble)],
+        let first = try await world.step(objects: objects, materials: [material: PhysicsMaterial(kind: .rigid)],
             region: region, duration: 0.25)
         XCTAssertEqual(Set(first.objects.keys), Set(objects.map { $0.descriptor.id }))
         let changed = try await world.step(objects: Array(first.objects.values),
-            materials: [material: PhysicsMaterial(kind: .bubble, damping: 4)],
+            materials: [material: PhysicsMaterial(kind: .rigid, damping: 4)],
             region: region, duration: 0.25)
-        for object in changed.objects.values { XCTAssertEqual(object.velocity.x, 1.4715178, accuracy: 0.0001) }
-        XCTAssertEqual(try XCTUnwrap(changed.objects[.init(rawValue: 1)]).position.x, 1.3678794, accuracy: 0.0001)
+        for object in changed.objects.values {
+            XCTAssertEqual(object.angularVelocity, 4 * exp(-1), accuracy: 0.0001)
+            XCTAssertEqual(object.velocity.x, 4, accuracy: 0.0001)
+        }
+        XCTAssertEqual(try XCTUnwrap(changed.objects[.init(rawValue: 1)]).position.x, 2, accuracy: 0.0001)
         let third = try await world.step(objects: Array(changed.objects.values),
-            materials: [material: PhysicsMaterial(kind: .bubble, damping: 4)],
+            materials: [material: PhysicsMaterial(kind: .rigid, damping: 4)],
             region: region, duration: 0.25)
         XCTAssertEqual(third.profile.bubbleUploadCount, 0)
         XCTAssertEqual(third.profile.commandBufferCount, 1)
