@@ -1,6 +1,6 @@
 # Migracja z BubblePhysics 2.x do 3.0.0
 
-Wersja 3.0.0 zmienia model podatności kontaktu i usuwa dwa parametry z publicznego API. Dokument zbiera zmiany wycinek po wycinku: ta wersja opisuje pierwszy z nich, podatność c₀ · r / r_ref. Kolejne punkty (tłumienie ruchu, gumka jako jedyny napęd, krawędzie ścian, kontur tylko rysowany) dopisują następne wycinki.
+Wersja 3.0.0 zmienia model podatności kontaktu, tłumienie ruchu i napęd chwytu oraz usuwa parametry z publicznego API. Dokument zbiera zmiany wycinek po wycinku: ta wersja opisuje podatność c₀ · r / r_ref, jedno tłumienie ruchu i gumkę jako jedyny napęd. Kolejne punkty (krawędzie ścian, kontur tylko rysowany) dopisują następne wycinki.
 
 ## Podatność kontaktu: c = c₀ · r / r_ref
 
@@ -28,3 +28,14 @@ Gra, która miała s = 1 i k = 0, zachowuje c₀ i r_ref bez zmian: wzór daje t
 - **Zwiększenie r_ref przy stałym c₀** zmniejsza podatność każdej bańki w tej samej proporcji, więc r_ref i c₀ da się przestrajać razem: liczy się tylko iloraz c₀ / r_ref.
 
 Wartości `base`, przy których α pary przepełnia `Float` przy największym promieniu bańki, nadal odrzuca transakcja z `invalidValue(.valueOutOfRange("contactCompliance"))`; granica to teraz c₀ · r_max / r_ref.
+
+## Napęd tylko gumką i jedno tłumienie ruchu
+
+W 2.x chwyt miał dwa tryby: narzuconą prędkość (`maximumSpeed`, `distanceResponse`) i gumkę siłową (`bandStiffness`, `bandDamping`, `maximumForce`), a przy chwycie bańka mogła się usztywniać (`rigidifies`). Tłumienie ruchu było podwójne: γ materiału w kernelu i D gumki (`e^(−D · dt / m)`), więc bańka dociągnięta do ściany traciła część siły. W 3.0.0 zostaje jedna gumka i jedno tłumienie.
+
+- **Tłumienie.** `damping` materiału (γ) mnoży prędkość przez e^(−γ · dt) w hoście, przed dodaniem F / m · dt, dla baniek i brył `.dynamic`, `.motorDriven` i `.playerDriven`. Siła działa w całości: bańka dociśnięta do ściany ugina się o c · F bez względu na γ i masę. Prędkość narzucona torem (`.pathDriven`, bryła kinematyczna) nie jest tłumiona.
+- **`bandDamping` → γ.** Pola `BubbleDrivePolicy.bandDamping` (D) nie ma. Dawne tłumienie gumki zastępuje γ materiału. Żeby zachować prędkość ustaloną v = K · s / (m · γ + D) z 2.3.0, ustaw γ' = γ + D / m w materiale bańki. Prędkość ustalona w 3.0.0 to v = K · s · dt / (m · (1 − e^(−γ' · dt))) ≈ K · s / (m · γ').
+- **`rigidifies` znika.** Razem z `rigidificationDuration`, `relaxationDuration`, `distanceResponse`, `maximumSpeed` i `BubbleDrivePolicy.standard`. Chwycona bańka nie zmienia promienia ani kształtu, więc `rigidifies: false` nie jest już potrzebne: usuń je z wywołań.
+- **`drivePolicy` jest opcjonalne.** `BubbleDrivePolicy(bandStiffness:maximumForce:)` ma tylko dwa pola, a `BubbleDescriptor.drivePolicy` i `BubbleResult.drivePolicy` są typu `BubbleDrivePolicy?` z domyślnym `nil`. Bańka, którą gracz ma chwytać, musi mieć `drivePolicy` w deskryptorze i w każdym wyniku scalenia albo podziału. Bez niej `beginPlayerDrive` odrzuca transakcję z `incompatibleObjectKind(id)`.
+- **Koniec chwytu brył.** `beginPlayerDrive` odrzuca bryłę wielokątną z `incompatibleObjectKind(id)`. Bryłę prowadź przez `MotorDrive`, `KinematicDrive` albo ścieżkę.
+- **Koniec chwytu przy zmianie struktury.** `replace`, scalenie i podział chwyconej bańki kończą chwyt (bez `DriveFeedback`, a `updatePlayerDrive` i `endPlayerDrive` dają `driveNotActive` albo `objectNotFound`). Po scaleniu albo podziale chwyć wynik ponownie: wynik musi mieć `drivePolicy`.

@@ -12,8 +12,12 @@ Wydanie w toku: ta sekcja zbiera zmiany wycinek po wycinku, tag powstaje po osta
 - Walidacja stagera liczy najgorszą α pary z największego promienia (bieżącego, docelowego, celu trwającego przejścia i `endRadius`) jako c₀ · r_max / r_ref, bez ρ_min^kc.
 - Rekord cache kontaktu niesie sumę podatności końców (`compliance.x` = c_a + c_b) zamiast ρ końców. `nativeUpdateContactRho` znika z kroku, a kontur pary dzieli wgniecenie według podatności z `contact.x`.
 
+- Jedno tłumienie ruchu liniowego. `MotionControllers.prepare` mnoży prędkość przez e^(−γ · dt) (γ to `damping` materiału obiektu) przed dodaniem F / m · dt, dla ról `.dynamic`, `.motorDriven` i `.playerDriven`. Kernele (`nativePredict`, `nativeRigidPredict`) nie tłumią już ruchu liniowego na ścieżce publicznej, tłumią tylko obrót. Siła działa więc w całości: bańka dociśnięta gumką w nasyceniu, `MotorDrive` albo siłą globalną ugina się o c · F, bez względu na γ i masę (wcześniej gumka traciła około 11,5 % siły przez e^(−D · dt / m), a każda siła jeszcze około 1 % przy γ 0,6). Prędkość narzucona torem (`.pathDriven`, bryła kinematyczna) nie jest tłumiona.
+- Napęd tylko gumką siłową. `BubbleDrivePolicy(bandStiffness:maximumForce:)` ma dwa pola, bez `.standard`. `BubbleDescriptor.drivePolicy` i `BubbleResult.drivePolicy` są opcjonalne i domyślnie `nil`. Bańka bez `drivePolicy` i bryła nie dają się chwycić: `beginPlayerDrive` odrzuca je z `incompatibleObjectKind(id)`. Chwyt nie zmienia promienia ani kształtu bańki. `replace`, scalenie i podział chwyconej bańki kończą chwyt, ponowny chwyt tylko z polityką.
+
 ### Usunięte
 
+- `BubbleDrivePolicy.bandDamping` (D): tłumienie gumki zastępuje γ materiału. `BubbleDrivePolicy.rigidifies`, `rigidificationDuration`, `relaxationDuration` i `distanceResponse`, `maximumSpeed`: narzucona prędkość i usztywnianie przy chwycie znikają razem z trybem prędkościowym. `BubbleDrivePolicy.standard`.
 - `BubbleContactCompliance.radiusExponent` (s) i `BubbleContactCompliance.compressionExponent` (k). Przestrojenie podatności opisuje [docs/MIGRATION-v3.md](docs/MIGRATION-v3.md).
 
 ## 2.3.0

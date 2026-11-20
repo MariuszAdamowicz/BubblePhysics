@@ -15,6 +15,10 @@ final class BubbleScene: ShowcaseScene {
     /// Najwyższa liczba na bańce; bańka o tej liczbie przestaje się scalać.
     private static let maximumValue = 8
     private static let mergeGroup = MergeGroupSet(rawValue: 1)
+    /// Gumka chwytu: siła K · naciągnięcie, obcięta do 600. Bańka bez `drivePolicy` nie daje się chwycić.
+    private static func gripPolicy() throws -> BubbleDrivePolicy {
+        try BubbleDrivePolicy(bandStiffness: 20, maximumForce: 600)
+    }
     /// Kolory gradientów: wartość 1, 2–3, 4–7, 8.
     private static let tints: [(top: SIMD3<Float>, bottom: SIMD3<Float>)] = [
         ([0.55, 0.85, 1.0], [0.20, 0.45, 0.95]), ([0.65, 1.0, 0.70], [0.15, 0.65, 0.35]),
@@ -106,7 +110,8 @@ final class BubbleScene: ShowcaseScene {
                 id: id, position: [30 + Float(column) * 60 + .random(in: -4...4), 300 + Float(row) * 45],
                 targetRadius: .random(in: 16...20), mass: 4,
                 physicsMaterialID: Self.bubblePhysics, renderMaterialID: RenderMaterialID(rawValue: 1),
-                mergeGroups: Self.mergeGroup, eventInterest: .mergeContact, decal: try decal(for: 1))))
+                mergeGroups: Self.mergeGroup, eventInterest: .mergeContact, drivePolicy: try Self.gripPolicy(),
+                decal: try decal(for: 1))))
         }
         return transaction
     }
@@ -157,7 +162,7 @@ final class BubbleScene: ShowcaseScene {
                 id: id, physicsMaterialID: Self.bubblePhysics,
                 renderMaterialID: RenderMaterialID(rawValue: UInt64(Self.tier(of: value) + 1)),
                 mergeGroups: isFinal ? [] : Self.mergeGroup, eventInterest: isFinal ? [] : .mergeContact,
-                decal: try decal(for: value))
+                decal: try decal(for: value), drivePolicy: try Self.gripPolicy())
             let token = world.submit(WorldTransaction().mergeBubbles([first, second], result: result))
             pendingMerges[token] = PendingMerge(sources: [first, second], result: id, value: value)
         } catch {
