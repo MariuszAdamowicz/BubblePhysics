@@ -523,4 +523,30 @@ final class TransactionStagerTests: XCTestCase {
                                                                                     second: try part(5, band: true, share: 0.5)),
                                                      against: initial))
     }
+
+    // MARK: chwyt bryły (P-B-14, G4-AC2)
+
+    /// Bryła wielokątna nie daje się chwycić: `beginPlayerDrive` jest odrzucany z `incompatibleObjectKind(id)`, a jej ruch (rola,
+    /// prędkość, brak celu napędu) zostaje taki jak przed transakcją. Bryłami steruje się `MotorDrive` albo napędem kinematycznym.
+    func testBeginPlayerDriveIsRejectedForARigidPolygon() throws {
+        let rigidMaterialID = PhysicsMaterialID(rawValue: 2)
+        let body = try RigidBodyDescriptor(id: id(2), vertices: [[-1, -1], [1, -1], [1, 1], [-1, 1]], velocity: [3, 0], mass: 2,
+                                           motionRole: .dynamic, physicsMaterialID: rigidMaterialID, renderMaterialID: styleID)
+        let initial = try TransactionStager.stage(
+            resources().updatePhysicsMaterial(rigidMaterialID, material: PhysicsMaterial(kind: .rigid)).add(.rigidBody(body)),
+            against: state()).state
+        XCTAssertEqual(initial.objects[id(2)]?.motionRole, .dynamic)
+
+        let transaction = WorldTransaction().beginPlayerDrive(id(2), target: [5, 5])
+        assertRejected(transaction, against: initial, reason: .incompatibleObjectKind(id(2)))
+        let boundary = TransactionStager.stageBatch([PendingTransaction(token: TransactionToken(rawValue: 1), transaction: transaction)],
+                                                    against: initial)
+        XCTAssertTrue(boundary.frame.transactionReceipts.isEmpty)
+        let after = try XCTUnwrap(boundary.state.objects[id(2)])
+        XCTAssertEqual(after.motionRole, .dynamic, "rola bez zmian")
+        XCTAssertEqual(after.velocity, [3, 0], "prędkość bez zmian")
+        XCTAssertNil(after.playerDriveTarget, "brak celu napędu")
+        XCTAssertNil(after.playerDriveID)
+        XCTAssertEqual(boundary.state.nextDriveID, initial.nextDriveID, "identyfikator napędu nie został zużyty")
+    }
 }
