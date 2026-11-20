@@ -1,0 +1,183 @@
+# Change Design: BubblePhysics 3.0.0 — poprawki tłumienia gumki i krawędzi ścian, model fizyki autora (bez kc, s = 1, tylko siły, kontur tylko rysowany)
+
+**Date:** 2026-11-20
+**Artifact:** change-design
+**Status:** Draft
+**Template version:** default/0.3.2
+**References:** dokument wejściowy autora `2KBubbles-iOS/docs/benchmarks/stage-0/v2.3.0-engine-3.0.0-input.md` (pomiary i dane surowe w `v2.3.0/wall/` repo gry); punkt wyjścia: `main` = v2.3.0 (e669fb1)
+
+**Plugin version:** 0.7.11
+**Agent Sessions:** claude-code: c5b90ea6-86f7-4190-a0d2-2990f317affb
+
+---
+
+<!-- hint: Keep the `**Artifact:** change-design` line — /plan and /implement use it to recognize this as a change-design artifact (requirements + design in one file) and skip the prd.md requirement. -->
+
+> *Section audience —* 🔍 reviewer (understand the change without implementing it) · 🛠 author (implement the change). Sections without an icon serve both.
+
+## Summary 🔍
+
+Pomiary gry na 2.3.0 pokazały dwa błędy, przez które bańka w spoczynku nie ugina się o c · F. Pierwszy: tłumienie gumki mnoży też przyrost prędkości z siły, więc gumka oddaje w spoczynku tylko F · e^(−D·dt/m) (ok. 88 % dla bańki „2”). Drugi: każda krawędź statycznego wielokąta odpycha z obu stron. Gdy wgniecenie przekracza grubość ściany, bańka dostaje drugą sprężynę od tylnej krawędzi i ugięcie się załamuje. Autor ustalił też model fizyki, w którym zostają tylko środki, promienie, sprężyny i siły. Kontur ma być wyłącznie rysunkiem.
+
+3.0.0 poprawia oba błędy i doprowadza silnik do tego modelu. Tłumienie gumki działa najpierw na prędkość, a dopiero potem dochodzi F/m · dt. Krawędź statycznego wielokąta daje kontakt tylko od zewnątrz, a wypukły wierzchołek jest liczony raz. Podatność to c = c₀ · r / r_ref, bez wykładników `radiusExponent` i `compressionExponent` i bez ρ. Napęd gracza to tylko gumka siłowa, a usztywnianie przy chwycie, które podmieniało promień fizyczny na promień konturu, znika. Kontur liczy się na końcu kroku i nie może już ani zmienić fizyki, ani odrzucić kroku.
+
+Stare parametry znikają z API, więc to wersja główna. Gra jest jedynym użytkownikiem i dostaje przewodnik migracji. Wybór ζ_c, spoczynek planszy i strojenie zostają w repo gry.
+
+## Background & problem 🔍
+
+Pomiary i rachunki są w dokumencie wejściowym autora. Tu zostaje tylko to, czego potrzeba do oceny projektu.
+
+- **Błąd 1: tłumienie gumki zabiera siłę w spoczynku.** `MotionControllers.prepare` (Sources/BubblePhysicsRuntime/MotionControllers.swift:72-78) liczy v ← (v + F/m · dt) · e^(−D·dt/m). Mnożnik działa też na przyrost z siły, więc w spoczynku przy ścianie kontakt dostaje F · e^(−D·dt/m). Pomiar gry (r 24, m 1,36, D 10, dt 1/60): ε 0,5676 zamiast 0,648, czynnik 0,885. Zgodność z modelem błędu 0,990 w 6 punktach (D 10/20/40, masa ×1/×4/×0,25). Specyfikacja 2.3.0 zakładała F −= D · v, czyli zero w spoczynku.
+- **Błąd 2: ściany odpychają obiema krawędziami.** `NativePublicWorld` (Sources/BubblePhysicsNativeMetal/NativePublicWorld.swift:212-227) zamienia każdą krawędź statycznego wielokąta w dwustronny odcinek (`.fixed`, `NativeSolverInput.swift:61`), a `nativeBuildContacts` (Sources/BubblePhysicsNativeMetal/Shaders/NativeGeometryKernels.metal-source:655-662) bierze normalną od najbliższego punktu. Gra buduje ścianę jako prostokąt grubości T = 48. Gdy δ > T, bańka dotyka tylnej krawędzi i dostaje drugi kontakt z tą samą normalną: δ = (c · F + T) / 2. Pomiar: liniowo do δ ≈ 48, potem nachylenie 0,49. W wypukłym narożniku działa ten sam mechanizm: obie krawędzie mają najbliższy punkt w tym samym wierzchołku.
+- **Model fizyki autora.** Podatność 2.3.0 to c = c₀ · (r/r_ref)^s · ρ^kc (Sources/BubblePhysicsPublic/Model/Resources.swift:9-38), gdzie ρ liczy `nativeUpdateContactRho` (Sources/BubblePhysicsNativeMetal/Shaders/NativePostSolveKernels.metal-source:596-644). Autor chce s = 1 na stałe, bez kc i bez ρ: ta sama siła ściska każdą bańkę o ten sam ułamek promienia, ε = c₀ · F / r_ref, a w parze wgniecenie dzieli się w proporcji promieni.
+- **Kontur jeszcze wpływa na fizykę, w dwóch miejscach.** Po pierwsze, `rigidifies` przy chwycie podmienia promień fizyczny na `effectiveRadius` konturu (Sources/BubblePhysicsRuntime/TransactionStager.swift:355, MotionControllers.swift:41-50), a ten promień trafia do kolizji, podatności i scalania. Po drugie, walidacja konturu odrzuca cały krok: na GPU (`nativeSafetyFailure(safety, 4)`, NativePostSolveKernels.metal-source:847 i :929, plus sprawdzenia skończoności) i na CPU (Sources/BubblePhysicsNativeMetal/NativeMetalSolver.swift:1005-1032). Kontur z konstrukcji leży w kole o promieniu fizycznym (próbka = środek + kierunek · r · (1 − deficyt), deficyt ∈ [0, 1]), więc te sprawdzenia nie wykrywają niczego, czego nie wykryłaby walidacja stanu fizycznego.
+- **Napęd prędkością.** `BubbleDrivePolicy` (Sources/BubblePhysicsPublic/Model/Motion.swift:10-50) ma obok gumki tryb prędkościowy (`maximumSpeed`, `distanceResponse`) i usztywnianie (`rigidifies`, `rigidificationDuration`, `relaxationDuration`). Autor zostawia tylko gumkę.
+
+```mermaid
+flowchart LR
+  subgraph before["Before (2.3.0)"]
+    d1["napęd: prędkość albo gumka<br/>v ← (v + F/m·dt)·e^(−D·dt/m)"] --> r1["rigidifies: promień fizyczny<br/>:= promień konturu"]
+    r1 --> s1["kontakty: krawędzie dwustronne,<br/>c = c₀(r/r_ref)^s·ρ^kc"]
+    s1 --> c1["kontur"]
+    c1 -- "walidacja odrzuca krok" --> s1
+    c1 -. "effectiveRadius → promień przy chwycie" .-> r1
+  end
+```
+
+```mermaid
+flowchart LR
+  subgraph after["After (3.0.0)"]
+    d2["napęd: tylko gumka<br/>v ← v·e^(−D·dt/m) + F/m·dt"] --> s2["kontakty: krawędzie od zewnątrz,<br/>wierzchołek raz, c = c₀·r/r_ref"]
+    s2 --> c2["kontur (tylko rysunek)"]
+  end
+```
+
+## Goals and non-goals
+
+### Goals
+
+**G1: gumka oddaje w spoczynku pełną siłę** — tłumienie gumki zabiera tylko prędkość.
+- [ ] <a id="g1-ac1"></a>G1-AC1 — Bańka r 24 z materiału c₀ 0,0108, r_ref 20, dociągana gumką w nasyceniu (siła `maximumForce` 1 200) do ściany grubości co najmniej 2r, bez siły globalnej i pól. Po uspokojeniu ugięcie (r − odległość środka od czoła ściany) równa się c₀ · (r / r_ref) · `maximumForce` z tolerancją 2 % dla każdej kombinacji D ∈ {0, 10, 40} i m ∈ {0,34, 1,36, 5,44}. Ugięcia przy różnych D nie różnią się między sobą o więcej niż 2 % · `verify: test integracyjny przez publiczne API świata, 9 kombinacji`
+- [ ] <a id="g1-ac2"></a>G1-AC2 — Bańka w trybie gumki, bez kontaktów, siły globalnej i pól, z `damping` materiału 0, z naciągnięciem poniżej `maximumForce` / K_band, przy celu niezmienionym między ramkami i jednym kroku stałym na ramkę. Prędkość w ramce N+1 równa się v_N · e^(−D·dt/m) + K_band · (`target` − `achievedPoint`) / m · dt, z `target` i `achievedPoint` z `DriveFeedback` ramki N, z tolerancją 1 % dla D ∈ {0, 10} · `verify: test integracyjny dwóch kolejnych ramek`
+- [ ] <a id="g1-ac3"></a>G1-AC3 — Bańka dociśnięta do ściany gumką z siłą F (poniżej `maximumForce`) ma po uspokojeniu to samo położenie środka i ten sam kontur co ta sama bańka dociśnięta `MotorDrive` z tą samą siłą F, z tolerancją 2 % ugięcia. Chwyt nie zmienia więc promienia ani kształtu bańki · `verify: test integracyjny, dwa światy`
+
+**G2: krawędź statycznej bryły odpycha tylko od zewnątrz i raz**
+- [ ] <a id="g2-ac1"></a>G2-AC1 — Bańka r 148 (c₀ 0,0108, r_ref 20) dociśnięta stałą siłą do ściany-prostokąta grubości T = 48. Po uspokojeniu ugięcie równa się c · F z tolerancją 2 % dla pięciu sił, z których co najmniej trzy dają c · F > T (np. F ∈ {300, 900, 1 500, 2 000, 2 400}). Ta sama scena ze ścianą grubości 400 daje ugięcia równe z tolerancją 2 % · `verify: test integracyjny, dwie grubości ściany`
+- [ ] <a id="g2-ac2"></a>G2-AC2 — Bańka dociśnięta stałą siłą F wzdłuż dwusiecznej do wypukłego narożnika prostokąta ma po uspokojeniu odległość środka od wierzchołka równą r − c · F z tolerancją 2 % · `verify: test integracyjny`
+- [ ] <a id="g2-ac3"></a>G2-AC3 — Ta sama scena (ściany grube i cienkie, narożnik wypukły, wielokąt wklęsły w kształcie litery L z bańką dociśniętą do jego wewnętrznego narożnika) daje te same pozycje i prędkości środków z tolerancją 1e-3 jednostki przez 600 kroków, niezależnie od tego, czy wierzchołki wielokątów podano zgodnie z ruchem wskazówek zegara, czy przeciwnie · `verify: test integracyjny, dwa światy z odwróconą kolejnością wierzchołków`
+- [ ] <a id="g2-ac4"></a>G2-AC4 — Bańka puszczona z `maximumLinearSpeed` prostopadle i pod kątem 30° na ścianę grubości 48 nie kończy kroku ze środkiem wewnątrz ściany ani za nią, a żaden krok nie zostaje odrzucony · `verify: test integracyjny; istniejące testy CCD i strażników przechodzą`
+
+**G3: model podatności c = c₀ · r / r_ref**
+- [ ] <a id="g3-ac1"></a>G3-AC1 — Bańki r ∈ {12, 24, 48, 148} z tego samego materiału (c₀ 0,0108, r_ref 20), każda dociśnięta do ściany tą samą siłą F, mają po uspokojeniu względne ugięcie ε = ugięcie / r równe c₀ · F / r_ref z tolerancją 2 % · `verify: test integracyjny, cztery rozmiary`
+- [ ] <a id="g3-ac2"></a>G3-AC2 — Dwie bańki z tego samego materiału, bez ścian, ściskane ku sobie dwoma przeciwnymi polami kierunkowymi o module F (każde z filtrem na jedną bańkę), dla par promieni (12, 24), (24, 24) i (24, 148). Po uspokojeniu nakładanie równa się (c_a + c_b) · F z tolerancją 2 %, a wgniecenie konturu każdej bańki w kierunku partnera równa się nakładanie · r_self / (r_a + r_b) z tolerancją 2 % · `verify: test integracyjny, pomiar środków i konturu z ramki`
+- [ ] <a id="g3-ac3"></a>G3-AC3 — `BubbleContactCompliance` ma tylko `base` (c₀ ≥ 0) i `referenceRadius` (r_ref > 0). Wartość ujemna, NaN albo nieskończona i r_ref ≤ 0 dają `ModelValidationError.valueOutOfRange` z nazwą pola, a materiał `.rigid` przyjmuje tylko `.hard`, jak w 2.3.0 · `verify: test jednostkowy modelu; kod używający radiusExponent albo compressionExponent się nie kompiluje`
+- [ ] <a id="g3-ac4"></a>G3-AC4 — Bańka z c₀ = 0 (`.hard`) i jej kontakty zachowują się jak w 2.3.0 · `verify: istniejące testy kontaktów twardych przechodzą bez zmian oczekiwań`
+
+**G4: napęd gracza tylko gumką siłową**
+- [ ] <a id="g4-ac1"></a>G4-AC1 — `BubbleDrivePolicy` ma tylko `bandStiffness` (wymagane), `bandDamping` (domyślnie 0) i `maximumForce` (domyślnie `nil` = bez limitu). Walidacja pól jak w 2.3.0: `bandStiffness` ≤ 0 albo nieskończone, `bandDamping` < 0 albo nieskończone i `maximumForce` ≤ 0 albo nieskończone dają `valueOutOfRange` z nazwą pola · `verify: test jednostkowy modelu`
+- [ ] <a id="g4-ac2"></a>G4-AC2 — Bańka bez polityki napędu (`drivePolicy` = `nil`, wartość domyślna deskryptora) nie daje się chwycić: transakcja z `beginPlayerDrive` dla niej jest odrzucana z powodem wskazującym tę bańkę, a bańka zachowuje ruch sprzed transakcji · `verify: test transakcji`
+- [ ] <a id="g4-ac3"></a>G4-AC3 — Walidacja stabilności gumki (K_band · dt² / m < 1 przy wstawieniu, zamianie, scaleniu i podziale) i limit modułu celu w `beginPlayerDrive` / `updatePlayerDrive` działają jak w 2.3.0 · `verify: istniejące testy stagera dla gumki przechodzą`
+
+**G5: kontur tylko rysowany**
+- [ ] <a id="g5-ac1"></a>G5-AC1 — Dwa światy z tą samą sceną, różniące się tylko `deformability` materiałów baniek (0 i 0,65) oraz tym, czy ramka czyta punkty konturu, dają identyczne bit w bit pozycje, prędkości i promienie wszystkich obiektów przez 600 kroków. Scena ma ściany, tłok co najmniej 20 baniek, chwyt gumką, scalenie i podział · `verify: test integracyjny porównujący ramki dwóch światów`
+- [ ] <a id="g5-ac2"></a>G5-AC2 — W scenach testów konturu każdy punkt konturu leży nie dalej od środka niż promień bańki (tolerancja 1e-3), a każda krawędź konturu jest nie dłuższa niż `maxContourSegmentLength`. Żaden krok nie jest odrzucany z powodu konturu · `verify: test niezmienników konturu w scenach testów konturu`
+- [ ] <a id="g5-ac3"></a>G5-AC3 — Po uspokojeniu sceny tłoku przy ścianach kontury nie przenikają się nawzajem ani nie przenikają ścian, z tolerancją 0,5 jednostki · `verify: istniejący test nieprzenikania konturów (G3-AC2 zmiany 2.3.0) przechodzi`
+
+**G6: wydanie 3.0.0 bez regresji**
+- [ ] <a id="g6-ac1"></a>G6-AC1 — Cały zestaw testów repozytorium przechodzi. Opis PR wymienia z powodem każdy test usunięty albo zmieniony przez G1–G5 (napęd prędkością, `rigidifies`, kc, s, ρ, krawędzie dwustronne, walidacja konturu) · `verify: swift test; lista w opisie PR`
+- [ ] <a id="g6-ac2"></a>G6-AC2 — CHANGELOG ma sekcję 3.0.0, a nowy przewodnik migracji (`docs/MIGRATION-v3.md`) mówi, co gra musi zmienić: przestroić c₀ po usunięciu s i kc, zastąpić napęd prędkością gumką, usunąć `rigidifies` i czasy usztywniania, podawać `drivePolicy` bańkom, które gracz chwyta, oraz że krawędzie statycznych wielokątów odpychają tylko od zewnątrz. `docs/integration-guide.md` opisuje model 3.0.0 · `verify: przegląd diffu dokumentacji`
+- [ ] <a id="g6-ac3"></a>G6-AC3 — Wynik perf guarda (`BubblePhysicsPerfGuard`) i obciążenie maszyny w chwili pomiaru są w opisie PR · `verify: opis PR`
+
+### Non-goals
+
+- Wybór ζ_c i sposób na spoczynek planszy. Autor rozstrzyga to po poprawkach; `contactDampingRatio` zostaje jak w 2.3.0. Czas dochodzenia dużych baniek do równowagi (10–39 s dla 7168) się nie zmienia.
+- Zadania gry: strojenie, przepakowane plansze z bramką przenikania 0, bramka przeciskania, laboratorium, migracja `PhysicsTuning.json`.
+- Raport pomiarowy z liczbami (decyzja autora, wystarczą testy).
+- Zmiana kontaktu twardego (c₀ = 0) i jego ścieżki w solverze.
+- Zmiana algorytmu konturu: wygładzanie między punktami styku, majoranta i seed pierwszej klatki scalenia lub podziału zostają.
+- Kinematyczne i dynamiczne bryły wielokątne: już dziś mają kontakt jednostronny (`nativeRigidContacts`).
+- Backendy referencyjne (`BubblePhysicsReference`, `BubblePhysicsReferenceMetal`) i stary moduł `BubblePhysics`.
+- Warstwa zgodności ze starym API.
+
+## Architecture
+
+Sześć jednostek: dwie po stronie hosta, trzy w natywnym solverze i jedna w API. Po zmianie krok wygląda tak:
+
+1. **Siły (host).** `MotionControllers.prepare` w gałęzi `.playerDriven` liczy F = clamp(K_band · (cel − pozycja), `maximumForce`) + siła globalna + pola i v ← v · e^(−D·dt/m) + F / m · dt.
+2. **Predykcja, kontakty, XPBD (GPU)** z c = c₀ · r / r_ref, bez ρ.
+3. **Prędkość i tłumienie kontaktu (GPU)** jak w 2.3.0.
+4. **Kontur (GPU)** na końcu, bez wpływu na wynik i bez prawa odrzucenia kroku.
+
+**1. Tłumienie gumki (host, `MotionControllers.swift`).** Linia całkowania zmienia kolejność: najpierw v · e^(−D·dt/m), potem + F / m · dt. W spoczynku v = 0, więc kontakt dostaje pełne F. Prędkość ustalona bez kontaktów to (F / m · dt) / (1 − e^(−D·dt/m)) ≈ F / D przy małym dt, czyli jak w 2.3.0 z dokładnością do przybliżenia małego kroku.
+
+**2. Gumka jako jedyny napęd (API + host).** `BubbleDrivePolicy` traci `rigidifies`, `rigidificationDuration`, `relaxationDuration`, `maximumSpeed` i `distanceResponse`, a `bandStiffness` staje się wymagane. Znika `BubbleDrivePolicy.standard`. `drivePolicy` w `BubbleDescriptor` i w wynikach scalenia i podziału jest opcjonalne, domyślnie `nil`, a `beginPlayerDrive` dla bańki bez polityki odrzuca transakcję. W `MotionControllers` znika gałąź prędkościowa (`bubbleDriveSpeed`) i blok usztywniania (:41-50), więc promień kolizyjny bańki to zawsze jej promień (`targetRadius`). W `RuntimeObject` (`TransactionStager.swift:53-56`) znikają `capturedRadius`, `radiusBlendStart`, `rigidity`, `rigidityBlendStart` i `shapeElapsed`, chyba że plan pokaże, że przejścia promienia ich potrzebują (wtedy zostaje tylko to, czego używają przejścia). Do GPU przestaje trafiać `rigidity` (`material.z`), a bramka konturu `material.z >= 1` (NativePostSolveKernels.metal-source:735) znika.
+
+**3. Podatność c = c₀ · r / r_ref (API, host, shader).** `BubbleContactCompliance` traci `radiusExponent` i `compressionExponent`, a `scaledBase` liczy c₀ · r / r_ref. Rekord bańki niesie w `contact.x` gotową podatność, a `contact.y` (dziś kc) staje się wolne. `nativeContactCompliance` (NativeGeometryKernels.metal-source:18-24) zwraca `contact.x` bez potęgi ρ. Znikają `nativeUpdateContactRho` z dyspozycją (NativeMetalSolver.swift:691-693) i `nativeIsStructuralResult`, a z rekordu kontaktu `rho.x/y` i ich przenoszenie przy trafieniu cache (NativeXPBDKernels.metal-source:204). Zostaje `rho.z`, suma podatności końców, którą czytają α, bramka twarda/miękka limitu λ pary i częstość tłumienia kontaktu; plan może przemianować pole. Kontur dzieli wgniecenie pary miękkiej wg c_a : c_b, co przy jednym c₀ daje r_a : r_b. Walidacja najgorszego α w stagerze (`TransactionStager.swift:559-588`) traci składnik ρ_min^kc i wybór promienia wg znaku s.
+
+**4. Krawędź statycznego wielokąta jednostronna (host + shader).** `NativePublicWorld` liczy znak pola wielokąta i przekazuje dla każdej krawędzi stronę zewnętrzną (dla obiegu przeciwnego do ruchu wskazówek zegara zewnętrzna jest prawa normalna). `nativeBuildContacts` i ponowne liczenie normalnej w iteracjach (NativeXPBDKernels.metal-source:415) dla takiej krawędzi:
+
+- nie tworzą kontaktu, gdy środek bańki leży po wewnętrznej stronie prostej krawędzi;
+- nie tworzą kontaktu, gdy najbliższym punktem odcinka jest jego wierzchołek końcowy, bo ten wierzchołek należy do następnej krawędzi wielokąta (dla wypukłego wierzchołka środek w jego obszarze leży po zewnętrznej stronie obu krawędzi, więc następna krawędź ten kontakt da);
+- biorą normalną jak dziś, od najbliższego punktu do środka, więc na narożniku bańka toczy się po wierzchołku.
+
+Plan rozstrzyga, czy wykorzystać istniejące pole `allowedSide` ze zmienioną semantyką (dziś nikt go nie ustawia, a wymusza ono stałą normalną), czy dodać nową flagę. Zapewnia przy tym, że CCD (`nativeForbiddenCenterCrossing`, NativePostSolveKernels.metal-source:58-65) i strażniki środka (:204-271) dalej wypychają środek na stronę, z której przyszedł (G2-AC4).
+
+**5. Kontur bez prawa weta (shader + host).** Znikają sprawdzenia konturu, które odrzucają krok: `nativeSafetyFailure(safety, 4)` za długą krawędź (NativePostSolveKernels.metal-source:847, :929), sprawdzenia skończoności wartości konturu w kernelach konturu oraz w odczycie ramki `NativeMetalSolver.swift:1005-1032` sprawdzenia punktów, długości krawędzi, zakresu deformacji, `effectiveRadius` i `bounds`. Zostaje walidacja stanu fizycznego (pozycje, prędkości, promienie, rekordy kontaktów). Niezmienniki konturu pilnują testy (G5-AC2). Sprawdzenia spójności pakietu (ID i geometria bańki zgodne z rekordem) to kontrola fizyki, a nie konturu, więc zostają.
+
+**6. Wydanie 3.0.0.** CHANGELOG, `docs/MIGRATION-v3.md`, `docs/integration-guide.md`.
+
+```mermaid
+flowchart TD
+  prep["MotionControllers.prepare<br/>(1) v·e^(−D·dt/m) + F/m·dt<br/>(2) bez usztywniania: promień = targetRadius"] --> predict["nativePredict"]
+  predict --> build["nativeBuildContacts<br/>(4) krawędź od zewnątrz, wierzchołek raz"]
+  build --> prepc["nativePrepareSolverContacts<br/>(3) rho.z = c₀·r_a/r_ref + c₀·r_b/r_ref"]
+  prepc --> solve["warm start + 8 iteracji Jacobiego, przeguby, bryły"]
+  solve --> guards["CCD, strażniki"]
+  guards --> vel["nativeUpdateVelocities, tłumienie kontaktu (bez zmian)"]
+  vel --> contour["kontur: nacisk, wygładzanie, render<br/>(5) bez odrzucania kroku"]
+```
+
+## Components
+
+- **`Sources/BubblePhysicsPublic/Model/Motion.swift`** — `BubbleDrivePolicy`: tylko pola gumki, `bandStiffness` wymagane, bez `.standard`.
+- **`Sources/BubblePhysicsPublic/Model/Objects.swift`**, **`WorldTransaction.swift`** — `drivePolicy: BubbleDrivePolicy?`, domyślnie `nil`, w deskryptorze bańki i w wynikach scalenia i podziału.
+- **`Sources/BubblePhysicsPublic/Model/Resources.swift`** — `BubbleContactCompliance(base:referenceRadius:)`, `scaledBase` = c₀ · r / r_ref, walidacja bez wykładników.
+- **`Sources/BubblePhysicsRuntime/MotionControllers.swift`** — kolejność tłumienia gumki; usunięcie gałęzi prędkościowej i usztywniania.
+- **`Sources/BubblePhysicsRuntime/TransactionStager.swift`** — odrzucenie chwytu bańki bez polityki; usunięcie pól usztywniania z `RuntimeObject`; walidacja α bez ρ i s.
+- **`Sources/BubblePhysicsRuntime/NativeCompleteStepper.swift`**, **`StructuralOperations.swift`** — bez `rigidity` i przejęcia `effectiveRadius` do fizyki; promień scalania i podziału = promień bańki.
+- **`Sources/BubblePhysicsNativeMetal/NativePublicWorld.swift`**, **`NativeSolverInput.swift`**, **`NativeMetalBufferLayout.swift`** — strona zewnętrzna krawędzi statycznego wielokąta ze znaku pola; `contact` bez kc; `material.z` bez `rigidity`; `rho` bez `x/y`.
+- **`Sources/BubblePhysicsNativeMetal/NativeMetalSolver.swift`** — bez dyspozycji `nativeUpdateContactRho`; odczyt ramki bez walidacji konturu.
+- **`Sources/BubblePhysicsNativeMetal/Shaders/NativeGeometryKernels.metal-source`** — `nativeContactCompliance` bez ρ; `nativeBuildContacts`: krawędź jednostronna i wierzchołek raz.
+- **`Sources/BubblePhysicsNativeMetal/Shaders/NativeXPBDKernels.metal-source`** — normalna krawędzi jednostronnej w iteracjach; cache bez `rho.x/y`.
+- **`Sources/BubblePhysicsNativeMetal/Shaders/NativePostSolveKernels.metal-source`** — usunięcie `nativeUpdateContactRho` i `nativeIsStructuralResult`; kontur bez ρ i bez bramki `material.z`; bez `nativeSafetyFailure` z konturu.
+- **`Sources/BubblePhysicsNativeMetalDiagnostics/…`** — dostosowanie do nowego wejścia solvera (bez kc i `rigidity`).
+- **`Tests/…`** — nowe testy G1–G5. Usunięte albo przepisane: testy napędu prędkością i usztywniania, `ContactRhoHistoryTests`, `RhoGridReportTests`, testy zależne od kc i s, testy ABI (`NativeMetalShaderABITests`), testy odrzucenia kroku przez kontur. Sonda `ZZWallPressProbeTests.swift` nie wchodzi do repozytorium.
+- **`CHANGELOG.md`**, **`docs/MIGRATION-v3.md`** (nowy), **`docs/integration-guide.md`** — wydanie 3.0.0 i migracja.
+
+## Decisions 🔍
+
+| ID | Title | Context | Options | Choice | Rationale | Source | Goal impact | Consequences |
+|----|-------|---------|---------|--------|-----------|--------|-------------|--------------|
+| <a id="cd-d-1"></a>CD-D-1 | Kontakt twardy (c₀ = 0) | Model autora mówi „bańki są ściśliwe”, a kod ma osobną ścieżkę dla c₀ = 0 (stałe `contactDamping`, częściowa korekta prędkości, limit λ pary) | zostawić bez zmian; usunąć i wymagać c₀ > 0; liczyć c₀ = 0 ścieżką miękką z bardzo małą podatnością | zostawić bez zmian | decyzje autora go nie dotyczą; usunięcie to duża zmiana shaderów i testów; c → 0 na ścieżce miękkiej daje wystrzał z zawierania (CD-D-18 zmiany 2.3.0) | user | G3-AC4 | wzór c = c₀ · r / r_ref daje 0 dla `.hard`, więc dwie ścieżki w solverze zostają |
+| <a id="cd-d-2"></a>CD-D-2 | Kontur a przyjęcie kroku | Walidacja konturu na GPU i CPU odrzuca krok, choć kontur z konstrukcji leży w kole, a nieskończoność może przyjść tylko z fizyki | usunąć sprawdzenia konturu z przyjęcia kroku; nie odrzucać, ale liczyć w diagnostyce; usunąć tylko sprawdzenie długości krawędzi | usunąć wszystkie sprawdzenia konturu z przyjęcia kroku; niezmienniki pilnują testy | kontur jest rysunkiem; jedyny realny przypadek (float32 przy bardzo dużych współrzędnych środka) to ograniczenie precyzji współrzędnych, a nie błąd kształtu | user (po przeglądzie sprawdzeń w kodzie) | G5-AC1, G5-AC2 | przy skrajnie dużych współrzędnych kontur może mieć krawędź dłuższą niż `maxContourSegmentLength`, a krok przejdzie; spójność pakietu renderu (ID, geometria) dalej sprawdzana |
+| <a id="cd-d-3"></a>CD-D-3 | Krawędź statycznego wielokąta od zewnątrz | Dwustronny odcinek daje drugą sprężynę od tylnej krawędzi cienkiej ściany | pomijać kontakt, gdy środek leży po wewnętrznej stronie prostej krawędzi, normalna od najbliższego punktu, strona ze znaku pola; istniejące `allowedSide` ze stałą normalną; wymagać od gry obiegu wierzchołków | pomijanie od tyłu, normalna od najbliższego punktu, strona ze znaku pola | znosi załamanie przy δ > T, narożniki toczą się jak dziś, wklęsłe wielokąty działają; stała normalna wypycha bańkę przy narożniku w złą stronę; obieg łatwo policzyć w silniku | user | G2-AC1, G2-AC3, G2-AC4 | CCD i strażniki muszą dalej zwracać środek na stronę wejścia; dotyczy tylko statycznych wielokątów |
+| <a id="cd-d-4"></a>CD-D-4 | Wypukły wierzchołek liczony raz | Przy CD-D-3 środek w obszarze wypukłego wierzchołka leży po zewnętrznej stronie obu krawędzi, więc obie dałyby kontakt z tym samym punktem i normalną: dwie sprężyny równolegle, ta sama klasa błędu co błąd 2 | wierzchołek należy do jednej krawędzi; zostawić podwójny kontakt; osobny kontakt z wierzchołkiem | wierzchołek końcowy odcinka należy do następnej krawędzi wielokąta | model autora: od bryły bańka odpycha się jak od jednej sprężyny; rozwiązanie lokalne w budowie kontaktu, bez nowego typu kontaktu | auto (wynika z CD-D-3 i modelu autora) | G2-AC2 | trzeba sprawdzić, że kontakt nie znika na granicy obszarów (ciągłość przy przejściu z krawędzi na wierzchołek) |
+| <a id="cd-d-5"></a>CD-D-5 | Tolerancja ugięcia | Dokument wejściowy zostawia tolerancję ε do ustalenia | 2 %; 5 %; 10 % jak w 2.3.0 | 2 % | łapie oba błędy (11,5 % i nachylenie 0,49); pomiar 0,990 mieści się z zapasem | user | G1-AC1, G1-AC3, G2-AC1, G2-AC2, G3-AC1, G3-AC2 | testy na dużych bańkach wymagają długiego uspokojenia (r 148: tysiące kroków) |
+| <a id="cd-d-6"></a>CD-D-6 | Raport pomiarowy | W 2.3.0 był raport opt-in z liczbami do oceny autora | pełny raport; tylko ε; bez raportu | bez raportu, wystarczą testy | decyzja autora | user | none | dane do wyboru ζ_c gra zbiera sama |
+| <a id="cd-d-7"></a>CD-D-7 | Kształt `BubbleDrivePolicy` i bańka bez polityki | Po usunięciu napędu prędkością `.standard` traci sens, a sztywność gumki zależy od masy i strojenia | `bandStiffness` wymagane i `drivePolicy` opcjonalne (nil = nie do chwycenia); `.standard` z domyślnymi K, D; `drivePolicy` wymagane w każdym deskryptorze | `BubbleDrivePolicy(bandStiffness:bandDamping:maximumForce:)`, `drivePolicy` opcjonalne, domyślnie `nil`, chwyt bez polityki odrzucany | stała K w silniku byłaby zgadywaniem i mogłaby nie przejść walidacji K · dt² / m < 1 dla lekkiej bańki; wymaganie polityki zmusza do jej podawania także bańkom, których nikt nie chwyta | auto (rekomendacja; autor oddał decyzje tego poziomu agentowi) | G4-AC1, G4-AC2 | gra musi podać politykę każdej bańce, którą gracz może chwycić; wynik scalenia i podziału niesie politykę jawnie |
+| <a id="cd-d-8"></a>CD-D-8 | Kolejność tłumienia gumki | Mnożnik e^(−D·dt/m) działa dziś na przyrost z siły | v · e^(−D·dt/m) + F/m · dt; F −= D · v jawnie | tłumienie najpierw, potem F/m · dt | kierunek poprawki z dokumentu wejściowego; forma wykładnicza zostaje bezwarunkowo stabilna dla każdego D ≥ 0; w spoczynku kontakt dostaje pełne F | auto (dokument wejściowy, błąd 1) | G1-AC1, G1-AC2 | prędkość ustalona bez kontaktów zmienia się tylko o błąd przybliżenia małego kroku |
+| <a id="cd-d-9"></a>CD-D-9 | Usunięcie ρ | Bez kc ρ nie wpływa na podatność, a `rho.x/y` czyta tylko podatność i kontur | zostawić ρ nieczynne; usunąć `nativeUpdateContactRho`, `nativeIsStructuralResult`, `rho.x/y` i ich przenoszenie | usunąć; `rho.z` (suma podatności) zostaje | martwy kod i jeden dispatch GPU mniej na krok; kontur liczy podział z `contact.x` | auto (decyzja 1 autora + przegląd kodu) | G3-AC1, G3-AC2 | zmiana układu rekordu kontaktu i testów ABI |
+| <a id="cd-d-10"></a>CD-D-10 | Usunięcie usztywniania przy chwycie | `rigidifies` podmienia promień fizyczny na `effectiveRadius` konturu i zeruje kontur | usunąć całość (promień, `rigidity`, bramkę konturu, czasy); zostawić tylko zerowanie konturu | usunąć całość | decyzje 3 i 4 autora: bez `rigidifies`, kontur bez wpływu na fizykę; zerowanie konturu bez usztywnienia nie ma znaczenia | auto (decyzje 3 i 4 autora) | G1-AC3, G5-AC1 | chwycona bańka dociśnięta do ściany ugina się i wygląda tak samo jak niechwycona |
+| <a id="cd-d-11"></a>CD-D-11 | Granica zakresu: silnik a gra | Kryteria 3.0.0 mówią o przepakowanych planszach gry, a ζ_c i spoczynek są do decyzji po poprawkach | wszystko w silniku; silnik zamyka kryteria sprawdzalne w swoim repo, gra resztę | silnik: ε przy ścianie i w parze, krawędzie, kontur bez wpływu, nieprzenikanie w scenie tłoku; gra: przepakowane plansze, ζ_c, spoczynek, strojenie | tak przebiegały 2.1.0–2.3.0 (CD-D-1 zmiany 2.3.0, decyzja autora); strojenie wymaga wydanego silnika | auto (precedens decyzji autora z 2.3.0) | G5-AC3; non-goals | problem z plansz gry wraca jako 3.0.x |
+| <a id="cd-d-12"></a>CD-D-12 | Perf guard | Powtórki perf guarda tej samej bazy rozjeżdżają się bardziej niż różnica baza–zmiana (acceptance 3,12 vs 5,43 ms przy load 1,5 vs 3) | warunek scalenia; wynik i obciążenie w opisie PR | wynik i obciążenie w opisie PR | pomiar jest dziś zbyt zaszumiony, by blokować; zmiana usuwa jeden dispatch i nie dodaje nowych | auto (pomiary perf guarda z 2.3.0) | G6-AC3 | autor ocenia wynik przy przeglądzie PR |
+| <a id="cd-d-13"></a>CD-D-13 | Wersja i zgodność | Usunięcie parametrów łamie API | 3.0.0 bez warstwy zgodności; parametry przestarzałe w 2.x | 3.0.0, stare parametry usunięte | decyzja 5 autora; gra jest jedynym użytkownikiem | user (decyzja 5 dokumentu wejściowego) | G6-AC2 | gra migruje jednym krokiem wg `docs/MIGRATION-v3.md` |
+| <a id="cd-d-14"></a>CD-D-14 | Dowód „kontur nie zmienia fizyki” | Kryterium wejściowe: ten sam przebieg środków z konturem i bez | dwa światy różniące się `deformability` i odczytem konturu, porównanie bit w bit; porównanie z tolerancją | bit w bit | po CD-D-2 i CD-D-10 nie ma żadnej drogi z konturu do fizyki, więc każda różnica to błąd; `deformability` steruje tylko konturem | auto (przegląd kodu: `deformability` czyta tylko kernel konturu) | G5-AC1 | test wykryje każdą przyszłą drogę z konturu do fizyki |
+
+## Key facts & assumptions
+
+- **Niezmiennik:** kontur nie ma żadnej drogi do fizyki. Ani do promieni, pozycji, prędkości i kontaktów, ani do decyzji o przyjęciu kroku (G5-AC1).
+- Po usunięciu usztywniania `effectiveRadius` służy już tylko do zapytań (`QueryIndex.swift:43`) i ramki. To nie jest fizyka.
+- `deformability` czyta tylko kernel konturu (NativePostSolveKernels.metal-source:730-734), więc nadaje się na przełącznik w teście G5-AC1.
+- W parze wgniecenie dzieli się w proporcji promieni tylko przy tym samym c₀. Nadpisanie c₀ na bańce (`contactCompliance` w transakcji) zostaje i daje podział c_a : c_b.
+- Duże bańki dochodzą do równowagi długo (7168 przy ścianie: 10–39 s zależnie od ζ_c), więc testy G2-AC1 i G3-AC1 dla r 148 potrzebują długiego uspokojenia albo ζ_c dobranego pod szybki spoczynek. Tolerancja dotyczy stanu ustalonego.
+- Założenie niepotwierdzone, nieblokujące: istniejące testy CCD i strażników przejdą po zmianie krawędzi na jednostronne bez zmian oczekiwań. Jeśli nie, plan wymienia je w opisie PR (G6-AC1).
