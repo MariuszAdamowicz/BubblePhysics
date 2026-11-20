@@ -8,7 +8,7 @@
 **References:** dokument wejściowy autora `2KBubbles-iOS/docs/benchmarks/stage-0/v2.3.0-engine-3.0.0-input.md`; punkt wyjścia `main` = v2.3.0 (e669fb1)
 **Strategy:** slices
 **Test command:** `swift build --build-tests && swift test` (macOS z GPU; pojedynczy test: `swift test --filter <Cel>.<Klasa>/<test>`)
-**Status:** Draft
+**Status:** Approved
 **Template version:** default/0.3.3
 
 **Plugin version:** 0.7.11
