@@ -222,14 +222,79 @@ Każdy wycinek zostawia zestaw testów zielony i dopisuje swoją część do CHA
 **Delivers:** podatność bańki to c₀ · r / r_ref bez wykładników i bez ρ, a para miękka dzieli wgniecenie w proporcji podatności.
 
 1. Przenieś nieśledzoną sondę `Tests/BubblePhysicsRuntimeTests/ZZWallPressProbeTests.swift` poza pakiet do `/Users/adamowim/priv/ios/bubble_phisics-probes/ZZWallPressProbeTests.swift` (najpierw `mkdir -p` katalogu, bo jeszcze nie istnieje), nie kasując jej (git jej nie zna, więc skasowania nie da się cofnąć; wpis w `.git/info/exclude` nie wystarczy, bo SwiftPM kompiluje każdy plik w `Tests/`, a sonda używa API zmienianego w zadaniu 5 i w wycinku 2) · verify: `! test -e Tests/BubblePhysicsRuntimeTests/ZZWallPressProbeTests.swift && test -s /Users/adamowim/priv/ios/bubble_phisics-probes/ZZWallPressProbeTests.swift`
+
+   ```text
+   $ ! test -e Tests/BubblePhysicsRuntimeTests/ZZWallPressProbeTests.swift && test -s /Users/adamowim/priv/ios/bubble_phisics-probes/ZZWallPressProbeTests.swift && echo T1 OK
+   T1 OK
+   ```
 2. Dodaj do `ContactComplianceTests` test czterech rozmiarów i test pary ściskanej polami kierunkowymi, z materiałem `BubbleContactCompliance(base:referenceRadius:)` (dzisiejszy `init` daje s = 0, więc testy kompilują się i padają), obejmujące [P-B-1](#p-b-1) i [P-B-2](#p-b-2) · verify: `swift test --filter "ContactComplianceTests/(testRelativeDeflectionIsTheSameForEveryRadius|testSoftPairOverlapIsTheSumOfCompliancesAndDentsSplitByRadius)"` pada na asercji
+
+   ```text
+   (faza czerwona przed zadaniem 5 w f9ce7d4: pada na asercji; po wycinku, HEAD 491ee99:)
+   $ swift test --filter "ContactComplianceTests/(testRelativeDeflectionIsTheSameForEveryRadius|testSoftPairOverlapIsTheSumOfCompliancesAndDentsSplitByRadius)"
+   Executed 2 tests, with 0 failures (0 unexpected) in 3.891 (3.892) seconds
+   ```
 3. Dodaj do `TransactionStagerTests` parę przypadków po obu stronach granicy α przy r_max liczonej jako c₀ · r_max / r_ref, obejmującą [P-B-5](#p-b-5) · verify: `swift test --filter TransactionStagerTests/testSoftBubbleIsRejectedWhenWorstAlphaAtMaximumRadiusIsNotFinite` pada na asercji
+
+   ```text
+   (faza czerwona przed zadaniem 6 w f9ce7d4: pada na asercji; po wycinku, HEAD 491ee99:)
+   $ swift test --filter TransactionStagerTests/testSoftBubbleIsRejectedWhenWorstAlphaAtMaximumRadiusIsNotFinite
+   Executed 1 test, with 0 failures (0 unexpected) in 0.001 (0.003) seconds
+   ```
 4. Dodaj do `ContactContourTests` test tłoku co najmniej 20 baniek r 12–48 w narożniku pudła, obejmujący [P-B-6](#p-b-6) · verify: `swift test --filter ContactContourTests/testCrowdInBoxCornerContoursDoNotPenetrateEachOtherOrWalls 2>&1 | grep -q "Executed 1 test, with 0 failures"`
+
+   ```text
+   $ swift test --filter ContactContourTests/testCrowdInBoxCornerContoursDoNotPenetrateEachOtherOrWalls
+   Executed 1 test, with 0 failures (0 unexpected) in 3.093 (3.094) seconds
+   ```
 5. W jednym kroku zmień `BubbleContactCompliance` na `base` i `referenceRadius`, `scaledBase` na c₀ · r / r_ref, `validate` bez wykładników i `NativePublicProperties.contact` na `contact.y` = 0, a wszystkie wywołania z wykładnikami przepisz: `CrowdScene.softBubblePhysics`, `ModelValidationTests` (z testami pól `base`, `referenceRadius` i `.rigid` tylko z `.hard`), `NativeMetalShaderABITests`, `NativeMetalStructuralOperationTests`, `ContactComplianceTests`, oba testy `ContactContourTests`, `MotionControllersPrepareTests`, `ContainmentResolutionTests`, `docs/integration-guide.md:96`, a `ContactRhoHistoryTests` i `RhoGridReportTests` usuń; obejmuje [P-B-1](#p-b-1)–[P-B-3](#p-b-3) · verify: `! grep -rn "radiusExponent\|compressionExponent" Sources Tests Examples docs/integration-guide.md && swift test --filter "ContactComplianceTests|ModelValidationTests|ContactContourTests|NativeMetalShaderABITests"`
+
+   ```text
+   $ ! grep -rn "radiusExponent\|compressionExponent" Sources Tests Examples docs/integration-guide.md
+   (brak trafień, exit 0)
+   $ swift test --filter "ContactComplianceTests|ModelValidationTests|ContactContourTests|NativeMetalShaderABITests"
+   Executed 56 tests, with 0 failures (0 unexpected) in 12.466 (12.472) seconds
+   ```
 6. Uprość `validateWorstAlpha` do r_max ze wszystkich promieni i c₀ · r_max / r_ref bez ρ_min^kc · verify: `swift test --filter TransactionStagerTests`
+
+   ```text
+   $ swift test --filter TransactionStagerTests
+   Executed 32 tests, with 0 failures (0 unexpected) in 0.008 (0.011) seconds
+   ```
 7. Zamień pas `rho` rekordu cache na `compliance` (x = c_a + c_b) w Swift i MSL, usuń `nativeUpdateContactRho`, `nativeIsStructuralResult` i ich dyspozycję, a `nativeContactCompliance` i podział konturu oprzyj na `contact.x` · verify: `! grep -rnE 'nativeUpdateContactRho|nativeIsStructuralResult|\.rho([^a-zA-Z_]|$)' Sources/BubblePhysicsNativeMetal && swift test --filter "NativeMetalShaderABITests|NativeMetalSolverLifecycleTests|NativeMetalXPBDTests"`
+
+   ```text
+   $ ! grep -rnE 'nativeUpdateContactRho|nativeIsStructuralResult|\.rho([^a-zA-Z_]|$)' Sources/BubblePhysicsNativeMetal
+   (brak trafień, exit 0)
+   $ swift test --filter "NativeMetalShaderABITests|NativeMetalSolverLifecycleTests|NativeMetalXPBDTests"
+   Executed 42 tests, with 0 failures (0 unexpected) in 2.365 (2.371) seconds
+   ```
 8. Dodaj sekcję 3.0.0 do CHANGELOG, utwórz `docs/MIGRATION-v3.md` z częścią o przestrojeniu c₀ po usunięciu s i kc, a w `docs/integration-guide.md` opisz podatność c₀ · r / r_ref · verify: `grep -q "## 3.0.0" CHANGELOG.md && grep -q "r_ref" docs/MIGRATION-v3.md && swift test --filter IntegrationGuideTests`
+
+   ```text
+   $ grep -q "## 3.0.0" CHANGELOG.md && grep -q "r_ref" docs/MIGRATION-v3.md && swift test --filter IntegrationGuideTests
+   Executed 3 tests, with 0 failures (0 unexpected) in 0.013 (0.014) seconds
+   ```
 9. Uruchom cały zestaw, popraw oczekiwania testów zmienionych przez nowy model (m.in. `ContactVelocityCorrectionProbeTests`, `CrowdCompressionTests`, `ContactDynamicsTests`, `PairLambdaCeilingProbeTests`, `BandDriveTests`), potwierdź, że kontakty twarde przechodzą bez zmian oczekiwań, i zapisz w `plan.md` listę usuniętych i zmienionych testów z powodami do opisu PR, obejmuje [P-B-4](#p-b-4) · verify: `swift build --build-tests && swift test`
+
+   ```text
+   $ swift build --build-tests && swift test        (HEAD 491ee99)
+   exit 0
+   Executed 1453 tests, with 1 test skipped and 0 failures (0 unexpected) in 592.682 (592.835) seconds
+   ```
+
+   **Usunięte i zmienione testy (do opisu PR).** Testy kontaktów twardych: bez zmian oczekiwań ([P-B-4](#p-b-4)).
+
+   - Usunięte pliki: `ContactRhoHistoryTests` (2 testy: kontakt ze ścianą z historią ρ i bez niej) i `RhoGridReportTests.testWritesTheHardeningGridReport` (raport utwardzania ρ), bo ρ nie istnieje.
+   - `ContactComplianceTests`, usunięte (nie ma s, k ani ρ_min): `testRadiusLawWithExponent2DentsTheLargerBubbleMoreInRelativeTerms`, `testRadiusLawWithExponent0DentsTheSmallerBubbleMoreInRelativeTerms`, `testCompressionExponentMakesDoubledForceDentLessThanTwice`, `testSettlesWithCompressionExponentInWindowBetweenOneAndTwoSeconds`, `testWorstAlphaRejectsCompressionExponentWhoseMinimumRhoFactorOverflowsFloatEvenWithTinyBase`, `testWorstAlphaTakesTheSmallerRadiusWhenTheRadiusExponentIsNegative`.
+   - `ContactComplianceTests`, przemianowane albo przepisane: `testRadiusLawWithExponent1GivesEqualRelativeDent` → `testRadiusLawGivesEqualRelativeDent` (s = 1 to teraz jedyny model, tolerancja 20 % → 2 %); `testRadiusLawWithoutCompressionExponentDoublesTheDentWithDoubleForce` → `testDoubledForceDoublesTheDent`; `testSoftPairSplitsTheDentByComplianceOfEachEndWithItsOwnRho` → `testSoftPairSplitsTheDentByComplianceOfEachEnd` (bez ρ, podział przez nadpisanie `contactCompliance` jednej bańki, proporcja 3); `testWorstAlphaCountsTheFactorTwoTheTimeStepAndTheMinimumRhoForNegativeCompressionExponent` → `testWorstAlphaCountsTheFactorTwoAndTheTimeStep` (bez ρ_min).
+   - Nowe: `ContactComplianceTests.testRelativeDeflectionIsTheSameForEveryRadius` ([P-B-1](#p-b-1)), `ContactComplianceTests.testSoftPairOverlapIsTheSumOfCompliancesAndDentsSplitByRadius` ([P-B-2](#p-b-2)), `TransactionStagerTests.testSoftBubbleIsRejectedWhenWorstAlphaAtMaximumRadiusIsNotFinite` i `TransactionStagerTests.testWorstAlphaUsesTheLargestRadiusOfTheRunningAndTheNewRadiusTransition` ([P-B-5](#p-b-5)), `ContactContourTests.testCrowdInBoxCornerContoursDoNotPenetrateEachOtherOrWalls` ([P-B-6](#p-b-6)), `NativeMetalXPBDTests.testPreparedContactComplianceOfWallHardPairAndSoftHardPair`.
+   - `ContactContourTests`: oba dotychczasowe testy przepisane bez wykładników. W teście ściany c₀ 0,2 (przy kc 3) → 0,06, bo bez kc dawne c₀ dałoby ugięcie równe promieniowi.
+   - `ModelValidationTests`: walidacja podatności na dwóch polach `base` i `referenceRadius`, `valueOutOfRange` z nazwą pola, bez przypadków wykładników; `.rigid` tylko z `.hard` (albo z c₀ = 0).
+   - `NativeMetalShaderABITests`: sonda cache mierzy `compliance` zamiast `rho`. `testHostComputesContactComplianceForBubbleRecord` sprawdza c₀ · r / r_ref, `contact.y` = 0 i liniowy wzrost z promieniem; usunięte przypadki skrajnych wykładników i przepełnienia Double/Float przy s = 70.
+   - `NativeMetalXPBDTests`: usunięte `testWallRhoComesFromThePredictedCenter`, `testWallRhoOfShallowContactIsDistanceOverRadius`, `testPairRhoSplitsTheOverlapByComplianceFromThePreviousStep` i `testHardPairKeepsRhoOneAndSoftHardPairPutsTheWholeOverlapOnTheSoftEnd`, bo ρ nie istnieje; `testPreparedContactCarriesTheSumOfEndComplianceInRhoZ` → `testPreparedContactCarriesTheSumOfEndComplianceInComplianceX`.
+   - `NativeMetalStructuralOperationTests`: `testMergeResultWithSourceIDStartsItsPairEndAtRhoOne` i `testSplitResultWithSourceIDStartsItsPairEndAtRhoOne` → `…StartsItsPairWithAFreshRecordAndTheComplianceOfItsOwnRadius` (świeży rekord, `compliance.x` = c₀ · (r_a + r_b) / r_ref, bez dziedziczenia ρ).
+   - Zmienione tylko wywołania (bez wykładników), oczekiwania bez zmian: `NativeMetalStructuralOperationTests` (materiały), `ContainmentResolutionTests`, `MotionControllersPrepareTests`, `CrowdScene.softBubblePhysics`. Materiał tłoku `CrowdScene.softCrowdPhysics` traci k = 1; `CrowdCompressionTests` i pokrewne przechodzą bez zmiany oczekiwań.
 
 ## Deviations from Design
 
@@ -245,4 +310,8 @@ None.
 
 | # | Slice | Task | Type (change/gap) | Description | Status | Date |
 |---|-------|------|-------------------|-------------|--------|------|
-|   |       |      |                   |             |        |      |
+| 1 | 1 | 2 | change | Test czterech rozmiarów ([P-B-1](#p-b-1)) ma własny świat ze ścianą statyczną grubości 300 (lico x = −100, region ±500) zamiast ścian `CrowdScene`: ściana 48 dałaby bańce r 148 drugą sprężynę z tyłu (dwustronne krawędzie zostają do wycinka 3). | pending | 2026-11-20 |
+| 2 | 1 | 3 | change | Obok zaplanowanego testu stagera doszedł drugi, `testWorstAlphaUsesTheLargestRadiusOfTheRunningAndTheNewRadiusTransition`: r_max obejmuje też promień trwającego i nowego przejścia promienia. | pending | 2026-11-20 |
+| 3 | 1 | 5 | change | W `ContactComplianceTests` testy oparte na s, k i ρ_min są usunięte, nie przeniesione; test podziału wgniecenia w parze dzieli przez nadpisanie `contactCompliance` jednej bańki (proporcja 3) zamiast przez kc. | pending | 2026-11-20 |
+| 4 | 1 | 5 | change | Test konturu przy ścianie w `ContactContourTests`: c₀ 0,2 → 0,06 (c · F = 0,3 r), bo bez kc dawne c₀ dawałoby ugięcie równe całemu promieniowi. | pending | 2026-11-20 |
+| 5 | 1 | przegląd końcowy (491ee99) | change | Test pary ([P-B-2](#p-b-2)) przeniesiony z `CrowdScene.makeWorld` (rama ścian; bańka r 148 startowała 26 jednostek w ścianie) do otwartego świata ±500 bez ścian, z asercją uspokojenia. Test tłoku ([P-B-6](#p-b-6)) dostał asercję uspokojenia (maks. prędkość < 5) i dotyku obu ścian przez bańkę w narożniku. | pending | 2026-11-20 |
