@@ -111,7 +111,8 @@ public struct ObjectFilter: Equatable, Sendable {
 }
 
 public struct BubbleDescriptor: Equatable, Sendable {
-    public let drivePolicy: BubbleDrivePolicy
+    /// Polityka chwytu gumką; `nil` oznacza bańkę, której `beginPlayerDrive` nie chwyta.
+    public let drivePolicy: BubbleDrivePolicy?
     public let id: ObjectID
     public let position: WorldPoint
     public let velocity: WorldPoint
@@ -136,7 +137,7 @@ public struct BubbleDescriptor: Equatable, Sendable {
                 regionExitPolicy: RegionExitPolicy = .remove, physicsMaterialID: PhysicsMaterialID,
                 renderMaterialID: RenderMaterialID, mergeGroups: MergeGroupSet = [],
                 eventInterest: EventInterest = [],
-                drivePolicy: BubbleDrivePolicy = .standard, filter: CollisionFilter = .default,
+                drivePolicy: BubbleDrivePolicy? = nil, filter: CollisionFilter = .default,
                 layer: Int32 = 0, decal: Decal? = nil, contactCompliance: Float? = nil) throws {
         try requireFinite(position, "bubble.position")
         try requireFinite(velocity, "bubble.velocity")

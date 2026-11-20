@@ -6,46 +6,19 @@ public struct PlayerDriveID: RawRepresentable, Hashable, Sendable {
     public init(rawValue: UInt64) { self.rawValue = rawValue }
 }
 
-/// Polityka zmiany kształtu i odpowiedzi prowadzenia bańki. Czasy mierzone w symulacji.
+/// Polityka chwytu bańki gumką siłową. Bańka z `drivePolicy` = `nil` nie daje się chwycić.
 public struct BubbleDrivePolicy: Equatable, Sendable {
-    public let rigidifies: Bool
-    public let rigidificationDuration: Double
-    public let relaxationDuration: Double
-    /// Górna granica prędkości prowadzenia w jednostkach świata na sekundę.
-    public let maximumSpeed: Float
-    /// Prędkość na jednostkę odległości od celu. `nil` zachowuje historyczny stały napęd.
-    public let distanceResponse: Float?
-    /// Sztywność gumki K_band (siła na jednostkę naciągnięcia). `nil` zachowuje napęd prędkościowy (`maximumSpeed`, `distanceResponse`).
-    public let bandStiffness: Float?
-    /// Tłumienie gumki D: siła −D · v bańki. Dozwolone tylko z `bandStiffness`.
-    public let bandDamping: Float
-    /// Górna granica modułu siły gumki. `nil` oznacza brak limitu; dozwolone tylko z `bandStiffness`.
+    /// Sztywność gumki K_band (siła na jednostkę naciągnięcia).
+    public let bandStiffness: Float
+    /// Górna granica modułu siły gumki. `nil` oznacza brak limitu.
     public let maximumForce: Float?
-    public static let standard = try! BubbleDrivePolicy()
-    public init(rigidifies: Bool = true, rigidificationDuration: Double = 0.15,
-                relaxationDuration: Double = 0.25, maximumSpeed: Float = 12,
-                distanceResponse: Float? = nil, bandStiffness: Float? = nil, bandDamping: Float = 0,
-                maximumForce: Float? = nil) throws {
-        for duration in [rigidificationDuration, relaxationDuration] {
-            guard duration.isFinite, duration >= 0 else { throw ModelValidationError.valueOutOfRange("drive.duration") }
+    public init(bandStiffness: Float, maximumForce: Float? = nil) throws {
+        // Pola zgłaszają `valueOutOfRange` także dla ∞ i NaN, inaczej niż `requirePositive`.
+        guard bandStiffness.isFinite, bandStiffness > 0 else { throw ModelValidationError.valueOutOfRange("drive.bandStiffness") }
+        if let maximumForce {
+            guard maximumForce.isFinite, maximumForce > 0 else { throw ModelValidationError.valueOutOfRange("drive.maximumForce") }
         }
-        try requirePositive(maximumSpeed, "drive.maximumSpeed")
-        if let distanceResponse { try requirePositive(distanceResponse, "drive.distanceResponse") }
-        // Pola gumki zgłaszają `valueOutOfRange` także dla ∞ i NaN, G1-AC5 wymaga `valueOutOfRange` także dla ∞ i NaN, inaczej niż `requirePositive`.
-        if let bandStiffness {
-            guard bandStiffness.isFinite, bandStiffness > 0 else { throw ModelValidationError.valueOutOfRange("drive.bandStiffness") }
-            guard bandDamping.isFinite, bandDamping >= 0 else { throw ModelValidationError.valueOutOfRange("drive.bandDamping") }
-            if let maximumForce {
-                guard maximumForce.isFinite, maximumForce > 0 else { throw ModelValidationError.valueOutOfRange("drive.maximumForce") }
-            }
-        } else {
-            guard bandDamping == 0 else { throw ModelValidationError.valueOutOfRange("drive.bandDamping") }
-            guard maximumForce == nil else { throw ModelValidationError.valueOutOfRange("drive.maximumForce") }
-        }
-        self.rigidifies = rigidifies; self.rigidificationDuration = rigidificationDuration
-        self.relaxationDuration = relaxationDuration
-        self.maximumSpeed = maximumSpeed; self.distanceResponse = distanceResponse
-        self.bandStiffness = bandStiffness; self.bandDamping = bandDamping; self.maximumForce = maximumForce
+        self.bandStiffness = bandStiffness; self.maximumForce = maximumForce
     }
 }
 

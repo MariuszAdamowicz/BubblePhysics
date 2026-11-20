@@ -27,6 +27,12 @@ final class JointStagingTests: XCTestCase {
                                      physicsMaterialID: bubbleMaterial, renderMaterialID: styleID))
     }
 
+    /// Bańka z polityką gumki, którą `beginPlayerDrive` przyjmuje.
+    private func grabbableBubble(_ value: UInt64, at x: Float = 0) throws -> WorldObject {
+        .bubble(try BubbleDescriptor(id: id(value), position: [x, 0], targetRadius: 2, mass: 2, physicsMaterialID: bubbleMaterial,
+                                     renderMaterialID: styleID, drivePolicy: BubbleDrivePolicy(bandStiffness: 60)))
+    }
+
     private func box(_ value: UInt64, role: MotionRole = .dynamic, at x: Float = 0) throws -> WorldObject {
         .rigidBody(try RigidBodyDescriptor(id: id(value), vertices: [[-1, -1], [1, -1], [1, 1], [-1, 1]],
             position: [x, 0], motionRole: role, physicsMaterialID: rigidMaterial, renderMaterialID: styleID))
@@ -170,15 +176,15 @@ final class JointStagingTests: XCTestCase {
     }
 
     func testJointWithMovableBodyIsAcceptedIncludingOneImmobileEndAndWorld() throws {
-        var transaction = WorldTransaction().beginPlayerDrive(id(5), target: [1, 1])
         let state = try world([box(1, role: .static), box(2, role: .kinematic), box(3, role: .dynamic, at: 5),
-                               box(4, role: .motorDriven, at: 9), circle(5, role: .dynamic, at: 12)])
-        transaction = transaction
+                               box(4, role: .motorDriven, at: 9), circle(5, role: .dynamic, at: 12), grabbableBubble(6, at: 20)])
+        // Chwycona bańka (z polityką gumki) jest ruchomym końcem więzu dystansowego.
+        let transaction = WorldTransaction().beginPlayerDrive(id(6), target: [1, 1])
             .addJoint(weld(1, 1, 3)).addJoint(weld(2, 2, 3)).addJoint(hinge(3, 4, 1)).addJoint(hinge(4, 4, nil))
-            .addJoint(weld(5, 3, nil)).addJoint(hinge(6, 5, 2))
+            .addJoint(weld(5, 3, nil)).addJoint(hinge(6, 5, 2)).addJoint(distance(7, 6, nil))
         let change = try assertAccepted(transaction, against: state)
-        XCTAssertEqual(Set(change.state.joints.keys), Set((1...6).map { joint($0) }))
-        XCTAssertEqual(change.state.objects[id(5)]?.motionRole, .playerDriven)
+        XCTAssertEqual(Set(change.state.joints.keys), Set((1...7).map { joint($0) }))
+        XCTAssertEqual(change.state.objects[id(6)]?.motionRole, .playerDriven)
     }
 
     func testSetMotionThatWouldLeaveJointWithoutMovableBodyIsRejected() throws {
@@ -191,9 +197,9 @@ final class JointStagingTests: XCTestCase {
         assertRejected(try WorldTransaction().setPathDrive(id(2), drive: PathDrive(points: [[1, 1]], speed: 1)), against: joined,
                        reason: .unsupportedJointBody(joint(1)))
         assertRejected(WorldTransaction().setMotion(id(3), role: .static), against: joined, reason: .unsupportedJointBody(joint(2)))
-        // Zmiana między rolami ruchomymi, w tym sterowanie gracza, jest dozwolona.
+        // Zmiana między rolami ruchomymi jest dozwolona.
         let accepted = try assertAccepted(WorldTransaction().setMotion(id(2), role: .motorDriven)
-            .beginPlayerDrive(id(3), target: [2, 2]), against: joined)
+            .setMotion(id(3), role: .motorDriven), against: joined)
         XCTAssertEqual(accepted.state.joints.count, 2)
         // Drugi koniec staje się ruchomy, więc pierwszy może zostać nieruchomy.
         let swapped = try assertAccepted(WorldTransaction().setMotion(id(1), role: .kinematic), against: joined)

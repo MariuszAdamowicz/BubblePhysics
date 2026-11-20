@@ -37,18 +37,8 @@ package enum MotionControllers {
     private static func prepare(_ object: inout RuntimeObject, id: ObjectID, fields: [(RuntimeObject, ForceFieldDescriptor)],
                                 globalForce: WorldPoint, duration: Double, dt: Float) throws {
         guard let mass = object.mass else { return }
-        if case .bubble(let bubble) = object.descriptor {
-            let active = object.playerDriveTarget != nil && bubble.drivePolicy.rigidifies
-            if active || object.capturedRadius != nil {
-                object.shapeElapsed += duration
-                let seconds = active ? bubble.drivePolicy.rigidificationDuration : bubble.drivePolicy.relaxationDuration
-                let t = seconds == 0 ? Float(1) : Float(min(1, object.shapeElapsed / seconds))
-                let radius = active ? (object.capturedRadius ?? object.targetRadius) : object.targetRadius
-                object.collisionRadius = object.radiusBlendStart + (radius - object.radiusBlendStart) * t
-                object.rigidity = object.rigidityBlendStart + ((active ? 1 : 0) - object.rigidityBlendStart) * t
-                if !active && t == 1 { object.capturedRadius = nil }
-            } else { object.collisionRadius = object.targetRadius }
-        }
+        // Promień kolizji zawsze równa się docelowemu: tędy przejścia promienia docierają do fizyki (chwyt go nie zmienia).
+        if case .bubble = object.descriptor { object.collisionRadius = object.targetRadius }
         switch object.motionRole {
         case .static: object.velocity = .zero; object.angularVelocity = 0
         case .kinematic: applyKinematicDrive(&object, duration: duration)
@@ -64,23 +54,17 @@ package enum MotionControllers {
             object.velocity += force / mass * dt
         case .playerDriven:
             guard let target = object.playerDriveTarget else { object.velocity = .zero; break }
-            let policy: BubbleDrivePolicy?
-            if case .bubble(let bubble) = object.descriptor { policy = bubble.drivePolicy } else { policy = nil }
-            if let policy, let stiffness = policy.bandStiffness {
-                // Gumka siłowa: prędkość wynika z siły i masy (v2.3.0). Siła globalna i pola działają jak w `.dynamic` (CD-D-10);
-                // `maximumForce` ogranicza samą gumkę. Tłumienie gumki −D · v jest całkowane wykładniczo, jak tłumienie materiału.
-                var band = (target - object.position) * stiffness
-                if let maximumForce = policy.maximumForce {
-                    let magnitude = length(band)
-                    if magnitude > maximumForce { band *= maximumForce / magnitude }
-                }
-                let force = band + externalForce(id: id, at: object.position, fields: fields, globalForce: globalForce)
-                object.velocity = (object.velocity + force / mass * dt) * exp(-policy.bandDamping * dt / mass)
-            } else {
-                let delta = target - object.position
-                let speed = bubbleDriveSpeed(distance: length(delta), policy: policy)
-                object.velocity = velocity(to: target, from: object.position, speed: speed, dt: dt)
+            // Gumka siłowa: prędkość wynika z siły i masy (v2.3.0). Siła globalna i pola działają jak w `.dynamic` (CD-D-10);
+            // `maximumForce` ogranicza samą gumkę. Chwycona bańka bez polityki nie istnieje (stager odrzuca chwyt), więc brak
+            // polityki znaczy brak napędu.
+            guard case .bubble(let bubble) = object.descriptor, let policy = bubble.drivePolicy else { object.velocity = .zero; break }
+            var band = (target - object.position) * policy.bandStiffness
+            if let maximumForce = policy.maximumForce {
+                let magnitude = length(band)
+                if magnitude > maximumForce { band *= maximumForce / magnitude }
             }
+            let force = band + externalForce(id: id, at: object.position, fields: fields, globalForce: globalForce)
+            object.velocity += force / mass * dt
         case .pathDriven:
             if let path = object.pathDrive, !object.pathStopped {
                 while object.pathIndex < path.points.count - 1 && length(path.points[object.pathIndex] - object.position) <= 0.0001 {
@@ -139,12 +123,6 @@ package enum MotionControllers {
         let delta = target - origin, distance = length(delta)
         guard distance > 0 else { return .zero }
         return delta * (min(speed, distance / dt) / distance)
-    }
-
-    private static func bubbleDriveSpeed(distance: Float, policy: BubbleDrivePolicy?) -> Float {
-        guard let policy else { return 12 }
-        guard let response = policy.distanceResponse else { return policy.maximumSpeed }
-        return min(policy.maximumSpeed, distance * response)
     }
 
     package static func feedback(_ state: inout RuntimeState, contacts: [ObjectID: [DriveBlockingContact]]) -> [DriveFeedback] {

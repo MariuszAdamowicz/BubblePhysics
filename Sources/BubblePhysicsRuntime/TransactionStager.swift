@@ -50,12 +50,7 @@ package struct RuntimeObject: Equatable, Sendable {
     package var effectiveRadius: Float = 0
     /// AABB bańki z ostatniego kroku solvera; `nil`, gdy krok jeszcze jej nie policzył.
     package var bounds: WorldRectangle?
-    package var capturedRadius: Float?
-    package var rigidity: Float = 0
     package var structuralShape: NativeStructuralShape?
-    package var radiusBlendStart: Float = 0
-    package var rigidityBlendStart: Float = 0
-    package var shapeElapsed: Double = 0
 
     init(_ descriptor: WorldObject) {
         self.descriptor = descriptor
@@ -293,7 +288,6 @@ private struct StagingContext {
             existing.motionRole = role
             if role != .playerDriven {
                 existing.playerDriveTarget = nil; existing.playerDriveID = nil; existing.motionBeforeDrive = nil
-                existing.radiusBlendStart = existing.collisionRadius; existing.rigidityBlendStart = existing.rigidity; existing.shapeElapsed = 0
             }
             if role != .pathDriven { existing.pathDrive = nil; existing.pathBlocker = nil; existing.pathStopped = false }
             if role != .motorDriven { existing.motorDrive = nil }
@@ -345,6 +339,10 @@ private struct StagingContext {
         case .beginPlayerDrive(let id, let target):
             try requireFinite(target, "playerDrive.target")
             var existing = try physicalObject(id)
+            // Chwycić można tylko bańkę z gumką: bańka bez `drivePolicy` i bryła nie mają czym jechać (G4-AC2).
+            guard case .bubble(let bubble) = existing.descriptor, bubble.drivePolicy != nil else {
+                throw TransactionRejectionReason.incompatibleObjectKind(id)
+            }
             try requireBandDriveTarget(target, of: existing)
             guard existing.playerDriveTarget == nil else { throw TransactionRejectionReason.driveAlreadyActive(id) }
             existing.motionBeforeDrive = existing.motionRole == .playerDriven ? .dynamic : existing.motionRole
@@ -352,8 +350,6 @@ private struct StagingContext {
             existing.playerDriveID = PlayerDriveID(rawValue: state.nextDriveID)
             guard state.nextDriveID < UInt64.max else { throw ModelValidationError.valueOutOfRange("drive.id") }
             state.nextDriveID += 1
-            existing.capturedRadius = existing.effectiveRadius
-            existing.radiusBlendStart = existing.collisionRadius; existing.rigidityBlendStart = existing.rigidity; existing.shapeElapsed = 0
             state.objects[id] = existing
         case .updatePlayerDrive(let id, let target):
             try requireFinite(target, "playerDrive.target")
@@ -367,7 +363,6 @@ private struct StagingContext {
             guard existing.playerDriveTarget != nil else { throw TransactionRejectionReason.driveNotActive(id) }
             existing.motionRole = existing.motionBeforeDrive ?? .dynamic
             existing.playerDriveTarget = nil; existing.playerDriveID = nil; existing.motionBeforeDrive = nil
-            existing.radiusBlendStart = existing.collisionRadius; existing.rigidityBlendStart = existing.rigidity; existing.shapeElapsed = 0
             try validate(existing)
             state.objects[id] = existing
             try validateJoints(attachedTo: id)
@@ -549,7 +544,7 @@ private struct StagingContext {
     /// Gumka całkuje siłę jawnie, więc wymaga K · dt² / m < 1 (CD-D-9). `validate(_:)` widzi masę każdej bańki po dodaniu, zamianie,
     /// scaleniu i podziale (podział zmniejsza masę), więc jedno sprawdzenie obejmuje wszystkie cztery ścieżki.
     private func validateBandStability(of bubble: BubbleDescriptor) throws {
-        guard let stiffness = bubble.drivePolicy.bandStiffness else { return }
+        guard let stiffness = bubble.drivePolicy?.bandStiffness else { return }
         let step = Double(state.configuration.fixedTimeStep)
         guard Double(stiffness) * step * step / Double(bubble.mass) < 1 else {
             throw ModelValidationError.valueOutOfRange("drive.bandStiffness")
@@ -588,7 +583,7 @@ private struct StagingContext {
 
     /// Siła gumki K·(cel − położenie) musi być skończona, więc w trybie gumki cel podlega temu samemu limitowi co siła `MotorDrive`.
     private func requireBandDriveTarget(_ target: WorldPoint, of object: RuntimeObject) throws {
-        guard case .bubble(let bubble) = object.descriptor, bubble.drivePolicy.bandStiffness != nil else { return }
+        guard case .bubble(let bubble) = object.descriptor, bubble.drivePolicy != nil else { return }
         try requireDriveMagnitude(target.x, "playerDrive.target"); try requireDriveMagnitude(target.y, "playerDrive.target")
     }
 

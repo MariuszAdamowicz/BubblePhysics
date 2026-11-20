@@ -30,8 +30,8 @@ public struct BubbleResult: Equatable, Sendable {
     public let layer: Int32
     /// Naklejka wyniku scalenia albo podziału; `nil` oznacza brak.
     public let decal: Decal?
-    /// Polityka jazdy wyniku scalenia albo podziału; domyślnie `.standard`.
-    public let drivePolicy: BubbleDrivePolicy
+    /// Polityka chwytu gumką wyniku scalenia albo podziału; `nil` (domyślnie) oznacza wynik, którego nie da się chwycić.
+    public let drivePolicy: BubbleDrivePolicy?
     /// Masa wyniku scalenia; `nil` oznacza sumę mas źródeł. Prędkość liniowa i kątowa wyniku zawsze
     /// pochodzą z mas źródeł (pęd i moment pędu źródeł podzielone przez ich sumę mas i wynikającą z niej
     /// bezwładność), więc przy nadpisanej masie pęd nie jest zachowany. Pole działa
@@ -44,7 +44,7 @@ public struct BubbleResult: Equatable, Sendable {
                 motionRole: MotionRole = .dynamic, regionExitPolicy: RegionExitPolicy = .remove,
                 mergeGroups: MergeGroupSet = [], eventInterest: EventInterest = [],
                 filter: CollisionFilter = .default, layer: Int32 = 0, decal: Decal? = nil,
-                drivePolicy: BubbleDrivePolicy = .standard, mass: Float? = nil, contactCompliance: Float? = nil) {
+                drivePolicy: BubbleDrivePolicy? = nil, mass: Float? = nil, contactCompliance: Float? = nil) {
         self.filter = filter; self.layer = layer; self.decal = decal
         self.drivePolicy = drivePolicy; self.mass = mass; self.contactCompliance = contactCompliance
         self.id = id; self.physicsMaterialID = physicsMaterialID; self.renderMaterialID = renderMaterialID

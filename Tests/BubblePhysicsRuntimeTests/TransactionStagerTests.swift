@@ -115,7 +115,7 @@ final class TransactionStagerTests: XCTestCase {
     }
 
     func testDriveLifecycleAndInvalidRoles() throws {
-        let initial = try TransactionStager.stage(resources().add(.bubble(bubble(1))), against: state()).state
+        let initial = try TransactionStager.stage(resources().add(.bubble(bandBubble(1, mass: 2))), against: state()).state
         let driven = try TransactionStager.stage(WorldTransaction()
             .beginPlayerDrive(id(1), target: [2, 3]).updatePlayerDrive(id(1), target: [4, 5]), against: initial).state
         XCTAssertEqual(driven.objects[id(1)]?.motionRole, .playerDriven)
@@ -174,7 +174,7 @@ final class TransactionStagerTests: XCTestCase {
     }
 
     func testCommandsRejectInvalidNumbersAndUnsupportedObjectKinds() throws {
-        let initial = try TransactionStager.stage(resources().add(.bubble(bubble(1))), against: state()).state
+        let initial = try TransactionStager.stage(resources().add(.bubble(bandBubble(1, mass: 2))), against: state()).state
         assertRejected(WorldTransaction().setGlobalForce([.infinity, 0]), against: initial,
                        reason: .invalidValue(.nonFiniteValue("globalForce")))
         assertRejected(WorldTransaction().beginPlayerDrive(id(1), target: [0, .nan]), against: initial,
@@ -301,19 +301,19 @@ final class TransactionStagerTests: XCTestCase {
                        reason: .invalidValue(.staticGeometryOutsideSimulationRegion))
     }
 
-    func testMergeResultTakesDrivePolicyFromBubbleResultAndDefaultsToStandard() throws {
-        let policy = try BubbleDrivePolicy(maximumSpeed: 3)
+    func testMergeResultTakesDrivePolicyFromBubbleResultAndDefaultsToNil() throws {
+        let policy = try BubbleDrivePolicy(bandStiffness: 30, maximumForce: 200)
         let initial = try TransactionStager.stage(resources().add(.bubble(bubble(1))).add(.bubble(bubble(2, position: [3, 0]))), against: state()).state
         let custom = try mergedBubble(against: initial,
             result: BubbleResult(id: id(3), physicsMaterialID: materialID, renderMaterialID: styleID, drivePolicy: policy))
         XCTAssertEqual(custom.drivePolicy, policy)
-        let standard = try mergedBubble(against: initial,
+        let plain = try mergedBubble(against: initial,
             result: BubbleResult(id: id(3), physicsMaterialID: materialID, renderMaterialID: styleID))
-        XCTAssertEqual(standard.drivePolicy, .standard)
+        XCTAssertNil(plain.drivePolicy)
     }
 
     func testSplitPartsTakeDrivePolicyFromTheirBubbleResults() throws {
-        let policy = try BubbleDrivePolicy(rigidifies: false, maximumSpeed: 3)
+        let policy = try BubbleDrivePolicy(bandStiffness: 30, maximumForce: 200)
         let initial = try TransactionStager.stage(resources().add(.bubble(bubble(1))), against: state()).state
         let split = try TransactionStager.stage(WorldTransaction().splitBubble(id(1),
             first: BubbleSplitPart(result: BubbleResult(id: id(4), physicsMaterialID: materialID,
@@ -323,7 +323,7 @@ final class TransactionStagerTests: XCTestCase {
         guard case .bubble(let first) = try XCTUnwrap(split.objects[id(4)]).descriptor,
               case .bubble(let second) = try XCTUnwrap(split.objects[id(5)]).descriptor else { return XCTFail("brak baniek") }
         XCTAssertEqual(first.drivePolicy, policy)
-        XCTAssertEqual(second.drivePolicy, .standard)
+        XCTAssertNil(second.drivePolicy)
     }
 
     func testMergeMassOverridesResultMassAndNilKeepsTheSumOfSourceMasses() throws {
@@ -513,7 +513,7 @@ final class TransactionStagerTests: XCTestCase {
         let initial = try TransactionStager.stage(resources().add(.bubble(bubble(1))), against: state()).state
         func part(_ value: UInt64, band banded: Bool, share: Float) throws -> BubbleSplitPart {
             BubbleSplitPart(result: BubbleResult(id: id(value), physicsMaterialID: materialID, renderMaterialID: styleID,
-                drivePolicy: banded ? try band() : .standard), share: share)
+                drivePolicy: banded ? try band() : nil), share: share)
         }
         assertBandUnstable(WorldTransaction().splitBubble(id(1), first: try part(4, band: true, share: 0.1),
                                                           second: try part(5, band: false, share: 0.9)), against: initial)

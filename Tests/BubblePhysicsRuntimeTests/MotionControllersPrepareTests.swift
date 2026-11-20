@@ -90,8 +90,8 @@ final class MotionControllersPrepareTests: XCTestCase {
     private let bubbleMaterial = PhysicsMaterialID(rawValue: 1)
     private let driven = ObjectID(rawValue: 1)
 
-    /// Bańka m = 2 w (0, 0) z prędkością `velocity` chwycona gumką/napędem prędkościowym, plus ewentualne pola i siła globalna.
-    private func drivenState(policy: BubbleDrivePolicy, target: WorldPoint, velocity: WorldPoint = .zero, globalForce: WorldPoint = .zero,
+    /// Bańka m = 2 w (0, 0) z prędkością `velocity` chwycona gumką, plus ewentualne pola i siła globalna.
+    private func drivenState(policy: BubbleDrivePolicy?, target: WorldPoint, velocity: WorldPoint = .zero, globalForce: WorldPoint = .zero,
                              fields: [ForceFieldDescriptor] = []) throws -> RuntimeState {
         var transaction = WorldTransaction()
             .updatePhysicsMaterial(bubbleMaterial, material: try PhysicsMaterial(kind: .bubble))
@@ -135,14 +135,6 @@ final class MotionControllersPrepareTests: XCTestCase {
         assertEqual(below, WorldPoint(100 / 2 / 60, 0))
     }
 
-    /// Tłumienie gumki to −D · v całkowane wykładniczo: v ← (v + F/m · dt) · e^(−D · dt / m).
-    func testBandDampingDecaysTheVelocityExponentiallyAfterTheForceIncrement() throws {
-        let policy = try BubbleDrivePolicy(bandStiffness: 100, bandDamping: 6)
-        let velocity = try preparedVelocity(drivenState(policy: policy, target: [3, 4], velocity: [1, -2]))
-        let decay = Float(exp(-6.0 / 60 / 2))
-        assertEqual(velocity, WorldPoint((1 + 300 / 2 / 60) * decay, (-2 + 400 / 2 / 60) * decay))
-    }
-
     /// CD-D-10 (P-B-9): siła globalna i pole kierunkowe dodają się do siły gumki jak w `.dynamic`; pole z filtrem na inny ID nie działa.
     func testBandForceAddsGlobalForceAndFieldsLikeADynamicBubble() throws {
         let policy = try BubbleDrivePolicy(bandStiffness: 100)
@@ -165,13 +157,19 @@ final class MotionControllersPrepareTests: XCTestCase {
         assertEqual(velocity, WorldPoint(150 / 2 / 60, (200 - 50) / 2 / 60))
     }
 
-    /// P-B-10 (G5-AC1): bez `bandStiffness` napęd zostaje prędkościowy: prędkość narzucona, siła globalna ignorowana.
-    func testPolicyWithoutBandKeepsTheV220VelocityDrive() throws {
-        let policy = try BubbleDrivePolicy(maximumSpeed: 12)
-        let velocity = try preparedVelocity(drivenState(policy: policy, target: [3, 4], velocity: [1, -2], globalForce: [20, -10]))
-        assertEqual(velocity, WorldPoint(12 * 0.6, 12 * 0.8))
-        // Odległość 5 · odpowiedź 1 = prędkość 5 w kierunku (0,6; 0,8).
-        let response = try BubbleDrivePolicy(maximumSpeed: 12, distanceResponse: 1)
-        assertEqual(try preparedVelocity(drivenState(policy: response, target: [3, 4])), WorldPoint(3, 4))
+    /// Chwycona bańka bez polityki nie istnieje przez stager (chwyt jest odrzucany), a gdyby stan ją miał, nie ma czym jechać:
+    /// dostaje prędkość 0 jak `.playerDriven` bez celu, bez siły globalnej.
+    func testPlayerDrivenBubbleWithoutPolicyGetsZeroVelocity() throws {
+        var state = try drivenState(policy: BubbleDrivePolicy(bandStiffness: 100), target: [3, 4], velocity: [1, -2], globalForce: [20, -10])
+        let chosen = try XCTUnwrap(state.objects[driven])
+        guard case .bubble(let bubble) = chosen.descriptor else { return XCTFail("to nie bańka") }
+        var plain = RuntimeObject(.bubble(try BubbleDescriptor(id: bubble.id, position: bubble.position, velocity: bubble.velocity,
+            targetRadius: bubble.targetRadius, mass: bubble.mass, physicsMaterialID: bubble.physicsMaterialID,
+            renderMaterialID: bubble.renderMaterialID, drivePolicy: nil)))
+        plain.motionRole = .playerDriven; plain.playerDriveTarget = chosen.playerDriveTarget; plain.velocity = chosen.velocity
+        state.objects[driven] = plain
+        XCTAssertEqual(state.objects[driven]?.motionRole, .playerDriven)
+        XCTAssertNotNil(state.objects[driven]?.playerDriveTarget)
+        assertEqual(try preparedVelocity(state), .zero)
     }
 }

@@ -127,7 +127,7 @@ package final class NativeCompleteStepper: CompleteStepper {
             value.position = object.position; value.previousPosition = object.previousPosition
             value.velocity = object.velocity; value.rotation = object.rotation
             value.angularVelocity = object.angularVelocity; value.motionRole = object.motionRole
-            value.collisionRadius = object.collisionRadius; value.rigidity = object.rigidity
+            value.collisionRadius = object.collisionRadius
             value.structuralShape = object.structuralShape; value.layer = object.layer
             return value
         }

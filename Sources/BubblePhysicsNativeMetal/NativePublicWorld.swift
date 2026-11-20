@@ -15,7 +15,6 @@ package struct NativePublicObject: Equatable, Sendable {
     package var effectiveRadius: Float = 0
     /// AABB zdeformowanego konturu bańki po ostatnim kroku (z kernelu); `nil` dla brył i przed pierwszym krokiem.
     package var bounds: WorldRectangle?
-    package var rigidity: Float = 0
     package var structuralShape: NativeStructuralShape?
     /// Warstwa rysowania i hit-testu; w rekordzie bańki i bryły jako `filter.w`.
     package var layer: Int32 = 0
@@ -67,7 +66,7 @@ package struct NativePublicFrame {
 
 struct NativePublicProperties: Equatable, Sendable {
     var flags: SIMD4<UInt32> // enabled, static, wrap, region result (0 unchanged, 1 removed, 2 wrapped)
-    var material: SIMD4<Float> // damping, deformability, rigidity, friction
+    var material: SIMD4<Float> // damping, deformability, 0 (nieużywane), friction
     var restitution: Float
     var resources: SIMD2<UInt64> // material ID, render material ID
     var eventData: SIMD2<UInt64> // interest, merge groups
@@ -190,7 +189,7 @@ package final class NativePublicWorld {
                 solverBubbles.append(bubble)
                 properties[id] = NativePublicProperties(
                     flags: SIMD4(1, object.motionRole == .static ? 1 : 0, b.regionExitPolicy == .wrap ? 1 : 0, 0),
-                    material: SIMD4(material.damping, material.deformability, object.rigidity, material.friction),
+                    material: SIMD4(material.damping, material.deformability, 0, material.friction),
                     restitution: material.restitution,
                     resources: SIMD2(b.physicsMaterialID.rawValue, b.renderMaterialID.rawValue),
                     eventData: SIMD2(b.eventInterest.rawValue, b.mergeGroups.rawValue), filter: b.filter,

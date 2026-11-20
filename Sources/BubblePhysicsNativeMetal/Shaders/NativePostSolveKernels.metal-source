@@ -674,12 +674,11 @@ kernel void nativeAccumulateContactPressure(device NativeBubble *bubbles [[buffe
     // niezmienionej geometrii zatwierdzonej klatki.
     float4 value = float4(deficit, deficit, 0, 0);
     if (bubble.publicFlags.x) {
-        float softness = bubble.material.y * (1 - bubble.material.z);
+        float softness = bubble.material.y;
         value = float4(max(deficit, directionalPressure * softness), deficit, 0, 0);
         // Bańka z podatnością kontaktu omija bramkę deformowalności: bez niej materiał z domyślnym `deformability` = 0 nie miałby
-        // konturu. Bramka `material.z >= 1` zostaje.
-        if (softness == 0 && bubble.material.z == 0 && bubble.contact.x <= 0) value.xy = 0;
-        if (bubble.material.z >= 1) value.xy = 0;
+        // konturu.
+        if (softness == 0 && bubble.contact.x <= 0) value.xy = 0;
     }
     if (!all(isfinite(value))) nativeSafetyFailure(safety, 1);
     pressure[index] = value;

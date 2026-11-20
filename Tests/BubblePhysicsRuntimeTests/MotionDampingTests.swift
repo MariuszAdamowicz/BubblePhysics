@@ -104,7 +104,7 @@ final class MotionDampingTests: XCTestCase {
         for mass: Float in [0.34, 1.36, 5.44] {
             var deflections: [Float] = []
             for gamma: Float in [0, 0.6, 4] {
-                let policy = try BubbleDrivePolicy(rigidifies: false, bandStiffness: 100, maximumForce: maximumForce)
+                let policy = try BubbleDrivePolicy(bandStiffness: 100, maximumForce: maximumForce)
                 let world = try await world(bubble: bubbleMaterial(damping: gamma), wall: true, extent: 1500) {
                     try $0.add(CrowdScene.bubble(1, at: [faceX + radius, 0], radius: radius, mass: mass, drivePolicy: policy))
                         .beginPlayerDrive(id(1), target: [faceX + radius - 0.1, 0])
@@ -150,7 +150,7 @@ final class MotionDampingTests: XCTestCase {
         let radius: Float = 24, force: Float = 600
         let expected = baseCompliance * (radius / referenceRadius) * force
         for gamma: Float in [0.6, 4] {
-            let policy = try BubbleDrivePolicy(rigidifies: false, bandStiffness: 100, maximumForce: force)
+            let policy = try BubbleDrivePolicy(bandStiffness: 100, maximumForce: force)
             let band = try await world(bubble: bubbleMaterial(damping: gamma), wall: true, extent: 1500) {
                 try $0.add(CrowdScene.bubble(1, at: [faceX + radius, 0], radius: radius, mass: 1.36, drivePolicy: policy))
                     .beginPlayerDrive(id(1), target: [faceX + radius - 0.1, 0])
@@ -187,7 +187,7 @@ final class MotionDampingTests: XCTestCase {
         for kind in Driven.allCases {
             for gamma: Float in [0, 0.6, 4] {
                 let name = "\(kind), γ = \(gamma)"
-                let policy = try BubbleDrivePolicy(rigidifies: false, bandStiffness: stiffness)
+                let policy = try BubbleDrivePolicy(bandStiffness: stiffness)
                 let world = try await world(bubble: bubbleMaterial(damping: gamma, maximumLinearSpeed: nil), rigidDamping: gamma,
                                             wall: false, extent: 500) {
                     switch kind {
@@ -236,7 +236,7 @@ final class MotionDampingTests: XCTestCase {
     func testVelocityOfTheBandAtConstantStretchSettlesAtTheDiscreteSteadyState() async throws {
         let stiffness: Float = 60, stretch: Float = 0.1, mass: Float = 1.36
         for gamma: Float in [0.6, 4] {
-            let policy = try BubbleDrivePolicy(rigidifies: false, bandStiffness: stiffness)
+            let policy = try BubbleDrivePolicy(bandStiffness: stiffness)
             let start: WorldPoint = [-300, 0]
             let world = try await world(bubble: bubbleMaterial(damping: gamma), wall: false, extent: 500) {
                 try $0.add(CrowdScene.bubble(1, at: start, radius: 10, mass: mass, drivePolicy: policy))

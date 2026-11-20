@@ -65,7 +65,7 @@ enum CrowdScene {
     static func bubble(_ value: UInt64, at position: WorldPoint, radius: Float, velocity: WorldPoint = .zero,
                        mass: Float? = nil, interest: EventInterest = [.didAdd, .didExitSimulationRegion],
                        material: PhysicsMaterialID? = nil, contactCompliance: Float? = nil,
-                       drivePolicy: BubbleDrivePolicy = .standard) throws -> WorldObject {
+                       drivePolicy: BubbleDrivePolicy? = nil) throws -> WorldObject {
         .bubble(try BubbleDescriptor(id: id(value), position: position, velocity: velocity, targetRadius: radius,
                                      mass: mass ?? radius * radius / 400, physicsMaterialID: material ?? bubbleMaterial,
                                      renderMaterialID: style, eventInterest: interest, drivePolicy: drivePolicy,
