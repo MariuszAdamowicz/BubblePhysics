@@ -36,7 +36,7 @@ final class MotionControllersPrepareTests: XCTestCase {
     /// Przejście parametru materiału odtwarza materiał, więc musi zachować podatność kontaktu i ζ_c (G4-AC1, G4-AC2).
     func testMaterialParameterTransitionKeepsContactComplianceAndDampingRatio() throws {
         let materialID = PhysicsMaterialID(rawValue: 7)
-        let compliance = BubbleContactCompliance(base: 0.174, referenceRadius: 20, radiusExponent: 1, compressionExponent: 0.5)
+        let compliance = BubbleContactCompliance(base: 0.174, referenceRadius: 20)
         let material = try PhysicsMaterial(kind: .bubble, damping: 0.1, contactCompliance: compliance, contactDampingRatio: 0.2)
         let transaction = WorldTransaction()
             .updatePhysicsMaterial(materialID, material: material)

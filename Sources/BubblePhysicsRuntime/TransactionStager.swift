@@ -556,13 +556,9 @@ private struct StagingContext {
         }
     }
 
-    /// Najmniejszy stosunek promienia konturu do r (ρ_min z CD-D-8), którego używa podatność przy k < 0.
-    private static let minimumContourRatio = 0.01
-
     /// Najgorsza α pary z tą bańką, α_cfg + 2 · c_worst / dt², musi być skończonym Float (CD-D-15), żeby GPU nie dostało podatności,
-    /// która przepełnia Float. c_worst = c₀ · (r*/r_ref)^s · ρ_min^min(k, 0), gdzie r* to ten koniec przedziału promieni, który daje
-    /// większe (r/r_ref)^s, czyli większy promień przy s ≥ 0 i mniejszy przy s < 0. Przedział obejmuje bieżący i docelowy promień
-    /// bańki, cel trwającego `startTransition` oraz `endRadius` nowego przejścia. Przy c₀ = 0 potęg się nie liczy.
+    /// która przepełnia Float. c_worst = c₀ · r_max / r_ref, gdzie r_max to największy z promieni: bieżącego, docelowego, celu
+    /// trwającego `startTransition` i `endRadius` nowego przejścia. Przy c₀ = 0 podatności się nie liczy.
     func validateWorstAlpha(_ object: RuntimeObject, endRadius: Float? = nil) throws {
         guard case .bubble(let bubble) = object.descriptor, let (materialID, _) = object.material,
               let material = state.physicsMaterials[materialID] else { return }
@@ -574,14 +570,9 @@ private struct StagingContext {
             var radii = [object.targetRadius, object.collisionRadius]
             if let endRadius { radii.append(endRadius) }
             if case .scalar(let scheduled)? = state.transitions[.bubbleRadius(bubble.id)]?.value { radii.append(scheduled) }
-            let radius = (compliance.radiusExponent >= 0 ? radii.max() : radii.min()) ?? object.targetRadius
-            let worst = compliance.scaledBase(base, radius: radius)
-                * pow(Self.minimumContourRatio, min(Double(compliance.compressionExponent), 0))
-            // GPU liczy czynnik ρ^k w Float osobno (`nativeContactCompliance`), zanim pomnoży go przez część bazową, więc
-            // ρ_min^k musi być skończonym Float także przy małym c₀, przy którym sam iloczyn się mieści.
-            let factor = pow(Float(Self.minimumContourRatio), min(compliance.compressionExponent, 0))
+            let worst = compliance.scaledBase(base, radius: radii.max() ?? object.targetRadius)
             // Host liczy c w Float, więc przepełnienie samego c też jest błędem.
-            guard factor.isFinite, Float(worst).isFinite else { throw ModelValidationError.valueOutOfRange("contactCompliance") }
+            guard Float(worst).isFinite else { throw ModelValidationError.valueOutOfRange("contactCompliance") }
             alpha += 2 * Double(Float(worst)) / stepSquared
         }
         guard Float(alpha).isFinite else { throw ModelValidationError.valueOutOfRange("contactCompliance") }

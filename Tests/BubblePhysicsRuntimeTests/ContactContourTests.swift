@@ -13,10 +13,6 @@ final class ContactContourTests: XCTestCase {
     /// Tolerancja asercji „nie płycej niż geometria”: kontur z GPU w Float, próbkowany punktami.
     private let depthTolerance: Float = 0.02
 
-    private func softWorld(compressionExponent: Float, base: Float, _ build: (WorldTransaction) throws -> WorldTransaction) throws -> BubbleWorld {
-        try softWorld(material: CrowdScene.softBubblePhysics(base: base, compressionExponent: compressionExponent), build)
-    }
-
     private func softWorld(base: Float, _ build: (WorldTransaction) throws -> WorldTransaction) throws -> BubbleWorld {
         try softWorld(material: CrowdScene.softBubblePhysics(base: base), build)
     }
@@ -56,10 +52,11 @@ final class ContactContourTests: XCTestCase {
         return full - (contour.map { length($0 - center) }.min() ?? full)
     }
 
-    // P-B-17, ściana: bańka dociśnięta siłą globalną do lewej ściany (kc = 3, więc ρ i wgniecenie są wyraźne).
+    // P-B-17, ściana: bańka dociśnięta siłą globalną do lewej ściany. c₀ = 0,06 i F = 100 dają ugięcie c · F = 6 = 0,3 r, więc
+    // wgniecenie jest wyraźne.
     func testWallContourIsNotShallowerThanTheGeometricDentAndDoesNotPenetrateTheWall() async throws {
         let wallX = -CrowdScene.interiorHalfSize.x
-        let world = try softWorld(compressionExponent: 3, base: 0.2) {
+        let world = try softWorld(base: 0.06) {
             try $0.add(CrowdScene.bubble(1, at: [wallX + radius, 0], radius: radius, mass: 1)).setGlobalForce([-100, 0])
         }
         var checked = 0
@@ -84,7 +81,7 @@ final class ContactContourTests: XCTestCase {
     // P-B-17, para: dwie jednakowe miękkie bańki ściskane siłami `MotorDrive`. Dla jednakowych kół i podatności podział wgniecenia c_a : c_b
     // jest równy połowie, więc cięciwa pary leży na płaszczyźnie symetrii w odległości D / 2 od każdego środka.
     func testPairContoursAreNotShallowerThanTheChordDentAndDoNotPenetrateEachOther() async throws {
-        let world = try softWorld(compressionExponent: 0, base: 0.2) {
+        let world = try softWorld(base: 0.2) {
             try $0.add(CrowdScene.bubble(1, at: [-radius, 0], radius: radius, mass: 1))
                 .add(CrowdScene.bubble(2, at: [radius, 0], radius: radius, mass: 1))
                 .setMotorDrive(CrowdScene.id(1), drive: MotorDrive(force: [30, 0]))

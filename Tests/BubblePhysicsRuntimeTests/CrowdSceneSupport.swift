@@ -95,22 +95,20 @@ enum CrowdScene {
     /// Drugi materiał baniek sceny, np. twardy obok miękkiego w jednym świecie.
     static let secondBubbleMaterial = PhysicsMaterialID(rawValue: 3)
 
-    /// Materiał baniek z podatnością kontaktu c = base · (r / referenceRadius)^s · ρ^k; reszta jak w `bubblePhysics`.
+    /// Materiał baniek z podatnością kontaktu c = base · r / referenceRadius; reszta jak w `bubblePhysics`.
     /// Bez tłumienia, `maximumLinearSpeed` = 600 jak w scenie tłoku. `dampingRatio` to ζ_c kontaktu miękkiego (domyślnie 1, jak w materiale).
-    static func softBubblePhysics(base: Float, radiusExponent: Float = 1, compressionExponent: Float = 0,
-                                  referenceRadius: Float = 20, maximumLinearSpeed: Float? = 600,
+    static func softBubblePhysics(base: Float, referenceRadius: Float = 20, maximumLinearSpeed: Float? = 600,
                                   damping: Float = 0, dampingRatio: Float = 1) throws -> PhysicsMaterial {
         try PhysicsMaterial(kind: .bubble, damping: damping, maximumLinearSpeed: maximumLinearSpeed,
-                            contactCompliance: BubbleContactCompliance(base: base, referenceRadius: referenceRadius,
-                                radiusExponent: radiusExponent, compressionExponent: compressionExponent),
+                            contactCompliance: BubbleContactCompliance(base: base, referenceRadius: referenceRadius),
                             contactDampingRatio: dampingRatio)
     }
 
-    /// Materiał miękki tłoku z P-B-27 i P-B-28: s = 1, k = 1, c₀ = 3,85e-3 przy r_ref = 20. Od v2.3.0 kontakt miękki ugina się
+    /// Materiał miękki tłoku z P-B-27 i P-B-28: c₀ = 3,85e-3 przy r_ref = 20. Od v2.3.0 kontakt miękki ugina się
     /// o pełne c · F (CD-D-16), czyli 3,85× mniej niż dawne c₀ = 1e-3 z częściową korektą prędkości; c₀ przeskalowane o ten
     /// współczynnik zachowuje dawny wygląd: kontakt realnie ustępuje, a bańki nie wchodzą w siebie bez granic.
     static func softCrowdPhysics() throws -> PhysicsMaterial {
-        try softBubblePhysics(base: 3.85e-3, radiusExponent: 1, compressionExponent: 1)
+        try softBubblePhysics(base: 3.85e-3)
     }
 
     /// Ściana, w którą bańka jest dociskana.

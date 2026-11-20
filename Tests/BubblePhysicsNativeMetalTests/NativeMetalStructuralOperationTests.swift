@@ -178,12 +178,12 @@ final class NativeMetalStructuralOperationTests: XCTestCase {
     }
 
     // P-B-13: wynik scalenia z ID źródła ma w pierwszym kroku ρ_prev = 1 na końcu pary, więc podział nakładania liczy c(1), a nie
-    // c(ρ źródła). Materiał z kc = 3, żeby c zależało od ρ. Test sprawdza ścieżkę hosta, nie gałąź shadera: host unieważnia rekordy
+    // c(ρ źródła). Od 3.0.0 c nie zależy od ρ (bez kc); test do przepisania wraz z usunięciem ρ (zadanie 7 wycinka 1). Test sprawdza ścieżkę hosta, nie gałąź shadera: host unieważnia rekordy
     // cache ID strukturalnych (`NativeMetalSolver`, invalidationRecords), więc rekord pary jest nowy (wiek 1) i oba końce, także
     // partnera, mają ρ_prev = 1. Gałąź `nativeIsStructuralResult` jest tylko drugą zaporą i tu nie jest wykonywana.
     func testMergeResultWithSourceIDStartsItsPairEndAtRhoOne() async throws {
         let softMaterial = try PhysicsMaterial(kind: .bubble, deformability: 1,
-            contactCompliance: BubbleContactCompliance(base: 0.002, referenceRadius: 1, radiusExponent: 0, compressionExponent: 3))
+            contactCompliance: BubbleContactCompliance(base: 0.002, referenceRadius: 1))
         func soft(_ n: UInt64, x: Float) throws -> BubbleDescriptor {
             try BubbleDescriptor(id: id(n), position: [x, 0], targetRadius: 1, physicsMaterialID: material, renderMaterialID: style)
         }
@@ -224,7 +224,7 @@ final class NativeMetalStructuralOperationTests: XCTestCase {
     // (po ±0,7 w poziomie) nadal na niego nachodzą.
     func testSplitResultWithSourceIDStartsItsPairEndAtRhoOne() async throws {
         let softMaterial = try PhysicsMaterial(kind: .bubble, deformability: 1,
-            contactCompliance: BubbleContactCompliance(base: 0.002, referenceRadius: 1, radiusExponent: 0, compressionExponent: 3))
+            contactCompliance: BubbleContactCompliance(base: 0.002, referenceRadius: 1))
         func soft(_ n: UInt64, y: Float) throws -> BubbleDescriptor {
             try BubbleDescriptor(id: id(n), position: [0, y], targetRadius: 1, physicsMaterialID: material, renderMaterialID: style)
         }

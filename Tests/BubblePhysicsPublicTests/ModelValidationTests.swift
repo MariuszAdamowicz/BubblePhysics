@@ -124,50 +124,42 @@ final class ModelValidationTests: XCTestCase {
         XCTAssertThrowsError(try polygon([[0, 0], [1, 0], [0, 1]], rotation: .infinity))
     }
 
-    // P-B-17 (G4-AC7): podatność kontaktu w materiale.
+    // P-B-17 (G4-AC7), P-B-3 (G3-AC3): podatność kontaktu w materiale to tylko `base` i `referenceRadius`.
     func testContactComplianceDefaultsToHardAndAcceptsValidValues() throws {
         XCTAssertEqual(try PhysicsMaterial(kind: .bubble).contactCompliance, .hard)
-        XCTAssertEqual(BubbleContactCompliance.hard,
-                       BubbleContactCompliance(base: 0, referenceRadius: 1, radiusExponent: 0, compressionExponent: 0))
-        let soft = BubbleContactCompliance(base: 1e-4, referenceRadius: 20, radiusExponent: -1.5, compressionExponent: 2)
+        XCTAssertEqual(BubbleContactCompliance.hard, BubbleContactCompliance(base: 0, referenceRadius: 1))
+        let soft = BubbleContactCompliance(base: 1e-4, referenceRadius: 20)
         XCTAssertEqual(try PhysicsMaterial(kind: .bubble, contactCompliance: soft).contactCompliance, soft)
-        // Wykładniki bez podatności nie dają błędu: przy c₀ = 0 potęgi nie są liczone.
-        XCTAssertNoThrow(try PhysicsMaterial(kind: .bubble,
-            contactCompliance: BubbleContactCompliance(base: 0, radiusExponent: 70, compressionExponent: -70)))
+        XCTAssertEqual(soft.base, 1e-4)
+        XCTAssertEqual(soft.referenceRadius, 20)
         XCTAssertNoThrow(try PhysicsMaterial(kind: .rigid, contactCompliance: .hard))
-        XCTAssertNoThrow(try PhysicsMaterial(kind: .rigid,
-            contactCompliance: BubbleContactCompliance(base: 0, referenceRadius: 3, radiusExponent: 1, compressionExponent: 1)))
+        // Materiał `.rigid` przyjmuje tylko `.hard`, także z innym promieniem odniesienia przy c₀ = 0.
+        XCTAssertNoThrow(try PhysicsMaterial(kind: .rigid, contactCompliance: BubbleContactCompliance(base: 0, referenceRadius: 3)))
     }
 
     func testMaterialRejectsInvalidContactComplianceWithValueOutOfRange() throws {
-        let invalid: [(String, BubbleContactCompliance)] = [
-            ("ujemna podatność", BubbleContactCompliance(base: -1e-3)),
-            ("NaN podatność", BubbleContactCompliance(base: .nan)),
-            ("nieskończona podatność", BubbleContactCompliance(base: .infinity)),
-            ("NaN wykładnik promienia", BubbleContactCompliance(base: 1, radiusExponent: .nan)),
-            ("nieskończony wykładnik promienia", BubbleContactCompliance(base: 1, radiusExponent: .infinity)),
-            ("NaN wykładnik ściśnięcia", BubbleContactCompliance(base: 1, compressionExponent: .nan)),
-            ("nieskończony wykładnik ściśnięcia", BubbleContactCompliance(base: 1, compressionExponent: -.infinity)),
-            ("promień odniesienia 0", BubbleContactCompliance(base: 1, referenceRadius: 0)),
-            ("ujemny promień odniesienia", BubbleContactCompliance(base: 1, referenceRadius: -2)),
-            ("NaN promień odniesienia", BubbleContactCompliance(base: 1, referenceRadius: .nan)),
-            ("nieskończony promień odniesienia", BubbleContactCompliance(base: 1, referenceRadius: .infinity)),
-            // Wykładniki i promień sprawdza się także przy c₀ = 0.
-            ("NaN wykładnik przy c₀ = 0", BubbleContactCompliance(base: 0, radiusExponent: .nan)),
-            ("promień odniesienia 0 przy c₀ = 0", BubbleContactCompliance(base: 0, referenceRadius: 0)),
+        let invalid: [(String, BubbleContactCompliance, String)] = [
+            ("ujemna podatność", BubbleContactCompliance(base: -1e-3), "contactCompliance.base"),
+            ("NaN podatność", BubbleContactCompliance(base: .nan), "contactCompliance.base"),
+            ("nieskończona podatność", BubbleContactCompliance(base: .infinity), "contactCompliance.base"),
+            ("promień odniesienia 0", BubbleContactCompliance(base: 1, referenceRadius: 0), "contactCompliance.referenceRadius"),
+            ("ujemny promień odniesienia", BubbleContactCompliance(base: 1, referenceRadius: -2), "contactCompliance.referenceRadius"),
+            ("NaN promień odniesienia", BubbleContactCompliance(base: 1, referenceRadius: .nan), "contactCompliance.referenceRadius"),
+            ("nieskończony promień odniesienia", BubbleContactCompliance(base: 1, referenceRadius: .infinity),
+             "contactCompliance.referenceRadius"),
+            // Promień odniesienia sprawdza się także przy c₀ = 0.
+            ("promień odniesienia 0 przy c₀ = 0", BubbleContactCompliance(base: 0, referenceRadius: 0), "contactCompliance.referenceRadius"),
         ]
-        for (name, compliance) in invalid {
+        for (name, compliance, field) in invalid {
             XCTAssertThrowsError(try PhysicsMaterial(kind: .bubble, contactCompliance: compliance), name) {
-                guard case .valueOutOfRange = $0 as? ModelValidationError else {
-                    return XCTFail("\(name): oczekiwano valueOutOfRange, jest \($0)")
-                }
+                XCTAssertEqual($0 as? ModelValidationError, .valueOutOfRange(field), name)
             }
         }
     }
 
     func testRigidMaterialRejectsPositiveContactCompliance() throws {
         XCTAssertThrowsError(try PhysicsMaterial(kind: .rigid, contactCompliance: BubbleContactCompliance(base: 1e-6))) {
-            guard case .valueOutOfRange = $0 as? ModelValidationError else { return XCTFail("\($0)") }
+            XCTAssertEqual($0 as? ModelValidationError, .valueOutOfRange("contactCompliance.base"))
         }
     }
 

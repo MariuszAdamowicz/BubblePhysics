@@ -76,12 +76,11 @@ struct NativePublicProperties: Equatable, Sendable {
     var speedLimits: SIMD2<Float> = .zero
     /// Warstwa obiektu; w rekordzie bańki jako `filter.w` (`NativeMetalFilter.encodeLayer`).
     var layer: Int32 = 0
-    /// Kontakt bańki: część bazowa podatności c₀·(r/r_ref)^s (0 = kontakt twardy), wykładnik ściśnięcia k, współczynnik tłumienia
+    /// Kontakt bańki: podatność c₀·r/r_ref (0 = kontakt twardy), wolna lane `.y` (zawsze 0), współczynnik tłumienia
     /// kontaktu miękkiego ζ_c (zawsze, także dla bańki twardej: czyta go tłumik pary); w rekordzie bańki jako `contact`.
     var contact: SIMD4<Float> = .zero
 
-    /// c₀ (po nadpisaniu na bańce) · (r / r_ref)^s dla bieżącego promienia fizycznego `radius`. Przy c₀ = 0 potęg się nie liczy,
-    /// więc skrajny wykładnik nie daje NaN z 0 · ∞ (CD-D-8).
+    /// c₀ (po nadpisaniu na bańce) · r / r_ref dla bieżącego promienia fizycznego `radius`.
     /// Lane `.z` zawsze niesie ζ_c, także przy c₀ = 0 (gałąź `guard`): tłumik pary czyta go też dla bańki twardej.
     /// Przepełnienie Float wyklucza stager (CD-D-15).
     static func contact(of compliance: BubbleContactCompliance, override: Float?, radius: Float,
@@ -89,7 +88,7 @@ struct NativePublicProperties: Equatable, Sendable {
         let base = override ?? compliance.base
         guard base > 0 else { return SIMD4(0, 0, dampingRatio, 0) }
         // Ten sam wzór w Double co walidacja stagera (`validateWorstAlpha`).
-        return SIMD4(Float(compliance.scaledBase(base, radius: radius)), compliance.compressionExponent, dampingRatio, 0)
+        return SIMD4(Float(compliance.scaledBase(base, radius: radius)), 0, dampingRatio, 0)
     }
 }
 
