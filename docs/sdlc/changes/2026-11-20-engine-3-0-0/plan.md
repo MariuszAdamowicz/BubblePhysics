@@ -397,18 +397,61 @@ Każdy wycinek zostawia zestaw testów zielony i dopisuje swoją część do CHA
 **Delivers:** krawędź statycznego wielokąta odpycha bańkę tylko od zewnątrz, wypukły wierzchołek raz, niezależnie od grubości ściany i obiegu wierzchołków.
 
 18. Utwórz `Tests/BubblePhysicsRuntimeTests/StaticPolygonEdgeTests.swift` z testami cienkiej ściany T 48 a T 400 w pięciu siłach i krawędzi podanej jako dwa współliniowe odcinki, obejmującymi [P-B-18](#p-b-18) i [P-B-23](#p-b-23) · verify: `swift test --filter "StaticPolygonEdgeTests/(testThinWall|testCollinear)"` pada na asercji
+
+   ```text
+   (faza czerwona w efd2995: pada na asercji; po wycinku, HEAD 138a37f:)
+   $ swift test --filter "StaticPolygonEdgeTests/(testThinWall|testCollinear)"
+   Executed 2 tests, with 0 failures (0 unexpected) in 18.993 (18.994) seconds
+   ```
 19. Dodaj do `StaticPolygonEdgeTests` testy wierzchołków 30°, 90° i 120° z siłą promieniową ustawianą w każdej ramce oraz zsuwania przez te wierzchołki z siłą do najbliższego punktu i styczną 30, obejmujące [P-B-19](#p-b-19) i [P-B-22](#p-b-22) · verify: `swift test --filter "StaticPolygonEdgeTests/(testConvexVertex|testSlide)"` pada na asercji
+
+   ```text
+   (faza czerwona w efd2995: pada na asercji; po wycinku, HEAD 138a37f:)
+   $ swift test --filter "StaticPolygonEdgeTests/(testConvexVertex|testSlide)"
+   Executed 2 tests, with 0 failures (0 unexpected) in 12.311 (12.312) seconds
+   ```
 20. Dodaj do `StaticPolygonEdgeTests` test czterech baniek w światach o obiegu zgodnym i przeciwnym do ruchu wskazówek zegara oraz test bańki r 12 z prędkością 6 000 prostopadle i pod kątem 30° w ścianę T 48; oba mogą przechodzić już dziś (krawędzie dwustronne nie zależą od obiegu, a CCD zatrzymuje bańkę) i chronią przed regresją; test, który dziś pada, zostaje bez zmian jako czerwony test zadania 23, a wykonawca zapisuje rozbieżność i usuwa go z filtra tego sprawdzenia; obejmują [P-B-20](#p-b-20) i [P-B-21](#p-b-21) · verify: `grep -q testWinding Tests/BubblePhysicsRuntimeTests/StaticPolygonEdgeTests.swift && grep -q testFastBubble Tests/BubblePhysicsRuntimeTests/StaticPolygonEdgeTests.swift && swift test --filter "StaticPolygonEdgeTests/(testWinding|testFastBubble)"`
+
+   ```text
+   (w efd2995 testWinding był czerwony i wyszedł z filtra tego sprawdzenia, zielony po zadaniu 23; po wycinku, HEAD 138a37f:)
+   $ grep -q testWinding … && grep -q testFastBubble Tests/BubblePhysicsRuntimeTests/StaticPolygonEdgeTests.swift && echo OK
+   OK
+   $ swift test --filter "StaticPolygonEdgeTests/(testWinding|testFastBubble)"
+   Executed 2 tests, with 0 failures (0 unexpected) in 2.279 (2.280) seconds
+   ```
 21. Napisz testy, które jeszcze się nie kompilują: `NativeStaticPolygonEdgesTests` (znak obiegu, wypukłość końców i sąsiad dla trójkąta 30° i wielokąta L, scalanie w tolerancji 1e-5 i brak scalenia tuż poza nią) i `NativeStaticPolygonContactTests` (gęste środki wokół wierzchołków 30°, 90°, 120° i 270°, na granicach obszarów i o jedno ULP obok, przez `executeFrame(input:)`), obejmujące [P-B-30](#p-b-30) i [P-B-24](#p-b-24) · verify: `test -f Tests/BubblePhysicsNativeMetalTests/NativeStaticPolygonContactTests.swift && ! swift build --build-tests`
+
+   ```text
+   (faza czerwona przed 93e2588: `swift build --build-tests` się nie kompiluje; po wycinku, HEAD 138a37f:)
+   $ test -f Tests/BubblePhysicsNativeMetalTests/NativeStaticPolygonContactTests.swift && echo OK
+   OK
+   ```
 22. Zbuduj stronę hosta: `NativeStaticPolygonEdges.segments(…)` z obiegiem, wypukłością końców, sąsiadem i scalaniem współliniowych, pole `NativeSolverSegment.polygonEdge`, pakowanie do `flags.w` i pasa `region` w `NativeMetalSegment` i w MSL `NativeSegment` (128 B, `flags.z` zostaje 0), wywołanie w `NativePublicWorld.step` zamiast pętli `.fixed`, oraz testy ABI (`NativeMetalShaderABITests`, stride 128 w `NativeMetalSolverLifecycleTests`, `NativeSolverInputTests`) · verify: `swift test --filter "NativeStaticPolygonEdgesTests|NativeMetalShaderABITests|NativeMetalSolverLifecycleTests|NativeSolverInputTests|CrowdCompressionTests|ContainmentResolutionTests|ContactComplianceTests"` (sceny ze ścianami łapią regresję scalania krawędzi, zanim kernele staną się jednostronne)
+
+   ```text
+   $ swift test --filter "NativeStaticPolygonEdgesTests|NativeMetalShaderABITests|NativeMetalSolverLifecycleTests|NativeSolverInputTests|CrowdCompressionTests|ContainmentResolutionTests|ContactComplianceTests"        (HEAD 138a37f)
+   Executed 74 tests, with 0 failures (0 unexpected) in 66.624 (66.633) seconds
+   ```
 23. Zbuduj kontakty według obszarów: wspólna funkcja granicy, `nativeBuildContacts` z cechą w `response.w` i wgnieceniem −`FLT_MAX` poza obszarami, `nativeEmitAdjacency` bez rekordów krawędzi z `flags.w` niewidzianych w tym kroku, `nativeConstraintGeometry` z parametrem cechy i `nativeFinalizeSolverContacts` według cechy, obejmujące [P-B-18](#p-b-18)–[P-B-24](#p-b-24) · verify: `swift test --filter "NativeStaticPolygonContactTests|StaticPolygonEdgeTests"`
+
+   ```text
+   $ swift test --filter "NativeStaticPolygonContactTests|StaticPolygonEdgeTests"        (HEAD 138a37f)
+   Executed 7 tests, with 0 failures (0 unexpected) in 37.244 (37.248) seconds
+   ```
 24. Dopisz do CHANGELOG (sekcja 3.0.0) i `docs/MIGRATION-v3.md`, że krawędzie statycznych wielokątów odpychają tylko od zewnątrz, a wypukły wierzchołek raz, oraz zdanie o tym w `docs/integration-guide.md` przy ścianach · verify: `sed -n '/^## 3.0.0/,/^## 2.3.0/p' CHANGELOG.md | grep -q "od zewnątrz" && grep -q "od zewnątrz" docs/MIGRATION-v3.md && grep -q "od zewnątrz" docs/integration-guide.md && swift test --filter "IntegrationGuideTests|MigrationGuideTests"`
+
+   ```text
+   $ sed -n '/^## 3.0.0/,/^## 2.3.0/p' CHANGELOG.md | grep -q "od zewnątrz" && grep -q … docs/MIGRATION-v3.md && grep -q … docs/integration-guide.md        (HEAD 138a37f)
+   greps OK
+   $ swift test --filter "IntegrationGuideTests|MigrationGuideTests"
+   Executed 7 tests, with 0 failures (0 unexpected) in 0.025 (0.027) seconds
+   ```
 25. Uruchom cały zestaw, popraw z powodem oczekiwania testów CCD, strażników i ścian zmienionych przez jednostronne krawędzie, i zapisz w `plan.md` pod pogrubionym nagłówkiem na początku linii (jak w wycinku 2) listę usuniętych i zmienionych testów wycinka 3 z powodami do opisu PR, obejmuje [P-B-21](#p-b-21) · verify: `grep -q '^ *\*\*Usunięte i zmienione testy wycinka 3' docs/sdlc/changes/2026-11-20-engine-3-0-0/plan.md && swift build --build-tests && swift test`
 
    ```text
-   $ grep -q '^ *\*\*Usunięte i zmienione testy wycinka 3' docs/sdlc/changes/2026-11-20-engine-3-0-0/plan.md && swift build --build-tests && swift test
+   $ grep -q '^ *\*\*Usunięte i zmienione testy wycinka 3' docs/sdlc/changes/2026-11-20-engine-3-0-0/plan.md && swift build --build-tests && swift test        (HEAD 138a37f)
    exit 0
-   Executed 1477 tests, with 1 test skipped and 0 failures (0 unexpected) in 606.752 (606.893) seconds
+   Executed 1477 tests, with 1 test skipped and 0 failures (0 unexpected) in 619.294 (619.437) seconds
    ```
 
    **Usunięte i zmienione testy wycinka 3 (do opisu PR).**
@@ -458,3 +501,9 @@ None.
 | 11 | 2 | 15, przegląd końcowy (bb2fbe6) | change | Wywołania z R2 zbudowane inaczej: γ trafia do `prepare` obiektu jako niewychodzące domknięcie (odczyt leniwy tylko dla `.dynamic`, `.motorDriven` i `.playerDriven`, uwaga przeglądu o odczycie słownika w każdym kroku), a nie jako wartość; `dampedVelocity(_ velocity:damping:dt:)` przyjmuje prędkość, nie obiekt; `requireDrivePolicy(_ id:)` sam wyszukuje obiekt i go zwraca, żeby `beginPlayerDrive` nie szukał dwa razy. Zachowanie bez zmian. | approved | 2026-11-21 |
 | 12 | 2 | 16, przegląd końcowy (bb2fbe6) | change | Przykład: polityka chwytu K 20, `maximumForce` 600 (plan nie podawał wartości) jako region przewodnika `grip-policy` pokazany w „Chwyt gumką”, zamiast przenoszenia regionu `merge-events`. Materiał baniek przykładu dostał `damping` 1,5, bo bez γ chwycona bańka byłaby nietłumioną sprężyną; opadanie pod siłą globalną to teraz ok. 6,7 j/s. W przewodniku przepisany też akapit o `BubbleResult.drivePolicy` i punkt „Ramki” (z e^(−γ·dt)). | approved | 2026-11-21 |
 | 13 | 2 | przegląd końcowy (bb2fbe6) | change | Dodatki z przeglądu: w teście [P-B-9](#p-b-9) materiał bryły ma γ + 1,3, inne niż materiał baniek, żeby test łapał γ z niewłaściwego materiału (sprawdzone celowo błędnym odczytem); nowy test hosta `MotionControllersPrepareTests.testHostDampsDynamicAndPlayerDrivenVelocityBeforeAddingForceAndLeavesPathDrivenAlone`; w `docs/MIGRATION-v3.md` przepis przestrojenia napędu prędkością: K = v · m · γ / s, `maximumForce` = v_max · m · γ. | approved | 2026-11-21 |
+| 14 | 3 | 20 | gap | `StaticPolygonEdgeTests.testWinding…` ([P-B-20](#p-b-20)) był czerwony przed kernelami (bańka 3 różniła się między obiegami o 1,5 przy tolerancji 1e-2), więc zgodnie z zadaniem wyszedł z filtra sprawdzenia zadania 20 (zostaje tam `testFastBubble`) i jest czerwonym testem zadania 23; po zadaniu 23 zielony. | pending | 2026-11-21 |
+| 15 | 3 | 20 | change | Trzecia bańka [P-B-20](#p-b-20) (narożnik wypukły) startuje 50 jednostek od narożnika na linii siły (kierunek 195°, 15° od normalnej lica), a nie na dwusiecznej: start na dwusiecznej daje linię siły 25 od wierzchołka, więcej niż r 24, i bańka przelatuje nad ścianą poza region. | pending | 2026-11-21 |
+| 16 | 3 | 22 | change | Kształt API, którego R2 nie podawał: `NativeStaticPolygonEdges.segments(points:firstID:ownerID:)` zwraca `[NativeSolverSegment]`, nowy typ `NativeSolverPolygonEdge` (strona zewnętrzna, wypukły początek i koniec, `previousStart`), stała `collinearTolerance`; ID odcinków idą kolejno od `firstID` bez dziur po scaleniu, a strażnik pojemności w `NativePublicWorld` sprawdza `candidateNextSegmentID <= Int.max - points.count`. | pending | 2026-11-21 |
+| 17 | 3 | 23 | change | Kernele: bit 2 `flags.w` (wypukły koniec) jest pakowany zgodnie z R2, ale żaden kernel go nie czyta — wnętrze krawędzi zawsze wyklucza rzut za jej koniec, a wierzchołek bierze następna krawędź (komentarze to mówią). Obok wspólnej funkcji granicy doszła funkcja MSL `nativePolygonEdgeFeature`, a `nativeReadConstraint` dostał parametr cechy w trzech wywołaniach, także w `nativeMeasureResidual`, którego R2 nie wymienia. Wnętrze krawędzi to `side >= 0`, więc środek dokładnie na linii krawędzi też ma kontakt. | pending | 2026-11-21 |
+| 18 | 3 | 25 | change | Zmienione oczekiwania spoza zakresu zadania (planowano tylko testy CCD, strażników i ścian): nowe hashe w `AcceptanceEquivalenceTests` (4 testy) i `AcceptanceRenderEquivalenceTests` (2 testy), `referenceCommit` = 2e24499, nieaktualne zdanie „wzorzec bez zmian od v2.1.0” usunięte. Powód według wykonawcy — prawdopodobny, nieudowodniony: ściany sceny akceptacyjnej mają grubość 1, więc znikają tylna sprężyna i podwójny kontakt w wierzchołku; po 10 krokach stany identyczne bit w bit, po 40 krokach 102 z 305 obiektów różnią się do 1,3, dalej chaos gęstej sceny. Testy CCD, strażników, ścian, kontaktów twardych i tłoku bez zmian. | pending | 2026-11-21 |
+| 19 | 3 | 18–21, przegląd końcowy (99e947e) | change | Wybory testów i poprawki z przeglądu: wierzchołki to trójkąty równoramienne (ramiona 300), trójkąt ostry ma dokładnie 30°; zsuwanie uspokaja bańkę 240 ramek samą siłą promieniową, potem styczna 30; [P-B-24](#p-b-24) to kąty co 5°, promienie 0,5r i 0,95r, a po przeglądzie także środki dokładnie na granicy (0, ±ULP, −0,0) przy wierzchołkach osiowych i okna ±8 ULP wokół granicy przy ukośnych zamiast bisekcji (iloczyn w kernelu może być liczony fma inaczej niż na hoście) — mutacja `along < 0` teraz pada. [P-B-30](#p-b-30): tolerancja scalania sprawdzana przy 0,9 i 1,1 wartości progowej, `previousStart` w obu obiegach, martwy pomocnik `bentWall` usunięty. `docs/MIGRATION-v3.md`: w 2.x każdy wypukły wierzchołek dawał dwa kontakty (bez „dla ostrego żadnej”). | pending | 2026-11-21 |
