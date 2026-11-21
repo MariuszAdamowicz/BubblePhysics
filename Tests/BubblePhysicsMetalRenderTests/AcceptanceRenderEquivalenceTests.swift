@@ -19,10 +19,10 @@ final class AcceptanceRenderEquivalenceTests: XCTestCase {
     private static let referenceDeviceName = "Apple M1 Pro"
     private static let referenceSteps = 120
     private static let referenceWidth = 1125, referenceHeight = 2436
-    /// Commit, na którym policzono wzorzec: kod renderera bez żadnej zmiany etapu 9.
-    private static let referenceCommit = "da550a4"
+    /// Commit, na którym policzono aktualne hashe wzorca (wycinek 3 wydania 3.0.0): kod renderera bez żadnej zmiany etapu 9.
+    private static let referenceCommit = "2e24499"
     /// Wzorzec zapisany przed zadaniem 96 (pula areny) i zadaniem 99 (zmiany renderu).
-    /// Bez limitu λ pary (`pairCorrectionLimit = false`, CD-D-20): wzorzec bez zmian, ten sam co w v2.1.0.
+    /// Bez limitu λ pary (`pairCorrectionLimit = false`, CD-D-20).
     /// Hashe zaktualizowane w wycinku 3 wydania 3.0.0 (jednostronne krawędzie statycznych wielokątów): ściany sceny mają grubość 1,
     /// więc bez drugiej sprężyny od tylnej krawędzi bańki przy ścianach stoją gdzie indziej (Apple M1 Pro, ta sama scena i kroki).
     private static let referencePixelHash: UInt64 = 0x0b613f1372717d0c

@@ -73,7 +73,35 @@ final class NativeStaticPolygonContactTests: XCTestCase {
                 }
             }
         }
+        result += boundaryCenters(corner, incoming: incoming, outgoing: outgoing)
         return result.filter { !contains(ring, $0) && distance($0, to: ring) > 1e-3 && distance($0, to: ring) < radius }
+    }
+
+    /// Środki dokładnie na granicach obszarów i w oknie ±8 ULP wokół nich: dla każdej z dwóch prostych prostopadłych do krawędzi w
+    /// wierzchołku (`dot(środek − wierzchołek, kierunek) = 0`) przesuwamy jedną współrzędną po kolejnych liczbach Float wokół rozwiązania
+    /// tego równania, dla kilku odległości po obu stronach. Dla krawędzi osiowych (wierzchołki 90° i 270°) rozwiązanie wypada dokładnie
+    /// w zerze, więc okno zawiera `along == 0` (także dla -0.0); dla ukośnych okno obejmuje zmianę znaku predykatu jądra.
+    private func boundaryCenters(_ corner: Corner, incoming: Point, outgoing: Point) -> [Point] {
+        var result: [Point] = []
+        let vertex = corner.vertex
+        for direction in [incoming, outgoing] {
+            let normal = Point(-direction.y, direction.x)
+            for sign: Float in [1, -1] {
+                for distance: Float in [0.5 * radius, 0.95 * radius] {
+                    let seed = vertex + sign * distance * normal
+                    // Rozwiązujemy po tej współrzędnej, która jest dobrze uwarunkowana, i przesuwamy ją po sąsiednich Float.
+                    let solveX = abs(direction.x) >= abs(direction.y)
+                    var exact = seed
+                    if solveX { exact.x = vertex.x - (seed.y - vertex.y) * direction.y / direction.x } else { exact.y = vertex.y - (seed.x - vertex.x) * direction.x / direction.y }
+                    var below = solveX ? exact.x : exact.y, above = below
+                    var window = [below]
+                    for _ in 0..<8 { below = below.nextDown; above = above.nextUp; window.append(below); window.append(above) }
+                    if (solveX ? exact.x : exact.y) == 0 { window.append(-0.0) }
+                    for value in window { result.append(solveX ? Point(value, exact.y) : Point(exact.x, value)) }
+                }
+            }
+        }
+        return result
     }
 
     func testEveryCenterCloserThanTheRadiusHasOneNonDuplicatedContactAroundEveryVertex() async throws {

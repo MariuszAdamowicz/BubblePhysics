@@ -56,6 +56,7 @@ package struct NativeSolverPolygonEdge: Equatable, Sendable {
     /// Wierzchołek początkowy (końcowy) jest ściśle wypukły: obszar wierzchołka początkowego należy do tej krawędzi, a wnętrze krawędzi
     /// nie obejmuje rzutu na jej koniec wypukły.
     package var convexStart: Bool
+    /// Informacyjne: jądra nie czytają tego pola (obszary krawędzi używają tylko `convexStart`), służy diagnostyce i testom.
     package var convexEnd: Bool
     /// Początek krawędzi poprzedniej, czyli jej drugi koniec względem wierzchołka początkowego tej krawędzi.
     package var previousStart: SIMD2<Float>

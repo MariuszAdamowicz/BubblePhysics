@@ -57,7 +57,7 @@ struct NativeMetalSegment: Equatable, Sendable {
     /// względem lewej normalnej, reserved. Dla pozostałych odcinków zero.
     var region = SIMD4<Float>.zero
 
-    /// `flags.w`: bit 0 krawędź wielokąta z obszarami, bit 1 wypukły początek, bit 2 wypukły koniec; `flags.z` krawędzi wielokąta zostaje 0.
+    /// `flags.w`: bit 0 krawędź wielokąta z obszarami, bit 1 wypukły początek, bit 2 wypukły koniec (informacyjny: jądra go nie czytają, służy diagnostyce i testom); `flags.z` krawędzi wielokąta zostaje 0.
     init(_ segment: NativeSolverSegment) {
         var polygonFlags: UInt32 = 0
         if let edge = segment.polygonEdge {

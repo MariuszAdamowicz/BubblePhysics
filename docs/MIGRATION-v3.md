@@ -43,7 +43,7 @@ W 2.x chwyt miał dwa tryby: narzuconą prędkość (`maximumSpeed`, `distanceRe
 
 ## Krawędzie statycznych wielokątów odpychają tylko od zewnątrz
 
-W 2.x każda krawędź bryły statycznej (ściany, wielokąta) była odcinkiem dwustronnym. Bańka ugięta głębiej niż grubość ściany dostawała więc drugą sprężynę od tylnej krawędzi, a przy wypukłym wierzchołku dwa kontakty z tym samym punktem (dla kątów prostego i rozwartego dwie sprężyny równolegle, dla ostrego żadnej). W 3.0.0 krawędź statycznego wielokąta odpycha tylko od zewnątrz, a wypukły wierzchołek raz:
+W 2.x każda krawędź bryły statycznej (ściany, wielokąta) była odcinkiem dwustronnym. Bańka ugięta głębiej niż grubość ściany dostawała więc drugą sprężynę od tylnej krawędzi, a przy wypukłym wierzchołku dwa kontakty z tym samym punktem (dwie sprężyny równolegle, dla każdego kąta wypukłego). W 3.0.0 krawędź statycznego wielokąta odpycha tylko od zewnątrz, a wypukły wierzchołek raz:
 
 - **Ugięcie nie zależy od grubości ściany.** Bańka dociśnięta siłą F do ściany o grubości 48 albo 400 ugina się o c · F, także gdy c · F jest większe niż grubość.
 - **Wnętrze krawędzi i wierzchołek.** Kontakt powstaje, gdy środek bańki leży po stronie zewnętrznej krawędzi w obszarze jej wnętrza (stała normalna zewnętrzna) albo w obszarze wypukłego wierzchołka (normalna od wierzchołka do środka, jeden kontakt). Przejście przez wierzchołek nie ma skoku kontaktu. Wierzchołek wklęsły (narożnik wewnętrzny litery L) daje dwa kontakty, po jednym z każdej krawędzi.

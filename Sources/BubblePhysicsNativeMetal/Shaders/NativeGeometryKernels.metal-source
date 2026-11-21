@@ -22,7 +22,7 @@ float nativeContactCompliance(NativeBubble bubble) {
 }
 struct NativeSegment {
     long2 identity;
-    uint4 flags; // x kinematyczny, y ma właściciela, z stała strona (`allowedSide`), w krawędź wielokąta: bit 0 obszary, bit 1 wypukły początek, bit 2 wypukły koniec
+    uint4 flags; // x kinematyczny, y ma właściciela, z stała strona (`allowedSide`), w krawędź wielokąta: bit 0 obszary, bit 1 wypukły początek, bit 2 wypukły koniec (informacyjny: jądra go nie czytają)
     float4 previous; float4 current;
     float4 velocity; float4 collision;
     uint4 filter; // kategoria, maska, reserved, reserved

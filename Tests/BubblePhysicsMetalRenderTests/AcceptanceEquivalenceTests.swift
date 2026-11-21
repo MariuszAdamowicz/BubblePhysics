@@ -17,11 +17,10 @@ final class AcceptanceEquivalenceTests: XCTestCase {
     /// Urządzenie, na którym zapisano wzorzec.
     private static let referenceDeviceName = "Apple M1 Pro"
     private static let referenceSteps = 120
-    /// Commit, na którym policzono wzorzec (kod biblioteki bez zmian od c614fe0 do 177147b), bez żadnej
-    /// optymalizacji ścieżki CPU etapu 8.
-    private static let referenceCommit = "c614fe0"
+    /// Commit, na którym policzono aktualne hashe wzorca (wycinek 3 wydania 3.0.0), bez żadnej optymalizacji ścieżki CPU etapu 8.
+    private static let referenceCommit = "2e24499"
     /// Wzorzec zapisany przed zadaniem 84 (bez żadnej optymalizacji ścieżki CPU etapu 8).
-    /// Bez limitu λ pary (`pairCorrectionLimit = false`, CD-D-20): wzorzec bez zmian, ten sam co w v2.1.0.
+    /// Bez limitu λ pary (`pairCorrectionLimit = false`, CD-D-20).
     /// Hashe zaktualizowane w wycinku 3 wydania 3.0.0 (jednostronne krawędzie statycznych wielokątów, CD-D-3, CD-D-4): ściany tej sceny mają
     /// grubość 1, więc dawna druga sprężyna od tylnej krawędzi i podwójny kontakt wierzchołka znikają i pozycje baniek przy ścianach
     /// się zmieniają (Apple M1 Pro, ta sama scena i kroki). Po 10 krokach stan jest jeszcze bit w bit ten sam co przed zmianą.
