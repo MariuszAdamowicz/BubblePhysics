@@ -478,18 +478,62 @@ Każdy wycinek zostawia zestaw testów zielony i dopisuje swoją część do CHA
 **Delivers:** kontur nie odrzuca kroku i nie wpływa na fizykę, dokumentacja mówi o wersji 3.0.0, a gałąź ma PR z pełną listą zmienionych testów, wynikiem perf guarda i uwagą o przestrzale lekkiej bańki.
 
 26. Odwróć `NativeMetalContourTests.testUnrepresentableContourEdgeRejectsFrameAndPreservesPublishedState` na `testUnrepresentableContourEdgeDoesNotRejectTheFrame`: bańka przy (1e7, 1e7) daje przyjętą i opublikowaną ramkę ze skończonymi pozycjami, część [P-B-26](#p-b-26) · verify: `grep -q testUnrepresentableContourEdgeDoesNotRejectTheFrame Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalContourTests.swift && swift build --build-tests && ! swift test --filter NativeMetalContourTests/testUnrepresentableContourEdgeDoesNotRejectTheFrame` (faza czerwona; zielony po zadaniu 31)
+
+   ```text
+   $ grep -q testUnrepresentableContourEdgeDoesNotRejectTheFrame …/NativeMetalContourTests.swift  → exit 0
+   $ swift build --build-tests && swift test --filter NativeMetalContourTests/testUnrepresentableContourEdgeDoesNotRejectTheFrame
+   Executed 1 test, with 0 failures (0 unexpected)
+   (faza czerwona widziana przed zadaniem 31 w 5a76c2d; po zadaniu 31 zielony, więc `! swift test` z verify już nie przechodzi)
+   ```
 27. Dodaj do `ContactContourTests` pomocnik niezmienników konturu (każdy punkt w kole o promieniu bańki ± 1e-3, każda krawędź ≤ `NativeSolverConfiguration().maxContourSegmentLength`, `lastAdvanceIssue` nil) i wywołaj go w trzech scenach tego pliku; test ochronny, przechodzi już dziś, część [P-B-26](#p-b-26) · verify: `grep -q maxContourSegmentLength Tests/BubblePhysicsRuntimeTests/ContactContourTests.swift && swift test --filter ContactContourTests`
+
+   ```text
+   $ grep -q maxContourSegmentLength …/ContactContourTests.swift && swift test --filter ContactContourTests
+   Executed 3 tests, with 0 failures (0 unexpected)
+   exit 0
+   ```
 28. Utwórz `Tests/BubblePhysicsRuntimeTests/ContourIsDrawOnlyTests.swift`: dwa światy z tą samą sceną (ściany, tłok co najmniej 20 baniek, chwyt gumką, scalenie i podział), różne tylko `deformability` (0 i 0,65) i odczytem `debugContourSnapshot()` w jednym z nich, z porównaniem `bitPattern` pozycji, prędkości, `collisionRadius` i `targetRadius` w każdym z 600 kroków (`effectiveRadius` i obwiednia pochodzą z konturu, więc się różnią); test ochronny, najpewniej przechodzi już dziś, obejmuje [P-B-25](#p-b-25) · verify: `swift test --filter ContourIsDrawOnlyTests 2>&1 | grep -q "Executed 1 test, with 0 failures"`
+
+   ```text
+   $ swift test --filter ContourIsDrawOnlyTests 2>&1 | grep -q "Executed 1 test, with 0 failures"
+   Executed 1 test, with 0 failures (0 unexpected) in 2.643 seconds
+   exit 0
+   ```
 29. Przepisz sześć testów konturu w `NativeMetalSafetyTests` (:384-:416) z „krok odrzucony” na „ramka przyjęta, wartości naprawione”: `effectiveRadius` nieskończony albo ponad `targetRadius` → `targetRadius`, obwiednia nieskończona albo odwrócona → nil w `bubbleBoundsRecords`, deformacja nieskończona albo spoza [0, 1] poza statystyką; część [P-B-26](#p-b-26) · verify: `! grep -q testFiniteEffectiveRadiusAboveTargetIsInvalidFrame Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalSafetyTests.swift && swift build --build-tests && ! swift test --filter NativeMetalSafetyTests` (faza czerwona; zielony po zadaniu 31)
+
+   ```text
+   $ ! grep -q testFiniteEffectiveRadiusAboveTargetIsInvalidFrame …/NativeMetalSafetyTests.swift  → exit 0
+   $ swift test --filter NativeMetalSafetyTests
+   Executed 32 tests, with 0 failures (0 unexpected)
+   (faza czerwona widziana przed zadaniem 31 w 5a76c2d; po zadaniu 31 zielony)
+   ```
 30. Usuń sprawdzenia konturu na GPU (POST :683, :702, :730, :781, :792-793, :802, :860, :874-875, :898, :940 i NativeGeometryKernels :132), ogranicz `nativeCheckFinite` :339 do `b.deformation.zw` i zamień asercję `NativeMetalChainKernelTests` :332 na „bit 4 nie zapala się przy żadnej długości krawędzi”, część [P-B-26](#p-b-26) · verify: `P=Sources/BubblePhysicsNativeMetal/Shaders/NativePostSolveKernels.metal-source; ! grep -q "edge > contour.shape.x" $P && ! grep -q "isfinite(b.deformation))" $P && grep -q "isfinite(b.deformation.zw)" $P && ! grep -q "atomic_fetch_or_explicit(safety" Sources/BubblePhysicsNativeMetal/Shaders/NativeGeometryKernels.metal-source && swift test --filter "NativeMetalChainKernelTests|NativeMetalPreviousContourTests|NativeMetalShaderABITests"`
+
+   ```text
+   $ P=…/NativePostSolveKernels.metal-source; ! grep -q "edge > contour.shape.x" $P && ! grep -q "isfinite(b.deformation))" $P && grep -q "isfinite(b.deformation.zw)" $P && ! grep -q "atomic_fetch_or_explicit(safety" …/NativeGeometryKernels.metal-source && swift test --filter "NativeMetalChainKernelTests|NativeMetalPreviousContourTests|NativeMetalShaderABITests"
+   Executed 25 tests, with 0 failures (0 unexpected)
+   exit 0
+   ```
 31. W odczycie ramki `NativeMetalSolver.swift` zamień odrzucenia za kontur (:1010-1013, :1016-1017, :1019-1022, :1028-1029) na naprawę wartości z tabeli wyborów R2, z `bubbleBoundsRecords` jako `[SIMD4<Float>?]` i `NativePublicWorld.adopt` z obwiednią opcjonalną, obejmuje [P-B-26](#p-b-26) · verify: `swift test --filter "NativeMetalContourTests|NativeMetalSafetyTests|NativeMetalPublicObjectTests|ContactContourTests|ContourIsDrawOnlyTests"`
+
+   ```text
+   $ swift test --filter "NativeMetalContourTests|NativeMetalSafetyTests|NativeMetalPublicObjectTests|ContactContourTests|ContourIsDrawOnlyTests"
+   Executed 59 tests, with 0 failures (0 unexpected)
+   exit 0
+   ```
 32. Domknij dokumentację wydania: sekcja „kontur tylko rysowany” w CHANGELOG, `docs/MIGRATION-v3.md` i `docs/integration-guide.md`; bez „Wydanie w toku” (CHANGELOG :7) i zapowiedzi kolejnych wycinków (`docs/MIGRATION-v3.md` :3); link do v3 w CHANGELOG :3 i README; tytuł przewodnika „BubblePhysics 3.0”; README „Wersja 3.0.0”; `MigrationGuideTests` :5 i :107 na 3.0.0 z asercją linku `(docs/MIGRATION-v3.md)`; obejmuje [P-B-28](#p-b-28) · verify: `grep -q "Wersja 3.0.0" README.md && grep -q "docs/MIGRATION-v3.md" README.md && ! grep -q "Wydanie w toku" CHANGELOG.md && sed -n 3p CHANGELOG.md | grep -q "MIGRATION-v3" && sed -n '/^## 3.0.0/,/^## 2.3.0/p' CHANGELOG.md | grep -q "tylko rysowan" && ! grep -qi "następne wycinki\|kolejne punkty" docs/MIGRATION-v3.md && grep -q "^## Kontur tylko rysowany" docs/MIGRATION-v3.md && grep -q "tylko rysowan" docs/integration-guide.md && head -1 docs/integration-guide.md | grep -q "3\.0" && swift test --filter "MigrationGuideTests|IntegrationGuideTests"`
+
+   ```text
+   $ grep -q "Wersja 3.0.0" README.md && … && head -1 docs/integration-guide.md | grep -q "3\.0" && swift test --filter "MigrationGuideTests|IntegrationGuideTests"
+   Executed 7 tests, with 0 failures (0 unexpected)
+   exit 0
+   ```
 33. Uruchom cały zestaw i zapisz w `plan.md` pod pogrubionym nagłówkiem na początku linii „Usunięte i zmienione testy wycinka 4” listę z powodami do opisu PR, obejmuje [P-B-27](#p-b-27) · verify: `grep -q '^ *\*\*Usunięte i zmienione testy wycinka 4' docs/sdlc/changes/2026-11-20-engine-3-0-0/plan.md && swift build --build-tests && swift test`
 
    ```text
-   $ grep -q '^ *\*\*Usunięte i zmienione testy wycinka 4' docs/sdlc/changes/2026-11-20-engine-3-0-0/plan.md && swift build --build-tests && swift test        (HEAD fcdcc80)
-   exit 0
-   swift test list: 1479 testów XCTest; swift test: kod wyjścia 0, 0 niepowodzeń (wyjście końcowe: „Test run with 0 tests in 0 suites passed”)
+   $ grep -q '^ *\*\*Usunięte i zmienione testy wycinka 4' …/plan.md && swift build --build-tests && swift test
+   Executed 1481 tests, with 1 test skipped and 0 failures (0 unexpected) in 604.668 seconds
+   exit 0 (HEAD d4ee77c, po poprawkach z przeglądu końcowego)
    ```
 
    **Usunięte i zmienione testy wycinka 4 (do opisu PR).**
@@ -500,6 +544,7 @@ Każdy wycinek zostawia zestaw testów zielony i dopisuje swoją część do CHA
    - `NativeMetalSafetyTests`, sześć testów konturu z „krok odrzucony” na „ramka przyjęta, wartość naprawiona”: `testFiniteEffectiveRadiusAboveTargetIsInvalidFrame` → `testEffectiveRadiusAboveTargetBecomesTargetRadius` (promień efektywny ponad `targetRadius` → `targetRadius`); `testNaNEffectiveRadiusIsNonFinite` → `testValidEffectiveRadiusIsPublishedUnchanged`, a nowy `testNegativeOrNonFiniteEffectiveRadiusBecomesTargetRadius` bierze przypadek nieskończony i ujemny; `testFiniteDeformationOutsideUnitRangeIsInvalidFrame` → `testDeformationOutsideUnitRangeStaysOutOfStatistics` i `testInfiniteDeformationIsNonFinite` → `testValidDeformationEntersStatistics` (zła deformacja poza statystyką, poprawna wchodzi); `testFiniteInvertedBoundsAreInvalidFrame` → `testInvertedOrNonFiniteBoundsBecomeNil` i `testNonFiniteBoundsAreNonFinite` → `testValidBoundsArePublishedUnchanged` (zła obwiednia → nil w `bubbleBoundsRecords`). Powód: odczyt ramki naprawia wartości konturu zamiast odrzucać krok ([P-B-26](#p-b-26)).
    - `NativeMetalChainKernelTests`: `testFusedContourSmoothingHonoursTheFailureBitLikeThirteenPasses` → `testFusedContourSmoothingHonoursThePreSetFailureBitAndDoesNotRaiseOneForNonFiniteContourData` (dane niefinitne w konturze nie zapalają bitu, oba warianty piszą wszystkie kontury, `safety` 0); w teście długości krawędzi bit 4 nie zapala się przy żadnej długości (dawniej przy krawędzi < 1). Powód: kernele konturu nie mają już sprawdzeń z `nativeSafetyFailure`.
    - `MigrationGuideTests`: README „Wersja 2.3.0” → „Wersja 3.0.0” (komentarz i asercja) i nowa asercja linku `(docs/MIGRATION-v3.md)` w README ([P-B-28](#p-b-28)).
+   - Nowe po przeglądzie końcowym (d4ee77c): `NativeMetalSafetyTests.testGPUCheckFiniteChecksOnlyVelocityLimitsOfDeformation` (`nativeCheckFinite` sprawdza z `deformation` tylko `zw`) i `NativeMetalBoundsPublicationTests.testBadBoundsRecordPublishesTheBubbleCircleInsteadOfThePreviousBounds` (zła obwiednia → koło bańki w `ObjectState.bounds`).
    - Bez zmian w wycinku 4: testy kontaktów twardych, CCD, strażników, stagera, `AcceptanceEquivalenceTests` i `AcceptanceRenderEquivalenceTests` (hashe po wycinku 3 zgodne, [P-B-27](#p-b-27)).
 
 34. Uruchom `swift run -c release BubblePhysicsPerfGuard` na bezczynnym Macu z `uptime` przed przebiegiem i po nim, bez zmiany progów, i zapisz linie PASS/FAIL z obciążeniem w `plan.md` pod pogrubionym nagłówkiem na początku linii „Perf guard wycinka 4”, obejmuje [P-B-29](#p-b-29) · verify: `grep -A12 '^ *\*\*Perf guard wycinka 4' docs/sdlc/changes/2026-11-20-engine-3-0-0/plan.md | grep -q "load average"`
@@ -586,3 +631,10 @@ None.
 | 17 | 3 | 23 | change | Kernele: bit 2 `flags.w` (wypukły koniec) jest pakowany zgodnie z R2, ale żaden kernel go nie czyta — wnętrze krawędzi zawsze wyklucza rzut za jej koniec, a wierzchołek bierze następna krawędź (komentarze to mówią). Obok wspólnej funkcji granicy doszła funkcja MSL `nativePolygonEdgeFeature`, a `nativeReadConstraint` dostał parametr cechy w trzech wywołaniach, także w `nativeMeasureResidual`, którego R2 nie wymienia. Wnętrze krawędzi to `side >= 0`, więc środek dokładnie na linii krawędzi też ma kontakt. | approved | 2026-11-21 |
 | 18 | 3 | 25 | change | Zmienione oczekiwania spoza zakresu zadania (planowano tylko testy CCD, strażników i ścian): nowe hashe w `AcceptanceEquivalenceTests` (4 testy) i `AcceptanceRenderEquivalenceTests` (2 testy), `referenceCommit` = 2e24499, nieaktualne zdanie „wzorzec bez zmian od v2.1.0” usunięte. Powód według wykonawcy — prawdopodobny, nieudowodniony: ściany sceny akceptacyjnej mają grubość 1, więc znikają tylna sprężyna i podwójny kontakt w wierzchołku; po 10 krokach stany identyczne bit w bit, po 40 krokach 102 z 305 obiektów różnią się do 1,3, dalej chaos gęstej sceny. Testy CCD, strażników, ścian, kontaktów twardych i tłoku bez zmian. | approved | 2026-11-21 |
 | 19 | 3 | 18–21, przegląd końcowy (99e947e) | change | Wybory testów i poprawki z przeglądu: wierzchołki to trójkąty równoramienne (ramiona 300), trójkąt ostry ma dokładnie 30°; zsuwanie uspokaja bańkę 240 ramek samą siłą promieniową, potem styczna 30; [P-B-24](#p-b-24) to kąty co 5°, promienie 0,5r i 0,95r, a po przeglądzie także środki dokładnie na granicy (0, ±ULP, −0,0) przy wierzchołkach osiowych i okna ±8 ULP wokół granicy przy ukośnych zamiast bisekcji (iloczyn w kernelu może być liczony fma inaczej niż na hoście) — mutacja `along < 0` teraz pada. [P-B-30](#p-b-30): tolerancja scalania sprawdzana przy 0,9 i 1,1 wartości progowej, `previousStart` w obu obiegach, martwy pomocnik `bentWall` usunięty. `docs/MIGRATION-v3.md`: w 2.x każdy wypukły wierzchołek dawał dwa kontakty (bez „dla ostrego żadnej”). | approved | 2026-11-21 |
+| 20 | 4 | 28 | change | Nowy seam spoza R2: `package var debugBubbleRadii` w `Sources/BubblePhysicsPublic/BubbleWorld.swift` (na wzór `benchmarkTelemetry` i `renderState`), bo publiczna ramka nie niesie `targetRadius` ani `collisionRadius`, a `BubbleWorld.state` jest prywatne. Bańki testu są twarde: kernel konturu czyta `deformability` tylko dla par twardych. Asercja „światy się różnią” porównuje obwiednię `ObjectState.bounds`, nie `effectiveRadius`, który pochodzi z geometrii kontaktu i nie zależy od `deformability` (uwaga planu, że `effectiveRadius` się różni, była błędna). | pending | 2026-11-21 |
+| 21 | 4 | 29 | change | Sześć testów odrzucenia zastąpionych siedmioma testami naprawy: cztery na wartości złe i trzy na wartości poprawne publikowane bez zmian (promień, deformacja, obwiednia). Pomocnik `acceptedFrameAfterCorrupting` bierze ramkę z `executeFrame(input:)`, bo ramka diagnostyczna nie niesie obwiedni. | pending | 2026-11-21 |
+| 22 | 4 | 30 | change | Zmieniony test spoza listy zadania: `NativeMetalChainKernelTests.testFusedContourSmoothingHonoursTheFailureBitLikeThirteenPasses` → `…HonoursThePreSetFailureBitAndDoesNotRaiseOneForNonFiniteContourData`; zostaje zatrzymanie przy ustawionym wcześniej bicie, a NaN w danych konturu nie zapala już bitu w obu ścieżkach. | pending | 2026-11-21 |
+| 23 | 4 | 31 | change | Sprawdzenia konturu :1010-1013 i :1016-1017 (skończone punkty, długość krawędzi) usunięte także w ścieżce diagnostycznej, nie tylko w publicznej. | pending | 2026-11-21 |
+| 24 | 4 | 32 | change | Wstęp `docs/MIGRATION-v3.md` przepisany („siedem punktów” zamiast opisu wycinek po wycinku), a w przewodniku doszedł punkt o konturze tylko rysowanym w części „Ugięcie i spoczynek”; oba poza literą zadania. | pending | 2026-11-21 |
+| 25 | 4 | 34 | gap | Perf guard puszczony na Macu pod obciążeniem (load 2,6–3,0, inne sesje), nie na bezczynnym: dwa przebiegi, FAIL w stress-300, mixed, decals i acceptance (+14 % do +99 %, duży rozrzut między przebiegami), skalowanie PASS. Wynik nierozstrzygnięty, przebieg na bezczynnym Macu zostaje przed scaleniem. | pending | 2026-11-21 |
+| 26 | 4 | przegląd końcowy (d4ee77c) | change | Poprawki z przeglądu: zdanie o ρ w `docs/MIGRATION-v3.md` zastąpione prawdziwym wpływem konturu na fizykę w 2.x (`rigidifies`: `effectiveRadius` konturu stawał się `collisionRadius` przy chwycie); link do `MIGRATION-v3.md` we wstępie przewodnika; z `nativeSeedStructuralContours` usunięty martwy parametr `safety` (bufory 9–11 → 8–10, host bez `safetyControl`); `import` bez `@testable` w `ContactContourTests`; nowe testy `testGPUCheckFiniteChecksOnlyVelocityLimitsOfDeformation` i `NativeMetalBoundsPublicationTests.testBadBoundsRecordPublishesTheBubbleCircleInsteadOfThePreviousBounds` (oba sprawdzone mutacją), a dla drugiego dwa seamy spoza R2: wewnętrzne `NativePublicWorld.persistentState` i `package NativeCompleteStepper.init(world:configuration:)`. | pending | 2026-11-21 |
