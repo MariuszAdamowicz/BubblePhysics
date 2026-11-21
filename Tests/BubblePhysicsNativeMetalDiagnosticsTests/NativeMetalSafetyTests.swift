@@ -381,42 +381,81 @@ final class NativeMetalSafetyTests: XCTestCase {
         change(&bubbles[0])
     }
 
-    func testFiniteEffectiveRadiusAboveTargetIsInvalidFrame() async throws {
-        try await assertCorruptedFrameIsRejected(as: "invalidFrame", world: { try makeWorld(x: -4) }) {
+    // P-B-26 (G5-AC2): kontur jest tylko rysowany, więc zła wartość z konturu nie odrzuca kroku. Ramka jest przyjęta,
+    // a opublikowane wartości są naprawione: promień efektywny → `targetRadius`, zła obwiednia → nil, zła deformacja poza statystyką.
+    // Wartości psuje wykonawca po zakończeniu bufora, tuż przed odczytem na CPU.
+    private func acceptedFrameAfterCorrupting(
+        world makeWorld: () throws -> ReferenceWorld, corrupt: @escaping (NativeMetalPersistentState) -> Void,
+        file: StaticString = #filePath, line: UInt = #line) async throws -> NativeSolverFrame {
+        let executor = SafetyCorruptingCommandExecutor()
+        let solver = try NativeMetalSolver(device: XCTUnwrap(MTLCreateSystemDefaultDevice()), commandExecutor: executor)
+        let world = try makeWorld()
+        _ = try await solver.executeFrame(world: world, scenarioStep: 1)
+        let state = try XCTUnwrap(solver.persistentState, file: file, line: line)
+        executor.corrupt = { corrupt(state) }
+        let frame = try await solver.executeFrame(input: ReferenceSolverInputAdapter.input(from: world), scenarioStep: 2)
+        XCTAssertTrue(frame.isComplete, file: file, line: line)
+        XCTAssertEqual(frame.bubbles.count, 1, file: file, line: line)
+        XCTAssertTrue(frame.bubbles.allSatisfy { $0.center.x.isFinite && $0.center.y.isFinite }, file: file, line: line)
+        return frame
+    }
+
+    func testEffectiveRadiusAboveTargetBecomesTargetRadius() async throws {
+        let frame = try await acceptedFrameAfterCorrupting(world: { try makeWorld(x: -4) }) {
             self.corruptPacket($0) { $0.deformation.y = 5 }
         }
+        XCTAssertEqual(frame.bubbleEffectiveRadii, [1])
     }
 
-    func testNaNEffectiveRadiusIsNonFinite() async throws {
-        try await assertCorruptedFrameIsRejected(as: "nonFinite", world: { try makeWorld(x: -4) }) {
-            self.corruptPacket($0) { $0.deformation.y = .nan }
+    func testNegativeOrNonFiniteEffectiveRadiusBecomesTargetRadius() async throws {
+        for value: Float in [-0.5, .nan, .infinity] {
+            let frame = try await acceptedFrameAfterCorrupting(world: { try makeWorld(x: -4) }) {
+                self.corruptPacket($0) { $0.deformation.y = value }
+            }
+            XCTAssertEqual(frame.bubbleEffectiveRadii, [1], "effectiveRadius=\(value)")
         }
     }
 
-    func testFiniteDeformationOutsideUnitRangeIsInvalidFrame() async throws {
-        for value: Float in [2, -0.5] {
-            try await assertCorruptedFrameIsRejected(as: "invalidFrame", world: { try makeWorld(x: -4) }) {
+    func testValidEffectiveRadiusIsPublishedUnchanged() async throws {
+        let frame = try await acceptedFrameAfterCorrupting(world: { try makeWorld(x: -4) }) {
+            self.corruptPacket($0) { $0.deformation.y = 0.75 }
+        }
+        XCTAssertEqual(frame.bubbleEffectiveRadii, [0.75])
+    }
+
+    func testDeformationOutsideUnitRangeStaysOutOfStatistics() async throws {
+        for value: Float in [2, -0.5, .infinity, .nan] {
+            let frame = try await acceptedFrameAfterCorrupting(world: { try makeWorld(x: -4) }) {
                 self.corruptPacket($0) { $0.deformation.x = value }
             }
+            XCTAssertEqual(frame.report.maximumRelativeDeformation, 0, "deformation=\(value)")
+            XCTAssertEqual(frame.report.deformationCount, 0, "deformation=\(value)")
         }
     }
 
-    func testInfiniteDeformationIsNonFinite() async throws {
-        try await assertCorruptedFrameIsRejected(as: "nonFinite", world: { try makeWorld(x: -4) }) {
-            self.corruptPacket($0) { $0.deformation.x = .infinity }
+    func testValidDeformationEntersStatistics() async throws {
+        let frame = try await acceptedFrameAfterCorrupting(world: { try makeWorld(x: -4) }) {
+            self.corruptPacket($0) { $0.deformation.x = 0.5 }
+        }
+        XCTAssertEqual(frame.report.maximumRelativeDeformation, 0.5)
+        XCTAssertEqual(frame.report.deformationCount, 1)
+    }
+
+    func testInvertedOrNonFiniteBoundsBecomeNil() async throws {
+        for bounds in [SIMD4<Float>(1, 1, -1, -1), SIMD4(.nan, 1, 2, 2), SIMD4(0, 0, .infinity, 1)] {
+            let frame = try await acceptedFrameAfterCorrupting(world: { try makeWorld(x: -4) }) {
+                self.corruptBubble($0) { $0.bounds = bounds }
+            }
+            XCTAssertEqual(frame.bubbleBoundsRecords.count, 1)
+            XCTAssertNil(frame.bubbleBoundsRecords[0], "bounds=\(bounds)")
         }
     }
 
-    func testFiniteInvertedBoundsAreInvalidFrame() async throws {
-        try await assertCorruptedFrameIsRejected(as: "invalidFrame", world: { try makeWorld(x: -4) }) {
-            self.corruptBubble($0) { $0.bounds = SIMD4(1, 1, -1, -1) }
+    func testValidBoundsArePublishedUnchanged() async throws {
+        let frame = try await acceptedFrameAfterCorrupting(world: { try makeWorld(x: -4) }) {
+            self.corruptBubble($0) { $0.bounds = SIMD4(-5, -1, -3, 1) }
         }
-    }
-
-    func testNonFiniteBoundsAreNonFinite() async throws {
-        try await assertCorruptedFrameIsRejected(as: "nonFinite", world: { try makeWorld(x: -4) }) {
-            self.corruptBubble($0) { $0.bounds = SIMD4(.nan, 1, 2, 2) }
-        }
+        XCTAssertEqual(frame.bubbleBoundsRecords, [SIMD4<Float>(-5, -1, -3, 1)])
     }
 
     func testNegativeContactMultiplierIsInvalidFrameAndNaNMultiplierIsNonFinite() async throws {
