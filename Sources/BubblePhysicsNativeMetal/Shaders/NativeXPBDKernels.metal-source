@@ -1064,9 +1064,11 @@ kernel void nativeDampContactNormalMotion(device NativeBubble *bubbles [[buffer(
         // Dashpot usuwa energię oscylacji zarówno podczas dojścia, jak i
         // odbicia; sama korekcja XPBD nadal egzekwuje brak penetracji.
         float normalVelocity = dot(bubble.motion.xy - otherVelocity, outward);
-        // Tłumienie spoczynkowe nie może ingerować w celowy, szybki ruch
-        // kinematycznej przeszkody. Granica jest skalowana promieniem, więc
-        // drobne bańki stabilizują się szybciej niż duże.
+        // Próg prędkości dotyczy tylko kontaktu twardego (stały `contactDamping`): tłumienie spoczynkowe nie może tam ingerować
+        // w celowy, szybki ruch kinematycznej przeszkody. Granica jest skalowana promieniem, więc drobne bańki stabilizują się
+        // szybciej niż duże. Kontakt miękki to sprężyna z tłumieniem, która tłumi zawsze (3.0.1, BF-D-2): bez dashpotu szybkie
+        // zderzenie ze ścianą przestrzeliwało do 2 · c · F i dalej, za krawędź. Dashpot działa na prędkość względną, więc szybka
+        // przeszkoda przekazuje bańce swój ruch normalny, a nie jest hamowana.
         float restSpeed = max(40.0f, 2.0f * bubble.physical.z);
         float inverseMassSum = bubble.physical.y + otherInverseMass;
         float share = inverseMassSum > 0 ? bubble.physical.y / inverseMassSum : 0;
@@ -1080,14 +1082,14 @@ kernel void nativeDampContactNormalMotion(device NativeBubble *bubbles [[buffer(
             float frequency = sqrt(inverseMassSum / record.compliance.x);
             factor = clamp(1.0f - exp(-2.0f * ratio * frequency * control.physics.x), 0.0f, 1.0f);
         }
-        // Szybki kontakt nadal ma materialną odpowiedź; próg dotyczy wyłącznie
-        // dashpotu, który przy prędkości CCD nie może dodać sztucznego hamowania.
+        // Szybki kontakt nadal ma materialną odpowiedź; próg dotyczy wyłącznie dashpotu kontaktu twardego, który przy prędkości
+        // CCD nie może dodać sztucznego hamowania. Dashpot kontaktu miękkiego działa przy każdej prędkości zbliżania.
         if (normalVelocity < 0 && restitution > 0)
             bubble.motion.xy -= outward * (normalVelocity * (1.0f + restitution) * share);
         float2 relativeVelocity = bubble.motion.xy - otherVelocity;
         float2 tangentialVelocity = relativeVelocity - outward * dot(relativeVelocity, outward);
         bubble.motion.xy -= tangentialVelocity * clamp(friction * share, 0.0f, 1.0f);
-        if (abs(normalVelocity) > restSpeed) continue;
+        if (record.compliance.x <= 0 && abs(normalVelocity) > restSpeed) continue;
         bubble.motion.xy -= outward * (normalVelocity * factor * share);
     }
     // Odbicie od szybkiego partnera mogłoby przekroczyć limit materiału.
