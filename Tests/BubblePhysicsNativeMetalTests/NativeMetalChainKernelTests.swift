@@ -128,10 +128,9 @@ final class NativeMetalChainKernelTests: XCTestCase {
         }
     }
 
-    /// Przypadek awarii: bit awarii zapalony przed dispatchem albo przez dane niefinitne w trakcie. Zapalenie bitu przez
-    /// jedną grupę w trakcie dispatchu nie może rozjechać wątków innej grupy przy barierze (wyjście jest jednolite),
-    /// więc oba warianty kończą się ukończonym buforem poleceń i tym samym bitem awarii co dawna ścieżka.
-    func testFusedContourSmoothingHonoursTheFailureBitLikeThirteenPasses() throws {
+    /// Przypadek awarii: bit awarii zapalony przed dispatchem zatrzymuje oba warianty (żadna grupa nie pisze). Kontur jest tylko
+    /// rysowany, więc dane niefinitne w konturze nie zapalają bitu: oba warianty kończą bez zawieszenia, z bitem 0.
+    func testFusedContourSmoothingHonoursThePreSetFailureBitAndDoesNotRaiseOneForNonFiniteContourData() throws {
         let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
         let pipelines = try NativeMetalPipelineCache.pipelines(for: device).stages
         let bubbles = 40, stride = 64
@@ -165,15 +164,14 @@ final class NativeMetalChainKernelTests: XCTestCase {
             XCTAssertEqual(halted.safety, 1, "fused \(fused)")
             XCTAssertTrue(halted.output.allSatisfy { $0 == sentinel }, "fused \(fused): przerwany krok nie zapisuje konturów")
         }
-        // Dane niefinitne w jednej bańce w środku zestawu: obie ścieżki zapalają bit i kończą bez zawieszenia.
+        // Dane niefinitne w jednej bańce w środku zestawu: kontur nie odrzuca kroku, więc żadna ścieżka nie zapala bitu.
         values[(bubbles / 2) * stride + 5].w = .nan
         let legacy = try smooth(values, safetyBit: 0, fused: false)
         let fused = try smooth(values, safetyBit: 0, fused: true)
-        XCTAssertEqual(legacy.safety, 1)
-        XCTAssertEqual(fused.safety, 1)
-        // Wyniki nie są porównywane bit w bit: dawna ścieżka przerywa kolejne przejścia po zapaleniu bitu, a o tym, które
-        // wątki zdążą jeszcze zapisać, decyduje kolejność grup, więc zgodność dotyczy bitu awarii i braku zawieszenia.
-        XCTAssertTrue(fused.output.contains { $0 != sentinel }, "grupy sprzed zapalenia bitu zapisały kontury")
+        XCTAssertEqual(legacy.safety, 0)
+        XCTAssertEqual(fused.safety, 0)
+        XCTAssertTrue(legacy.output.allSatisfy { $0 != sentinel }, "dawna ścieżka zapisała wszystkie kontury")
+        XCTAssertTrue(fused.output.allSatisfy { $0 != sentinel }, "ścieżka fused zapisała wszystkie kontury")
     }
 
     // MARK: kandydaci brył (zadanie 94)
@@ -313,8 +311,8 @@ final class NativeMetalChainKernelTests: XCTestCase {
 
     func testGroupedRenderPreparationIsBitIdenticalToThePerBubbleThread() throws {
         let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
-        // 8 i 64 to potęgi dwójki, 96 i 100 nie; duża dopuszczalna krawędź nie zgłasza błędu,
-        // mała ustawia bit 4 w bezpieczniku w obu wariantach.
+        // 8 i 64 to potęgi dwójki, 96 i 100 nie; kontur jest tylko rysowany, więc żadna długość krawędzi
+        // (także 0,05, krótsza od krawędzi konturu) nie zapala bitów w bezpieczniku w obu wariantach.
         for stride in [8, 64, 96, 100, 256] {
             for maxEdge in [Float(10), Float(0.05)] {
                 let seed = UInt64(stride) &* 7919 &+ UInt64(maxEdge * 100)
@@ -329,8 +327,8 @@ final class NativeMetalChainKernelTests: XCTestCase {
                 XCTAssertEqual(grouped.0.deformation, legacy.0.deformation, "stride \(stride) edge \(maxEdge)")
                 // Test nie jest zgodnością zer: pakiet bańki z pełnym konturem został zapisany.
                 XCTAssertNotEqual(legacy.0.packets[2], 5)
-                if maxEdge < 1 { XCTAssertNotEqual(legacy.0.safety[3] & 4, 0, "bit przekroczonej krawędzi") }
-                else { XCTAssertEqual(legacy.0.safety[3], 0) }
+                XCTAssertEqual(legacy.0.safety[3] & 4, 0, "bit 4 nie zapala się przy żadnej długości krawędzi, stride \(stride) edge \(maxEdge)")
+                XCTAssertEqual(legacy.0.safety[3], 0, "stride \(stride) edge \(maxEdge)")
             }
         }
     }

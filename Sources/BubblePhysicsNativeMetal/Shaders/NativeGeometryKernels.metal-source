@@ -129,7 +129,6 @@ kernel void nativeSeedStructuralContours(device NativeBubble *bubbles [[buffer(0
     float4 value = pressure[index];
     value.x = max(value.x, deficit);
     value.y = max(value.y, deficit);
-    if (!all(isfinite(value))) atomic_fetch_or_explicit(safety + 3, 1, memory_order_relaxed);
     pressure[index] = value;
 }
 
