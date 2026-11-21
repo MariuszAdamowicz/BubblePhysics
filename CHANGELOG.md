@@ -2,6 +2,13 @@
 
 Zmiany w wydaniach `BubblePhysics`. Przejście z 1.x na 2.0.0 opisuje [docs/MIGRATION-v2.md](docs/MIGRATION-v2.md), a z 2.x na 3.0.0 [docs/MIGRATION-v3.md](docs/MIGRATION-v3.md).
 
+## 3.0.1
+
+### Naprawione
+
+- Tłumienie ζ_c kontaktu miękkiego działa przy każdej prędkości zbliżania. Dotąd dashpot był pomijany, gdy prędkość normalna przekraczała max(40, 2r), więc szybkie zderzenie ze ścianą było nietłumione (tylko γ materiału): mała bańka dociśnięta gumką (r 24, c₀ 0,0108, F 1200, uderzenie ok. 173 j/s) przestrzeliwała do ε ≈ 1 zamiast osiąść w ε = c₀ · F / r_ref = 0,648. Dashpot działa na prędkość względną, więc przy szybkiej kinematycznej przeszkodzie bańka przejmuje jej ruch normalny, zamiast go hamować. Kontakty twarde (c₀ = 0) zachowują próg jak w 3.0.0.
+- Krawędź statycznego wielokąta odpycha środek bańki, który minął ją w kroku. Dotąd, gdy przewidziany środek był za prostą krawędzi, krawędź nie dawała kontaktu, a strażnik środka tylko cofał go na krawędź: bańka pchana w ścianę stała na stałe w ε ≈ 1. Teraz kontakt daje krawędź wejścia, czyli ta, przed którą środek był na początku kroku, wzdłuż jej normalnej zewnętrznej i z wgnieceniem większym niż r. Tylna krawędź cienkiej ściany nadal nie odpycha, bo środek nigdy nie był przed nią.
+
 ## 3.0.0
 
 Przejście z 2.x opisuje [docs/MIGRATION-v3.md](docs/MIGRATION-v3.md).
