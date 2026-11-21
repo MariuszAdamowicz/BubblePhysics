@@ -23,10 +23,12 @@ final class AcceptanceRenderEquivalenceTests: XCTestCase {
     private static let referenceCommit = "da550a4"
     /// Wzorzec zapisany przed zadaniem 96 (pula areny) i zadaniem 99 (zmiany renderu).
     /// Bez limitu λ pary (`pairCorrectionLimit = false`, CD-D-20): wzorzec bez zmian, ten sam co w v2.1.0.
-    private static let referencePixelHash: UInt64 = 0x5e37c3629219412c
+    /// Hashe zaktualizowane w wycinku 3 wydania 3.0.0 (jednostronne krawędzie statycznych wielokątów): ściany sceny mają grubość 1,
+    /// więc bez drugiej sprężyny od tylnej krawędzi bańki przy ścianach stoją gdzie indziej (Apple M1 Pro, ta sama scena i kroki).
+    private static let referencePixelHash: UInt64 = 0x0b613f1372717d0c
     /// Z limitem λ pary (CD-D-9, domyślnie): limit zmienia pozycje w gęstej scenie, więc piksele po 120 krokach mają nowy hash
     /// (Apple M1 Pro, ta sama scena, kroki i rozdzielczość co wzorzec).
-    private static let pairLimitPixelHash: UInt64 = 0xbecb5955496833ea
+    private static let pairLimitPixelHash: UInt64 = 0xbda0edb8b979305e
 
     private struct RenderedImage {
         let width: Int

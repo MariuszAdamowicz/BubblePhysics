@@ -405,6 +405,19 @@ Każdy wycinek zostawia zestaw testów zielony i dopisuje swoją część do CHA
 24. Dopisz do CHANGELOG (sekcja 3.0.0) i `docs/MIGRATION-v3.md`, że krawędzie statycznych wielokątów odpychają tylko od zewnątrz, a wypukły wierzchołek raz, oraz zdanie o tym w `docs/integration-guide.md` przy ścianach · verify: `sed -n '/^## 3.0.0/,/^## 2.3.0/p' CHANGELOG.md | grep -q "od zewnątrz" && grep -q "od zewnątrz" docs/MIGRATION-v3.md && grep -q "od zewnątrz" docs/integration-guide.md && swift test --filter "IntegrationGuideTests|MigrationGuideTests"`
 25. Uruchom cały zestaw, popraw z powodem oczekiwania testów CCD, strażników i ścian zmienionych przez jednostronne krawędzie, i zapisz w `plan.md` pod pogrubionym nagłówkiem na początku linii (jak w wycinku 2) listę usuniętych i zmienionych testów wycinka 3 z powodami do opisu PR, obejmuje [P-B-21](#p-b-21) · verify: `grep -q '^ *\*\*Usunięte i zmienione testy wycinka 3' docs/sdlc/changes/2026-11-20-engine-3-0-0/plan.md && swift build --build-tests && swift test`
 
+   ```text
+   $ grep -q '^ *\*\*Usunięte i zmienione testy wycinka 3' docs/sdlc/changes/2026-11-20-engine-3-0-0/plan.md && swift build --build-tests && swift test
+   exit 0
+   Executed 1477 tests, with 1 test skipped and 0 failures (0 unexpected) in 606.752 (606.893) seconds
+   ```
+
+   **Usunięte i zmienione testy wycinka 3 (do opisu PR).**
+
+   - Nowe: `StaticPolygonEdgeTests` (`testThinWallDeflectsByTheFrontEdgeOnlyAndTheSameAsAThickWall`, `testCollinearVertexDoesNotChangeTheContact`, `testConvexVertexIsOneSpringForEveryAngle`, `testSlideThroughAConvexVertexKeepsTheDistanceFromTheEdge`, `testWindingOfTheVerticesDoesNotChangeTheTrajectories`, `testFastBubbleNeverEndsAStepInsideOrBehindTheWall`; [P-B-18](#p-b-18)–[P-B-23](#p-b-23)); `NativeStaticPolygonEdgesTests` (7 testów obiegu, wypukłości końców, sąsiada i scalania w tolerancji 1e-5; [P-B-30](#p-b-30)); `NativeStaticPolygonContactTests` (gęste środki wokół wierzchołków 30°, 90°, 120° i 270° na granicach obszarów i o jedno ULP obok; [P-B-24](#p-b-24)); `NativeSolverInputTests.testPolygonEdgePacksFlagsAndRegionBand` i `testChangingThePolygonEdgeChangesTheSegmentRecordInTheSnapshot`.
+   - Zmienione: stride segmentu 112 → 128 w `NativeMetalSolverLifecycleTests` i `NativeMetalShaderABITests` (pas `region`).
+   - Zmienione oczekiwania: hashe w `AcceptanceEquivalenceTests` (cztery testy, stan obiektów i kontury, z limitem λ pary i bez) i `AcceptanceRenderEquivalenceTests` (dwa testy, piksele). Ściany sceny akceptacyjnej mają grubość 1, więc dawna druga sprężyna od tylnej krawędzi i podwójny kontakt wierzchołka znikają, a pozycje baniek przy ścianach się zmieniają; po 10 krokach stan jest jeszcze bit w bit ten sam co przed zmianą, po 40 krokach różni się (mediana odchylenia po 120 krokach 0,014, ogon chaotyczny jak w gęstej scenie). Nowe wartości z Apple M1 Pro.
+   - Bez zmian oczekiwań: testy CCD, strażników, ścian, kontaktów twardych i tłoku (założenie projektu z „Key facts” potwierdzone, [P-B-21](#p-b-21)).
+
 ## Deviations from Design
 
 None.
