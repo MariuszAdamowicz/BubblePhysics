@@ -503,6 +503,27 @@ Każdy wycinek zostawia zestaw testów zielony i dopisuje swoją część do CHA
    - Bez zmian w wycinku 4: testy kontaktów twardych, CCD, strażników, stagera, `AcceptanceEquivalenceTests` i `AcceptanceRenderEquivalenceTests` (hashe po wycinku 3 zgodne, [P-B-27](#p-b-27)).
 
 34. Uruchom `swift run -c release BubblePhysicsPerfGuard` na bezczynnym Macu z `uptime` przed przebiegiem i po nim, bez zmiany progów, i zapisz linie PASS/FAIL z obciążeniem w `plan.md` pod pogrubionym nagłówkiem na początku linii „Perf guard wycinka 4”, obejmuje [P-B-29](#p-b-29) · verify: `grep -A12 '^ *\*\*Perf guard wycinka 4' docs/sdlc/changes/2026-11-20-engine-3-0-0/plan.md | grep -q "load average"`
+   **Perf guard wycinka 4 (do opisu PR).** HEAD b1214bf, progi bez zmian, Mac nie był bezczynny (na maszynie pracowały inne sesje), więc wynik jest nierozstrzygnięty. Dwa kolejne przebiegi `swift run -c release BubblePhysicsPerfGuard`, oba z kodem wyjścia 1:
+
+   ```text
+   przebieg 1, uptime przed: 16:57  up 4 days,  2:16, 10 users, load averages: 3,04 3,21 2,73
+   FAIL stress-300: p95 2.2449 ms, punkt odniesienia 1.9634 ms, limit 2.1598 ms (+14.3%)
+   FAIL mixed: p95 5.1865 ms, punkt odniesienia 3.7942 ms, limit 4.1736 ms (+36.7%)
+   FAIL decals: p95 3.4724 ms, punkt odniesienia 2.1770 ms, limit 2.3947 ms (+59.5%)
+   FAIL acceptance: p95 3.6690 ms, punkt odniesienia 2.4590 ms, limit 2.7049 ms (+49.2%)
+   scaling 600/300: 1.68 (limit 2.50) PASS; CPU poza GPU p95 300: 0.9766 ms, 600: 1.6442 ms
+   uptime po:    16:59  up 4 days,  2:18, 10 users, load averages: 1,93 2,88 2,66
+   przebieg 2, uptime przed: 16:59  up 4 days,  2:18, 10 users, load averages: 2,70 2,97 2,70
+   FAIL stress-300: p95 2.9423 ms, punkt odniesienia 1.9634 ms, limit 2.1598 ms (+49.9%)
+   FAIL mixed: p95 4.8994 ms, punkt odniesienia 3.7942 ms, limit 4.1736 ms (+29.1%)
+   FAIL decals: p95 3.0423 ms, punkt odniesienia 2.1770 ms, limit 2.3947 ms (+39.7%)
+   FAIL acceptance: p95 4.8831 ms, punkt odniesienia 2.4590 ms, limit 2.7049 ms (+98.6%)
+   scaling 600/300: 1.50 (limit 2.50) PASS; CPU poza GPU p95 300: 0.9240 ms, 600: 1.3900 ms
+   uptime po:    17:00  up 4 days,  2:19, 10 users, load averages: 2,64 2,91 2,69
+   ```
+
+   Rozrzut między przebiegami (acceptance +49,2 % i +98,6 %, stress-300 +14,3 % i +49,9 %) przy obciążeniu 2–3 wskazuje na szum; to jedyny wynik, nie ma przebiegu na bezczynnym Macu.
+
 35. Złóż opis PR 3.0.0 (listy testów wycinków 1–4, perf guard z obciążeniem, przestrzał lekkiej bańki z odstępstwa 6) i, po zgodzie użytkownika, wypchnij gałąź (`credential.helper` z `gh`) i otwórz PR do `main` przez `gh pr create`; scalenie i tag `v3.0.0` robi autor, obejmuje [P-B-27](#p-b-27) i [P-B-29](#p-b-29) · verify: `gh pr list --head feature/engine-3-0-0 --state open --json number --jq length | grep -qx 1` (wymaga użytkownika: zgoda na push i PR)
 
 ## Deviations from Design
