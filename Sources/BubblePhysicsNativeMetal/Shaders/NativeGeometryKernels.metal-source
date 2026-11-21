@@ -649,12 +649,16 @@ bool nativePastSegmentEnd(float2 center, float2 from, float2 to) {
 // Cecha kontaktu z krawędzią statycznego wielokąta, zapisana w response.w do końca kroku: 0 poza obszarami krawędzi
 // (rekord odpada), 1 wnętrze krawędzi (stała normalna zewnętrzna), 2 wierzchołek początkowy wypukły (normalna od wierzchołka).
 // Wnętrze obejmuje 0 < t < 1 po stronie zewnętrznej; wierzchołek wypukły należy do krawędzi, która się w nim zaczyna.
-uint nativePolygonEdgeFeature(float2 center, NativeSegment s, float2 outward) {
+// Krawędź wejścia (3.0.1, BF-D-1): gdy przewidziany środek `center` minął w kroku prostą krawędzi, wnętrze krawędzi nadal daje
+// kontakt, jeśli środek z początku kroku `previous` był po jej stronie zewnętrznej. Środek odpycha więc dokładnie krawędź, przez
+// którą wszedł, wzdłuż normalnej zewnętrznej; tylna krawędź cienkiej ściany nie dostaje kontaktu nigdy, bo środek nie był przed nią.
+uint nativePolygonEdgeFeature(float2 center, float2 previous, NativeSegment s, float2 outward) {
     float2 start = s.current.xy, end = s.current.zw;
     float along = dot(center - start, end - start);
     bool convexStart = (s.flags.w & 2) != 0;
     if (convexStart && along <= 0 && nativePastSegmentEnd(center, s.region.xy, start)) return 2;
-    if (along > 0 && dot(center - start, outward) >= 0 && !nativePastSegmentEnd(center, start, end)) return 1;
+    bool outside = dot(center - start, outward) >= 0 || dot(previous - start, outward) >= 0;
+    if (along > 0 && outside && !nativePastSegmentEnd(center, start, end)) return 1;
     return 0;
 }
 
@@ -683,9 +687,11 @@ kernel void nativeBuildContacts(device NativeBubble *bubbles [[buffer(0)]],
         allowedSide = s.flags.z ? s.collision.x : 0;
         penetration = a.physical.z - distance;
         if (s.flags.w & 1) {
-            // Krawędź statycznego wielokąta: kontakt tylko z obszaru wnętrza krawędzi albo wierzchołka (CD-D-3, CD-D-4).
+            // Krawędź statycznego wielokąta: kontakt tylko z obszaru wnętrza krawędzi albo wierzchołka (CD-D-3, CD-D-4). Środek
+            // z początku kroku (position.zw z nativePredict) wybiera krawędź wejścia, gdy przewidziany środek minął krawędź (BF-D-1);
+            // wgniecenie r − dot(center − start, outward) jest wtedy większe niż r, z normalną zewnętrzną.
             float2 outward = base * s.region.z;
-            feature = nativePolygonEdgeFeature(a.position.xy, s, outward);
+            feature = nativePolygonEdgeFeature(a.position.xy, a.position.zw, s, outward);
             if (feature == 1) {
                 normal = outward; point = a.position.xy - outward * dot(a.position.xy - s.current.xy, outward);
                 penetration = a.physical.z - dot(a.position.xy - s.current.xy, outward);
