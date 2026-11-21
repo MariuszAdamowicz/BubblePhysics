@@ -224,8 +224,9 @@ package struct NativeSolverFrame {
     /// Promień efektywny każdej bańki, w kolejności `bubbles` (bez słownika budowanego co klatkę).
     package var bubbleEffectiveRadii: [Float] = []
     /// AABB zdeformowanego konturu po kroku (min.xy, max.xy), liczony w kernelu, w kolejności `bubbles`; bez odczytu
-    /// konturu na CPU.
-    package var bubbleBoundsRecords: [SIMD4<Float>] = []
+    /// konturu na CPU. `nil`, gdy obwiednia z kernelu jest nieskończona albo odwrócona (kontur jest tylko rysowany, więc
+    /// krok nie jest odrzucany); obwiednię daje wtedy koło bańki.
+    package var bubbleBoundsRecords: [SIMD4<Float>?] = []
     /// Widok słownikowy dla diagnostyki i testów; produkcyjna ścieżka czyta tablice po indeksie bańki.
     package var effectiveRadii: [NativeSolverBubbleID: Float] {
         Dictionary(uniqueKeysWithValues: zip(bubbles.map(\.id), bubbleEffectiveRadii))

@@ -993,7 +993,7 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         var contours: [NativeSolverBubbleID: [SIMD2<Float>]] = [:]
         var renderData: [SIMD4<Float>] = []
         var effectiveRadii: [Float] = []
-        var bubbleBounds: [SIMD4<Float>] = []
+        var bubbleBounds: [SIMD4<Float>?] = []
         effectiveRadii.reserveCapacity(bubbles.count)
         bubbleBounds.reserveCapacity(bubbles.count)
         var deformationCount = 0
@@ -1007,27 +1007,23 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
             let points = (0..<(readsContours ? Int(pointCounts[index]) : 0)).map { point -> SIMD2<Float> in
                 pointRecords![index * state.contourStride + point]
             }
-            guard points.allSatisfy(\.isFiniteVector) else { throw rejectSafety(.nonFinite) }
-            guard points.indices.allSatisfy({ point in
-                (points[(point + 1) % points.count] - points[point]).euclideanLength <= contourConfiguration.maxContourSegmentLength
-            }) else { throw rejectSafety(.invalidFrame) }
+            // Kontur jest tylko rysowany: jego zła wartość nie odrzuca kroku, host naprawia opublikowane wartości. Skończoność
+            // fizyki sprawdził już `nativeCheckFinite`, a spójność pakietu z rekordem (wyżej) zostaje.
+            // Deformacja nieskończona albo spoza [0, 1] nie wchodzi do statystyk.
             let deformation = packets[index].deformation.x
-            // NaN i ±∞ kończą świat (`.nonFinite`); skończona wartość poza zakresem odrzuca tylko krok (`.invalidFrame`).
-            guard deformation.isFinite else { throw rejectSafety(.nonFinite) }
-            guard deformation >= 0, deformation <= 1 else { throw rejectSafety(.invalidFrame) }
-            let effectiveRadius = packets[index].deformation.y
-            guard effectiveRadius.isFinite else { throw rejectSafety(.nonFinite) }
-            guard effectiveRadius >= 0, effectiveRadius <= bubbles[index].targetRadius else {
-                throw rejectSafety(.invalidFrame)
+            if deformation.isFinite, deformation >= 0, deformation <= 1 {
+                if deformation * bubbles[index].targetRadius > contourConfiguration.positionTolerance { deformationCount += 1 }
+                maximumRelativeDeformation = max(maximumRelativeDeformation, deformation)
             }
-            if deformation * bubbles[index].targetRadius > contourConfiguration.positionTolerance { deformationCount += 1 }
-            maximumRelativeDeformation = max(maximumRelativeDeformation, deformation)
             if readsContours { contours[bubbles[index].id] = points }
-            effectiveRadii.append(effectiveRadius)
+            // Promień efektywny nieskończony albo spoza [0, targetRadius] staje się `targetRadius`.
+            let measuredRadius = packets[index].deformation.y
+            effectiveRadii.append(measuredRadius.isFinite && measuredRadius >= 0 && measuredRadius <= bubbles[index].targetRadius
+                ? measuredRadius : bubbles[index].targetRadius)
+            // Obwiednia nieskończona albo odwrócona staje się nil: wtedy obwiednię daje koło bańki.
             let bounds = records[index].bounds
-            guard (0..<4).allSatisfy({ bounds[$0].isFinite }) else { throw rejectSafety(.nonFinite) }
-            guard bounds.x <= bounds.z, bounds.y <= bounds.w else { throw rejectSafety(.invalidFrame) }
-            bubbleBounds.append(bounds)
+            bubbleBounds.append((0..<4).allSatisfy({ bounds[$0].isFinite }) && bounds.x <= bounds.z && bounds.y <= bounds.w
+                ? bounds : nil)
             renderData.append(packets[index].geometry)
         }
         if collectDispatchStatistics {
