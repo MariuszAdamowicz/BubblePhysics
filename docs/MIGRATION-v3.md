@@ -1,6 +1,6 @@
 # Migracja z BubblePhysics 2.x do 3.0.0
 
-Wersja 3.0.0 zmienia model podatności kontaktu, tłumienie ruchu i napęd chwytu oraz usuwa parametry z publicznego API. Dokument zbiera zmiany wycinek po wycinku: ta wersja opisuje podatność c₀ · r / r_ref, jedno tłumienie ruchu i gumkę jako jedyny napęd. Kolejne punkty (kontur tylko rysowany) dopisują następne wycinki.
+Wersja 3.0.0 zmienia model podatności kontaktu, tłumienie ruchu i napęd chwytu, krawędzie ścian statycznych i rolę konturu oraz usuwa parametry z publicznego API. Dokument ma siedem punktów: podatność c₀ · r / r_ref, napęd tylko gumką, jedno tłumienie ruchu, bryły, których nie da się już chwycić, `drivePolicy` i krawędzie statycznych wielokątów (wszystkie w pierwszych trzech sekcjach poniżej), a na końcu rolę konturu.
 
 ## Podatność kontaktu: c = c₀ · r / r_ref
 
@@ -52,3 +52,11 @@ W 2.x każda krawędź bryły statycznej (ściany, wielokąta) była odcinkiem d
 - **Kontakty twarde** (c₀ = 0) dostają ten sam podział na obszary, więc scena z cienką ścianą albo wypukłym narożnikiem może zachowywać się inaczej niż w 2.x (bez drugiego kontaktu od tyłu i bez podwójnego kontaktu z wierzchołkiem).
 
 Co zmienić w kodzie: nic, API się nie zmienia. Jeśli gra dobierała `base` albo grubość ściany tak, żeby sprężyna od tyłu cienkiej ściany nie wchodziła w grę, grubość nie jest już ograniczeniem: ugięcie to c · F. CCD i strażniki środka dalej oddają środek bańki na stronę, z której przyszedł.
+
+## Kontur tylko rysowany
+
+W 2.x kontur bańki mógł odrzucić krok: ramka z krawędzią konturu dłuższą niż limit (bardzo duża współrzędna, na której `Float` nie pozwala skrócić krawędzi), z nieskończonym punktem, promieniem efektywnym albo deformacją kończyła się odrzuceniem kroku albo awarią świata. Kontur wpływał też na fizykę przez stopień ściśnięcia bańki (ρ). W 3.0.0 kontur jest tylko rysunkiem:
+
+- **Kontur nie wpływa na fizykę.** Pozycje, prędkości i promienie fizyczne (`targetRadius`, `collisionRadius`) nie zależą od tego, czy i jak kontur jest liczony: ten sam świat z `deformability` 0 albo 0,65 i z odczytem konturu albo bez niego daje identyczne wyniki bit w bit. `deformability` materiału wpływa już tylko na kształt rysowanego konturu bańki z kontaktem twardym.
+- **Kontur nie odrzuca kroku.** Zła wartość z konturu nie daje już `frameRejected` ani `worldFailed`. Krok jest przyjęty, a gra dostaje wartości naprawione: promień efektywny nieskończony albo spoza [0, `targetRadius`] jest równy `targetRadius`, nieskończona albo odwrócona obwiednia `ObjectState.bounds` to obwiednia koła bańki, a deformacja spoza [0, 1] nie wchodzi do statystyk. Walidacja fizyki zostaje: nieskończona pozycja, prędkość, promień albo rekord kontaktu, ujemny mnożnik λ i niespójność pakietu renderu dalej odrzucają krok.
+- **Co zmienić w kodzie:** nic, API się nie zmienia. Jeśli gra obsługiwała odrzucenie kroku z powodu konturu (`frameRejected` przy dużych współrzędnych), ta ścieżka przestaje być potrzebna. Jeśli gra dobierała `deformability` tak, by zmieniać zachowanie fizyczne bańki, nie ma już takiego wpływu: ruch zależy od materiału (`damping`, podatność) i sił.

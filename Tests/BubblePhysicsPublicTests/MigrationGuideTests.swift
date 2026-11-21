@@ -2,8 +2,8 @@ import Foundation
 import XCTest
 
 /// P-B-10 (G1-AC1): `docs/migration/v1-api-diff.txt` to wynik `swift-api-digester -diagnose-sdk` między `v1.0.0` a HEAD,
-/// a `docs/MIGRATION-v2.md` ma zamiennik każdego symbolu z tego diffu. README podaje bieżącą wersję 2.3.0 i odsyła
-/// do `CHANGELOG.md`, a dalej wspomina 2.0.0 jako wersję migracji i odsyła do obu przewodników.
+/// a `docs/MIGRATION-v2.md` ma zamiennik każdego symbolu z tego diffu. README podaje bieżącą wersję 3.0.0 i odsyła
+/// do `CHANGELOG.md` i do `docs/MIGRATION-v3.md`, a dalej wspomina 2.0.0 jako wersję migracji i odsyła do obu przewodników.
 /// Korzeń repozytorium wynika z `#filePath`, jak w `PackageGraphTests`.
 final class MigrationGuideTests: XCTestCase {
     private var root: URL {
@@ -104,10 +104,11 @@ final class MigrationGuideTests: XCTestCase {
 
     func testReadmeStatesCurrentVersionAndLinksTheChangelogAndBothGuides() throws {
         let readme = try read("README.md")
-        XCTAssertTrue(readme.contains("Wersja 2.3.0"), "README podaje bieżącą wersję 2.3.0")
+        XCTAssertTrue(readme.contains("Wersja 3.0.0"), "README podaje bieżącą wersję 3.0.0")
         XCTAssertTrue(readme.contains("(CHANGELOG.md)"), "README odsyła do changeloga")
         XCTAssertTrue(readme.contains("2.0.0"), "README wspomina 2.0.0 jako wersję migracji z 1.x")
         XCTAssertTrue(readme.contains("(docs/MIGRATION-v2.md)"), "README odsyła do dokumentu migracji")
+        XCTAssertTrue(readme.contains("(docs/MIGRATION-v3.md)"), "README odsyła do dokumentu migracji na 3.0.0")
         XCTAssertTrue(readme.contains("(docs/integration-guide.md)"), "README odsyła do przewodnika integracji")
     }
 }
