@@ -15,20 +15,19 @@ package struct NativePublicObject: Equatable, Sendable {
     package var effectiveRadius: Float = 0
     /// AABB zdeformowanego konturu bańki po ostatnim kroku (z kernelu); `nil` dla brył i przed pierwszym krokiem.
     package var bounds: WorldRectangle?
-    package var rigidity: Float = 0
     package var structuralShape: NativeStructuralShape?
     /// Warstwa rysowania i hit-testu; w rekordzie bańki i bryły jako `filter.w`.
     package var layer: Int32 = 0
 
-    /// Stan bańki po kroku solvera: poza, prędkości, promień efektywny i obwiednia konturu.
-    fileprivate mutating func adopt(_ bubble: NativeSolverBubble, effectiveRadius: Float, bounds: SIMD4<Float>) {
+    /// Stan bańki po kroku solvera: poza, prędkości, promień efektywny i obwiednia konturu (`nil` bez poprawnej obwiedni).
+    fileprivate mutating func adopt(_ bubble: NativeSolverBubble, effectiveRadius: Float, bounds: SIMD4<Float>?) {
         position = bubble.center
         previousPosition = bubble.previousCenter
         velocity = bubble.velocity
         rotation = bubble.rotation
         angularVelocity = bubble.angularVelocity
         self.effectiveRadius = effectiveRadius
-        self.bounds = WorldRectangle(uncheckedMin: SIMD2(bounds.x, bounds.y), max: SIMD2(bounds.z, bounds.w))
+        self.bounds = bounds.map { WorldRectangle(uncheckedMin: SIMD2($0.x, $0.y), max: SIMD2($0.z, $0.w)) }
     }
 
     package init(descriptor: WorldObject) {
@@ -67,7 +66,7 @@ package struct NativePublicFrame {
 
 struct NativePublicProperties: Equatable, Sendable {
     var flags: SIMD4<UInt32> // enabled, static, wrap, region result (0 unchanged, 1 removed, 2 wrapped)
-    var material: SIMD4<Float> // damping, deformability, rigidity, friction
+    var material: SIMD4<Float> // damping, deformability, 0 (nieużywane), friction
     var restitution: Float
     var resources: SIMD2<UInt64> // material ID, render material ID
     var eventData: SIMD2<UInt64> // interest, merge groups
@@ -76,12 +75,11 @@ struct NativePublicProperties: Equatable, Sendable {
     var speedLimits: SIMD2<Float> = .zero
     /// Warstwa obiektu; w rekordzie bańki jako `filter.w` (`NativeMetalFilter.encodeLayer`).
     var layer: Int32 = 0
-    /// Kontakt bańki: część bazowa podatności c₀·(r/r_ref)^s (0 = kontakt twardy), wykładnik ściśnięcia k, współczynnik tłumienia
+    /// Kontakt bańki: podatność c₀·r/r_ref (0 = kontakt twardy), wolna lane `.y` (zawsze 0), współczynnik tłumienia
     /// kontaktu miękkiego ζ_c (zawsze, także dla bańki twardej: czyta go tłumik pary); w rekordzie bańki jako `contact`.
     var contact: SIMD4<Float> = .zero
 
-    /// c₀ (po nadpisaniu na bańce) · (r / r_ref)^s dla bieżącego promienia fizycznego `radius`. Przy c₀ = 0 potęg się nie liczy,
-    /// więc skrajny wykładnik nie daje NaN z 0 · ∞ (CD-D-8).
+    /// c₀ (po nadpisaniu na bańce) · r / r_ref dla bieżącego promienia fizycznego `radius`.
     /// Lane `.z` zawsze niesie ζ_c, także przy c₀ = 0 (gałąź `guard`): tłumik pary czyta go też dla bańki twardej.
     /// Przepełnienie Float wyklucza stager (CD-D-15).
     static func contact(of compliance: BubbleContactCompliance, override: Float?, radius: Float,
@@ -89,7 +87,7 @@ struct NativePublicProperties: Equatable, Sendable {
         let base = override ?? compliance.base
         guard base > 0 else { return SIMD4(0, 0, dampingRatio, 0) }
         // Ten sam wzór w Double co walidacja stagera (`validateWorstAlpha`).
-        return SIMD4(Float(compliance.scaledBase(base, radius: radius)), compliance.compressionExponent, dampingRatio, 0)
+        return SIMD4(Float(compliance.scaledBase(base, radius: radius)), 0, dampingRatio, 0)
     }
 }
 
@@ -133,9 +131,11 @@ package final class NativePublicWorld {
         solver = try NativeMetalSolver(device: device, commandExecutor: commandExecutor, configuration: configuration)
     }
     package var hasSensorPairHistory: Bool { solver.hasSensorPairHistory }
-    /// Rekordy cache kontaktów po ostatnim kroku (ρ końców, λ). Szew testów ρ wyników scalenia i podziału; typ rekordu jest
+    /// Rekordy cache kontaktów po ostatnim kroku (podatność końców, λ). Szew testów rekordów wyników scalenia i podziału; typ rekordu jest
     /// wewnętrzny, więc testy czytają go przez `@testable`.
     var cachedContacts: [NativeContactCacheRecord] { solver.cachedContacts }
+    /// Trwały stan GPU solvera; szew testów, które psują bufor roboczy po zakończeniu klatki (typ jest wewnętrzny).
+    var persistentState: NativeMetalPersistentState? { solver.persistentState }
     /// Krok bez GPU (brak ciał z masą) kończy wszystkie pary w `EventCompactor`, więc i tu historia par musi zniknąć;
     /// inaczej para o tych samych ID dodana później nie dostałaby `contactBegan`.
     package func forgetContactHistory() { contactHistory = [] }
@@ -191,7 +191,7 @@ package final class NativePublicWorld {
                 solverBubbles.append(bubble)
                 properties[id] = NativePublicProperties(
                     flags: SIMD4(1, object.motionRole == .static ? 1 : 0, b.regionExitPolicy == .wrap ? 1 : 0, 0),
-                    material: SIMD4(material.damping, material.deformability, object.rigidity, material.friction),
+                    material: SIMD4(material.damping, material.deformability, 0, material.friction),
                     restitution: material.restitution,
                     resources: SIMD2(b.physicsMaterialID.rawValue, b.renderMaterialID.rawValue),
                     eventData: SIMD2(b.eventInterest.rawValue, b.mergeGroups.rawValue), filter: b.filter,
@@ -218,14 +218,11 @@ package final class NativePublicWorld {
                 else {
                     let c = cos(object.rotation), s = sin(object.rotation)
                     let points = geometry.vertices.map { WorldPoint($0.x * c - $0.y * s, $0.x * s + $0.y * c) + object.position }
-                    var segments: [NativeSolverSegment] = []
-                    for i in points.indices {
-                        guard candidateNextSegmentID < Int.max else { throw NativeMetalSolverError.capacityOverflow }
-                        let a = points[i], b = points[(i + 1) % points.count]
-                        segments.append(.fixed(id: candidateNextSegmentID, a: a, b: b,
-                            ownerID: Int(bitPattern: UInt(p.id.rawValue))))
-                        candidateNextSegmentID += 1
-                    }
+                    // Krawędzie jednostronne ze scalaniem współliniowych; identyfikatory idą od `candidateNextSegmentID`.
+                    guard candidateNextSegmentID <= Int.max - points.count else { throw NativeMetalSolverError.capacityOverflow }
+                    let segments = NativeStaticPolygonEdges.segments(points: points, firstID: candidateNextSegmentID,
+                                                                     ownerID: Int(bitPattern: UInt(p.id.rawValue)))
+                    candidateNextSegmentID += segments.count
                     entry = (geometry, object.position, object.rotation, segments)
                 }
                 candidatePolygons[p.id] = entry

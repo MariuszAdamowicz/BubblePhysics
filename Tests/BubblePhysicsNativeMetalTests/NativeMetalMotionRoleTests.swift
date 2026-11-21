@@ -12,7 +12,8 @@ final class NativeMetalMotionRoleTests: XCTestCase {
             .updatePhysicsMaterial(.init(rawValue: 2), material: PhysicsMaterial(kind: .rigid))
             .updateRenderMaterial(.init(rawValue: 1), material: try RenderMaterial())
             .add(.bubble(BubbleDescriptor(id: ball, position: .zero, targetRadius: 1, motionRole: role,
-                physicsMaterialID: .init(rawValue: 1), renderMaterialID: .init(rawValue: 1))))
+                physicsMaterialID: .init(rawValue: 1), renderMaterialID: .init(rawValue: 1),
+                drivePolicy: BubbleDrivePolicy(bandStiffness: 60))))
         if let x {
             transaction = try transaction.add(.rigidBody(RigidBodyDescriptor(id: wall,
                 vertices: [[x,-10],[x+0.25,-10],[x+0.25,10],[x,10]],
@@ -32,9 +33,10 @@ final class NativeMetalMotionRoleTests: XCTestCase {
     func testBlockedPlayerDriveReportsAchievedPointAndBlockerWithoutTeleporting() async throws {
         let stepper = try NativeCompleteStepper(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         var complete = try await step(stepper, initial(wallAt: 2), WorldTransaction().beginPlayerDrive(ball, target: [8,0]))
+        // Gumka K = 60 dociska bańkę do ściany siłą ok. 420, więc twardy kontakt dopuszcza ułamek procenta wnikania; teleport przez ścianę by to wykrył.
         for _ in 0..<40 {
             complete = try await step(stepper, complete.state)
-            XCTAssertLessThanOrEqual(try XCTUnwrap(complete.state.objects[ball]).position.x, 1.001)
+            XCTAssertLessThanOrEqual(try XCTUnwrap(complete.state.objects[ball]).position.x, 1.01)
         }
         let feedback = try XCTUnwrap(complete.driveFeedback.first)
         XCTAssertEqual(feedback.blockingContact?.objectID, wall)
@@ -42,7 +44,8 @@ final class NativeMetalMotionRoleTests: XCTestCase {
         XCTAssertEqual(feedback.achievedPoint, complete.state.objects[ball]?.position)
     }
 
-    func testDynamicAndMotorDrivenReceiveFieldsWhileActivePlayerDriveDoesNot() async throws {
+    /// CD-D-10: chwycona gumką bańka dostaje siłę globalną i pola jak `.dynamic`; ścieżka i `.static` ich nie dostają.
+    func testDynamicMotorDrivenAndBandPlayerDriveReceiveFieldsWhilePathAndStaticDoNot() async throws {
         for role in [MotionRole.dynamic, .motorDriven, .pathDriven, .playerDriven, .static] {
             let stepper = try NativeCompleteStepper(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
             let field = try ForceFieldDescriptor(id: .init(rawValue: 3), position: .zero,
@@ -51,7 +54,7 @@ final class NativeMetalMotionRoleTests: XCTestCase {
             if role == .playerDriven { commands = commands.beginPlayerDrive(ball, target: .zero) }
             let complete = try await step(stepper, initial(role: role), commands)
             let velocity = try XCTUnwrap(complete.state.objects[ball]).velocity
-            if role == .dynamic || role == .motorDriven {
+            if role == .dynamic || role == .motorDriven || role == .playerDriven {
                 XCTAssertEqual(velocity.x, 0.2, accuracy: 0.001)
                 XCTAssertEqual(velocity.y, 0.1, accuracy: 0.001)
             } else { XCTAssertEqual(velocity, .zero) }
@@ -88,24 +91,21 @@ final class NativeMetalMotionRoleTests: XCTestCase {
         XCTAssertNil(feedback.blockingContact)
     }
 
-    func testPlayerDrivenBubbleTransitionsToEffectiveRigidCircleThenRelaxesAfterRelease() async throws {
+    /// G1: chwyt i puszczenie nie zmieniają promienia kolizji ani kształtu: bańka z wgnieceniem z kontaktu zachowuje `targetRadius`
+    /// w fizyce także w czasie chwytu (bez usztywniania i bez rozluźniania po puszczeniu).
+    func testGrabAndReleaseKeepTheCollisionRadiusAtTheTargetRadius() async throws {
         let stepper = try NativeCompleteStepper(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
-        // Initial overlap creates real compression before capture, not a test-only contour.
+        // Initial overlap creates real compression before the grab, not a test-only contour.
         var complete = try await step(stepper, initial(soft: 1, wallAt: 0.7))
-        let radius = try XCTUnwrap(complete.state.objects[ball]).effectiveRadius
-        XCTAssertLessThan(radius, 0.99)
-        complete = try await step(stepper, complete.state, WorldTransaction()
-            .beginPlayerDrive(ball, target: [-3,0]))
-        let first = try XCTUnwrap(complete.state.objects[ball])
-        XCTAssertGreaterThan(first.collisionRadius, radius)
-        XCTAssertLessThan(first.collisionRadius, 1)
-        for _ in 0..<20 { complete = try await step(stepper, complete.state) }
-        XCTAssertEqual(try XCTUnwrap(complete.state.objects[ball]).collisionRadius, radius, accuracy: 0.001)
+        XCTAssertLessThan(try XCTUnwrap(complete.state.objects[ball]).effectiveRadius, 0.99)
+        complete = try await step(stepper, complete.state, WorldTransaction().beginPlayerDrive(ball, target: [-3,0]))
+        XCTAssertEqual(try XCTUnwrap(complete.state.objects[ball]).collisionRadius, 1, accuracy: 1e-6)
+        for _ in 0..<20 {
+            complete = try await step(stepper, complete.state)
+            XCTAssertEqual(try XCTUnwrap(complete.state.objects[ball]).collisionRadius, 1, accuracy: 1e-6)
+        }
         complete = try await step(stepper, complete.state, WorldTransaction().endPlayerDrive(ball))
-        XCTAssertGreaterThan(try XCTUnwrap(complete.state.objects[ball]).collisionRadius, radius)
-        XCTAssertLessThan(try XCTUnwrap(complete.state.objects[ball]).collisionRadius, 1)
-        for _ in 0..<30 { complete = try await step(stepper, complete.state) }
-        XCTAssertEqual(try XCTUnwrap(complete.state.objects[ball]).collisionRadius, 1, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(complete.state.objects[ball]).collisionRadius, 1, accuracy: 1e-6)
     }
 
     func testMotorForceTorqueAndPhysicalTransitionsAdvanceOnSimulationTime() async throws {
@@ -124,15 +124,17 @@ final class NativeMetalMotionRoleTests: XCTestCase {
         XCTAssertEqual(replaced.state.globalForce, [0,-12])
     }
 
-    func testPlayerDrivenPolygonReportsWallAndMotorTorqueChangesRotation() async throws {
+    /// G4-AC2: bryły nie da się chwycić (`incompatibleObjectKind`); bryłą steruje `MotorDrive`, a moment obrotowy zmienia obrót.
+    func testPolygonCannotBeGrabbedAndMotorTorqueChangesRotation() async throws {
         let stepper = try NativeCompleteStepper(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         let polygon = try RigidBodyDescriptor(id: ball, vertices: [[-0.5,-0.5],[0.5,-0.5],[0.5,0.5],[-0.5,0.5]],
             motionRole: .dynamic, physicsMaterialID: .init(rawValue: 2), renderMaterialID: .init(rawValue: 1))
-        var complete = try await step(stepper, initial(wallAt: 2), WorldTransaction()
-            .replace(ball, with: .rigidBody(polygon)).beginPlayerDrive(ball, target: [8,0]))
-        for _ in 0..<60 { complete = try await step(stepper, complete.state) }
-        XCTAssertEqual(complete.driveFeedback.first?.blockingContact?.objectID, wall)
-        XCTAssertLessThanOrEqual(try XCTUnwrap(complete.state.objects[ball]).position.x, 1.501)
+        let withPolygon = try await step(stepper, initial(wallAt: 2), WorldTransaction().replace(ball, with: .rigidBody(polygon)))
+        let rejected = TransactionStager.stageBatch([PendingTransaction(token: .init(rawValue: 2),
+            transaction: WorldTransaction().beginPlayerDrive(ball, target: [8,0]))], against: withPolygon.state, validate: stepper.validate)
+        XCTAssertEqual(rejected.frame.events, [.transactionRejected(.init(rawValue: 2),
+            TransactionRejection(operationIndex: 0, reason: .incompatibleObjectKind(ball)))])
+        XCTAssertEqual(rejected.state.objects[ball]?.motionRole, .dynamic)
         let motorStepper = try NativeCompleteStepper(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         let motor = try await step(motorStepper, initial(), WorldTransaction().replace(ball, with: .rigidBody(polygon))
             .setMotorDrive(ball, drive: MotorDrive(force: [6,0], torque: 6)))

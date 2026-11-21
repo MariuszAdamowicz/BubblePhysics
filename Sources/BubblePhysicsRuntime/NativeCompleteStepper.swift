@@ -17,6 +17,11 @@ package final class NativeCompleteStepper: CompleteStepper {
         native = try device.map { try NativePublicWorld(device: $0, configuration: configuration) }
         configuredContactCompliance = configuration.sanitized.contactCompliance
     }
+    /// Szew testów: stepper na gotowym świecie natywnym (np. z wstrzykniętym wykonawcą poleceń).
+    package init(world: NativePublicWorld, configuration: NativeMetalConfiguration = .default) {
+        native = world
+        configuredContactCompliance = configuration.sanitized.contactCompliance
+    }
     package var baseContactCompliance: Float { configuredContactCompliance }
     package var positionTolerance: Float { NativePublicWorld.positionTolerance }
     /// Pary z dostarczonym `contactBegan` po ostatnio opublikowanym kroku; szew testów `didPublish`.
@@ -127,7 +132,7 @@ package final class NativeCompleteStepper: CompleteStepper {
             value.position = object.position; value.previousPosition = object.previousPosition
             value.velocity = object.velocity; value.rotation = object.rotation
             value.angularVelocity = object.angularVelocity; value.motionRole = object.motionRole
-            value.collisionRadius = object.collisionRadius; value.rigidity = object.rigidity
+            value.collisionRadius = object.collisionRadius
             value.structuralShape = object.structuralShape; value.layer = object.layer
             return value
         }

@@ -6,27 +6,22 @@ import BubblePhysicsReference
 
 @MainActor
 final class NativeMetalContourTests: XCTestCase {
-    // Usunięcie walidacji rzeczywistych punktów dopuści krawędzie dłuższe od
-    // limitu, gdy rozdzielczość float32 w dużych współrzędnych przekracza limit.
-    func testUnrepresentableContourEdgeRejectsFrameAndPreservesPublishedState() async throws {
+    // P-B-26 (G5-AC2): kontur jest tylko rysowany. Krawędź dłuższa od limitu, bo rozdzielczość float32 przy dużych
+    // współrzędnych jej nie pozwala skrócić, nie odrzuca ramki: ramka jest przyjęta i opublikowana.
+    func testUnrepresentableContourEdgeDoesNotRejectTheFrame() async throws {
         let solver = try makeSolver()
         var world = try makeWorld()
         let approved = try await solver.executeFrame(world: world, scenarioStep: 1)
         var bubble = world.bubbles[0]
         bubble.center = .init(x: 10_000_000, y: 10_000_000)
         world.updateBubble(bubble)
-        do {
-            _ = try await solver.executeFrame(world: world, scenarioStep: 2)
-            XCTFail("Contour edges exceeding the configured limit must reject the GPU frame")
-        } catch let failure as NativeMetalSafetyFailure {
-            guard case .invalidFrame = failure.reason else {
-                return XCTFail("Unexpected safety failure: \(failure.reason)")
-            }
-            XCTAssertFalse(failure.telemetry.didEncounterNonFinite)
-            XCTAssertEqual(failure.telemetry.commandBufferCount, 1)
-        }
-        XCTAssertEqual(solver.publishedFrame?.bubbles, approved.bubbles)
-        XCTAssertEqual(solver.publishedFrame?.contours, approved.contours)
+        let frame = try await solver.executeFrame(world: world, scenarioStep: 2)
+        XCTAssertTrue(frame.isComplete)
+        XCTAssertTrue(frame.bubbles.allSatisfy { $0.center.x.isFinite && $0.center.y.isFinite })
+        XCTAssertEqual(frame.bubbles[0].center.x, 10_000_000, accuracy: 1)
+        XCTAssertNotEqual(frame.bubbles[0].center, approved.bubbles[0].center)
+        XCTAssertEqual(solver.publishedFrame?.bubbles, frame.bubbles)
+        XCTAssertEqual(solver.publishedFrame?.contours, frame.contours)
     }
 
     func testDeepNarrowContactHonorsEveryEdgeLengthWithAndWithoutSurfaceTension() async throws {

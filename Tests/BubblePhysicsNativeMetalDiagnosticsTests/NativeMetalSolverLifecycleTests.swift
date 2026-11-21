@@ -245,7 +245,7 @@ final class NativeMetalSolverLifecycleTests: XCTestCase {
         XCTAssertEqual(MemoryLayout<NativeMetalSensorRecord>.stride, 48)
         XCTAssertEqual(MemoryLayout<NativeMetalSensorPair>.stride, 32)
         XCTAssertEqual(MemoryLayout<NativeMetalSegment>.alignment, 16)
-        XCTAssertEqual(MemoryLayout<NativeMetalSegment>.stride, 112)
+        XCTAssertEqual(MemoryLayout<NativeMetalSegment>.stride, 128)
         XCTAssertEqual(MemoryLayout<NativeMetalContactCache>.alignment, 16)
         XCTAssertEqual(MemoryLayout<NativeMetalContactCache>.stride, 80)
         XCTAssertEqual(MemoryLayout<NativeMetalCandidate>.stride, 32)

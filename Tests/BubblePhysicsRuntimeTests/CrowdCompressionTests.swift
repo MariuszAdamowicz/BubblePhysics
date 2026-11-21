@@ -161,7 +161,7 @@ final class CrowdCompressionTests: XCTestCase {
     }
 
     // P-B-30 (G4-AC7, CD-D-17, CD-D-18): zawarta para miękka wystrzeliwuje mniejszą bańkę i nie psuje świata. Duża r = 40 w (0, 0),
-    // mała r = 12 w całości wewnątrz w (6, 0), przeszkoda r = 20 w (100, 0) na osi wystrzału (+x); masy r² / 400, c₀ = 1e-3, kc = 0,
+    // mała r = 12 w całości wewnątrz w (6, 0), przeszkoda r = 20 w (100, 0) na osi wystrzału (+x); masy r² / 400, c₀ = 1e-3 (podatność c₀·r/r_ref),
     // ζ_c = 1, `damping` = 0, `maximumLinearSpeed` = 600. Granicy przesunięcia środka w kroku nie ma: wystrzał jest zamierzony.
     func testSoftContainedPairReleasesWithoutBreakingTheWorld() async throws {
         // Bez `CrowdScene.makeWorld`: krok z wstawieniem baniek jest właśnie tym, w którym zawieranie się rozwiązuje.

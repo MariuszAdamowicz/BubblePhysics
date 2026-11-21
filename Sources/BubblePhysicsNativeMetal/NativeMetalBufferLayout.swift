@@ -13,7 +13,7 @@ struct NativeMetalBubble: Equatable, Sendable {
     var eventData = SIMD2<UInt64>.zero // interest, merge groups
     var bounds = SIMD4<Float>.zero // AABB zdeformowanego konturu po kroku: min.xy, max.xy
     var filter = NativeMetalFilter.default // kategoria, maska, reserved, warstwa (`NativeMetalFilter.encodeLayer`)
-    var contact = SIMD4<Float>.zero // część bazowa podatności c₀·(r/r_ref)^s (0 = kontakt twardy), wykładnik ściśnięcia k, ζ_c (współczynnik tłumienia kontaktu miękkiego, także dla bańki twardej), reserved
+    var contact = SIMD4<Float>.zero // podatność c₀·r/r_ref (0 = kontakt twardy), reserved, ζ_c (współczynnik tłumienia kontaktu miękkiego, także dla bańki twardej), reserved
 
     init(_ bubble: NativeSolverBubble) {
         identity = SIMD2(Int64(bubble.id.rawValue), 0)
@@ -53,11 +53,20 @@ struct NativeMetalSegment: Equatable, Sendable {
     var velocity: SIMD4<Float>
     var collision: SIMD4<Float>
     var filter: SIMD4<UInt32> // kategoria, maska, reserved, reserved
+    /// Krawędź statycznego wielokąta: drugi koniec krawędzi poprzedniej w wierzchołku początkowym (x, y), znak strony zewnętrznej
+    /// względem lewej normalnej, reserved. Dla pozostałych odcinków zero.
+    var region = SIMD4<Float>.zero
 
+    /// `flags.w`: bit 0 krawędź wielokąta z obszarami, bit 1 wypukły początek, bit 2 wypukły koniec (informacyjny: jądra go nie czytają, służy diagnostyce i testom); `flags.z` krawędzi wielokąta zostaje 0.
     init(_ segment: NativeSolverSegment) {
+        var polygonFlags: UInt32 = 0
+        if let edge = segment.polygonEdge {
+            polygonFlags = 1 | (edge.convexStart ? 2 : 0) | (edge.convexEnd ? 4 : 0)
+            region = SIMD4(edge.previousStart.x, edge.previousStart.y, edge.outwardSign, 0)
+        }
         identity = SIMD2(Int64(segment.id), Int64(segment.ownerID ?? 0))
         flags = SIMD4(segment.isKinematic ? 1 : 0, segment.ownerID == nil ? 0 : 1,
-                      segment.allowedSide == nil ? 0 : 1, 0)
+                      segment.allowedSide == nil ? 0 : 1, polygonFlags)
         previous = SIMD4(segment.previousA.x, segment.previousA.y, segment.previousB.x, segment.previousB.y)
         current = SIMD4(segment.currentA.x, segment.currentA.y, segment.currentB.x, segment.currentB.y)
         velocity = SIMD4(segment.linearVelocity.x, segment.linearVelocity.y, segment.angularVelocity, 0)
@@ -92,10 +101,10 @@ struct NativeContactCacheRecord: Equatable, Sendable {
     var metadata: SIMD4<UInt32> // kind, age, lastSeenFrame, flags
     var geometry: SIMD4<Float> // normal.xy, point.xy
     var response: SIMD4<Float> // lambda, penetration, allowedSide (0 = nil), reserved
-    /// x, y: ρ końców a i b z geometrii bieżącego kroku (stosunek promienia konturu do r w kierunku normalnej), bez wygładzania.
-    /// z: suma podatności końców c_a(ρ_a) + c_b(ρ_b) (dla kontaktu z odcinkiem tylko c_a), liczona raz na kontakt aktywny
-    /// w `nativePrepareSolverContacts` i czytana przez `nativeContactAlpha` w każdej iteracji solvera. w: reserved.
-    var rho: SIMD4<Float> = SIMD4(1, 1, 0, 0)
+    /// x: suma podatności końców c_a + c_b (dla kontaktu z odcinkiem tylko c_a), liczona raz na kontakt aktywny w
+    /// `nativePrepareSolverContacts` z `contact.x` baniek i czytana przez `nativeContactAlpha` w każdej iteracji solvera.
+    /// y, z, w: reserved.
+    var compliance: SIMD4<Float> = .zero
     var key: NativeContactKey { .init(kind: metadata.x, first: participants.x, second: participants.y) }
     var lambda: Float { get { response.x } set { response.x = newValue } }
     var age: UInt32 { metadata.y }

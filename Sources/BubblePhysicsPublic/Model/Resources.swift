@@ -6,35 +6,29 @@ public enum PhysicsMaterialKind: Hashable, Sendable {
     case rigid
 }
 
-/// Podatność kontaktu bańki: c = base · (r / referenceRadius)^radiusExponent · ρ^compressionExponent, gdzie r to bieżący promień
-/// fizyczny bańki, a ρ ∈ [0, 1] to stosunek promienia konturu do r w kierunku kontaktu. `base` = 0 (`.hard`) to kontakt twardy
-/// z v2.1.0: potęgi nie są wtedy liczone.
+/// Podatność kontaktu bańki: c = base · r / referenceRadius, gdzie r to bieżący promień fizyczny bańki. Ta sama siła ściska więc
+/// każdą bańkę o ten sam ułamek promienia, ε = c₀ · F / r_ref, a w parze wgniecenie dzieli się w proporcji podatności, czyli
+/// promieni. `base` = 0 (`.hard`) to kontakt twardy z v2.1.0.
 public struct BubbleContactCompliance: Equatable, Sendable {
     /// Podstawowa podatność c₀ ≥ 0; 0 oznacza kontakt twardy.
     public let base: Float
     /// Promień odniesienia r_ref > 0.
     public let referenceRadius: Float
-    /// Wykładnik s promienia: względne wgniecenie przy tej samej sile rośnie jak r^(s−1).
-    public let radiusExponent: Float
-    /// Wykładnik k ściśnięcia: dla k > 0 bańka sztywnieje wraz ze ściśnięciem konturu.
-    public let compressionExponent: Float
 
-    public init(base: Float = 0, referenceRadius: Float = 1, radiusExponent: Float = 0, compressionExponent: Float = 0) {
+    public init(base: Float = 0, referenceRadius: Float = 1) {
         self.base = base
         self.referenceRadius = referenceRadius
-        self.radiusExponent = radiusExponent
-        self.compressionExponent = compressionExponent
     }
 
     /// Kontakt twardy, jak w v2.1.0.
     public static let hard = BubbleContactCompliance()
 
-    /// Część bazowa podatności c₀ · (r / r_ref)^s w `Double` dla podanego c₀ (po nadpisaniu na bańce) i promienia r. Jedno źródło
-    /// wzoru dla walidacji stagera i rekordu GPU: potęga w Float przepełniałaby tam, gdzie walidacja w Double przepuszcza.
-    /// Przy c₀ ≤ 0 potęg się nie liczy, więc skrajny wykładnik nie daje NaN z 0 · ∞ (CD-D-8).
+    /// Podatność c₀ · r / r_ref w `Double` dla podanego c₀ (po nadpisaniu na bańce) i promienia r. Jedno źródło wzoru dla
+    /// walidacji stagera i rekordu GPU: iloczyn w Float przepełniałby tam, gdzie walidacja w Double przepuszcza.
+    /// Przy c₀ ≤ 0 zwraca 0, więc kontakt twardy nie zależy od promienia.
     package func scaledBase(_ base: Float, radius: Float) -> Double {
         guard base > 0 else { return 0 }
-        return Double(base) * pow(Double(radius) / Double(referenceRadius), Double(radiusExponent))
+        return Double(base) * Double(radius) / Double(referenceRadius)
     }
 
     /// Każda wartość nieprawidłowa (ujemna, NaN, nieskończona, promień odniesienia ≤ 0) daje `valueOutOfRange`, a podatność > 0
@@ -43,10 +37,6 @@ public struct BubbleContactCompliance: Equatable, Sendable {
         guard base.isFinite, base >= 0 else { throw ModelValidationError.valueOutOfRange("contactCompliance.base") }
         guard referenceRadius.isFinite, referenceRadius > 0 else {
             throw ModelValidationError.valueOutOfRange("contactCompliance.referenceRadius")
-        }
-        guard radiusExponent.isFinite else { throw ModelValidationError.valueOutOfRange("contactCompliance.radiusExponent") }
-        guard compressionExponent.isFinite else {
-            throw ModelValidationError.valueOutOfRange("contactCompliance.compressionExponent")
         }
         guard kind == .bubble || base == 0 else { throw ModelValidationError.valueOutOfRange("contactCompliance.base") }
     }

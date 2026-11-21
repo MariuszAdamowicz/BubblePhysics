@@ -1,6 +1,25 @@
 # Changelog
 
-Zmiany w wydaniach `BubblePhysics`. Przejście z 1.x na 2.0.0 opisuje [docs/MIGRATION-v2.md](docs/MIGRATION-v2.md).
+Zmiany w wydaniach `BubblePhysics`. Przejście z 1.x na 2.0.0 opisuje [docs/MIGRATION-v2.md](docs/MIGRATION-v2.md), a z 2.x na 3.0.0 [docs/MIGRATION-v3.md](docs/MIGRATION-v3.md).
+
+## 3.0.0
+
+Przejście z 2.x opisuje [docs/MIGRATION-v3.md](docs/MIGRATION-v3.md).
+
+### Zmienione (łamiące)
+
+- `BubbleContactCompliance` ma tylko `base` (c₀) i `referenceRadius` (r_ref). Podatność bańki to c = c₀ · r / r_ref, gdzie r to bieżący promień fizyczny, bez wykładników i bez ρ. Ta sama siła ściska więc każdą bańkę o ten sam ułamek promienia, ε = c₀ · F / r_ref, a para dzieli wgniecenie w proporcji promieni.
+- Walidacja stagera liczy najgorszą α pary z największego promienia (bieżącego, docelowego, celu trwającego przejścia i `endRadius`) jako c₀ · r_max / r_ref, bez ρ_min^kc.
+- Rekord cache kontaktu niesie sumę podatności końców (`compliance.x` = c_a + c_b) zamiast ρ końców. `nativeUpdateContactRho` znika z kroku, a kontur pary dzieli wgniecenie według podatności z `contact.x`.
+- Jedno tłumienie ruchu liniowego. `MotionControllers.prepare` mnoży prędkość przez e^(−γ · dt) (γ to `damping` materiału obiektu) przed dodaniem F / m · dt, dla ról `.dynamic`, `.motorDriven` i `.playerDriven`. Kernele (`nativePredict`, `nativeRigidPredict`) nie tłumią już ruchu liniowego na ścieżce publicznej, tłumią tylko obrót. Siła działa więc w całości: bańka dociśnięta gumką w nasyceniu, `MotorDrive` albo siłą globalną ugina się o c · F, bez względu na γ i masę (wcześniej gumka traciła około 11,5 % siły przez e^(−D · dt / m), a każda siła jeszcze około 1 % przy γ 0,6). Prędkość narzucona torem (`.pathDriven`, bryła kinematyczna) nie jest tłumiona.
+- Napęd tylko gumką siłową. `BubbleDrivePolicy(bandStiffness:maximumForce:)` ma dwa pola, bez `.standard`. `BubbleDescriptor.drivePolicy` i `BubbleResult.drivePolicy` są opcjonalne i domyślnie `nil`. Bańka bez `drivePolicy` i bryła nie dają się chwycić: `beginPlayerDrive` odrzuca je z `incompatibleObjectKind(id)`. Chwyt nie zmienia promienia ani kształtu bańki. `replace`, scalenie i podział chwyconej bańki kończą chwyt, ponowny chwyt tylko z polityką.
+- Krawędzie statycznych wielokątów odpychają tylko od zewnątrz, a wypukły wierzchołek raz. Dotąd każda krawędź bryły statycznej była odcinkiem dwustronnym: cienka ściana (grubość mniejsza niż ugięcie, albo zwykła ściana przy dużej bańce) dawała bańce drugą sprężynę od tylnej krawędzi, a wierzchołek wypukły dwa kontakty z tym samym punktem. Teraz kontakt powstaje w obszarze wnętrza krawędzi po jej stronie zewnętrznej (stała normalna zewnętrzna) albo w obszarze wypukłego wierzchołka (normalna od wierzchołka, jeden kontakt, wierzchołek należy do krawędzi, która się w nim zaczyna); klasyfikacja na granicy obszarów jest dokładnym dopełnieniem, także o jedno ULP obok. Ugięcie przy ścianie to c · F niezależnie od jej grubości. Strona zewnętrzna wynika ze znaku pola wielokąta, więc obieg wierzchołków podany przez grę nie ma znaczenia. Krawędzie sąsiednie współliniowe w tolerancji 1e-5 (|e₁ × e₂| ≤ 1e-5 · |e₁| · |e₂|) są scalane i ich wspólny wierzchołek nie zmienia kontaktu. Dotyczy też kontaktów twardych (c₀ = 0). Segment solvera ma o jedno pole więcej (stride 112 → 128 B); CCD i strażniki środka działają jak dotąd, dwustronnie.
+- Kontur tylko rysowany. Kernele konturu i renderu nie zapalają już bitów błędu za wartość konturu (skończoność punktów, długość krawędzi, skończoność i zakres promienia efektywnego, deformacji i obwiedni), a `nativeCheckFinite` sprawdza z rekordu deformacji tylko limity prędkości. Odczyt ramki nie odrzuca kroku za kontur, tylko naprawia opublikowane wartości: promień efektywny nieskończony albo spoza [0, `targetRadius`] staje się `targetRadius`, nieskończona albo odwrócona obwiednia staje się obwiednią koła bańki, a deformacja spoza [0, 1] nie wchodzi do statystyk. Pozycje, prędkości i promienie fizyczne nie zależą od konturu (dwa światy z `deformability` 0 i 0,65 dają identyczne wyniki bit w bit). Walidacja stanu fizycznego (skończoność, λ ≥ 0, spójność pakietu renderu) zostaje.
+
+### Usunięte
+
+- `BubbleDrivePolicy.bandDamping` (D): tłumienie gumki zastępuje γ materiału. `BubbleDrivePolicy.rigidifies`, `rigidificationDuration`, `relaxationDuration` i `distanceResponse`, `maximumSpeed`: narzucona prędkość i usztywnianie przy chwycie znikają razem z trybem prędkościowym. `BubbleDrivePolicy.standard`.
+- `BubbleContactCompliance.radiusExponent` (s) i `BubbleContactCompliance.compressionExponent` (k). Przestrojenie podatności opisuje [docs/MIGRATION-v3.md](docs/MIGRATION-v3.md).
 
 ## 2.3.0
 

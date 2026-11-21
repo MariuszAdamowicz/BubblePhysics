@@ -17,17 +17,19 @@ final class AcceptanceEquivalenceTests: XCTestCase {
     /// Urządzenie, na którym zapisano wzorzec.
     private static let referenceDeviceName = "Apple M1 Pro"
     private static let referenceSteps = 120
-    /// Commit, na którym policzono wzorzec (kod biblioteki bez zmian od c614fe0 do 177147b), bez żadnej
-    /// optymalizacji ścieżki CPU etapu 8.
-    private static let referenceCommit = "c614fe0"
+    /// Commit, na którym policzono aktualne hashe wzorca (wycinek 3 wydania 3.0.0), bez żadnej optymalizacji ścieżki CPU etapu 8.
+    private static let referenceCommit = "2e24499"
     /// Wzorzec zapisany przed zadaniem 84 (bez żadnej optymalizacji ścieżki CPU etapu 8).
-    /// Bez limitu λ pary (`pairCorrectionLimit = false`, CD-D-20): wzorzec bez zmian, ten sam co w v2.1.0.
-    private static let referenceObjectHash: UInt64 = 0x62aa8c214dcaec24
-    private static let referenceContourHash: UInt64 = 0xbc19bd9b8aa48c7d
+    /// Bez limitu λ pary (`pairCorrectionLimit = false`, CD-D-20).
+    /// Hashe zaktualizowane w wycinku 3 wydania 3.0.0 (jednostronne krawędzie statycznych wielokątów, CD-D-3, CD-D-4): ściany tej sceny mają
+    /// grubość 1, więc dawna druga sprężyna od tylnej krawędzi i podwójny kontakt wierzchołka znikają i pozycje baniek przy ścianach
+    /// się zmieniają (Apple M1 Pro, ta sama scena i kroki). Po 10 krokach stan jest jeszcze bit w bit ten sam co przed zmianą.
+    private static let referenceObjectHash: UInt64 = 0xfa5767995423d94b
+    private static let referenceContourHash: UInt64 = 0xd9560fd38a0a2ecc
     /// Z limitem λ pary (CD-D-9, domyślnie): limit zmienia przesunięcia w gęstej scenie, więc stan i kontury po 120
     /// krokach mają nowe hashe (Apple M1 Pro, ta sama scena i kroki co wzorzec).
-    private static let pairLimitObjectHash: UInt64 = 0x4e78b25ccda3ae78
-    private static let pairLimitContourHash: UInt64 = 0xf3be8eabdb1ca5fb
+    private static let pairLimitObjectHash: UInt64 = 0xa0e2db9372a992c1
+    private static let pairLimitContourHash: UInt64 = 0xcb1ed172437bc536
 
     private struct Published {
         let frame: WorldFrame

@@ -4,7 +4,7 @@ import XCTest
 
 /// P-B-20, P-B-21, P-B-22 (G4-AC1, G4-AC2, CD-D-6): kontakt miękki drga jak oscylator tłumiony o ω = √(1 / (c · μ)) i ζ = ζ_c.
 ///
-/// Warunki: kc = 0 (sprężyna liniowa), `damping` materiału = 0, restytucja 0, wychylenie mniejsze niż ugięcie statyczne,
+/// Warunki: podatność liniowa c₀·r/r_ref (sprężyna liniowa), `damping` materiału = 0, restytucja 0, wychylenie mniejsze niż ugięcie statyczne,
 /// prędkości daleko poniżej `restSpeed` = max(40, 2r). Podatność dobrana tak, żeby ω · dt ≈ 0,02: XPBD z α = c / dt² to
 /// niejawny Euler, który sam tłumi tempem ≈ ω · dt / 2 (ζ_num ≈ 0,01), więc przy większym ω · dt dekrement mierzyłby głównie krok.
 /// Wychylenie startowe to połowa ugięcia statycznego, więc kontakt przez cały ruch jest aktywny.

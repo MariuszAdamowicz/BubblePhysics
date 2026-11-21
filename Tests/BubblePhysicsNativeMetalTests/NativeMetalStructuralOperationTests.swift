@@ -177,13 +177,12 @@ final class NativeMetalStructuralOperationTests: XCTestCase {
         XCTAssertEqual(reused, fresh, accuracy: 0.0001)
     }
 
-    // P-B-13: wynik scalenia z ID źródła ma w pierwszym kroku ρ_prev = 1 na końcu pary, więc podział nakładania liczy c(1), a nie
-    // c(ρ źródła). Materiał z kc = 3, żeby c zależało od ρ. Test sprawdza ścieżkę hosta, nie gałąź shadera: host unieważnia rekordy
-    // cache ID strukturalnych (`NativeMetalSolver`, invalidationRecords), więc rekord pary jest nowy (wiek 1) i oba końce, także
-    // partnera, mają ρ_prev = 1. Gałąź `nativeIsStructuralResult` jest tylko drugą zaporą i tu nie jest wykonywana.
-    func testMergeResultWithSourceIDStartsItsPairEndAtRhoOne() async throws {
+    // Wynik scalenia z ID źródła nie dziedziczy rekordu pary źródła: host unieważnia rekordy cache ID strukturalnych
+    // (`NativeMetalSolver`, invalidationRecords), więc rekord pary jest nowy (wiek 1), a jego podatność c_a + c_b to c₀·r/r_ref
+    // wyniku i partnera, bez śladu po źródle.
+    func testMergeResultWithSourceIDStartsItsPairWithAFreshRecordAndTheComplianceOfItsOwnRadius() async throws {
         let softMaterial = try PhysicsMaterial(kind: .bubble, deformability: 1,
-            contactCompliance: BubbleContactCompliance(base: 0.002, referenceRadius: 1, radiusExponent: 0, compressionExponent: 3))
+            contactCompliance: BubbleContactCompliance(base: 0.002, referenceRadius: 1))
         func soft(_ n: UInt64, x: Float) throws -> BubbleDescriptor {
             try BubbleDescriptor(id: id(n), position: [x, 0], targetRadius: 1, physicsMaterialID: material, renderMaterialID: style)
         }
@@ -195,8 +194,7 @@ final class NativeMetalStructuralOperationTests: XCTestCase {
         _ = try await native.step(objects: state.objects.values.map { NativePublicObject(descriptor: $0.descriptor) },
             materials: state.physicsMaterials, region: state.configuration.simulationRegion, duration: 1.0 / 60)
         let before = try XCTUnwrap(native.cachedContacts.first { $0.metadata.x == 0 && $0.participants == SIMD2<Int64>(2, 5) })
-        XCTAssertLessThan(before.rho.x, 0.9, "źródło niesie ściśnięty koniec, więc dziedziczenie ρ byłoby widoczne")
-        XCTAssertLessThan(before.rho.y, 0.9)
+        XCTAssertEqual(before.compliance.x, 0.002 * 2, accuracy: 1e-5, "dwie bańki r 1, c₀ 0,002, r_ref 1")
 
         let merged = try TransactionStager.stage(WorldTransaction().mergeBubbles([id(1), id(2)],
             result: .init(id: id(2), physicsMaterialID: material, renderMaterialID: style)), against: state).state
@@ -212,19 +210,15 @@ final class NativeMetalStructuralOperationTests: XCTestCase {
         let radius = object.targetRadius, otherRadius = partner.collisionRadius
         let overlap = radius + otherRadius - (partner.position - input.position).euclideanLength
         XCTAssertGreaterThan(overlap, 0.3)
-        func compliance(_ rho: Float) -> Float { 0.002 * pow(max(rho, 0.01), 3) }
         XCTAssertEqual(after.metadata.y, 1, "rekord pary wyniku jest nowy: host unieważnił rekord ID strukturalnego")
-        let cSelf = compliance(1), cOther = compliance(1)
-        XCTAssertEqual(after.rho.x, (radius - overlap * cSelf / (cSelf + cOther)) / radius, accuracy: 1e-3)
-        XCTAssertEqual(after.rho.y, (otherRadius - overlap * cOther / (cSelf + cOther)) / otherRadius, accuracy: 1e-3)
+        XCTAssertEqual(after.compliance.x, 0.002 * (radius + otherRadius), accuracy: 1e-5, "c_a + c_b z promieni bieżącego kroku")
     }
 
-    // P-B-13 dla podziału: część, która zachowuje ID źródła, w pierwszym kroku ma ρ_prev = 1 na końcu pary, a nie ρ źródła.
-    // Jak wyżej: sprawdza ścieżkę hosta (unieważnienie rekordu), nie gałąź shadera. Partner leży nad źródłem, więc oba kawałki
-    // (po ±0,7 w poziomie) nadal na niego nachodzą.
-    func testSplitResultWithSourceIDStartsItsPairEndAtRhoOne() async throws {
+    // Podział: część, która zachowuje ID źródła, dostaje nowy rekord pary (host unieważnia rekord ID strukturalnego) z podatnością
+    // z własnego promienia. Partner leży nad źródłem, więc oba kawałki (po ±0,7 w poziomie) nadal na niego nachodzą.
+    func testSplitResultWithSourceIDStartsItsPairWithAFreshRecordAndTheComplianceOfItsOwnRadius() async throws {
         let softMaterial = try PhysicsMaterial(kind: .bubble, deformability: 1,
-            contactCompliance: BubbleContactCompliance(base: 0.002, referenceRadius: 1, radiusExponent: 0, compressionExponent: 3))
+            contactCompliance: BubbleContactCompliance(base: 0.002, referenceRadius: 1))
         func soft(_ n: UInt64, y: Float) throws -> BubbleDescriptor {
             try BubbleDescriptor(id: id(n), position: [0, y], targetRadius: 1, physicsMaterialID: material, renderMaterialID: style)
         }
@@ -236,7 +230,7 @@ final class NativeMetalStructuralOperationTests: XCTestCase {
         _ = try await native.step(objects: state.objects.values.map { NativePublicObject(descriptor: $0.descriptor) },
             materials: state.physicsMaterials, region: state.configuration.simulationRegion, duration: 1.0 / 60)
         let before = try XCTUnwrap(native.cachedContacts.first { $0.metadata.x == 0 && $0.participants == SIMD2<Int64>(1, 5) })
-        XCTAssertLessThan(before.rho.x, 0.9, "źródło niesie ściśnięty koniec, więc dziedziczenie ρ byłoby widoczne")
+        XCTAssertEqual(before.compliance.x, 0.002 * 2, accuracy: 1e-5, "dwie bańki r 1, c₀ 0,002, r_ref 1")
 
         let split = try TransactionStager.stage(WorldTransaction().splitBubble(id(1),
             first: .init(result: result(1), share: 0.5), second: .init(result: result(6), share: 0.5)), against: state).state
@@ -257,10 +251,7 @@ final class NativeMetalStructuralOperationTests: XCTestCase {
         let overlap = radius + otherRadius - (partner.position - parts[0].position).euclideanLength
         XCTAssertGreaterThan(overlap, 0.1)
         XCTAssertEqual(after.metadata.y, 1, "rekord pary części jest nowy: host unieważnił rekord ID strukturalnego")
-        func compliance(_ rho: Float) -> Float { 0.002 * pow(max(rho, 0.01), 3) }
-        let cSelf = compliance(1), cOther = compliance(1)
-        XCTAssertEqual(after.rho.x, (radius - overlap * cSelf / (cSelf + cOther)) / radius, accuracy: 1e-3)
-        XCTAssertEqual(after.rho.y, (otherRadius - overlap * cOther / (cSelf + cOther)) / otherRadius, accuracy: 1e-3)
+        XCTAssertEqual(after.compliance.x, 0.002 * (radius + otherRadius), accuracy: 1e-5, "c_a + c_b z promieni bieżącego kroku")
     }
 
     // P-B-16: kontur wyniku scalenia pochodzi z seeda źródeł tylko w pierwszej klatce; w drugiej, bez żadnego kontaktu,

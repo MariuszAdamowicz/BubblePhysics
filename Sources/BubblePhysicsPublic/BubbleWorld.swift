@@ -131,6 +131,16 @@ public final class BubbleWorld {
                                snapped: snappedObjects)
     }
 
+    /// Promień docelowy i kolizyjny każdej bańki z opublikowanego stanu; szew testów, że kontur nie wpływa na fizykę
+    /// (publiczna klatka niesie promień efektywny i obwiednię z konturu, więc nie pokazuje promieni fizyki).
+    package var debugBubbleRadii: [ObjectID: (target: Float, collision: Float)] {
+        var radii: [ObjectID: (target: Float, collision: Float)] = [:]
+        for (id, object) in state.objects {
+            if case .bubble = object.descriptor { radii[id] = (object.targetRadius, object.collisionRadius) }
+        }
+        return radii
+    }
+
     /// CPU adapter/debug. Wywołanie kopiuje opublikowane kontury z pamięci GPU.
     public func debugContourSnapshot() -> [ObjectID: [WorldPoint]] {
         let snapshot = (stepper as? NativeCompleteStepper)?.publishedRenderHandoff?.debugContourSnapshot() ?? [:]

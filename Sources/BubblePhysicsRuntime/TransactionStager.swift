@@ -50,12 +50,7 @@ package struct RuntimeObject: Equatable, Sendable {
     package var effectiveRadius: Float = 0
     /// AABB bańki z ostatniego kroku solvera; `nil`, gdy krok jeszcze jej nie policzył.
     package var bounds: WorldRectangle?
-    package var capturedRadius: Float?
-    package var rigidity: Float = 0
     package var structuralShape: NativeStructuralShape?
-    package var radiusBlendStart: Float = 0
-    package var rigidityBlendStart: Float = 0
-    package var shapeElapsed: Double = 0
 
     init(_ descriptor: WorldObject) {
         self.descriptor = descriptor
@@ -293,7 +288,6 @@ private struct StagingContext {
             existing.motionRole = role
             if role != .playerDriven {
                 existing.playerDriveTarget = nil; existing.playerDriveID = nil; existing.motionBeforeDrive = nil
-                existing.radiusBlendStart = existing.collisionRadius; existing.rigidityBlendStart = existing.rigidity; existing.shapeElapsed = 0
             }
             if role != .pathDriven { existing.pathDrive = nil; existing.pathBlocker = nil; existing.pathStopped = false }
             if role != .motorDriven { existing.motorDrive = nil }
@@ -344,7 +338,7 @@ private struct StagingContext {
             state.objects[id] = existing
         case .beginPlayerDrive(let id, let target):
             try requireFinite(target, "playerDrive.target")
-            var existing = try physicalObject(id)
+            var existing = try requireDrivePolicy(id)
             try requireBandDriveTarget(target, of: existing)
             guard existing.playerDriveTarget == nil else { throw TransactionRejectionReason.driveAlreadyActive(id) }
             existing.motionBeforeDrive = existing.motionRole == .playerDriven ? .dynamic : existing.motionRole
@@ -352,8 +346,6 @@ private struct StagingContext {
             existing.playerDriveID = PlayerDriveID(rawValue: state.nextDriveID)
             guard state.nextDriveID < UInt64.max else { throw ModelValidationError.valueOutOfRange("drive.id") }
             state.nextDriveID += 1
-            existing.capturedRadius = existing.effectiveRadius
-            existing.radiusBlendStart = existing.collisionRadius; existing.rigidityBlendStart = existing.rigidity; existing.shapeElapsed = 0
             state.objects[id] = existing
         case .updatePlayerDrive(let id, let target):
             try requireFinite(target, "playerDrive.target")
@@ -367,7 +359,6 @@ private struct StagingContext {
             guard existing.playerDriveTarget != nil else { throw TransactionRejectionReason.driveNotActive(id) }
             existing.motionRole = existing.motionBeforeDrive ?? .dynamic
             existing.playerDriveTarget = nil; existing.playerDriveID = nil; existing.motionBeforeDrive = nil
-            existing.radiusBlendStart = existing.collisionRadius; existing.rigidityBlendStart = existing.rigidity; existing.shapeElapsed = 0
             try validate(existing)
             state.objects[id] = existing
             try validateJoints(attachedTo: id)
@@ -549,20 +540,16 @@ private struct StagingContext {
     /// Gumka całkuje siłę jawnie, więc wymaga K · dt² / m < 1 (CD-D-9). `validate(_:)` widzi masę każdej bańki po dodaniu, zamianie,
     /// scaleniu i podziale (podział zmniejsza masę), więc jedno sprawdzenie obejmuje wszystkie cztery ścieżki.
     private func validateBandStability(of bubble: BubbleDescriptor) throws {
-        guard let stiffness = bubble.drivePolicy.bandStiffness else { return }
+        guard let stiffness = bubble.drivePolicy?.bandStiffness else { return }
         let step = Double(state.configuration.fixedTimeStep)
         guard Double(stiffness) * step * step / Double(bubble.mass) < 1 else {
             throw ModelValidationError.valueOutOfRange("drive.bandStiffness")
         }
     }
 
-    /// Najmniejszy stosunek promienia konturu do r (ρ_min z CD-D-8), którego używa podatność przy k < 0.
-    private static let minimumContourRatio = 0.01
-
     /// Najgorsza α pary z tą bańką, α_cfg + 2 · c_worst / dt², musi być skończonym Float (CD-D-15), żeby GPU nie dostało podatności,
-    /// która przepełnia Float. c_worst = c₀ · (r*/r_ref)^s · ρ_min^min(k, 0), gdzie r* to ten koniec przedziału promieni, który daje
-    /// większe (r/r_ref)^s, czyli większy promień przy s ≥ 0 i mniejszy przy s < 0. Przedział obejmuje bieżący i docelowy promień
-    /// bańki, cel trwającego `startTransition` oraz `endRadius` nowego przejścia. Przy c₀ = 0 potęg się nie liczy.
+    /// która przepełnia Float. c_worst = c₀ · r_max / r_ref, gdzie r_max to największy z promieni: bieżącego, docelowego, celu
+    /// trwającego `startTransition` i `endRadius` nowego przejścia. Przy c₀ = 0 podatności się nie liczy.
     func validateWorstAlpha(_ object: RuntimeObject, endRadius: Float? = nil) throws {
         guard case .bubble(let bubble) = object.descriptor, let (materialID, _) = object.material,
               let material = state.physicsMaterials[materialID] else { return }
@@ -574,14 +561,9 @@ private struct StagingContext {
             var radii = [object.targetRadius, object.collisionRadius]
             if let endRadius { radii.append(endRadius) }
             if case .scalar(let scheduled)? = state.transitions[.bubbleRadius(bubble.id)]?.value { radii.append(scheduled) }
-            let radius = (compliance.radiusExponent >= 0 ? radii.max() : radii.min()) ?? object.targetRadius
-            let worst = compliance.scaledBase(base, radius: radius)
-                * pow(Self.minimumContourRatio, min(Double(compliance.compressionExponent), 0))
-            // GPU liczy czynnik ρ^k w Float osobno (`nativeContactCompliance`), zanim pomnoży go przez część bazową, więc
-            // ρ_min^k musi być skończonym Float także przy małym c₀, przy którym sam iloczyn się mieści.
-            let factor = pow(Float(Self.minimumContourRatio), min(compliance.compressionExponent, 0))
+            let worst = compliance.scaledBase(base, radius: radii.max() ?? object.targetRadius)
             // Host liczy c w Float, więc przepełnienie samego c też jest błędem.
-            guard factor.isFinite, Float(worst).isFinite else { throw ModelValidationError.valueOutOfRange("contactCompliance") }
+            guard Float(worst).isFinite else { throw ModelValidationError.valueOutOfRange("contactCompliance") }
             alpha += 2 * Double(Float(worst)) / stepSquared
         }
         guard Float(alpha).isFinite else { throw ModelValidationError.valueOutOfRange("contactCompliance") }
@@ -595,9 +577,19 @@ private struct StagingContext {
     /// (solver liczy z nich różnice pozycji, przesunięcia dzielone przez `dt` i mnożniki XPBD).
     private static let maximumDriveMagnitude: Float = 1_000_000
 
+    /// Chwycić można tylko bańkę z gumką: bańka bez `drivePolicy` i bryła nie mają czym jechać (G4-AC2), więc dostają
+    /// `incompatibleObjectKind(id)`. Zwraca obiekt, żeby wywołujący nie szukał go drugi raz.
+    private func requireDrivePolicy(_ id: ObjectID) throws -> RuntimeObject {
+        let object = try physicalObject(id)
+        guard case .bubble(let bubble) = object.descriptor, bubble.drivePolicy != nil else {
+            throw TransactionRejectionReason.incompatibleObjectKind(id)
+        }
+        return object
+    }
+
     /// Siła gumki K·(cel − położenie) musi być skończona, więc w trybie gumki cel podlega temu samemu limitowi co siła `MotorDrive`.
     private func requireBandDriveTarget(_ target: WorldPoint, of object: RuntimeObject) throws {
-        guard case .bubble(let bubble) = object.descriptor, bubble.drivePolicy.bandStiffness != nil else { return }
+        guard case .bubble(let bubble) = object.descriptor, bubble.drivePolicy != nil else { return }
         try requireDriveMagnitude(target.x, "playerDrive.target"); try requireDriveMagnitude(target.y, "playerDrive.target")
     }
 

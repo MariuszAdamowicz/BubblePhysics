@@ -13,24 +13,24 @@ struct NativeBubble {
     ulong2 eventData;
     float4 bounds;
     uint4 filter; // kategoria, maska, reserved, warstwa (Int32 z odwróconym bitem znaku)
-    float4 contact; // część bazowa podatności c₀·(r/r_ref)^s (0 = kontakt twardy), wykładnik ściśnięcia k, ζ_c (współczynnik tłumienia kontaktu miękkiego, także dla bańki twardej), reserved
+    float4 contact; // podatność c₀·r/r_ref (0 = kontakt twardy), reserved, ζ_c (współczynnik tłumienia kontaktu miękkiego, także dla bańki twardej), reserved
 };
-// Podatność końca kontaktu: c = c₀·(r/r_ref)^s · max(ρ, ρ_min)^k (CD-D-8). Host liczy część bazową `contact.x`, GPU czynnik ρ^k.
-// Przy `contact.x == 0` zwraca 0 bez potęg, więc skrajny wykładnik nie daje NaN, a kontakt zostaje twardy jak w v2.1.0.
-constant float kNativeMinimumContourRatio = 0.01f; // ρ_min (CD-D-8)
-float nativeContactCompliance(NativeBubble bubble, float rho) {
-    if (bubble.contact.x <= 0) return 0;
-    return bubble.contact.x * pow(max(rho, kNativeMinimumContourRatio), bubble.contact.y);
+// Podatność końca kontaktu: c = c₀·r/r_ref, liczona przez hosta w `contact.x` z bieżącego promienia fizycznego bańki.
+// Zero oznacza kontakt twardy jak w v2.1.0.
+float nativeContactCompliance(NativeBubble bubble) {
+    return max(bubble.contact.x, 0.0f);
 }
 struct NativeSegment {
-    long2 identity; uint4 flags; float4 previous; float4 current;
+    long2 identity;
+    uint4 flags; // x kinematyczny, y ma właściciela, z stała strona (`allowedSide`), w krawędź wielokąta: bit 0 obszary, bit 1 wypukły początek, bit 2 wypukły koniec (informacyjny: jądra go nie czytają)
+    float4 previous; float4 current;
     float4 velocity; float4 collision;
     uint4 filter; // kategoria, maska, reserved, reserved
+    float4 region; // krawędź wielokąta: drugi koniec krawędzi poprzedniej w wierzchołku początkowym (xy), znak strony zewnętrznej względem lewej normalnej (z), reserved
 };
 struct NativeContactCache {
     long2 participants; uint4 metadata; float4 geometry; float4 response;
-    float4 rho; // ρ końców a i b z geometrii bieżącego kroku (stosunek promienia konturu do r w kierunku normalnej),
-                // z: c_a(ρ_a) + c_b(ρ_b) z nativePrepareSolverContacts (dla odcinka tylko c_a), reserved
+    float4 compliance; // x: c_a + c_b z nativePrepareSolverContacts (dla odcinka tylko c_a), y, z, w: reserved
 };
 struct NativeCandidate { long2 participants; uint4 metadata; };
 struct NativeGridEntry { long2 cell; uint4 metadata; };
@@ -70,10 +70,9 @@ kernel void nativeSeedStructuralContours(device NativeBubble *bubbles [[buffer(0
     device float4 *pressure [[buffer(4)]], device uint *counts [[buffer(5)]],
     constant NativeControl &control [[buffer(6)]],
     constant NativeStructuralContourControl &contour [[buffer(7)]],
-    device atomic_uint *safety [[buffer(8)]],
-    device NativeBubble *previousBubbles [[buffer(9)]],
-    device float4 *previousDeformation [[buffer(10)]],
-    device uint *previousCounts [[buffer(11)]], uint index [[thread_position_in_grid]]) {
+    device NativeBubble *previousBubbles [[buffer(8)]],
+    device float4 *previousDeformation [[buffer(9)]],
+    device uint *previousCounts [[buffer(10)]], uint index [[thread_position_in_grid]]) {
     uint bubbleIndex = index / contour.counts.x, sample = index % contour.counts.x;
     if (bubbleIndex >= control.counts.x || sample >= counts[bubbleIndex]) return;
     NativeStructuralHeader header = headers[bubbleIndex];
@@ -129,7 +128,6 @@ kernel void nativeSeedStructuralContours(device NativeBubble *bubbles [[buffer(0
     float4 value = pressure[index];
     value.x = max(value.x, deficit);
     value.y = max(value.y, deficit);
-    if (!all(isfinite(value))) atomic_fetch_or_explicit(safety + 3, 1, memory_order_relaxed);
     pressure[index] = value;
 }
 
@@ -173,7 +171,8 @@ kernel void nativePredict(device NativeBubble *bubbles [[buffer(0)]],
     float dt = control.physics.x;
     b.position.zw = b.position.xy;
     if (b.publicFlags.x && b.publicFlags.y) { b.motion.xy = 0; b.motion.w = 0; bubbles[index] = b; return; }
-    b.motion.xy *= exp(-(b.publicFlags.x ? b.material.x : control.physics.y) * dt);
+    // Ścieżka publiczna nie tłumi ruchu liniowego: robi to host przed przyrostem prędkości z sił (MotionControllers.prepare).
+    if (!b.publicFlags.x) b.motion.xy *= exp(-control.physics.y * dt);
     b.motion.xy = nativeClampLinearSpeed(b.motion.xy, b.deformation.z);
     b.motion.w = nativeClampAngularSpeed(b.motion.w, b.deformation.w);
     b.position.xy += b.motion.xy * dt;
@@ -638,13 +637,34 @@ kernel void nativeCompactCandidates(constant NativeControl &control [[buffer(0)]
     nativeCountWork(statistics, 3);
 }
 
+// Granica obszarów krawędzi statycznego wielokąta (CD-D-4): czy rzut środka na odcinek from→to wypada na jego końcu albo za nim.
+// Obie krawędzie przy wierzchołku wołają tę funkcję z tymi samymi argumentami (koniec krawędzi poprzedniej: from = jej początek,
+// to = wierzchołek; początek następnej: from = region.xy, to = jej początek), więc wynik jest dokładnym dopełnieniem także o jedno ULP
+// od granicy. Jawne fma wyklucza różne kontrakcje mnożenia z dodawaniem w dwóch miejscach wywołania.
+bool nativePastSegmentEnd(float2 center, float2 from, float2 to) {
+    float2 edge = to - from, relative = center - from;
+    return fma(relative.x, edge.x, relative.y * edge.y) >= fma(edge.x, edge.x, edge.y * edge.y);
+}
+
+// Cecha kontaktu z krawędzią statycznego wielokąta, zapisana w response.w do końca kroku: 0 poza obszarami krawędzi
+// (rekord odpada), 1 wnętrze krawędzi (stała normalna zewnętrzna), 2 wierzchołek początkowy wypukły (normalna od wierzchołka).
+// Wnętrze obejmuje 0 < t < 1 po stronie zewnętrznej; wierzchołek wypukły należy do krawędzi, która się w nim zaczyna.
+uint nativePolygonEdgeFeature(float2 center, NativeSegment s, float2 outward) {
+    float2 start = s.current.xy, end = s.current.zw;
+    float along = dot(center - start, end - start);
+    bool convexStart = (s.flags.w & 2) != 0;
+    if (convexStart && along <= 0 && nativePastSegmentEnd(center, s.region.xy, start)) return 2;
+    if (along > 0 && dot(center - start, outward) >= 0 && !nativePastSegmentEnd(center, start, end)) return 1;
+    return 0;
+}
+
 kernel void nativeBuildContacts(device NativeBubble *bubbles [[buffer(0)]],
     device NativeSegment *segments [[buffer(1)]], device NativeContactControl &control [[buffer(2)]],
     device NativeCandidate *candidates [[buffer(3)]], device NativeContactCache *contacts [[buffer(4)]],
     uint index [[thread_position_in_grid]]) {
     if (index >= control.counts.x) return;
     NativeCandidate c = candidates[index]; NativeBubble a = bubbles[c.metadata.y];
-    float2 normal, point; float penetration; float allowedSide = 0;
+    float2 normal, point; float penetration; float allowedSide = 0; uint feature = 0;
     if (c.metadata.x == 0) {
         NativeBubble b = bubbles[c.metadata.z]; float2 delta = b.position.xy - a.position.xy;
         float distance = length(delta);
@@ -662,8 +682,24 @@ kernel void nativeBuildContacts(device NativeBubble *bubbles [[buffer(0)]],
         normal = s.flags.z ? base * s.collision.x : (distance > 0 ? delta / distance : base * sign);
         allowedSide = s.flags.z ? s.collision.x : 0;
         penetration = a.physical.z - distance;
+        if (s.flags.w & 1) {
+            // Krawędź statycznego wielokąta: kontakt tylko z obszaru wnętrza krawędzi albo wierzchołka (CD-D-3, CD-D-4).
+            float2 outward = base * s.region.z;
+            feature = nativePolygonEdgeFeature(a.position.xy, s, outward);
+            if (feature == 1) {
+                normal = outward; point = a.position.xy - outward * dot(a.position.xy - s.current.xy, outward);
+                penetration = a.physical.z - dot(a.position.xy - s.current.xy, outward);
+            } else if (feature == 2) {
+                point = s.current.xy; delta = a.position.xy - point; distance = length(delta);
+                normal = distance > 0 ? delta / distance : outward;
+                penetration = a.physical.z - distance;
+            } else {
+                // Skończone, żeby obliczenia przed kompaktowaniem nie dostały nieskończoności; rekord odpada w kompaktowaniu.
+                normal = outward; point = s.current.xy; penetration = -FLT_MAX;
+            }
+        }
     }
     NativeContactCache contact = { c.participants, uint4(c.metadata.x, 1, control.limits.x, 0),
-        float4(normal, point), float4(0, penetration, allowedSide, 0), float4(1, 1, 0, 0) };
+        float4(normal, point), float4(0, penetration, allowedSide, float(feature)), float4(1, 1, 0, 0) };
     contacts[index] = contact;
 }

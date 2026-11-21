@@ -175,7 +175,7 @@ final class ContainmentResolutionTests: XCTestCase {
             return (try distance(try XCTUnwrap(result.frames.first)), try distance(try XCTUnwrap(result.frames.last)))
         }
         let hard = try await firstStepDistanceAndFinal(.hard)
-        let soft = try await firstStepDistanceAndFinal(BubbleContactCompliance(base: 4e-3, referenceRadius: 20, radiusExponent: 1))
+        let soft = try await firstStepDistanceAndFinal(BubbleContactCompliance(base: 4e-3, referenceRadius: 20))
         XCTAssertGreaterThanOrEqual(soft.final, 20, "po 2 s środki oddalone o co najmniej 20")
         XCTAssertLessThan(soft.first, hard.first, "po pierwszym kroku miękka para (\(soft.first)) bliżej niż twarda (\(hard.first))")
     }

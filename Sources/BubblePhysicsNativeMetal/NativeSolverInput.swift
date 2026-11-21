@@ -48,6 +48,27 @@ package struct NativeSolverBubble: Equatable, Sendable {
     }
 }
 
+/// Krawędź statycznego wielokąta, która odpycha tylko od zewnątrz (CD-D-3, CD-D-4). `allowedSide` zostaje dla adaptera
+/// diagnostycznego; to pole jest osobne, bo CCD i strażniki nie mogą przełączać się na stałą normalną.
+package struct NativeSolverPolygonEdge: Equatable, Sendable {
+    /// Normalna zewnętrzna krawędzi to jej lewa normalna (−y, x) razy ten znak (−1 dla obiegu przeciwnego do ruchu wskazówek zegara).
+    package var outwardSign: Float
+    /// Wierzchołek początkowy (końcowy) jest ściśle wypukły: obszar wierzchołka początkowego należy do tej krawędzi, a wnętrze krawędzi
+    /// nie obejmuje rzutu na jej koniec wypukły.
+    package var convexStart: Bool
+    /// Informacyjne: jądra nie czytają tego pola (obszary krawędzi używają tylko `convexStart`), służy diagnostyce i testom.
+    package var convexEnd: Bool
+    /// Początek krawędzi poprzedniej, czyli jej drugi koniec względem wierzchołka początkowego tej krawędzi.
+    package var previousStart: SIMD2<Float>
+
+    package init(outwardSign: Float, convexStart: Bool, convexEnd: Bool, previousStart: SIMD2<Float>) {
+        self.outwardSign = outwardSign
+        self.convexStart = convexStart
+        self.convexEnd = convexEnd
+        self.previousStart = previousStart
+    }
+}
+
 package struct NativeSolverSegment: Equatable, Sendable {
     package var id: Int
     package var previousA: SIMD2<Float>
@@ -60,6 +81,8 @@ package struct NativeSolverSegment: Equatable, Sendable {
     package var ownerID: Int?
     /// `nil` oznacza segment dwustronny; w przeciwnym razie znak dozwolonej strony (−1 albo 1).
     package var allowedSide: Float?
+    /// `nil` dla każdego odcinka poza krawędzią statycznego wielokąta (też dla adaptera diagnostycznego).
+    package var polygonEdge: NativeSolverPolygonEdge?
     /// Filtr kolizji właściciela (krawędź statycznej bryły); domyślnie kolizja ze wszystkim.
     package var filter: CollisionFilter = .default
 
@@ -201,8 +224,9 @@ package struct NativeSolverFrame {
     /// Promień efektywny każdej bańki, w kolejności `bubbles` (bez słownika budowanego co klatkę).
     package var bubbleEffectiveRadii: [Float] = []
     /// AABB zdeformowanego konturu po kroku (min.xy, max.xy), liczony w kernelu, w kolejności `bubbles`; bez odczytu
-    /// konturu na CPU.
-    package var bubbleBoundsRecords: [SIMD4<Float>] = []
+    /// konturu na CPU. `nil`, gdy obwiednia z kernelu jest nieskończona albo odwrócona (kontur jest tylko rysowany, więc
+    /// krok nie jest odrzucany); obwiednię daje wtedy koło bańki.
+    package var bubbleBoundsRecords: [SIMD4<Float>?] = []
     /// Widok słownikowy dla diagnostyki i testów; produkcyjna ścieżka czyta tablice po indeksie bańki.
     package var effectiveRadii: [NativeSolverBubbleID: Float] {
         Dictionary(uniqueKeysWithValues: zip(bubbles.map(\.id), bubbleEffectiveRadii))

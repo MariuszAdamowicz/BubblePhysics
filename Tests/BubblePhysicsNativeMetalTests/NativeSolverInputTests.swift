@@ -69,5 +69,33 @@ final class NativeSolverInputTests: XCTestCase {
         XCTAssertEqual(record.identity, SIMD2(3, 9))
         XCTAssertEqual(record.flags, SIMD4(1, 1, 1, 0))
         XCTAssertEqual(record.collision.x, -1)
+        XCTAssertEqual(record.region, .zero, "odcinek spoza wielokąta nie ma pasa `region`")
+    }
+
+    /// Krawędź wielokąta niesie w `flags.w` bity 0 (krawędź z obszarami), 1 (wypukły początek), 2 (wypukły koniec), a w pasie `region`
+    /// drugi koniec krawędzi poprzedniej i znak strony zewnętrznej; `flags.z` zostaje 0, żeby CCD i strażniki działały dwustronnie.
+    func testPolygonEdgePacksFlagsAndRegionBand() {
+        var segment = NativeSolverSegment.fixed(id: 3, a: [0, 0], b: [1, 0], ownerID: 9)
+        segment.polygonEdge = NativeSolverPolygonEdge(outwardSign: -1, convexStart: true, convexEnd: false, previousStart: [-2, 5])
+        let record = NativeMetalSegment(segment)
+        XCTAssertEqual(record.flags, SIMD4(0, 1, 0, 0b011))
+        XCTAssertEqual(record.region, SIMD4(-2, 5, -1, 0))
+        segment.polygonEdge = NativeSolverPolygonEdge(outwardSign: 1, convexStart: false, convexEnd: true, previousStart: [1, 1])
+        let other = NativeMetalSegment(segment)
+        XCTAssertEqual(other.flags.w, 0b101)
+        XCTAssertEqual(other.region, SIMD4(1, 1, 1, 0))
+        XCTAssertEqual(MemoryLayout<NativeMetalSegment>.stride, 128)
+    }
+
+    func testChangingThePolygonEdgeChangesTheSegmentRecordInTheSnapshot() {
+        var segment = NativeSolverSegment.fixed(id: 3, a: [0, 0], b: [1, 0], ownerID: 9)
+        segment.polygonEdge = NativeSolverPolygonEdge(outwardSign: -1, convexStart: true, convexEnd: true, previousStart: [0, 1])
+        let value = input([bubble(1, x: 0)], segments: [segment])
+        let first = NativeMetalSnapshot(input: value)
+        XCTAssertEqual(first.segmentChanges.count, 1)
+        XCTAssertTrue(NativeMetalSnapshot(input: value, previous: first).segmentChanges.isEmpty)
+        var flipped = value
+        flipped.segments[0].polygonEdge?.outwardSign = 1
+        XCTAssertEqual(NativeMetalSnapshot(input: flipped, previous: first).segmentChanges.count, 1)
     }
 }
