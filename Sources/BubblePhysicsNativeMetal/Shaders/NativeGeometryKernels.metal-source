@@ -639,13 +639,34 @@ kernel void nativeCompactCandidates(constant NativeControl &control [[buffer(0)]
     nativeCountWork(statistics, 3);
 }
 
+// Granica obszarów krawędzi statycznego wielokąta (CD-D-4): czy rzut środka na odcinek from→to wypada na jego końcu albo za nim.
+// Obie krawędzie przy wierzchołku wołają tę funkcję z tymi samymi argumentami (koniec krawędzi poprzedniej: from = jej początek,
+// to = wierzchołek; początek następnej: from = region.xy, to = jej początek), więc wynik jest dokładnym dopełnieniem także o jedno ULP
+// od granicy. Jawne fma wyklucza różne kontrakcje mnożenia z dodawaniem w dwóch miejscach wywołania.
+bool nativePastSegmentEnd(float2 center, float2 from, float2 to) {
+    float2 edge = to - from, relative = center - from;
+    return fma(relative.x, edge.x, relative.y * edge.y) >= fma(edge.x, edge.x, edge.y * edge.y);
+}
+
+// Cecha kontaktu z krawędzią statycznego wielokąta, zapisana w response.w do końca kroku: 0 poza obszarami krawędzi
+// (rekord odpada), 1 wnętrze krawędzi (stała normalna zewnętrzna), 2 wierzchołek początkowy wypukły (normalna od wierzchołka).
+// Wnętrze obejmuje 0 < t < 1 po stronie zewnętrznej; wierzchołek wypukły należy do krawędzi, która się w nim zaczyna.
+uint nativePolygonEdgeFeature(float2 center, NativeSegment s, float2 outward) {
+    float2 start = s.current.xy, end = s.current.zw;
+    float along = dot(center - start, end - start);
+    bool convexStart = (s.flags.w & 2) != 0;
+    if (convexStart && along <= 0 && nativePastSegmentEnd(center, s.region.xy, start)) return 2;
+    if (along > 0 && dot(center - start, outward) >= 0 && !nativePastSegmentEnd(center, start, end)) return 1;
+    return 0;
+}
+
 kernel void nativeBuildContacts(device NativeBubble *bubbles [[buffer(0)]],
     device NativeSegment *segments [[buffer(1)]], device NativeContactControl &control [[buffer(2)]],
     device NativeCandidate *candidates [[buffer(3)]], device NativeContactCache *contacts [[buffer(4)]],
     uint index [[thread_position_in_grid]]) {
     if (index >= control.counts.x) return;
     NativeCandidate c = candidates[index]; NativeBubble a = bubbles[c.metadata.y];
-    float2 normal, point; float penetration; float allowedSide = 0;
+    float2 normal, point; float penetration; float allowedSide = 0; uint feature = 0;
     if (c.metadata.x == 0) {
         NativeBubble b = bubbles[c.metadata.z]; float2 delta = b.position.xy - a.position.xy;
         float distance = length(delta);
@@ -663,8 +684,24 @@ kernel void nativeBuildContacts(device NativeBubble *bubbles [[buffer(0)]],
         normal = s.flags.z ? base * s.collision.x : (distance > 0 ? delta / distance : base * sign);
         allowedSide = s.flags.z ? s.collision.x : 0;
         penetration = a.physical.z - distance;
+        if (s.flags.w & 1) {
+            // Krawędź statycznego wielokąta: kontakt tylko z obszaru wnętrza krawędzi albo wierzchołka (CD-D-3, CD-D-4).
+            float2 outward = base * s.region.z;
+            feature = nativePolygonEdgeFeature(a.position.xy, s, outward);
+            if (feature == 1) {
+                normal = outward; point = a.position.xy - outward * dot(a.position.xy - s.current.xy, outward);
+                penetration = a.physical.z - dot(a.position.xy - s.current.xy, outward);
+            } else if (feature == 2) {
+                point = s.current.xy; delta = a.position.xy - point; distance = length(delta);
+                normal = distance > 0 ? delta / distance : outward;
+                penetration = a.physical.z - distance;
+            } else {
+                // Skończone, żeby obliczenia przed kompaktowaniem nie dostały nieskończoności; rekord odpada w kompaktowaniu.
+                normal = outward; point = s.current.xy; penetration = -FLT_MAX;
+            }
+        }
     }
     NativeContactCache contact = { c.participants, uint4(c.metadata.x, 1, control.limits.x, 0),
-        float4(normal, point), float4(0, penetration, allowedSide, 0), float4(1, 1, 0, 0) };
+        float4(normal, point), float4(0, penetration, allowedSide, float(feature)), float4(1, 1, 0, 0) };
     contacts[index] = contact;
 }

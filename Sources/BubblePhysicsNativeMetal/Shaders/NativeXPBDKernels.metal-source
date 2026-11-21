@@ -296,6 +296,10 @@ kernel void nativeEmitAdjacency(device NativeBubble *bubbles [[buffer(0)]],
     bool matchedHistory = (record.metadata.w & 16) != 0;
     float threshold = matchedHistory ? -contacts.thresholds.w : contacts.thresholds.z;
     bool active = record.response.y > threshold;
+    // Rekord krawędzi statycznego wielokąta, którego nie zbudowano w tym kroku (cache go zachowuje do 30 klatek), jest nieaktywny:
+    // środek jest poza obszarami krawędzi, więc nie ma drugiej sprężyny od krawędzi, którą bańka właśnie opuściła.
+    if (record.metadata.x == 1 && b < control.counts.y && (segments[b].flags.w & 1) != 0 && record.metadata.z != contacts.limits.x)
+        active = false;
     endpoints[index] = uint4(a, b, record.metadata.x, active ? 1 : 0);
     nativeCountWork(statistics, 8);
     if (!active) return;
@@ -397,8 +401,10 @@ kernel void nativeApplyWarmStart(device NativeBubble *bubbles [[buffer(0)]],
 }
 
 // Normal i głębokość zawsze z jednej, zakończonej iteracji pozycji.
+// `feature` (response.w) wybrana w nativeBuildContacts obowiązuje do końca kroku: 1 stała normalna zewnętrzna krawędzi wielokąta,
+// 2 normalna od wierzchołka początkowego do bieżącego środka, 0 jak dotąd (najbliższy punkt odcinka).
 float4 nativeConstraintGeometry(NativeBubble a, float2 positionA, uint kind,
-    NativeBubble b, float2 positionB, NativeSegment segment, float2 fallback) {
+    NativeBubble b, float2 positionB, NativeSegment segment, float2 fallback, uint feature) {
     float2 normal; float penetration;
     if (kind == 0) {
         float2 delta = positionB - positionA;
@@ -414,17 +420,25 @@ float4 nativeConstraintGeometry(NativeBubble a, float2 positionA, uint kind,
         float distance = length(delta);
         normal = segment.flags.z ? fallback : (distance > 0 ? delta / distance : fallback);
         penetration = a.physical.z - distance;
+        if (feature == 1) {
+            float edgeLength = length(edge);
+            float2 outward = edgeLength > 0 ? float2(-edge.y, edge.x) / edgeLength * segment.region.z : fallback;
+            normal = outward; penetration = a.physical.z - dot(positionA - segment.current.xy, outward);
+        } else if (feature == 2) {
+            float2 toCenter = positionA - segment.current.xy; float vertexDistance = length(toCenter);
+            normal = vertexDistance > 0 ? toCenter / vertexDistance : fallback; penetration = a.physical.z - vertexDistance;
+        }
     }
     return float4(normal, penetration, 0);
 }
 
 float4 nativeReadConstraint(device NativeBubble *bubbles, device NativeSegment *segments,
-    device float4 *positions, uint a, uint b, uint kind, float2 fallback) {
+    device float4 *positions, uint a, uint b, uint kind, float2 fallback, uint feature) {
     NativeBubble other = bubbles[a]; NativeSegment segment = {};
     float2 positionB = positions[a].xy;
     if (kind == 0) { other = bubbles[b]; positionB = positions[b].xy; }
     else segment = segments[b];
-    return nativeConstraintGeometry(bubbles[a], positions[a].xy, kind, other, positionB, segment, fallback);
+    return nativeConstraintGeometry(bubbles[a], positions[a].xy, kind, other, positionB, segment, fallback, feature);
 }
 
 // α kontaktu (CD-D-5): α_cfg + (c_a + c_b) / dt² dla pary bańka–bańka, α_cfg + c_a / dt² dla bańki i odcinka
@@ -442,7 +456,7 @@ kernel void nativeUpdateContactMultipliers(device NativeBubble *bubbles [[buffer
     if (index >= contacts.counts.z || !endpoints[index].w) return;
     if (!solver.counts.x) { corrections[index] = 0; return; }
     uint4 edge = endpoints[index]; NativeContactCache record = cache[index];
-    float4 geometry = nativeReadConstraint(bubbles, segments, positions, edge.x, edge.y, edge.z, record.geometry.xy);
+    float4 geometry = nativeReadConstraint(bubbles, segments, positions, edge.x, edge.y, edge.z, record.geometry.xy, uint(record.response.w));
     float weight = bubbles[edge.x].physical.y + (edge.z == 0 ? bubbles[edge.y].physical.y : 0);
     float alpha = nativeContactAlpha(solver.physics.x, control.physics.x, record.compliance);
     if (weight + alpha <= 0) { corrections[index] = 0; return; }
@@ -491,7 +505,7 @@ kernel void nativeMeasureResidual(device NativeBubble *bubbles [[buffer(0)]],
         NativeContactCache record = cache[edge.x];
         uint a = edge.w && edge.z == 0 ? edge.y : index;
         uint b = edge.w && edge.z == 0 ? index : edge.y;
-        float4 geometry = nativeReadConstraint(bubbles, segments, positions, a, b, edge.z, record.geometry.xy);
+        float4 geometry = nativeReadConstraint(bubbles, segments, positions, a, b, edge.z, record.geometry.xy, uint(record.response.w));
         float alpha = nativeContactAlpha(solver.physics.x, control.physics.x, record.compliance);
         float residual = geometry.z - alpha * record.response.x;
         maximum = max(maximum, record.response.x > 0 ? abs(residual) : max(0.0f, residual));
@@ -538,14 +552,14 @@ kernel void nativeFinalizeSolverContacts(device NativeBubble *bubbles [[buffer(0
     device uint4 *endpoints [[buffer(5)]], uint index [[thread_position_in_grid]]) {
     if (index >= contacts.counts.z || !endpoints[index].w) return;
     uint4 edge = endpoints[index]; NativeContactCache record = cache[index];
-    float4 geometry = nativeReadConstraint(bubbles, segments, positions, edge.x, edge.y, edge.z, record.geometry.xy);
+    float4 geometry = nativeReadConstraint(bubbles, segments, positions, edge.x, edge.y, edge.z, record.geometry.xy, uint(record.response.w));
     record.geometry.xy = geometry.xy;
     if (edge.z == 0) record.geometry.zw = positions[edge.x].xy + geometry.xy * bubbles[edge.x].physical.z;
     else {
         NativeSegment segment = segments[edge.y]; float2 direction = segment.current.zw - segment.current.xy;
         float squared = dot(direction, direction);
         float t = squared > 0 ? clamp(dot(positions[edge.x].xy - segment.current.xy, direction) / squared, 0.0f, 1.0f) : 0;
-        record.geometry.zw = segment.current.xy + t * direction;
+        record.geometry.zw = uint(record.response.w) == 2 ? segment.current.xy : segment.current.xy + t * direction;
     }
     record.response.y = max(0.0f, geometry.z);
     cache[index] = record;
