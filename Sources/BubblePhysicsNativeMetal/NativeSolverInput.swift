@@ -48,6 +48,26 @@ package struct NativeSolverBubble: Equatable, Sendable {
     }
 }
 
+/// Krawędź statycznego wielokąta, która odpycha tylko od zewnątrz (CD-D-3, CD-D-4). `allowedSide` zostaje dla adaptera
+/// diagnostycznego; to pole jest osobne, bo CCD i strażniki nie mogą przełączać się na stałą normalną.
+package struct NativeSolverPolygonEdge: Equatable, Sendable {
+    /// Normalna zewnętrzna krawędzi to jej lewa normalna (−y, x) razy ten znak (−1 dla obiegu przeciwnego do ruchu wskazówek zegara).
+    package var outwardSign: Float
+    /// Wierzchołek początkowy (końcowy) jest ściśle wypukły: obszar wierzchołka początkowego należy do tej krawędzi, a wnętrze krawędzi
+    /// nie obejmuje rzutu na jej koniec wypukły.
+    package var convexStart: Bool
+    package var convexEnd: Bool
+    /// Początek krawędzi poprzedniej, czyli jej drugi koniec względem wierzchołka początkowego tej krawędzi.
+    package var previousStart: SIMD2<Float>
+
+    package init(outwardSign: Float, convexStart: Bool, convexEnd: Bool, previousStart: SIMD2<Float>) {
+        self.outwardSign = outwardSign
+        self.convexStart = convexStart
+        self.convexEnd = convexEnd
+        self.previousStart = previousStart
+    }
+}
+
 package struct NativeSolverSegment: Equatable, Sendable {
     package var id: Int
     package var previousA: SIMD2<Float>
@@ -60,6 +80,8 @@ package struct NativeSolverSegment: Equatable, Sendable {
     package var ownerID: Int?
     /// `nil` oznacza segment dwustronny; w przeciwnym razie znak dozwolonej strony (−1 albo 1).
     package var allowedSide: Float?
+    /// `nil` dla każdego odcinka poza krawędzią statycznego wielokąta (też dla adaptera diagnostycznego).
+    package var polygonEdge: NativeSolverPolygonEdge?
     /// Filtr kolizji właściciela (krawędź statycznej bryły); domyślnie kolizja ze wszystkim.
     package var filter: CollisionFilter = .default
 

@@ -53,11 +53,20 @@ struct NativeMetalSegment: Equatable, Sendable {
     var velocity: SIMD4<Float>
     var collision: SIMD4<Float>
     var filter: SIMD4<UInt32> // kategoria, maska, reserved, reserved
+    /// Krawędź statycznego wielokąta: drugi koniec krawędzi poprzedniej w wierzchołku początkowym (x, y), znak strony zewnętrznej
+    /// względem lewej normalnej, reserved. Dla pozostałych odcinków zero.
+    var region = SIMD4<Float>.zero
 
+    /// `flags.w`: bit 0 krawędź wielokąta z obszarami, bit 1 wypukły początek, bit 2 wypukły koniec; `flags.z` krawędzi wielokąta zostaje 0.
     init(_ segment: NativeSolverSegment) {
+        var polygonFlags: UInt32 = 0
+        if let edge = segment.polygonEdge {
+            polygonFlags = 1 | (edge.convexStart ? 2 : 0) | (edge.convexEnd ? 4 : 0)
+            region = SIMD4(edge.previousStart.x, edge.previousStart.y, edge.outwardSign, 0)
+        }
         identity = SIMD2(Int64(segment.id), Int64(segment.ownerID ?? 0))
         flags = SIMD4(segment.isKinematic ? 1 : 0, segment.ownerID == nil ? 0 : 1,
-                      segment.allowedSide == nil ? 0 : 1, 0)
+                      segment.allowedSide == nil ? 0 : 1, polygonFlags)
         previous = SIMD4(segment.previousA.x, segment.previousA.y, segment.previousB.x, segment.previousB.y)
         current = SIMD4(segment.currentA.x, segment.currentA.y, segment.currentB.x, segment.currentB.y)
         velocity = SIMD4(segment.linearVelocity.x, segment.linearVelocity.y, segment.angularVelocity, 0)

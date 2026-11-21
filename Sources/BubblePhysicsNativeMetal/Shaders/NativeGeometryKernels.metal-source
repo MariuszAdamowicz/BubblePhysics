@@ -21,9 +21,12 @@ float nativeContactCompliance(NativeBubble bubble) {
     return max(bubble.contact.x, 0.0f);
 }
 struct NativeSegment {
-    long2 identity; uint4 flags; float4 previous; float4 current;
+    long2 identity;
+    uint4 flags; // x kinematyczny, y ma właściciela, z stała strona (`allowedSide`), w krawędź wielokąta: bit 0 obszary, bit 1 wypukły początek, bit 2 wypukły koniec
+    float4 previous; float4 current;
     float4 velocity; float4 collision;
     uint4 filter; // kategoria, maska, reserved, reserved
+    float4 region; // krawędź wielokąta: drugi koniec krawędzi poprzedniej w wierzchołku początkowym (xy), znak strony zewnętrznej względem lewej normalnej (z), reserved
 };
 struct NativeContactCache {
     long2 participants; uint4 metadata; float4 geometry; float4 response;

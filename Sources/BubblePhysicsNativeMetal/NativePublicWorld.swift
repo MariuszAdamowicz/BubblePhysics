@@ -216,14 +216,11 @@ package final class NativePublicWorld {
                 else {
                     let c = cos(object.rotation), s = sin(object.rotation)
                     let points = geometry.vertices.map { WorldPoint($0.x * c - $0.y * s, $0.x * s + $0.y * c) + object.position }
-                    var segments: [NativeSolverSegment] = []
-                    for i in points.indices {
-                        guard candidateNextSegmentID < Int.max else { throw NativeMetalSolverError.capacityOverflow }
-                        let a = points[i], b = points[(i + 1) % points.count]
-                        segments.append(.fixed(id: candidateNextSegmentID, a: a, b: b,
-                            ownerID: Int(bitPattern: UInt(p.id.rawValue))))
-                        candidateNextSegmentID += 1
-                    }
+                    // Krawędzie jednostronne ze scalaniem współliniowych; identyfikatory idą od `candidateNextSegmentID`.
+                    guard candidateNextSegmentID <= Int.max - points.count else { throw NativeMetalSolverError.capacityOverflow }
+                    let segments = NativeStaticPolygonEdges.segments(points: points, firstID: candidateNextSegmentID,
+                                                                     ownerID: Int(bitPattern: UInt(p.id.rawValue)))
+                    candidateNextSegmentID += segments.count
                     entry = (geometry, object.position, object.rotation, segments)
                 }
                 candidatePolygons[p.id] = entry

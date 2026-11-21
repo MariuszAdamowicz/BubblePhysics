@@ -82,7 +82,8 @@ final class NativeMetalShaderABITests: XCTestCase {
                 ("current", MemoryLayout<NativeMetalSegment>.offset(of: \.current)),
                 ("velocity", MemoryLayout<NativeMetalSegment>.offset(of: \.velocity)),
                 ("collision", MemoryLayout<NativeMetalSegment>.offset(of: \.collision)),
-                ("filter", MemoryLayout<NativeMetalSegment>.offset(of: \.filter))]),
+                ("filter", MemoryLayout<NativeMetalSegment>.offset(of: \.filter)),
+                ("region", MemoryLayout<NativeMetalSegment>.offset(of: \.region))]),
             Probe(name: "cache", mslSize: "NativeContactCache", swiftSize: MemoryLayout<NativeContactCacheRecord>.stride, fields: [
                 ("participants", MemoryLayout<NativeContactCacheRecord>.offset(of: \.participants)),
                 ("metadata", MemoryLayout<NativeContactCacheRecord>.offset(of: \.metadata)),
