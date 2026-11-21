@@ -1,4 +1,5 @@
 import BubblePhysics
+@testable import BubblePhysicsNativeMetal
 import XCTest
 
 /// P-B-17 (G3-AC2): kontur bańki z `debugContourSnapshot()` nie jest płytszy niż wgniecenie geometryczne bieżących kontaktów,
@@ -46,6 +47,20 @@ final class ContactContourTests: XCTestCase {
         return worst
     }
 
+    /// P-B-26 (G5-AC2): niezmienniki konturu rysowanego w każdej scenie: każdy punkt leży w kole o promieniu bańki (± 1e-3),
+    /// żadna krawędź nie jest dłuższa niż `maxContourSegmentLength` konfiguracji NativeMetal, a krok nie został odrzucony.
+    private func assertContourInvariants(_ contour: [WorldPoint], center: WorldPoint, radius: Float, world: BubbleWorld, _ context: String,
+                                         file: StaticString = #filePath, line: UInt = #line) {
+        let maximumEdge = NativeSolverConfiguration().maxContourSegmentLength
+        XCTAssertNil(world.diagnostics.lastAdvanceIssue, context, file: file, line: line)
+        XCTAssertGreaterThanOrEqual(contour.count, 3, context, file: file, line: line)
+        for (index, point) in contour.enumerated() {
+            XCTAssertLessThanOrEqual(length(point - center), radius + 1e-3, "\(context): punkt \(index) poza kołem bańki", file: file, line: line)
+            let next = contour[(index + 1) % contour.count]
+            XCTAssertLessThanOrEqual(length(next - point), maximumEdge, "\(context): krawędź \(index) dłuższa niż limit", file: file, line: line)
+        }
+    }
+
     /// Najgłębsze wgniecenie konturu w promieniach, żeby test nie przechodził na konturze kołowym.
     private func deepestDent(_ contour: [WorldPoint], center: WorldPoint, radius: Float? = nil) -> Float {
         let full = radius ?? self.radius
@@ -65,6 +80,7 @@ final class ContactContourTests: XCTestCase {
             XCTAssertNil(world.diagnostics.lastAdvanceIssue, "krok \(step)")
             guard step >= 5, let state = frame.objects[CrowdScene.id(1)],
                   let contour = world.debugContourSnapshot()[CrowdScene.id(1)] else { continue }
+            assertContourInvariants(contour, center: state.position, radius: radius, world: world, "ściana, krok \(step)")
             let distance = state.position.x - wallX
             let shortfall = worstShortfall(contour: contour, center: state.position, normal: [-1, 0], distance: distance)
             XCTAssertLessThanOrEqual(shortfall, depthTolerance, "krok \(step): kontur płytszy niż wgniecenie geometryczne o \(shortfall)")
@@ -94,6 +110,8 @@ final class ContactContourTests: XCTestCase {
             guard step >= 5, let first = frame.objects[CrowdScene.id(1)], let second = frame.objects[CrowdScene.id(2)] else { continue }
             let snapshot = world.debugContourSnapshot()
             guard let contourA = snapshot[CrowdScene.id(1)], let contourB = snapshot[CrowdScene.id(2)] else { continue }
+            assertContourInvariants(contourA, center: first.position, radius: radius, world: world, "para a, krok \(step)")
+            assertContourInvariants(contourB, center: second.position, radius: radius, world: world, "para b, krok \(step)")
             let offset = second.position - first.position
             let distance = length(offset)
             let normal = offset / distance
@@ -172,6 +190,7 @@ final class ContactContourTests: XCTestCase {
         for first in placed {
             let contour = try XCTUnwrap(snapshot[CrowdScene.id(first.id)], "kontur bańki \(first.id)")
             let state = try XCTUnwrap(frame.objects[CrowdScene.id(first.id)])
+            assertContourInvariants(contour, center: state.position, radius: first.radius, world: world, "tłok, bańka \(first.id)")
             mostDented = max(mostDented, deepestDent(contour, center: state.position, radius: first.radius))
             for point in contour { deepestIntoWall = max(deepestIntoWall, abs(point.x) - half.x, abs(point.y) - half.y) }
             for second in placed where second.id != first.id {
