@@ -162,11 +162,13 @@ final class CrowdCompressionTests: XCTestCase {
 
     // P-B-30 (G4-AC7, CD-D-17, CD-D-18): zawarta para miękka wystrzeliwuje mniejszą bańkę i nie psuje świata. Duża r = 40 w (0, 0),
     // mała r = 12 w całości wewnątrz w (6, 0), przeszkoda r = 20 w (100, 0) na osi wystrzału (+x); masy r² / 400, c₀ = 1e-3 (podatność c₀·r/r_ref),
-    // ζ_c = 1, `damping` = 0, `maximumLinearSpeed` = 600. Granicy przesunięcia środka w kroku nie ma: wystrzał jest zamierzony.
+    // ζ_c = 0, `damping` = 0, `maximumLinearSpeed` = 600. Granicy przesunięcia środka w kroku nie ma: wystrzał jest zamierzony.
+    // Od 3.0.1 dashpot kontaktu miękkiego tłumi przy każdej prędkości (BF-D-2), więc przy ζ_c = 1 rozprężenie pary jest krytycznie
+    // tłumione i mała bańka nie dolatuje do przeszkody; ζ_c = 0 zostawia nietłumiony wystrzał, który ta scena sprawdza.
     func testSoftContainedPairReleasesWithoutBreakingTheWorld() async throws {
         // Bez `CrowdScene.makeWorld`: krok z wstawieniem baniek jest właśnie tym, w którym zawieranie się rozwiązuje.
         let world = try BubbleWorld(configuration: CrowdScene.configuration())
-        var setup = try CrowdScene.resources(bubble: CrowdScene.softBubblePhysics(base: 1e-3))
+        var setup = try CrowdScene.resources(bubble: CrowdScene.softBubblePhysics(base: 1e-3, dampingRatio: 0))
         for wall in try CrowdScene.walls() { setup = setup.add(wall) }
         _ = world.submit(setup.add(try CrowdScene.bubble(1, at: [0, 0], radius: 40))
             .add(try CrowdScene.bubble(2, at: [6, 0], radius: 12))
