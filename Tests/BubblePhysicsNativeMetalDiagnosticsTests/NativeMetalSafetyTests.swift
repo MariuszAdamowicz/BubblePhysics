@@ -514,6 +514,46 @@ final class NativeMetalSafetyTests: XCTestCase {
         XCTAssertEqual(try checkBits(multiplier: 0.5), 0, "poprawny mnożnik nie ustawia bitów")
     }
 
+    // Jądro `nativeCheckFinite` sprawdza z `deformation` tylko `.zw` (limity prędkości); `.xy` to maximum i promień efektywny
+    // konturu z poprzedniego kroku, więc zła wartość tam nie zapala bitów (kontur jest tylko rysowany).
+    func testGPUCheckFiniteChecksOnlyVelocityLimitsOfDeformation() async throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let solver = try NativeMetalSolver(device: device)
+        _ = try await solver.executeFrame(world: try makeWorld(x: -4), scenarioStep: 1)
+        let state = try XCTUnwrap(solver.persistentState)
+        let pipeline = try XCTUnwrap(NativeMetalPipelineCache.pipelines(for: device).stages["nativeCheckFinite"])
+        let queue = try XCTUnwrap(device.makeCommandQueue())
+
+        func checkBits(deformation: SIMD4<Float>) throws -> UInt32 {
+            let bubbles = state.workingBubbles.contents().bindMemory(to: NativeMetalBubble.self, capacity: 1)
+            bubbles[0].deformation = deformation
+            state.safetyControl.contents().storeBytes(of: NativeMetalSafetyControl(counts: .zero),
+                                                      as: NativeMetalSafetyControl.self)
+            let command = try XCTUnwrap(queue.makeCommandBuffer())
+            let encoder = try XCTUnwrap(command.makeComputeCommandEncoder())
+            encoder.setComputePipelineState(pipeline)
+            for (index, buffer) in [state.workingBubbles, state.workingSegments, state.workingCache, state.control,
+                                    state.contactControl, state.solverControl, state.safetyControl].enumerated() {
+                encoder.setBuffer(buffer, offset: 0, index: index)
+            }
+            encoder.dispatchThreadgroups(.init(width: 1, height: 1, depth: 1),
+                                         threadsPerThreadgroup: .init(width: 32, height: 1, depth: 1))
+            encoder.endEncoding()
+            command.commit()
+            command.waitUntilCompleted()
+            return state.safetyControl.contents().load(as: NativeMetalSafetyControl.self).counts.w
+        }
+
+        XCTAssertEqual(try checkBits(deformation: SIMD4(0.5, 1, 2, 3)), 0, "skończona deformacja nie ustawia bitów")
+        for bad in [Float.nan, .infinity, -.infinity] {
+            XCTAssertEqual(try checkBits(deformation: SIMD4(bad, 1, 2, 3)), 0, "deformation.x = \(bad) jest tylko rysowane")
+            XCTAssertEqual(try checkBits(deformation: SIMD4(0.5, bad, 2, 3)), 0, "deformation.y = \(bad) jest tylko rysowane")
+        }
+        let nonFiniteLimit = try checkBits(deformation: SIMD4(0.5, 1, .nan, 3))
+        XCTAssertNotEqual(nonFiniteLimit & 1, 0, "NaN w deformation.z (limit prędkości) to bit nonFinite")
+        XCTAssertNotEqual(try checkBits(deformation: SIMD4(0.5, 1, 2, .nan)) & 1, 0, "NaN w deformation.w to bit nonFinite")
+    }
+
     func testCCDThresholdUsesConfiguredMultiplierAndRadius() async throws {
         var world = try makeWorld(x: -4, vx: 10)
         world.addSegment(wall())

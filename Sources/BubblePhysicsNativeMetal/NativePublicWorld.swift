@@ -134,6 +134,8 @@ package final class NativePublicWorld {
     /// Rekordy cache kontaktów po ostatnim kroku (podatność końców, λ). Szew testów rekordów wyników scalenia i podziału; typ rekordu jest
     /// wewnętrzny, więc testy czytają go przez `@testable`.
     var cachedContacts: [NativeContactCacheRecord] { solver.cachedContacts }
+    /// Trwały stan GPU solvera; szew testów, które psują bufor roboczy po zakończeniu klatki (typ jest wewnętrzny).
+    var persistentState: NativeMetalPersistentState? { solver.persistentState }
     /// Krok bez GPU (brak ciał z masą) kończy wszystkie pary w `EventCompactor`, więc i tu historia par musi zniknąć;
     /// inaczej para o tych samych ID dodana później nie dostałaby `contactBegan`.
     package func forgetContactHistory() { contactHistory = [] }

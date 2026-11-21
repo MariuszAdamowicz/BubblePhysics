@@ -1,6 +1,6 @@
 # Przewodnik integracji BubblePhysics 3.0
 
-Ten przewodnik pokazuje, jak podłączyć `BubbleWorld` do aplikacji iOS z `MTKView`. Każdy blok kodu jest identyczny z oznaczonym regionem źródeł przykładowej aplikacji w `Examples/BubblePhysicsShowcase/App`, więc kompiluje się razem z nią (`IntegrationGuideTests` pilnuje zgodności). Przykład ma dwie sceny: bańki z teksturami, naklejkami, scalaniem i chwytem palcem (`BubbleScene`) oraz bryły z więzami i platformą kinematyczną (`RigidScene`). Przejście z wersji 1.x opisuje [MIGRATION-v2.md](MIGRATION-v2.md).
+Ten przewodnik pokazuje, jak podłączyć `BubbleWorld` do aplikacji iOS z `MTKView`. Każdy blok kodu jest identyczny z oznaczonym regionem źródeł przykładowej aplikacji w `Examples/BubblePhysicsShowcase/App`, więc kompiluje się razem z nią (`IntegrationGuideTests` pilnuje zgodności). Przykład ma dwie sceny: bańki z teksturami, naklejkami, scalaniem i chwytem palcem (`BubbleScene`) oraz bryły z więzami i platformą kinematyczną (`RigidScene`). Przejście z wersji 1.x opisuje [MIGRATION-v2.md](MIGRATION-v2.md), a z wersji 2.x na 3.0 [MIGRATION-v3.md](MIGRATION-v3.md).
 
 Build przykładu bez podpisu:
 

@@ -1,5 +1,5 @@
 import BubblePhysics
-@testable import BubblePhysicsNativeMetal
+import BubblePhysicsNativeMetal
 import XCTest
 
 /// P-B-17 (G3-AC2): kontur bańki z `debugContourSnapshot()` nie jest płytszy niż wgniecenie geometryczne bieżących kontaktów,

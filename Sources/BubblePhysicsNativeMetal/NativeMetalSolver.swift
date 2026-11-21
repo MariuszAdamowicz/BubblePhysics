@@ -798,7 +798,7 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         if !structuralSources.isEmpty {
             dispatch("nativeSeedStructuralContours", buffers: [state.workingBubbles, structuralHeaderBuffer,
                 structuralSourceBuffer, structuralClipBuffer, state.contourScratch, state.workingContourCounts,
-                state.control, state.contourControl, state.safetyControl, state.publishedBubbles,
+                state.control, state.contourControl, state.publishedBubbles,
                 state.publishedDeformation, state.publishedContourCounts], threads: count * state.contourStride)
         }
         // Liczba przejść jest nieparzysta: wynik pozostaje w roboczym buforze deformacji.

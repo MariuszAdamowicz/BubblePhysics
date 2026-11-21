@@ -70,10 +70,9 @@ kernel void nativeSeedStructuralContours(device NativeBubble *bubbles [[buffer(0
     device float4 *pressure [[buffer(4)]], device uint *counts [[buffer(5)]],
     constant NativeControl &control [[buffer(6)]],
     constant NativeStructuralContourControl &contour [[buffer(7)]],
-    device atomic_uint *safety [[buffer(8)]],
-    device NativeBubble *previousBubbles [[buffer(9)]],
-    device float4 *previousDeformation [[buffer(10)]],
-    device uint *previousCounts [[buffer(11)]], uint index [[thread_position_in_grid]]) {
+    device NativeBubble *previousBubbles [[buffer(8)]],
+    device float4 *previousDeformation [[buffer(9)]],
+    device uint *previousCounts [[buffer(10)]], uint index [[thread_position_in_grid]]) {
     uint bubbleIndex = index / contour.counts.x, sample = index % contour.counts.x;
     if (bubbleIndex >= control.counts.x || sample >= counts[bubbleIndex]) return;
     NativeStructuralHeader header = headers[bubbleIndex];
