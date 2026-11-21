@@ -1,6 +1,6 @@
 # Migracja z BubblePhysics 2.x do 3.0.0
 
-Wersja 3.0.0 zmienia model podatności kontaktu, tłumienie ruchu i napęd chwytu oraz usuwa parametry z publicznego API. Dokument zbiera zmiany wycinek po wycinku: ta wersja opisuje podatność c₀ · r / r_ref, jedno tłumienie ruchu i gumkę jako jedyny napęd. Kolejne punkty (krawędzie ścian, kontur tylko rysowany) dopisują następne wycinki.
+Wersja 3.0.0 zmienia model podatności kontaktu, tłumienie ruchu i napęd chwytu oraz usuwa parametry z publicznego API. Dokument zbiera zmiany wycinek po wycinku: ta wersja opisuje podatność c₀ · r / r_ref, jedno tłumienie ruchu i gumkę jako jedyny napęd. Kolejne punkty (kontur tylko rysowany) dopisują następne wycinki.
 
 ## Podatność kontaktu: c = c₀ · r / r_ref
 
@@ -40,3 +40,15 @@ W 2.x chwyt miał dwa tryby: narzuconą prędkość (`maximumSpeed`, `distanceRe
 - **`drivePolicy` jest opcjonalne.** `BubbleDrivePolicy(bandStiffness:maximumForce:)` ma tylko dwa pola, a `BubbleDescriptor.drivePolicy` i `BubbleResult.drivePolicy` są typu `BubbleDrivePolicy?` z domyślnym `nil`. Bańka, którą gracz ma chwytać, musi mieć `drivePolicy` w deskryptorze i w każdym wyniku scalenia albo podziału. Bez niej `beginPlayerDrive` odrzuca transakcję z `incompatibleObjectKind(id)`.
 - **Koniec chwytu brył.** `beginPlayerDrive` odrzuca bryłę wielokątną z `incompatibleObjectKind(id)`. Bryłę prowadź przez `MotorDrive`, `KinematicDrive` albo ścieżkę.
 - **Koniec chwytu przy zmianie struktury.** `replace`, scalenie i podział chwyconej bańki kończą chwyt (bez `DriveFeedback`, a `updatePlayerDrive` i `endPlayerDrive` dają `driveNotActive` albo `objectNotFound`). Po scaleniu albo podziale chwyć wynik ponownie: wynik musi mieć `drivePolicy`.
+
+## Krawędzie statycznych wielokątów odpychają tylko od zewnątrz
+
+W 2.x każda krawędź bryły statycznej (ściany, wielokąta) była odcinkiem dwustronnym. Bańka ugięta głębiej niż grubość ściany dostawała więc drugą sprężynę od tylnej krawędzi, a przy wypukłym wierzchołku dwa kontakty z tym samym punktem (dla kątów prostego i rozwartego dwie sprężyny równolegle, dla ostrego żadnej). W 3.0.0 krawędź statycznego wielokąta odpycha tylko od zewnątrz, a wypukły wierzchołek raz:
+
+- **Ugięcie nie zależy od grubości ściany.** Bańka dociśnięta siłą F do ściany o grubości 48 albo 400 ugina się o c · F, także gdy c · F jest większe niż grubość.
+- **Wnętrze krawędzi i wierzchołek.** Kontakt powstaje, gdy środek bańki leży po stronie zewnętrznej krawędzi w obszarze jej wnętrza (stała normalna zewnętrzna) albo w obszarze wypukłego wierzchołka (normalna od wierzchołka do środka, jeden kontakt). Przejście przez wierzchołek nie ma skoku kontaktu. Wierzchołek wklęsły (narożnik wewnętrzny litery L) daje dwa kontakty, po jednym z każdej krawędzi.
+- **Obieg wierzchołków nie ma znaczenia.** Strona zewnętrzna wynika ze znaku pola wielokąta, więc gra może podawać wierzchołki zgodnie albo przeciwnie do ruchu wskazówek zegara i nie musi niczego odwracać.
+- **Krawędzie współliniowe.** Sąsiednie krawędzie, dla których |e₁ × e₂| ≤ 1e-5 · |e₁| · |e₂| i e₁ · e₂ > 0, są scalane: dodatkowy wierzchołek na prostej nie zmienia kontaktu.
+- **Kontakty twarde** (c₀ = 0) dostają ten sam podział na obszary, więc scena z cienką ścianą albo wypukłym narożnikiem może zachowywać się inaczej niż w 2.x (bez drugiego kontaktu od tyłu i bez podwójnego kontaktu z wierzchołkiem).
+
+Co zmienić w kodzie: nic, API się nie zmienia. Jeśli gra dobierała `base` albo grubość ściany tak, żeby sprężyna od tyłu cienkiej ściany nie wchodziła w grę, grubość nie jest już ograniczeniem: ugięcie to c · F. CCD i strażniki środka dalej oddają środek bańki na stronę, z której przyszedł.
