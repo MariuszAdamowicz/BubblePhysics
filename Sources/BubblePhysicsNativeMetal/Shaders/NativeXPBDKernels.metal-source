@@ -1,11 +1,6 @@
-// Wspólne typy i geometria są kompilowane z NativeGeometryKernels.
+// Wspólne typy i geometria (także klucz cache: nativeCacheLess, nativeCacheLowerBound, nativeCacheSame) są kompilowane
+// z NativeGeometryKernels.
 // Cache oraz Jacobi XPBD/PBD. Żaden wątek kontaktu nie zapisuje pozycji bańki.
-bool nativeCacheLess(NativeContactCache a, NativeContactCache b) {
-    if (a.metadata.x != b.metadata.x) return a.metadata.x < b.metadata.x;
-    if (a.participants.x != b.participants.x) return a.participants.x < b.participants.x;
-    return a.participants.y < b.participants.y;
-}
-
 uint nativeInvalidation(NativeContactCache record, device long2 *invalidations, uint count,
     device NativeBubble *bubbles, uint bubbleCount, device NativeSegment *segments, uint segmentCount) {
     uint flags = 0;
@@ -169,19 +164,6 @@ kernel void nativeCompactActiveContacts(device NativeContactCache *contacts [[bu
     device uint4 *offsets [[buffer(3)]], uint index [[thread_position_in_grid]]) {
     if (index >= control.counts.x || contacts[index].response.y <= -control.thresholds.w) return;
     active[offsets[index].x - 1] = contacts[index];
-}
-
-uint nativeCacheLowerBound(device NativeContactCache *records, uint count, NativeContactCache key) {
-    uint low = 0, high = count;
-    while (low < high) {
-        uint mid = low + (high - low) / 2;
-        if (nativeCacheLess(records[mid], key)) low = mid + 1; else high = mid;
-    }
-    return low;
-}
-
-bool nativeCacheSame(NativeContactCache a, NativeContactCache b) {
-    return a.metadata.x == b.metadata.x && all(a.participants == b.participants);
 }
 
 // Jeden work-item odpowiada jednemu bieżącemu kontaktowi; binary search używa pełnego klucza.

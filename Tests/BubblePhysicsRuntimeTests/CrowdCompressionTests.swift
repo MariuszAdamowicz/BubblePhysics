@@ -9,7 +9,11 @@ final class CrowdCompressionTests: XCTestCase {
     /// Wspólne asercje G1-AC1, G1-AC2 i G2-AC5 dla przebiegu tłoku. Licznika par zawartych nie sprawdzają: przy B = 2,5 pola kół
     /// są 2,5 raza większe od wnętrza i część par zostaje zawarta w równowadze (probe: 14 przy c₀ = 0, 7 przy materiale miękkim,
     /// tyle samo po 600, 1800 i 3600 krokach). Spadek licznika do 0 sprawdzają przebiegi bez takiego nadmiaru pól.
+    /// `centerDepthBehindFrame` (w promieniach docelowych) to dopuszczalna głębokość środka za wewnętrzną krawędzią ściany; 0 wymaga
+    /// środków w ramie. Od 3.0.2 (BF-D-5) środek miękkiej bańki dociśniętej siłą F > r_ref / c₀ stoi za krawędzią w ε = c₀ · F / r_ref,
+    /// więc tłok miękki może mieć środki za krawędzią; bańka twarda (c = 0) nie.
     private func assertCrowdKeptStepsAccepted(_ report: CrowdScene.CrowdReport, world: BubbleWorld, balance: Double,
+                                              centerDepthBehindFrame: Float = 0,
                                               file: StaticString = #filePath, line: UInt = #line) {
         XCTAssertNil(report.firstIssue?.issue,
                      "krok \(report.firstIssue?.step ?? 0) odrzucony: \(String(describing: report.firstIssue?.rejection)), bańk: \(report.addedCount)",
@@ -18,7 +22,12 @@ final class CrowdCompressionTests: XCTestCase {
         XCTAssertNil(world.diagnostics.failureReason, file: file, line: line)
         XCTAssertEqual(report.exitEvents, 0, "didExitSimulationRegion", file: file, line: line)
         XCTAssertEqual(report.vanishedBubbles, 0, "bańki, które zniknęły z klatki", file: file, line: line)
-        XCTAssertTrue(report.outsideFrame.isEmpty, "środek poza ramą: \(report.outsideFrame.prefix(3))", file: file, line: line)
+        if centerDepthBehindFrame == 0 {
+            XCTAssertTrue(report.outsideFrame.isEmpty, "środek poza ramą: \(report.outsideFrame.prefix(3))", file: file, line: line)
+        } else {
+            XCTAssertLessThan(report.deepestCenterBehindFrame, centerDepthBehindFrame,
+                              "środek za krawędzią ściany (w r): \(report.outsideFrame.prefix(3))", file: file, line: line)
+        }
         XCTAssertGreaterThanOrEqual(report.balance, balance, file: file, line: line)
         XCTAssertGreaterThanOrEqual(report.steps, 600, "przebieg obejmuje 600 kroków po ostatniej bańce", file: file, line: line)
     }
@@ -100,7 +109,9 @@ final class CrowdCompressionTests: XCTestCase {
     func testSoftCrowdBalance2_5KeepsStepsAcceptedAndCompressesContoursUnlikeHard() async throws {
         let softWorld = try await CrowdScene.makeWorld(bubble: CrowdScene.softCrowdPhysics())
         let soft = try await CrowdScene.runCrowd(world: softWorld, balance: 2.5, seed: 2_500, extraSteps: 600)
-        assertCrowdKeptStepsAccepted(soft, world: softWorld, balance: 2.5)
+        // Od 3.0.2 (BF-D-5) środek miękkiej bańki może stać za krawędzią ściany: probe (to samo ziarno) dał trzy bańki r 44–47, najgłębiej
+        // 0,18 r za krawędzią (ε ≈ 1,18). Próg 0,5 r odróżnia mocne zgniecenie od przebicia ściany grubości 48.
+        assertCrowdKeptStepsAccepted(soft, world: softWorld, balance: 2.5, centerDepthBehindFrame: 0.5)
         let hardWorld = try await CrowdScene.makeWorld(bubble: CrowdScene.softBubblePhysics(base: 0))
         let hard = try await CrowdScene.runCrowd(world: hardWorld, balance: 2.5, seed: 2_500, extraSteps: 600)
         XCTAssertNil(hard.firstIssue?.issue, "przebieg odniesienia z c₀ = 0")

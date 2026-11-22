@@ -186,11 +186,70 @@ bool nativeEdgeCrossed(float2 start, float2 p, NativeSegment s, float margin) {
     return square > FLT_MIN && along >= 0 && along <= square && abs(nativeCross(e0, r0)) <= margin * sqrt(square);
 }
 
+// Krawędź wejścia w tym kroku (BF-D-2 z 3.0.2): krawędź statycznego wielokąta, dla której cache roboczy `cache` (contacts.counts.z
+// rekordów, posortowany po kluczu) ma rekord (bańka, krawędź) z cechą 1 zbudowany w tym kroku (lastSeenFrame = limits.x), a
+// przewidziany środek (position.xy z nativePredict, z którego nativeBuildContacts zbudował kontakt) leży za jej prostą: kontakt
+// powstał z przejścia krawędzi albo z pamięci krawędzi wejścia (BF-D-1), nie ze zwykłego docisku od zewnątrz. Rekord zachowany
+// z wcześniejszych klatek nie wystarcza: krawędź wejścia odpycha środek tylko wtedy, gdy kontakt istnieje w tym kroku. Bańka twarda
+// (c = 0) nie ma krawędzi wejścia: ε = c · F / r_ref = 0, więc jej środek za krawędzią to błąd solvera, który strażnik naprawia
+// jak w 3.0.1.
+bool nativeEntryEdge(NativeBubble b, NativeSegment s, device NativeContactCache *cache, device NativeContactControl &contacts) {
+    if ((s.flags.w & 1) == 0 || !(nativeContactCompliance(b) > 0)) return false;
+    float2 outward = nativeSegmentNormal(s.current) * s.region.z;
+    if (!(dot(b.position.xy - s.current.xy, outward) < 0)) return false;
+    NativeContactCache key = { long2(b.identity.x, s.identity.x), uint4(1, 0, 0, 0), float4(0), float4(0), float4(0) };
+    uint found = nativeCacheLowerBound(cache, contacts.counts.z, key);
+    return found < contacts.counts.z && nativeCacheSame(cache[found], key) && cache[found].response.w == 1
+        && cache[found].metadata.z == contacts.limits.x;
+}
+
+// Właściciel ma krawędź wejścia bańki w tym kroku: jej środek może stać w jego wnętrzu (ε = c₀ · F / r_ref > 1, BF-D-5).
+bool nativeOwnerHasEntryEdge(NativeBubble b, long owner, device NativeSegment *segments, uint count,
+    device NativeContactCache *cache, device NativeContactControl &contacts) {
+    for (uint j = 0; j < count; ++j) {
+        NativeSegment s = segments[j];
+        if (s.flags.y && s.identity.y == owner && nativeEntryEdge(b, s, cache, contacts)) return true;
+    }
+    return false;
+}
+
+// Przejście zabronione strażnikowi. Krawędź wejścia nie cofa środka ani w jedną, ani w drugą stronę (BF-D-2). Inna krawędź
+// właściciela z krawędzią wejścia cofa każde przejście, także z jego wnętrza: tył bryły zatrzymuje środek dociśnięty przez krawędź
+// wejścia (BF-D-3), czego `nativeForbiddenCenterCrossing` nie robi, bo pomija start we wnętrzu właściciela. Reszta jak w 3.0.1.
+bool nativeGuardForbidsCrossing(float2 start, float2 end, NativeSegment s, NativeBubble b, device NativeSegment *segments, uint count,
+    device NativeContactCache *cache, device NativeContactControl &contacts, device atomic_uint *statistics) {
+    if (nativeEntryEdge(b, s, cache, contacts)) return false;
+    if (s.flags.y && nativeOwnerHasEntryEdge(b, s.identity.y, segments, count, cache, contacts)) {
+        nativeCountWork(statistics, 6);
+        return nativeCenterCrossing(start, end, s);
+    }
+    return nativeForbiddenCenterCrossing(start, end, s, segments, count, statistics, true);
+}
+
+// Jak `nativeContainingOwner`, ale bez właścicieli z krawędzią wejścia bańki: środek w ich wnętrzu to dozwolony stan modelu
+// (BF-D-2), więc rzut CD-D-17 go pomija.
+long nativeGuardedOwner(float2 p, NativeBubble b, device NativeSegment *segments, uint count,
+    device NativeContactCache *cache, device NativeContactControl &contacts) {
+    long testedOwner = -1;
+    for (uint j = 0; j < count; ++j) {
+        NativeSegment s = segments[j];
+        if (!s.flags.y) continue;
+        bool first = s.identity.y != testedOwner;
+        testedOwner = s.identity.y;
+        if (!first || !nativeFilterAccepts(b.filter, s.filter)) continue;
+        if (nativeInsideOwner(p, segments, count, s.identity.y, false)
+            && !nativeOwnerHasEntryEdge(b, s.identity.y, segments, count, cache, contacts)) return s.identity.y;
+    }
+    return -1;
+}
+
 void nativeGuardCenter(device NativeBubble *bubbles, device NativeSegment *segments,
     device float4 *positions, constant NativeControl &control, device NativeContactControl &contacts,
-    device uint *changed, device atomic_uint *safety, device atomic_uint *statistics, uint i) {
+    device uint *changed, device atomic_uint *safety, device atomic_uint *statistics,
+    device NativeContactCache *cache, uint i) {
     if (bubbles[i].publicFlags.x && bubbles[i].publicFlags.y) return;
     float2 start = bubbles[i].position.zw, end = positions[i].xy;
+    NativeBubble bubble = bubbles[i];
     float margin = max(contacts.thresholds.z * 2, 1e-5f);
     for (uint j = 0; j < control.counts.y; ++j) {
         NativeSegment s = segments[j];
@@ -198,7 +257,7 @@ void nativeGuardCenter(device NativeBubble *bubbles, device NativeSegment *segme
         float2 corrected = end;
         if (nativeFastCandidate(bubbles[i], s, control, contacts) || nativePossibleCenterCrossing(start, end, s)) {
             if (!nativeCenterPathFinite(start, end, s, statistics)) { nativeSafetyFailure(safety, 1); continue; }
-            if (nativeForbiddenCenterCrossing(start, end, s, segments, control.counts.y, statistics, true))
+            if (nativeGuardForbidsCrossing(start, end, s, bubble, segments, control.counts.y, cache, contacts, statistics))
                 corrected = nativeReturnToOriginalSide(start, end, s, margin);
         }
         if (s.flags.z) {
@@ -212,11 +271,11 @@ void nativeGuardCenter(device NativeBubble *bubbles, device NativeSegment *segme
     // krawędzi `previous` → `current`), a bez takiej krawędzi na najbliższą, jak dotąd. Gdy punkt po rzucie leży we wnętrzu
     // sąsiedniego wielokąta, następuje kolejny rzut, ale łącznie najwyżej 1 + 4. Kolejny rzut wybiera krawędź z wolnym
     // miejscem (wygrywa najbliższa startowi), a gdy żadna go nie daje, krawędź przekroczoną albo najbliższą. Gdy po rzutach
-    // środek dalej leży we wnętrzu, końcowa walidacja odrzuca krok.
+    // środek dalej leży we wnętrzu, końcowa walidacja odrzuca krok. Właściciel z krawędzią wejścia bańki nie jest rzutowany (BF-D-2).
     float2 projected = end;
     bool moved = false;
     for (uint pass = 0; pass < 5; ++pass) {
-        long owner = nativeContainingOwner(projected, bubbles[i].filter, segments, control.counts.y);
+        long owner = nativeGuardedOwner(projected, bubble, segments, control.counts.y, cache, contacts);
         if (owner < 0) break;
         int bestTier = 4;
         float bestKey = INFINITY;
@@ -226,7 +285,15 @@ void nativeGuardCenter(device NativeBubble *bubbles, device NativeSegment *segme
             if (!edge.flags.y || edge.identity.y != owner) continue;
             float2 q = nativeClosestPoint(projected, edge.current);
             float distance = length(q - projected);
-            float2 outward = distance > FLT_MIN ? (q - projected) / distance : nativeSegmentNormal(edge.current);
+            // Środek na krawędzi albo o szum zaokrągleń od niej (BF-D-4): kierunek (q − p) / d wskazywałby wzdłuż krawędzi, więc
+            // wychodzi wzdłuż normalnej zewnętrznej. Krawędź statycznego wielokąta zna ją z region.z, inna bierze tę z ±normal, której
+            // kandydat nie leży we wnętrzu właściciela.
+            float2 outward = (q - projected) / distance;
+            if (!(distance >= margin / 2)) {
+                float2 normal = nativeSegmentNormal(edge.current);
+                if (edge.flags.w & 1) outward = normal * edge.region.z;
+                else outward = nativeInsideOwner(q + normal * margin, segments, control.counts.y, owner, false) ? -normal : normal;
+            }
             float2 candidate = q + outward * margin;
             bool crossed = nativeEdgeCrossed(start, projected, edge, margin);
             // Pierwszy rzut nie szuka wolnego miejsca: wychodzi przez krawędź przekroczoną albo najbliższą.
@@ -257,7 +324,7 @@ void nativeGuardCenter(device NativeBubble *bubbles, device NativeSegment *segme
         if (!nativeFilterAccepts(bubbles[i].filter, s.filter)) continue;
         if (nativeFastCandidate(bubbles[i], s, control, contacts) || nativePossibleCenterCrossing(start, end, s)) {
             if (!nativeCenterPathFinite(start, end, s, statistics)) nativeSafetyFailure(safety, 1);
-            else if (nativeForbiddenCenterCrossing(start, end, s, segments, control.counts.y, statistics, true))
+            else if (nativeGuardForbidsCrossing(start, end, s, bubble, segments, control.counts.y, cache, contacts, statistics))
                 nativeSafetyFailure(safety, 2 | 8);
         }
         if (s.flags.z && dot(end - s.current.xy, nativeSegmentNormal(s.current)) * s.collision.x < 0)
@@ -265,7 +332,9 @@ void nativeGuardCenter(device NativeBubble *bubbles, device NativeSegment *segme
         if (s.flags.y) {
             if (testedOwner != s.identity.y) {
                 testedOwner = s.identity.y;
-                testedInside = nativeInsideOwner(end, segments, control.counts.y, s.identity.y, false);
+                // Wnętrze właściciela z krawędzią wejścia bańki to dozwolony stan (BF-D-2), nie odrzucenie.
+                testedInside = nativeInsideOwner(end, segments, control.counts.y, s.identity.y, false)
+                    && !nativeOwnerHasEntryEdge(bubble, s.identity.y, segments, control.counts.y, cache, contacts);
             }
             if (testedInside) nativeSafetyFailure(safety, 2 | 8);
         }
@@ -276,10 +345,10 @@ kernel void nativeApplyCenterGuards(device NativeBubble *bubbles [[buffer(0)]],
     device NativeSegment *segments [[buffer(1)]], device float4 *positions [[buffer(2)]],
     constant NativeControl &control [[buffer(3)]], device NativeContactControl &contacts [[buffer(4)]],
     device uint *changed [[buffer(5)]], device atomic_uint *safety [[buffer(6)]],
-    device atomic_uint *statistics [[buffer(7)]],
+    device atomic_uint *statistics [[buffer(7)]], device NativeContactCache *cache [[buffer(8)]],
     uint i [[thread_position_in_grid]]) {
     if (i >= control.counts.x) return;
-    nativeGuardCenter(bubbles, segments, positions, control, contacts, changed, safety, statistics, i);
+    nativeGuardCenter(bubbles, segments, positions, control, contacts, changed, safety, statistics, cache, i);
 }
 
 // This final validator runs AFTER the last obstacle projection. It must never
