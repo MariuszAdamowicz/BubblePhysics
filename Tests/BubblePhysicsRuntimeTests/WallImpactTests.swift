@@ -16,6 +16,11 @@ final class WallImpactTests: XCTestCase {
         var final: Float = 0
         /// Kroki, po których środek bańki był na krawędzi ściany albo za nią (ε ≥ 1).
         var stepsWithCenterBehindEdge: [Int] = []
+        /// Prędkość normalna (w stronę ściany) po ostatnim kroku bez kontaktu, z którą bańka wchodzi w kontakt.
+        var impactSpeed: Float = 0
+        /// Kroki, po których droga środka w następnym kroku, |v_n| · dt, przekracza odległość środka od krawędzi ściany: przewidziany
+        /// środek następnego kroku mija krawędź (siła gumki tylko dokłada prędkości w stronę ściany).
+        var stepsWhoseNextPredictionPassesTheEdge: [Int] = []
     }
 
     /// Bańka r 24 startuje `gap` od ściany, gumka ciągnie ją w ścianę przez `seconds` s; ε = wgniecenie / r po każdym kroku.
@@ -37,6 +42,9 @@ final class WallImpactTests: XCTestCase {
             outcome.peak = max(outcome.peak, ratio)
             outcome.final = ratio
             if ratio >= 1 { outcome.stepsWithCenterBehindEdge.append(step) }
+            let normalSpeed = -state.velocity.x
+            if ratio <= 0 { outcome.impactSpeed = normalSpeed }
+            if normalSpeed * Float(CrowdScene.step) > radius * (1 - ratio) { outcome.stepsWhoseNextPredictionPassesTheEdge.append(step) }
         }
         return outcome
     }
@@ -45,7 +53,11 @@ final class WallImpactTests: XCTestCase {
     /// kroku na krawędzi ściany.
     func testFastSmallBubbleSettlesAtComplianceTimesForceWithoutCrossingTheEdge() async throws {
         let outcome = try await run(dampingRatio: 5)
+        // Warunek wstępny: uderzenie jest szybsze niż próg max(40, 2r), powyżej którego dashpot był pomijany do 3.0.0.
+        XCTAssertGreaterThan(outcome.impactSpeed, max(40, 2 * radius), "prędkość normalna tuż przed kontaktem")
         XCTAssertEqual(outcome.final, restingRatio, accuracy: 0.02 * restingRatio, "końcowe ε")
+        // Bez przestrzału: szczyt najwyżej 5 % ponad ε w spoczynku (bez tłumienia szybkiego zderzenia szczyt sięga ε ≈ 1).
+        XCTAssertLessThan(outcome.peak, restingRatio * 1.05, "szczyt ε")
         XCTAssertLessThan(outcome.peak, 1, "szczyt ε")
         XCTAssertEqual(outcome.stepsWithCenterBehindEdge, [], "kroki ze środkiem na krawędzi albo za nią")
     }
@@ -54,6 +66,8 @@ final class WallImpactTests: XCTestCase {
     /// więc bańka wraca i osiada w c · F zamiast stać w ε ≈ 1.
     func testBubbleWhosePredictedCenterPassesTheEdgeIsPushedBackByThatEdge() async throws {
         let outcome = try await run(dampingRatio: 0)
+        // Warunek wstępny: w którymś kroku przewidziany środek mija krawędź ściany.
+        XCTAssertNotEqual(outcome.stepsWhoseNextPredictionPassesTheEdge, [], "przewidziany środek nie minął krawędzi")
         XCTAssertEqual(outcome.final, restingRatio, accuracy: 0.02 * restingRatio, "końcowe ε")
     }
 }
