@@ -201,6 +201,14 @@ enum CrowdScene {
         var vanishedBubbles = 0
         /// Środki poza ramą (klatka, bańka, położenie).
         var outsideFrame: [(step: Int, id: ObjectID, position: WorldPoint)] = []
+        /// Najgłębsze położenie środka za wewnętrzną krawędzią ramy, w promieniach docelowych bańki (ε − 1 względem bliższej ściany);
+        /// 0, gdy każdy środek był w ramie.
+        @MainActor var deepestCenterBehindFrame: Float {
+            outsideFrame.map { sample in
+                max(abs(sample.position.x) - interiorHalfSize.x, abs(sample.position.y) - interiorHalfSize.y)
+                    / (targetRadii[sample.id] ?? 1)
+            }.max() ?? 0
+        }
         /// `containedBubblePairCount` z ostatniego kroku przebiegu (-1, dopóki żaden krok się nie wykonał).
         var lastContainedPairs = -1
         /// Największy `containedBubblePairCount` w przebiegu: odróżnia spadek licznika do 0 od licznika, który nigdy nie wzrósł.

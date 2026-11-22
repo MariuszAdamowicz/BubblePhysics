@@ -278,7 +278,9 @@ final class StaticPolygonEdgeTests: XCTestCase {
     }
 
     /// Bańka r 12 z prędkością 6 000 (100 jednostek na krok, więcej niż 2r + T = 72) prostopadle i pod kątem 30° na środek ściany T 48:
-    /// żaden krok nie kończy się ze środkiem w ścianie ani za nią, żaden nie jest odrzucony.
+    /// żaden krok nie kończy się ze środkiem przebitym w głąb ściany ani za nią, żaden nie jest odrzucony. Od 3.0.2 (BF-D-5) krawędź
+    /// wejścia odpycha liniowo także dla ε > 1, więc bańka wyhamowana przez CCD do ok. 270 j/s wgniata się przy uderzeniu na chwilę
+    /// środkiem za czoło (probe: 0,2, czyli ε ≈ 1,02); dopuszczalne jest najwyżej r / 10 (ε ≤ 1,1).
     func testFastBubbleNeverEndsAStepInsideOrBehindTheWall() async throws {
         let radius: Float = 12, speed: Float = 6000
         for degrees: Float in [0, 30] {
@@ -292,7 +294,7 @@ final class StaticPolygonEdgeTests: XCTestCase {
                 let frame = try await advance(world)
                 let position = try XCTUnwrap(frame.objects[id(1)]).position
                 if abs(position.y) <= 400 {
-                    XCTAssertGreaterThanOrEqual(position.x, -1e-3, "\(degrees)°, krok \(index): środek w ścianie albo za nią: \(position)")
+                    XCTAssertGreaterThanOrEqual(position.x, -radius / 10, "\(degrees)°, krok \(index): środek w ścianie albo za nią: \(position)")
                 }
             }
         }

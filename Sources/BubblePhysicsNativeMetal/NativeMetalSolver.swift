@@ -672,8 +672,10 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         dispatch("nativeCompactCandidates", buffers: [state.control, state.contactControl, state.candidateRows,
             state.candidateRowCounts, state.candidates, state.scanOffsets, state.dispatchStatistics],
             threads: count * Self.candidateLimitPerObject)
+        // Poprzedni opublikowany cache (pamięć krawędzi wejścia, BF-D-1 z 3.0.2) jest tylko czytany; scalanie pisze do workingCache.
+        // `control` daje liczbę odcinków do przeglądu krawędzi tego samego właściciela.
         dispatchContacts("nativeBuildContacts", buffers: [state.workingBubbles, state.workingSegments, state.contactControl,
-            state.candidates, state.contacts], argument: 0)
+            state.candidates, state.contacts, state.contactCache, state.control], argument: 0)
         dispatchContacts("nativePrepareContactFlags", buffers: [state.contacts, state.contactControl, state.scanValues], argument: 0)
         scan(mode: 1, maximum: state.contactCapacity)
         prepareIndirectArguments()
@@ -758,9 +760,10 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
             state.control, state.contactControl, state.guardedBubbles, state.safetyControl], threads: count)
         dispatch("nativeResolveCCD", buffers: [state.workingBubbles, state.workingSegments, inputPositions,
             state.control, state.contactControl, state.guardedBubbles, state.safetyControl, state.dispatchStatistics], threads: count)
+        // Cache roboczy tego kroku: krawędź wejścia bańki to rekord cechy 1 zbudowany w tym kroku (BF-D-2 z 3.0.2).
         dispatch("nativeApplyCenterGuards", buffers: [state.workingBubbles, state.workingSegments, inputPositions,
-            state.control, state.contactControl, state.guardedBubbles, state.safetyControl, state.dispatchStatistics],
-            threads: count)
+            state.control, state.contactControl, state.guardedBubbles, state.safetyControl, state.dispatchStatistics,
+            state.workingCache], threads: count)
         dispatch("nativeValidateBubbleContainment", buffers: [state.workingBubbles, inputPositions,
             state.control, state.solverControl, state.safetyControl], threads: count * count)
         if let diagnosticPostGuard = state.diagnosticPostGuardPositions {

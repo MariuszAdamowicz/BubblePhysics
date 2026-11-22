@@ -2,6 +2,15 @@
 
 Zmiany w wydaniach `BubblePhysics`. Przejście z 1.x na 2.0.0 opisuje [docs/MIGRATION-v2.md](docs/MIGRATION-v2.md), a z 2.x na 3.0.0 [docs/MIGRATION-v3.md](docs/MIGRATION-v3.md).
 
+## 3.0.2
+
+### Naprawione
+
+- Miękka bańka dociśnięta do ściany siłą F > r_ref / c₀ staje środkiem za krawędzią, w ε = c₀ · F / r_ref, zamiast odrzucać krok. Dotąd strażnik środka cofał środek na krawędź minus margines (ε ≈ 1), a wynik solvera dokładnie na krawędzi przerzucał środek wzdłuż krawędzi i odrzucał krok z `SolverGuardCause.centerCrossing`; krok powtarzał się aż do `stepsRejected` (bańka r 74 przy prawej ścianie, docisk tłumu 2222 > 1852). Teraz krawędź wejścia odpycha środek liniowo, bez twardnienia, także dla ε > 1: kontakt z krawędzią, przez którą środek wszedł, trwa w kolejnych krokach (pamięć z poprzedniego opublikowanego cache kontaktów), póki rzut środka leży we wnętrzu odcinka. Strażnik nie cofa środka za krawędzią wejścia, nie rzutuje go z tej bryły i nie odrzuca kroku.
+- Środek dociśnięty przez krawędź wejścia aż do tylnej krawędzi cienkiej ściany zostaje po jej wewnętrznej stronie (krawędź minus margines), a krok jest przyjęty; tylna krawędź nie wypycha go za ścianę.
+- Rzut środka z wnętrza wielokąta (CD-D-17), gdy środek leży na krawędzi albo o szum zaokrągleń od niej, wychodzi wzdłuż normalnej zewnętrznej krawędzi, a nie wzdłuż samej krawędzi, więc nie odrzuca kroku.
+- Bańka twarda (c₀ = 0), wejście w bryłę bez krawędzi wejścia (np. skośnie nad narożnikiem) i szybkie wejście (CCD) działają jak w 3.0.1. Trajektorie miękkich baniek mocno dociśniętych do ścian różnią się od 3.0.1: w tłoku i przy szybkim uderzeniu środek może na chwilę stanąć za krawędzią ściany.
+
 ## 3.0.1
 
 ### Naprawione
