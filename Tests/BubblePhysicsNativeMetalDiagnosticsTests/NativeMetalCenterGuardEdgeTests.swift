@@ -90,9 +90,13 @@ final class NativeMetalCenterGuardEdgeTests: XCTestCase {
     }
 
     /// Bez krawędzi wejścia (brak rekordu albo rekord z poprzedniej klatki) środek dokładnie na prostej nie jest odrzucany ani
-    /// przesuwany wzdłuż krawędzi: zostaje albo wychodzi wzdłuż normalnej zewnętrznej najwyżej o margines.
+    /// przesuwany wzdłuż krawędzi. Lewą i dolną krawędź `nativeInsideOwner` liczy jako wnętrze (ostre `p.x < x` i półotwarte
+    /// przedziały y w teście parzystości), więc rzut CD-D-17 musi wyprowadzić środek wzdłuż normalnej zewnętrznej o margines (BF-D-4;
+    /// w 3.0.1 kierunek z `(q − p) / d` albo lewa normalna odcinka wskazywał wzdłuż krawędzi albo w głąb bryły). Prawa i górna
+    /// krawędź to dla tego testu zewnątrz: rzutu nie ma, więc środek może też zostać na prostej (przesunięcie 0 … margines).
     func testCenterExactlyOnTheEdgeWithoutEntryEdgeLeavesAlongTheOutwardNormal() async throws {
         let fixture = try await GuardKernelFixture()
+        let onEdgeInside: Set<Int> = [1, 4]
         for edge in Self.edges {
             let start = edge.anchor + edge.outward * Self.margin
             for cache in [[], [Self.record(edge: edge.id, seen: Self.frame - 1)]] {
@@ -103,10 +107,36 @@ final class NativeMetalCenterGuardEdgeTests: XCTestCase {
                 let offset = result.position - end
                 let tangent = SIMD2(-edge.outward.y, edge.outward.x)
                 XCTAssertEqual(simd_dot(offset, tangent), 0, accuracy: 1e-3, "\(label): przesunięcie wzdłuż krawędzi \(result.position)")
-                XCTAssertGreaterThanOrEqual(simd_dot(offset, edge.outward), 0, "\(label): środek w bryle \(result.position)")
-                XCTAssertLessThanOrEqual(simd_dot(offset, edge.outward), Self.margin * 1.5, "\(label): \(result.position)")
+                if onEdgeInside.contains(edge.id) {
+                    XCTAssertEqual(simd_dot(offset, edge.outward), Self.margin, accuracy: 1e-4,
+                                   "\(label): środek nie wyszedł o margines wzdłuż normalnej \(result.position)")
+                } else {
+                    XCTAssertGreaterThanOrEqual(simd_dot(offset, edge.outward), 0, "\(label): środek w bryle \(result.position)")
+                    XCTAssertLessThanOrEqual(simd_dot(offset, edge.outward), Self.margin * 1.5, "\(label): \(result.position)")
+                }
             }
         }
+    }
+
+    /// Krawędź wielokąta kinematycznego (bez obszarów krawędzi, `region.z` = 0, stoi w miejscu: previous = current): środek
+    /// dokładnie na lewej krawędzi, którą `nativeInsideOwner` liczy jako wnętrze, wychodzi wzdłuż normalnej zewnętrznej o margines,
+    /// bez odrzucenia (BF-D-4: z ±normal ta, której kandydat nie leży we wnętrzu właściciela). Wierzchołki idą przeciwnie do ruchu
+    /// wskazówek zegara, więc sama lewa normalna odcinka wskazuje w głąb bryły.
+    func testCenterExactlyOnAKinematicPolygonEdgeLeavesAlongTheOutwardNormal() async throws {
+        let fixture = try await GuardKernelFixture()
+        let points: [SIMD2<Float>] = [[360, -500], [408, -500], [408, 500], [360, 500]]
+        let segments = points.indices.map { index -> NativeMetalSegment in
+            let a = points[index], b = points[(index + 1) % points.count]
+            return NativeMetalSegment(NativeSolverSegment(id: index + 1, previousA: a, previousB: b, currentA: a, currentB: b,
+                                                          isKinematic: true, ownerID: Self.owner))
+        }
+        let edge = Self.edges[3]
+        let end = edge.point(ulps: 0)
+        let result = try await fixture.guardCenter(start: edge.anchor + edge.outward * Self.margin, end: end, segments: segments,
+                                                   cache: [], frame: Self.frame)
+        XCTAssertEqual(result.bits & 10, 0, "bity \(result.bits), wynik \(result.position)")
+        XCTAssertEqual(result.position.x, 360 - Self.margin, accuracy: 1e-4, "\(result.position)")
+        XCTAssertEqual(result.position.y, end.y, accuracy: 1e-3, "przesunięcie wzdłuż krawędzi \(result.position)")
     }
 
     /// Bez krawędzi wejścia przejście krawędzi z zewnątrz do środka jest cofane jak w 3.0.1: na krawędź + margines po stronie

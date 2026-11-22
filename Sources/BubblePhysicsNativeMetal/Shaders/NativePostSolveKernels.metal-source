@@ -197,10 +197,8 @@ bool nativeEntryEdge(NativeBubble b, NativeSegment s, device NativeContactCache 
     if ((s.flags.w & 1) == 0 || !(nativeContactCompliance(b) > 0)) return false;
     float2 outward = nativeSegmentNormal(s.current) * s.region.z;
     if (!(dot(b.position.xy - s.current.xy, outward) < 0)) return false;
-    NativeContactCache key = { long2(b.identity.x, s.identity.x), uint4(1, 0, 0, 0), float4(0), float4(0), float4(0) };
-    uint found = nativeCacheLowerBound(cache, contacts.counts.z, key);
-    return found < contacts.counts.z && nativeCacheSame(cache[found], key) && cache[found].response.w == 1
-        && cache[found].metadata.z == contacts.limits.x;
+    int found = nativeCacheFind(cache, contacts.counts.z, 1, long2(b.identity.x, s.identity.x));
+    return found >= 0 && cache[found].response.w == 1 && cache[found].metadata.z == contacts.limits.x;
 }
 
 // Właściciel ma krawędź wejścia bańki w tym kroku: jej środek może stać w jego wnętrzu (ε = c₀ · F / r_ref > 1, BF-D-5).
@@ -247,15 +245,15 @@ void nativeGuardCenter(device NativeBubble *bubbles, device NativeSegment *segme
     device float4 *positions, constant NativeControl &control, device NativeContactControl &contacts,
     device uint *changed, device atomic_uint *safety, device atomic_uint *statistics,
     device NativeContactCache *cache, uint i) {
-    if (bubbles[i].publicFlags.x && bubbles[i].publicFlags.y) return;
-    float2 start = bubbles[i].position.zw, end = positions[i].xy;
     NativeBubble bubble = bubbles[i];
+    if (bubble.publicFlags.x && bubble.publicFlags.y) return;
+    float2 start = bubble.position.zw, end = positions[i].xy;
     float margin = max(contacts.thresholds.z * 2, 1e-5f);
     for (uint j = 0; j < control.counts.y; ++j) {
         NativeSegment s = segments[j];
-        if (!nativeFilterAccepts(bubbles[i].filter, s.filter)) continue;
+        if (!nativeFilterAccepts(bubble.filter, s.filter)) continue;
         float2 corrected = end;
-        if (nativeFastCandidate(bubbles[i], s, control, contacts) || nativePossibleCenterCrossing(start, end, s)) {
+        if (nativeFastCandidate(bubble, s, control, contacts) || nativePossibleCenterCrossing(start, end, s)) {
             if (!nativeCenterPathFinite(start, end, s, statistics)) { nativeSafetyFailure(safety, 1); continue; }
             if (nativeGuardForbidsCrossing(start, end, s, bubble, segments, control.counts.y, cache, contacts, statistics))
                 corrected = nativeReturnToOriginalSide(start, end, s, margin);
@@ -297,7 +295,7 @@ void nativeGuardCenter(device NativeBubble *bubbles, device NativeSegment *segme
             float2 candidate = q + outward * margin;
             bool crossed = nativeEdgeCrossed(start, projected, edge, margin);
             // Pierwszy rzut nie szuka wolnego miejsca: wychodzi przez krawędź przekroczoną albo najbliższą.
-            bool free = pass > 0 && nativeFreeCenter(start, candidate, bubbles[i].filter, segments, control.counts.y, control.region);
+            bool free = pass > 0 && nativeFreeCenter(start, candidate, bubble.filter, segments, control.counts.y, control.region);
             int tier = free ? (crossed ? 0 : 1) : (crossed ? 2 : 3);
             if (pass == 0) tier = crossed ? 0 : 1;
             float key = (pass == 0 && tier == 1) || tier == 3 ? distance : length(candidate - start);
@@ -321,8 +319,8 @@ void nativeGuardCenter(device NativeBubble *bubbles, device NativeSegment *segme
     bool testedInside = false;
     for (uint j = 0; j < control.counts.y; ++j) {
         NativeSegment s = segments[j];
-        if (!nativeFilterAccepts(bubbles[i].filter, s.filter)) continue;
-        if (nativeFastCandidate(bubbles[i], s, control, contacts) || nativePossibleCenterCrossing(start, end, s)) {
+        if (!nativeFilterAccepts(bubble.filter, s.filter)) continue;
+        if (nativeFastCandidate(bubble, s, control, contacts) || nativePossibleCenterCrossing(start, end, s)) {
             if (!nativeCenterPathFinite(start, end, s, statistics)) nativeSafetyFailure(safety, 1);
             else if (nativeGuardForbidsCrossing(start, end, s, bubble, segments, control.counts.y, cache, contacts, statistics))
                 nativeSafetyFailure(safety, 2 | 8);

@@ -657,6 +657,13 @@ bool nativeCacheSame(NativeContactCache a, NativeContactCache b) {
     return a.metadata.x == b.metadata.x && all(a.participants == b.participants);
 }
 
+// Indeks rekordu (rodzaj `kind`, uczestnicy `participants`) w cache `records` (`count` rekordów, posortowany po kluczu) albo -1.
+int nativeCacheFind(device NativeContactCache *records, uint count, uint kind, long2 participants) {
+    NativeContactCache key = { participants, uint4(kind, 0, 0, 0), float4(0), float4(0), float4(0) };
+    uint found = nativeCacheLowerBound(records, count, key);
+    return found < count && nativeCacheSame(records[found], key) ? int(found) : -1;
+}
+
 // Granica obszarów krawędzi statycznego wielokąta (CD-D-4): czy rzut środka na odcinek from→to wypada na jego końcu albo za nim.
 // Obie krawędzie przy wierzchołku wołają tę funkcję z tymi samymi argumentami (koniec krawędzi poprzedniej: from = jej początek,
 // to = wierzchołek; początek następnej: from = region.xy, to = jej początek), więc wynik jest dokładnym dopełnieniem także o jedno ULP
@@ -711,10 +718,8 @@ bool nativePolygonEdgeExit(float2 center, float2 previous, NativeSegment s, floa
 // zaakceptowany krok (krok odrzucony powtarza tę samą klatkę z tym samym cache). Rekord, który wypadł z cache (pojemność,
 // wygaśnięcie, unieważnienie), kończy pamięć: środek we wnętrzu bryły wraca wtedy do rzutu strażnika (CD-D-17).
 bool nativeRememberedEntryEdge(device NativeContactCache *previous, device NativeContactControl &control, long2 participants) {
-    NativeContactCache key = { participants, uint4(1, 0, 0, 0), float4(0), float4(0), float4(0) };
-    uint found = nativeCacheLowerBound(previous, control.limits.w, key);
-    return found < control.limits.w && nativeCacheSame(previous[found], key) && previous[found].response.w == 1
-        && previous[found].metadata.z + 1 == control.limits.x;
+    int found = nativeCacheFind(previous, control.limits.w, 1, participants);
+    return found >= 0 && previous[found].response.w == 1 && previous[found].metadata.z + 1 == control.limits.x;
 }
 
 // Bańka ma zapamiętaną krawędź wejścia na innej krawędzi właściciela odcinka `s`: jej środek stoi we wnętrzu bryły.
