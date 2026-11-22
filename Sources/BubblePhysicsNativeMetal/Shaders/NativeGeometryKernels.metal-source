@@ -648,14 +648,24 @@ bool nativePastSegmentEnd(float2 center, float2 from, float2 to) {
 
 // Cecha kontaktu z krawędzią statycznego wielokąta, zapisana w response.w do końca kroku: 0 poza obszarami krawędzi
 // (rekord odpada), 1 wnętrze krawędzi (stała normalna zewnętrzna), 2 wierzchołek początkowy wypukły (normalna od wierzchołka).
-// Wnętrze obejmuje 0 < t < 1 po stronie zewnętrznej; wierzchołek wypukły należy do krawędzi, która się w nim zaczyna.
-uint nativePolygonEdgeFeature(float2 center, NativeSegment s, float2 outward) {
+// Wnętrze krawędzi to dwa przypadki. Przewidziany środek `center` po stronie zewnętrznej prostej: jego rzut wypada w 0 < t < 1.
+// Środek za prostą (krawędź wejścia, BF-D-1): środek z początku kroku `previous` był po stronie zewnętrznej (albo na prostej), a
+// droga previous → center przecina sam odcinek, czyli punkt przecięcia z prostą rzutuje się w 0 < t < 1. Środek odpycha wtedy
+// dokładnie krawędź, przez którą wszedł, wzdłuż normalnej zewnętrznej: tylna krawędź cienkiej ściany i krawędź, której prostą droga
+// przecina poza odcinkiem (skośne wejście nad narożnikiem wypukłym), nie dostają kontaktu. Strażnik środka zostawia środek przed
+// krawędzią, więc w spoczynku previous leży po stronie zewnętrznej. Wierzchołek wypukły należy do krawędzi, która się w nim zaczyna.
+uint nativePolygonEdgeFeature(float2 center, float2 previous, NativeSegment s, float2 outward) {
     float2 start = s.current.xy, end = s.current.zw;
     float along = dot(center - start, end - start);
     bool convexStart = (s.flags.w & 2) != 0;
     if (convexStart && along <= 0 && nativePastSegmentEnd(center, s.region.xy, start)) return 2;
-    if (along > 0 && dot(center - start, outward) >= 0 && !nativePastSegmentEnd(center, start, end)) return 1;
-    return 0;
+    float centerSide = dot(center - start, outward);
+    if (centerSide >= 0) return along > 0 && !nativePastSegmentEnd(center, start, end) ? 1 : 0;
+    float previousSide = dot(previous - start, outward);
+    if (previousSide < 0) return 0;
+    // previousSide ≥ 0 > centerSide, więc mianownik jest dodatni, a udział drogi do przecięcia z prostą leży w [0, 1).
+    float2 crossing = previous + (center - previous) * (previousSide / (previousSide - centerSide));
+    return dot(crossing - start, end - start) > 0 && !nativePastSegmentEnd(crossing, start, end) ? 1 : 0;
 }
 
 kernel void nativeBuildContacts(device NativeBubble *bubbles [[buffer(0)]],
@@ -683,9 +693,11 @@ kernel void nativeBuildContacts(device NativeBubble *bubbles [[buffer(0)]],
         allowedSide = s.flags.z ? s.collision.x : 0;
         penetration = a.physical.z - distance;
         if (s.flags.w & 1) {
-            // Krawędź statycznego wielokąta: kontakt tylko z obszaru wnętrza krawędzi albo wierzchołka (CD-D-3, CD-D-4).
+            // Krawędź statycznego wielokąta: kontakt tylko z obszaru wnętrza krawędzi albo wierzchołka (CD-D-3, CD-D-4). Środek
+            // z początku kroku (position.zw z nativePredict) wybiera krawędź wejścia, gdy przewidziany środek minął prostą krawędzi, a jego droga przecięła odcinek (BF-D-1);
+            // wgniecenie r − dot(center − start, outward) jest wtedy większe niż r, z normalną zewnętrzną.
             float2 outward = base * s.region.z;
-            feature = nativePolygonEdgeFeature(a.position.xy, s, outward);
+            feature = nativePolygonEdgeFeature(a.position.xy, a.position.zw, s, outward);
             if (feature == 1) {
                 normal = outward; point = a.position.xy - outward * dot(a.position.xy - s.current.xy, outward);
                 penetration = a.physical.z - dot(a.position.xy - s.current.xy, outward);

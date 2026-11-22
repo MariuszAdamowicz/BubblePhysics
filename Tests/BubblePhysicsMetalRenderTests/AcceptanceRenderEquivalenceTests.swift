@@ -19,16 +19,18 @@ final class AcceptanceRenderEquivalenceTests: XCTestCase {
     private static let referenceDeviceName = "Apple M1 Pro"
     private static let referenceSteps = 120
     private static let referenceWidth = 1125, referenceHeight = 2436
-    /// Commit, na którym policzono aktualne hashe wzorca (wycinek 3 wydania 3.0.0): kod renderera bez żadnej zmiany etapu 9.
-    private static let referenceCommit = "2e24499"
+    /// Commit, na którym policzono aktualne hashe wzorca (poprawka 3.0.1, krawędź wejścia): kod renderera bez żadnej zmiany etapu 9.
+    private static let referenceCommit = "f65b13c"
     /// Wzorzec zapisany przed zadaniem 96 (pula areny) i zadaniem 99 (zmiany renderu).
     /// Bez limitu λ pary (`pairCorrectionLimit = false`, CD-D-20).
     /// Hashe zaktualizowane w wycinku 3 wydania 3.0.0 (jednostronne krawędzie statycznych wielokątów): ściany sceny mają grubość 1,
     /// więc bez drugiej sprężyny od tylnej krawędzi bańki przy ścianach stoją gdzie indziej (Apple M1 Pro, ta sama scena i kroki).
-    private static let referencePixelHash: UInt64 = 0x0b613f1372717d0c
+    /// Hashe zaktualizowane ponownie w 3.0.1 (krawędź wejścia, BF-D-1): przewidziany środek szybkiej bańki mija krawędź ściany
+    /// grubości 1, a krawędź wejścia nadal go odpycha, więc bańki przy ścianach stoją gdzie indziej (Apple M1 Pro).
+    private static let referencePixelHash: UInt64 = 0xc947960553219dd3
     /// Z limitem λ pary (CD-D-9, domyślnie): limit zmienia pozycje w gęstej scenie, więc piksele po 120 krokach mają nowy hash
     /// (Apple M1 Pro, ta sama scena, kroki i rozdzielczość co wzorzec).
-    private static let pairLimitPixelHash: UInt64 = 0xbda0edb8b979305e
+    private static let pairLimitPixelHash: UInt64 = 0x043e163361e313fa
 
     private struct RenderedImage {
         let width: Int

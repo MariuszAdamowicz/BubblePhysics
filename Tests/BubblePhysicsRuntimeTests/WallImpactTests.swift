@@ -1,0 +1,73 @@
+import BubblePhysics
+import XCTest
+
+/// Szybkie uderzenie małej bańki dociśniętej gumką w ścianę (poprawka 3.0.1, BF-D-1, BF-D-2). Strojenie jak w grze: c₀ 0,0108,
+/// r_ref 20, gumka K_band 30 i F_max 1200, cel daleko w ścianie lewej ramy `CrowdScene` (T 48). W spoczynku ε = c₀ · F / r_ref = 0,648.
+/// W 3.0.0 bańka r 24 startująca 150 od ściany uderzała z ok. 173 j/s: dashpot ζ_c był pomijany powyżej max(40, 2r), a przewidziany
+/// środek mijał krawędź, która wtedy przestawała odpychać, więc bańka stała na stałe w ε ≈ 1.
+@MainActor
+final class WallImpactTests: XCTestCase {
+    private let radius: Float = 24
+    /// ε w spoczynku: c₀ · F_max / r_ref.
+    private let restingRatio: Float = 0.0108 * 1200 / 20
+
+    private struct Outcome {
+        var peak: Float = -.infinity
+        var final: Float = 0
+        /// Kroki, po których środek bańki był na krawędzi ściany albo za nią (ε ≥ 1).
+        var stepsWithCenterBehindEdge: [Int] = []
+        /// Prędkość normalna (w stronę ściany) po ostatnim kroku bez kontaktu, z którą bańka wchodzi w kontakt.
+        var impactSpeed: Float = 0
+        /// Kroki, po których droga środka w następnym kroku, |v_n| · dt, przekracza odległość środka od krawędzi ściany: przewidziany
+        /// środek następnego kroku mija krawędź (siła gumki tylko dokłada prędkości w stronę ściany).
+        var stepsWhoseNextPredictionPassesTheEdge: [Int] = []
+    }
+
+    /// Bańka r 24 startuje `gap` od ściany, gumka ciągnie ją w ścianę przez `seconds` s; ε = wgniecenie / r po każdym kroku.
+    private func run(dampingRatio: Float, gap: Float = 150, seconds: Double = 6) async throws -> Outcome {
+        let world = try BubbleWorld(configuration: CrowdScene.configuration())
+        var setup = try CrowdScene.resources(bubble: CrowdScene.softBubblePhysics(
+            base: 0.0108, referenceRadius: 20, damping: 5, dampingRatio: dampingRatio))
+        for wall in try CrowdScene.walls() { setup = setup.add(wall) }
+        let policy = try BubbleDrivePolicy(bandStiffness: 30, maximumForce: 1200)
+        let start = WorldPoint(-CrowdScene.interiorHalfSize.x + radius + gap, 0)
+        _ = world.submit(try setup.add(CrowdScene.bubble(1, at: start, radius: radius, drivePolicy: policy))
+            .beginPlayerDrive(CrowdScene.id(1), target: WorldPoint(-2000, 0)))
+        var outcome = Outcome()
+        for step in 0..<Int(seconds * 60) {
+            let frame = await world.advance(by: CrowdScene.step)
+            XCTAssertNil(world.diagnostics.lastAdvanceIssue)
+            let state = try XCTUnwrap(frame.objects[CrowdScene.id(1)])
+            let ratio = CrowdScene.wallDepth(of: state, targetRadius: radius) / radius
+            outcome.peak = max(outcome.peak, ratio)
+            outcome.final = ratio
+            if ratio >= 1 { outcome.stepsWithCenterBehindEdge.append(step) }
+            let normalSpeed = -state.velocity.x
+            if ratio <= 0 { outcome.impactSpeed = normalSpeed }
+            if normalSpeed * Float(CrowdScene.step) > radius * (1 - ratio) { outcome.stepsWhoseNextPredictionPassesTheEdge.append(step) }
+        }
+        return outcome
+    }
+
+    /// (a) Z dashpotem ζ_c 5: szybkie uderzenie jest tłumione, bańka osiada w c · F bez przestrzału, a środek ani razu nie kończy
+    /// kroku na krawędzi ściany.
+    func testFastSmallBubbleSettlesAtComplianceTimesForceWithoutCrossingTheEdge() async throws {
+        let outcome = try await run(dampingRatio: 5)
+        // Warunek wstępny: uderzenie jest szybsze niż próg max(40, 2r), powyżej którego dashpot był pomijany do 3.0.0.
+        XCTAssertGreaterThan(outcome.impactSpeed, max(40, 2 * radius), "prędkość normalna tuż przed kontaktem")
+        XCTAssertEqual(outcome.final, restingRatio, accuracy: 0.02 * restingRatio, "końcowe ε")
+        // Bez przestrzału: szczyt najwyżej 5 % ponad ε w spoczynku (bez tłumienia szybkiego zderzenia szczyt sięga ε ≈ 1).
+        XCTAssertLessThan(outcome.peak, restingRatio * 1.05, "szczyt ε")
+        XCTAssertLessThan(outcome.peak, 1, "szczyt ε")
+        XCTAssertEqual(outcome.stepsWithCenterBehindEdge, [], "kroki ze środkiem na krawędzi albo za nią")
+    }
+
+    /// (b) Bez dashpotu (ζ_c 0) przewidziany środek mija krawędź w kroku uderzenia; krawędź, przez którą wszedł, nadal go odpycha,
+    /// więc bańka wraca i osiada w c · F zamiast stać w ε ≈ 1.
+    func testBubbleWhosePredictedCenterPassesTheEdgeIsPushedBackByThatEdge() async throws {
+        let outcome = try await run(dampingRatio: 0)
+        // Warunek wstępny: w którymś kroku przewidziany środek mija krawędź ściany.
+        XCTAssertNotEqual(outcome.stepsWhoseNextPredictionPassesTheEdge, [], "przewidziany środek nie minął krawędzi")
+        XCTAssertEqual(outcome.final, restingRatio, accuracy: 0.02 * restingRatio, "końcowe ε")
+    }
+}
