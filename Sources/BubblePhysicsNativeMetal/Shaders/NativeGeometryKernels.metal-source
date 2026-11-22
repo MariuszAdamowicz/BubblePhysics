@@ -760,13 +760,15 @@ kernel void nativeBuildContacts(device NativeBubble *bubbles [[buffer(0)]],
             // środek, który był za prostą już na początku kroku, zachowuje krawędź wejścia z poprzedniego kroku (pamięć z cache, BF-D-1 z 3.0.2).
             // Wgniecenie r − dot(center − start, outward) jest wtedy większe niż r, z normalną zewnętrzną.
             float2 outward = base * s.region.z;
-            bool remembered = nativeRememberedEntryEdge(previous, control, c.participants);
+            // Bańka twarda (c = 0) nie stoi środkiem za krawędzią (ε = c · F / r_ref = 0): bez pamięci i reguły wyjścia, jak w 3.0.1.
+            bool soft = nativeContactCompliance(a) > 0;
+            bool remembered = soft && nativeRememberedEntryEdge(previous, control, c.participants);
             feature = nativePolygonEdgeFeature(a.position.xy, a.position.zw, s, outward, remembered);
             // Środek wszedł do bryły przez inną jej krawędź (zapamiętaną krawędź wejścia) i wychodzi przez tę od strony wewnętrznej,
             // np. przez tył cienkiej ściany: ta krawędź wypychałaby go dalej za ścianę, więc kontaktu nie dostaje, a strażnik
             // zatrzymuje środek po jej stronie wewnętrznej (BF-D-3). Bez zapamiętanej krawędzi wejścia (bańka twarda, wejście
             // i wyjście w jednym kroku) zachowanie jak w 3.0.1.
-            if (feature == 1 && !remembered && nativePolygonEdgeExit(a.position.xy, a.position.zw, s, outward)
+            if (soft && feature == 1 && !remembered && nativePolygonEdgeExit(a.position.xy, a.position.zw, s, outward)
                 && nativeOwnerRemembersEntry(previous, control, c.participants.x, s, segments, world.counts.y)) feature = 0;
             if (feature == 1) {
                 normal = outward; point = a.position.xy - outward * dot(a.position.xy - s.current.xy, outward);
