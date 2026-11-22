@@ -297,4 +297,35 @@ final class StaticPolygonEdgeTests: XCTestCase {
             }
         }
     }
+
+    /// Bańka r 12 z prędkością (1 200, −1 800) wchodzi skosem w cienką ścianę T 48 (x od −148 do −100, y do 400) nad jej tylnym
+    /// górnym narożnikiem wypukłym: środek z początku kroku (−160, 420) leży na zewnątrz prostych krawędzi górnej i tylnej, a
+    /// przewidziany środek (−140, 390) rzutuje się do wnętrza obu odcinków. Droga środka przecina jednak tylko krawędź górną
+    /// (prostą x = −148 mija przy y 402, nad odcinkiem), więc odpycha tylko ona, wzdłuż +y: x i prędkość x zostają jak przed
+    /// krokiem, a żaden krok nie kończy się ze środkiem w ścianie. Tylna krawędź wciągałaby bańkę w lewo, za ścianę.
+    func testObliqueEntryAcrossAConvexCornerIsPushedOutByTheCrossedEdgeOnly() async throws {
+        let radius: Float = 12, velocity = WorldPoint(1200, -1800)
+        let world = try await world(extent: 2500, bubble: material(maximumLinearSpeed: 6000),
+                                    polygons: [rectangle(faceX: -100, thickness: 48)]) {
+            try $0.add(CrowdScene.bubble(1, at: [-220, 510], radius: radius, velocity: velocity))
+        }
+        for index in 0..<6 {
+            let frame = try await advance(world)
+            let state = try XCTUnwrap(frame.objects[id(1)])
+            let position = state.position
+            XCTAssertFalse(position.x > -148 && position.x < -100 && position.y < 400,
+                           "krok \(index): środek w ścianie: \(position)")
+            if index == 1 {
+                // Środek z początku kroku uderzenia; przewidziany środek to (−140, 390).
+                XCTAssertEqual(position.x, -160, accuracy: 1e-3, "faza trajektorii")
+                XCTAssertEqual(position.y, 420, accuracy: 1e-3, "faza trajektorii")
+            } else if index == 2 {
+                // Krok uderzenia: krawędź górna wypycha wzdłuż +y, więc x i prędkość x zostają (tarcie 0).
+                XCTAssertGreaterThanOrEqual(position.y, 400, "środek po kroku uderzenia nad krawędzią górną: \(position)")
+                XCTAssertEqual(position.x, -140, accuracy: 0.05, "tylna krawędź wciągnęła środek w lewo: \(position)")
+                XCTAssertEqual(state.velocity.x, velocity.x, accuracy: 0.01 * velocity.x,
+                               "tylna krawędź wyhamowała prędkość x: \(state.velocity)")
+            }
+        }
+    }
 }
