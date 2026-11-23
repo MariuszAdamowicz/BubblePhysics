@@ -67,6 +67,10 @@ enum NativeMetalSubstep {
     enum Term: UInt64 {
         case remainingTime = 0, stiffness = 1, distance = 2, margin = 3
     }
+    /// Bramki jąder końca kroku z efektem ubocznym (`nativePrepareEndGates`): indeks w `NativeMetalPersistentState.endGates`.
+    enum EndGate: Int, CaseIterable {
+        case region, mergeEvents, sensors, missingSensors, rigidFinish, polygonSensors, missingPolygonSensors
+    }
     /// Fazy `nativeIntegrateSubstep`: ½ impulsu i ruch; siły z nowego stanu i ½ impulsu; przyspieszenie początku kroku.
     enum Phase: UInt32 {
         case kickAndMove = 0, forcesAndKick = 1, initialAcceleration = 2

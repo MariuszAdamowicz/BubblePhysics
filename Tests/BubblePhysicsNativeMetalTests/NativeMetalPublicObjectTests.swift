@@ -143,7 +143,8 @@ final class NativeMetalPublicObjectTests: XCTestCase {
             materials: [material: PhysicsMaterial(kind: .rigid, damping: 4)],
             region: region, duration: 0.25)
         XCTAssertEqual(third.profile.bubbleUploadCount, 0)
-        XCTAssertEqual(third.profile.commandBufferCount, 1)
+        // Od silnika 4.0.0 klatka to para buforów: bufor podkroków i bufor końca kroku (CD-D-18).
+        XCTAssertEqual(third.profile.commandBufferCount, 2)
     }
 
     func testStaticPolygonBlocksBubbleAndRepeatedStepDoesNotRebuildGeometry() async throws {

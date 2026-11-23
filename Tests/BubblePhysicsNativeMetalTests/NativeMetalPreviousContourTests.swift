@@ -152,19 +152,29 @@ final class NativeMetalPreviousContourTests: XCTestCase {
         _ = frame
     }
 
-    func testRejectedStepBeforeTheGPUKeepsThePreviousSide() async throws {
+    /// Od silnika 4.0.0 hak renderu biegnie po buforze końca kroku (P-B-39), więc rzucające domknięcie odrzuca krok, gdy GPU zdążyło
+    /// już zapisać stronę roboczą: strona t−1 uchwytu jest nadpisana, a flaga to wie. Następna publikacja przywraca ją jak po błędzie
+    /// wykonania.
+    func testStepRejectedByTheRenderHookOverwritesThePreviousSideAndTheNextPublicationRestoresIt() async throws {
         let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         var frame = try await step(world, [moving(1, at: [0, 0])])
         let firstContours = try XCTUnwrap(world.publishedRenderHandoff).debugContourSnapshot()
         frame = try await next(world, frame)
         let published = try XCTUnwrap(world.publishedRenderHandoff)
+        let publishedContours = published.debugContourSnapshot()
         struct GameError: Error {}
         do {
             _ = try await next(world, frame) { _ in throw GameError() }
             XCTFail("rzucające domknięcie odrzuca krok")
         } catch is GameError {}
-        XCTAssertTrue(published.previousContoursValid, "bufor nie został zatwierdzony, GPU nic nie zapisało")
-        XCTAssertEqual(published.debugPreviousContourSnapshot(), firstContours)
+        XCTAssertTrue(world.publishedRenderHandoff === published, "odrzucony krok nic nie publikuje")
+        XCTAssertEqual(published.debugContourSnapshot(), publishedContours, "strona t jest nietknięta")
+        XCTAssertNotEqual(published.debugPreviousContourSnapshot(), firstContours, "GPU zapisało stronę t−1")
+        XCTAssertFalse(published.previousContoursValid, "uchwyt wie, że jego strona t−1 jest nieważna")
+        frame = try await next(world, frame)
+        let recovered = try XCTUnwrap(world.publishedRenderHandoff)
+        XCTAssertTrue(recovered.previousContoursValid)
+        XCTAssertEqual(recovered.debugPreviousContourSnapshot()[id(1)], publishedContours[id(1)])
         _ = frame
     }
 

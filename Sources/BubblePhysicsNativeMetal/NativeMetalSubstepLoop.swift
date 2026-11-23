@@ -78,3 +78,63 @@ enum NativeMetalSubstepLoop {
         }
     }
 }
+
+/// Wynik `NativeMetalSubstepLoop.run`: liczba par buforów klatki i czasy GPU osobno dla buforów podkroków (fizyka) i końca kroku (kontur).
+struct NativeMetalSubstepRun {
+    var pairCount = 0
+    var substepGPUMilliseconds = 0.0
+    var endGPUMilliseconds = 0.0
+}
+
+extension NativeMetalSubstepLoop {
+    /// Bufor podkroków kończy się przed buforem końca kroku (kolejność commitu), więc to wywołanie wraca od razu; handler po commicie
+    /// jest niedozwolony, a `waitUntilCompleted` jest niedostępne w kontekście asynchronicznym, stąd osobna funkcja synchroniczna.
+    private static func waitForCompletion(_ command: MTLCommandBuffer) { command.waitUntilCompleted() }
+
+    /// Pary buforów klatki (CD-D-18): bufor podkroków i bufor końca kroku commitują się jeden po drugim bez czekania, a CPU czeka
+    /// na bufor końca kroku i czyta licznik. Pierwsza para ma 2 × podkroków poprzedniej klatki (najmniej 2), każda kolejna 2 × więcej;
+    /// kolejna para zaczyna od przebudowy siatki (`encodePair` koduje cały początek pary). Pętla kończy się, gdy czas kroku minął
+    /// albo ustawiono znacznik limitu (`NativeMetalSubstep.frameLimit`); bufor końca kroku ma jądra z efektem ubocznym za bramkami,
+    /// więc przed końcem kroku nie zmienia stanu świata.
+    ///
+    /// `encodePair(indeks, podkroki)` zwraca parę niezatwierdzonych buforów (podkroków, końca kroku) w tej kolejności i woła
+    /// `invalidatePreviousContours` swojego uchwytu przed pierwszym commitem.
+    static func run(state: NativeMetalPersistentState, previousFrameSubsteps: Int, executor: any NativeMetalCommandExecuting,
+                    prepareContinuation: () -> Void,
+                    encodePair: (_ pair: Int, _ substeps: Int) throws -> (MTLCommandBuffer, MTLCommandBuffer)) async throws -> NativeMetalSubstepRun {
+        var result = NativeMetalSubstepRun()
+        var pairSize = max(2, 2 * previousFrameSubsteps)
+        var done = 0
+        while true {
+            if result.pairCount > 0 {
+                // Czasy i liczniki klatki zostają; licznik podkroków pary i znacznik przebudowy zaczynają od zera.
+                var control = state.substepControl.contents().load(as: NativeMetalSubstepControl.self)
+                control.counts.x = 0
+                control.counts.z = 0
+                state.substepControl.contents().storeBytes(of: control, as: NativeMetalSubstepControl.self)
+                prepareContinuation()
+            }
+            // Jeden podkrok ponad limit, żeby `nativeReduceSubstep` ustawił znacznik limitu, gdy krok jeszcze trwa.
+            let substeps = min(pairSize, NativeMetalSubstep.frameLimit + 1 - done)
+            let (stepsCommand, endCommand) = try encodePair(result.pairCount, substeps)
+            stepsCommand.commit()
+            let end = try await executor.complete(endCommand)
+            // Kolejka wykonuje bufory w kolejności commitu, więc bufor podkroków już się skończył.
+            waitForCompletion(stepsCommand)
+            guard stepsCommand.status == .completed else {
+                throw NativeMetalSolverError.commandFailed(stepsCommand.error?.localizedDescription
+                    ?? "Metal status \(stepsCommand.status.rawValue)")
+            }
+            result.pairCount += 1
+            result.substepGPUMilliseconds += max(0, stepsCommand.gpuEndTime - stepsCommand.gpuStartTime) * 1_000
+            result.endGPUMilliseconds += end.gpuMilliseconds
+            let control = state.substepControl.contents().load(as: NativeMetalSubstepControl.self)
+            let finished = control.counts.w == 0 && !(control.time.x - control.time.y > 0)
+            if finished || control.counts.w != 0 { return result }
+            let used = Int(control.counts.y)
+            guard used > done else { throw NativeMetalSolverError.commandFailed("pętla podkroków nie postępuje") }
+            done = used
+            pairSize *= 2
+        }
+    }
+}

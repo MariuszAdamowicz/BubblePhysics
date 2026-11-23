@@ -505,3 +505,13 @@ kernel void nativeIntegrateSubstep(device NativeBubble *bubbles [[buffer(0)]], c
     if (mode.y != 0 && substep.counts.y > 0 && substep.counts.y <= nativeSubstepFrameLimit)
         capture[(substep.counts.y - 1) * control.counts.x + index] = float4(position, velocity);
 }
+
+// Bramka końca kroku (CD-D-18): bufor końca kroku commituje się zaraz po buforze podkroków, bez czekania, więc jądra z efektem ubocznym
+// (region, zdarzenia, czujniki, zakończenie brył) idą pośrednią dyspozycją, która ma zero grup, dopóki czas kroku nie minął albo
+// klatka przekroczyła limit podkroków. `nominal[i]` to liczba grup bramki i przy skończonym kroku (CPU zna rozmiar każdej dyspozycji).
+kernel void nativePrepareEndGates(device NativeSubstepControl &substep [[buffer(0)]], device uint4 *gates [[buffer(1)]],
+    constant uint *nominal [[buffer(2)]], constant uint &count [[buffer(3)]], uint index [[thread_position_in_grid]]) {
+    if (index >= count) return;
+    bool finished = substep.counts.w == 0 && !(substep.time.x - substep.time.y > 0);
+    gates[index] = uint4(finished ? nominal[index] : 0, 1, 1, 0);
+}

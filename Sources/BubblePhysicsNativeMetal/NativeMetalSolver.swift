@@ -106,6 +106,8 @@ final class NativeMetalPersistentState {
     let substepDispatch: MTLBuffer
     /// h każdego podkroku klatki (`NativeMetalSubstep.frameLimit` wpisów).
     let substepSteps: MTLBuffer
+    /// Argumenty pośrednich dyspozycji jąder końca kroku (uint4 na bramkę: liczba grup, 1, 1, 0); zero grup, dopóki krok trwa.
+    let endGates: MTLBuffer
     /// Przy `captureSubsteps`: float4 (x.xy, v.xy) na bańkę na podkrok, indeks podkroku · liczba baniek kroku + indeks bańki. Bez przełącznika nil.
     let substepCapture: MTLBuffer?
     let renderPackets: MTLBuffer
@@ -237,6 +239,7 @@ final class NativeMetalPersistentState {
         substepControl = try buffer("substep.control", 1, MemoryLayout<NativeMetalSubstepControl>.stride)
         substepDispatch = try buffer("substep.dispatch", 1, 3 * MemoryLayout<UInt32>.stride)
         substepSteps = try buffer("substep.steps", NativeMetalSubstep.frameLimit, MemoryLayout<Float>.stride)
+        endGates = try buffer("substep.endGates", NativeMetalSubstep.EndGate.allCases.count, MemoryLayout<SIMD4<UInt32>>.stride)
         let (captureCount, captureOverflow) = bubbleCapacity.multipliedReportingOverflow(by: NativeMetalSubstep.frameLimit)
         guard !captureOverflow else { throw NativeMetalSolverError.allocationFailed }
         substepCapture = captureSubsteps ? try buffer("substep.capture", captureCount, MemoryLayout<SIMD4<Float>>.stride) : nil
@@ -280,6 +283,8 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
     private let collectStageDiagnostics: Bool
     private let commandExecutor: any NativeMetalCommandExecuting
     private var inFlight = false
+    /// Podkroki poprzedniej klatki: pierwsza para buforów następnej ma 2 × tyle (najmniej 2), CD-D-18.
+    private var previousFrameSubstepCount = 0
     private var lastSnapshot: NativeMetalSnapshot?
     private var frameNumber: UInt32 = 0
     private let sensorScratch = NativeMetalSensorScratch()
@@ -480,7 +485,9 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
                               snapshot.configuration.contactTolerance, snapshot.configuration.separationTolerance), cellWidth: .zero)
         state.contactControl.contents().storeBytes(of: contactParameters, as: NativeMetalContactControl.self)
         // Czasy i liczniki pętli podkroków: czas kroku, zero upłyniętego, zero podkroków; `substepControl` jest współdzielony z GPU.
-        state.substepControl.contents().storeBytes(of: NativeMetalSubstepControl(time: SIMD4(snapshot.configuration.timeStep, 0, 0, 0)),
+        // Świat bez baniek nie ma podkroków: czas kroku jest od razu upłyniony, więc bramki końca kroku (bryły, sensory) się otwierają.
+        state.substepControl.contents().storeBytes(of: NativeMetalSubstepControl(time: SIMD4(snapshot.configuration.timeStep,
+            count == 0 ? snapshot.configuration.timeStep : 0, 0, 0)),
                                                    as: NativeMetalSubstepControl.self)
         try forceBuffers.upload(snapshot.publicSettings?.forces ?? NativeForceInput(), device: device)
         memset(state.dispatchStatistics.contents(), 0, state.dispatchStatistics.length)
@@ -587,46 +594,60 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         let hitTestCounts = try snapshot.hitTests.isEmpty ? state.eventRecords : eventBuffer([SIMD4(
             UInt32(snapshot.hitTests.count), UInt32(rigidState.count), UInt32(state.contourStride), UInt32(0))])
 
+        // Bufor wywołującego dostaje tylko render po końcu kroku (P-B-39); fizyka idzie własnymi buforami solvera: parami
+        // (bufor podkroków, bufor końca kroku), commitowanymi bez czekania między sobą (CD-D-18).
+        if let commandBuffer {
+            guard commandBuffer.device === device, commandBuffer.status == .notEnqueued else {
+                throw NativeMetalSolverError.commandSetupFailed
+            }
+        }
         let descriptor = MTLCommandBufferDescriptor()
         descriptor.retainedReferences = true
         descriptor.errorOptions = .encoderExecutionStatus
-        guard let command = commandBuffer ?? queue.makeCommandBuffer(descriptor: descriptor),
-              command.device === device, command.status == .notEnqueued,
-              let blit = command.makeBlitCommandEncoder()
-        else { throw NativeMetalSolverError.commandSetupFailed }
-        command.label = "native.frame.step.\(scenarioStep)"
-        blit.label = "native.inputs"
-        if count > 0 {
-            blit.copy(from: state.publishedBubbles, sourceOffset: 0, to: state.workingBubbles, destinationOffset: 0, size: count * bubbleStride)
+        var encoder: MTLComputeCommandEncoder!
+        func makeCommand(_ label: String) throws -> MTLCommandBuffer {
+            guard let command = queue.makeCommandBuffer(descriptor: descriptor) else { throw NativeMetalSolverError.commandSetupFailed }
+            command.label = label
+            return command
         }
-        if segmentCount > 0 {
-            blit.copy(from: state.segments, sourceOffset: 0, to: state.workingSegments, destinationOffset: 0, size: segmentCount * segmentStride)
+        func beginCompute(_ command: MTLCommandBuffer, label: String) throws {
+            guard let created = command.makeComputeCommandEncoder() else { throw NativeMetalSolverError.commandSetupFailed }
+            created.label = label
+            encoder = created
         }
-        // Zmiana indeksu po sortowaniu ID nie jest zmianą wejścia CPU.
-        // Źródło pozostaje opublikowanym buforem, więc remapy nie kolidują.
-        // Zmiana indeksu po sortowaniu ID nie jest zmianą wejścia CPU.
-        // Źródło pozostaje opublikowanym buforem, więc remapy nie kolidują.
-        // Sąsiednie rekordy są łączone w jedno polecenie kopiowania na ciągły zakres.
-        for run in NativeMetalCopyRun.coalesce(snapshot.bubbleRemaps.map { ($0.sourceIndex, $0.destinationIndex) }) {
-            blit.copy(from: state.publishedBubbles, sourceOffset: run.source * bubbleStride,
-                      to: state.workingBubbles, destinationOffset: run.destination * bubbleStride, size: run.count * bubbleStride)
+        func encodeInputs(_ command: MTLCommandBuffer) throws {
+            guard let blit = command.makeBlitCommandEncoder() else { throw NativeMetalSolverError.commandSetupFailed }
+            blit.label = "native.inputs"
+            if count > 0 {
+                blit.copy(from: state.publishedBubbles, sourceOffset: 0, to: state.workingBubbles, destinationOffset: 0, size: count * bubbleStride)
+            }
+            if segmentCount > 0 {
+                blit.copy(from: state.segments, sourceOffset: 0, to: state.workingSegments, destinationOffset: 0, size: segmentCount * segmentStride)
+            }
+            // Zmiana indeksu po sortowaniu ID nie jest zmianą wejścia CPU.
+            // Źródło pozostaje opublikowanym buforem, więc remapy nie kolidują.
+            // Zmiana indeksu po sortowaniu ID nie jest zmianą wejścia CPU.
+            // Źródło pozostaje opublikowanym buforem, więc remapy nie kolidują.
+            // Sąsiednie rekordy są łączone w jedno polecenie kopiowania na ciągły zakres.
+            for run in NativeMetalCopyRun.coalesce(snapshot.bubbleRemaps.map { ($0.sourceIndex, $0.destinationIndex) }) {
+                blit.copy(from: state.publishedBubbles, sourceOffset: run.source * bubbleStride,
+                          to: state.workingBubbles, destinationOffset: run.destination * bubbleStride, size: run.count * bubbleStride)
+            }
+            for run in NativeMetalCopyRun.coalesce(snapshot.bubbleChanges.map { ($0.index, $0.index) }) {
+                blit.copy(from: state.bubbleUpdates, sourceOffset: run.source * bubbleStride,
+                          to: state.workingBubbles, destinationOffset: run.destination * bubbleStride, size: run.count * bubbleStride)
+            }
+            for run in NativeMetalCopyRun.coalesce(snapshot.segmentRemaps.map { ($0.sourceIndex, $0.destinationIndex) }) {
+                blit.copy(from: state.segments, sourceOffset: run.source * segmentStride,
+                          to: state.workingSegments, destinationOffset: run.destination * segmentStride, size: run.count * segmentStride)
+            }
+            for run in NativeMetalCopyRun.coalesce(snapshot.segmentChanges.map { ($0.index, $0.index) }) {
+                blit.copy(from: state.segmentUpdates, sourceOffset: run.source * segmentStride,
+                          to: state.workingSegments, destinationOffset: run.destination * segmentStride, size: run.count * segmentStride)
+            }
+            rigidState.encodeInputs(blit)
+            blit.endEncoding()
         }
-        for run in NativeMetalCopyRun.coalesce(snapshot.bubbleChanges.map { ($0.index, $0.index) }) {
-            blit.copy(from: state.bubbleUpdates, sourceOffset: run.source * bubbleStride,
-                      to: state.workingBubbles, destinationOffset: run.destination * bubbleStride, size: run.count * bubbleStride)
-        }
-        for run in NativeMetalCopyRun.coalesce(snapshot.segmentRemaps.map { ($0.sourceIndex, $0.destinationIndex) }) {
-            blit.copy(from: state.segments, sourceOffset: run.source * segmentStride,
-                      to: state.workingSegments, destinationOffset: run.destination * segmentStride, size: run.count * segmentStride)
-        }
-        for run in NativeMetalCopyRun.coalesce(snapshot.segmentChanges.map { ($0.index, $0.index) }) {
-            blit.copy(from: state.segmentUpdates, sourceOffset: run.source * segmentStride,
-                      to: state.workingSegments, destinationOffset: run.destination * segmentStride, size: run.count * segmentStride)
-        }
-        rigidState.encodeInputs(blit)
-        blit.endEncoding()
-        guard let encoder = command.makeComputeCommandEncoder() else { throw NativeMetalSolverError.commandSetupFailed }
-        encoder.label = "native.step"
         func dispatch(_ name: String, buffers: [MTLBuffer], threads: Int) {
             let pipeline = pipelines[name]!
             encoder.memoryBarrier(scope: .buffers)
@@ -669,6 +690,33 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
             NativeMetalScan.encode(encoder, pipelines: pipelines, buffers: scanBuffers, mode: mode, maximum: maximum,
                                    singleGroup: true)
         }
+        // Gotowe liczby grup bramek końca kroku (`nativePrepareEndGates`): CPU zna rozmiar każdej dyspozycji.
+        func groups(_ name: String, _ threads: Int) -> UInt32 {
+            let pipeline = pipelines[name]!
+            let width = min(pipeline.threadExecutionWidth, pipeline.maxTotalThreadsPerThreadgroup)
+            return UInt32((max(threads, 0) + width - 1) / width)
+        }
+        var gateGroups = [UInt32](repeating: 0, count: NativeMetalSubstep.EndGate.allCases.count)
+        gateGroups[NativeMetalSubstep.EndGate.region.rawValue] = groups("nativeApplyPublicRegion", count)
+        gateGroups[NativeMetalSubstep.EndGate.mergeEvents.rawValue] = groups("nativeCompactMergeEvents", state.contactCapacity)
+        gateGroups[NativeMetalSubstep.EndGate.sensors.rawValue] = groups("nativeCompactSensorEvents", pairCount)
+        gateGroups[NativeMetalSubstep.EndGate.missingSensors.rawValue] = groups("nativeCompactMissingSensorEvents", previousSensorPairCount)
+        gateGroups[NativeMetalSubstep.EndGate.rigidFinish.rawValue] = groups("nativeRigidFinish", rigidState.count)
+        gateGroups[NativeMetalSubstep.EndGate.polygonSensors.rawValue] = groups("nativeCompactPolygonSensorEvents", polygonPairCount)
+        gateGroups[NativeMetalSubstep.EndGate.missingPolygonSensors.rawValue] = groups("nativeCompactMissingSensorEvents", previousPolygonSensorPairCount)
+        func dispatchGate(_ pipeline: MTLComputePipelineState, _ gate: NativeMetalSubstep.EndGate) {
+            encoder.dispatchThreadgroups(indirectBuffer: state.endGates, indirectBufferOffset: gate.rawValue * MemoryLayout<SIMD4<UInt32>>.stride,
+                threadsPerThreadgroup: .init(width: min(pipeline.threadExecutionWidth, pipeline.maxTotalThreadsPerThreadgroup), height: 1, depth: 1))
+        }
+        func dispatchGated(_ name: String, buffers: [MTLBuffer], gate: NativeMetalSubstep.EndGate) {
+            let pipeline = pipelines[name]!
+            encoder.memoryBarrier(scope: .buffers)
+            encoder.setComputePipelineState(pipeline)
+            for (index, buffer) in buffers.enumerated() { encoder.setBuffer(buffer, offset: 0, index: index) }
+            dispatchGate(pipeline, gate)
+        }
+        // Tylko pierwsza para: bryły raz na krok (solver brył bez baniek: bańki dostają kontakt z pętli podkroków).
+        func encodeStepPrefix() {
         dispatch("nativeBeginStep", buffers: [state.workingBubbles, state.control], threads: count)
         // Bryły raz na krok (solver brył bez baniek: bańki dostają kontakt z pętli podkroków). `solverPositionsPing` to tylko wskazanie
         // dla parametrów jąder brył, które czytają je wyłącznie dla końców więzów z bańkami i kandydatów bańka–bryła (tu nieobecnych).
@@ -700,6 +748,9 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
                     jointState.ranges, jointState.exclusions], threads: rigidState.count)
             }
         }
+        }
+        // Początek każdej pary: a₀, zapas obwiedni i x₀, potem siatka i kandydaci z zapasem (kolejna para zaczyna od przebudowy).
+        func encodeBroadphase() {
         // a₀, zapas obwiedni i x₀, potem siatka i kandydaci z zapasem.
         NativeMetalSubstepLoop.encodeBroadphaseInputs(encoder, pipelines: pipelines, state: state, forces: forceBuffers, count: count)
         dispatchReduction("nativePrepareGrid", buffers: [state.workingBubbles, state.control, state.contactControl, state.broadphaseMargin])
@@ -720,8 +771,11 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
             state.adjacencyCounts, state.candidateOverflow], argument: 0)
         dispatch("nativeBuildAdjacency", buffers: [state.control, state.contactControl,
             state.adjacency, state.adjacencyCounts, state.candidateOverflow], threads: count)
-        NativeMetalSubstepLoop.encode(encoder, pipelines: pipelines, state: state, forces: forceBuffers, count: count,
-                                      capture: configuration.captureSubsteps)
+        }
+        // Koniec kroku: jądra bez efektu ubocznego liczą się w każdym buforze końca kroku, a z efektem (region, zdarzenia, czujniki,
+        // zakończenie brył) idą bramkami z zerem grup, dopóki czas kroku nie minął.
+        func encodeEndOfStep() {
+            dispatchPrepareEndGates()
         // Rekordy kontaktów końca kroku z końcowych położeń (zdarzenia, scalanie i kontur czytają je dalej): kandydaci → kontakty w
         // zasięgu rozdzielenia → rekordy bez historii (`limits.w` = 0, więc dopasowanie do poprzedniego cache niczego nie znajduje).
         dispatchContacts("nativeBuildContacts", buffers: [state.workingBubbles, state.workingSegments, state.contactControl,
@@ -857,35 +911,54 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
                 rigidState.count > 0 ? rigidState.triangles : state.eventRecords, state.control,
                 hitTestCounts, hitTestResultBuffer], threads: snapshot.hitTests.count)
         }
-        encoder.endEncoding()
-        if let beforeCommit {
-            let working = NativeMetalRenderHandoff(
-                points: state.workingContourPoints, counts: state.workingContourCounts,
-                bubbles: state.workingBubbles,
-                bubbleIDs: snapshot.sourceBubbles.map { ObjectID(rawValue: UInt64(bitPattern: Int64($0.id.rawValue))) },
-                contourStride: state.contourStride,
-                // Strona t−1 kroku w toku to strona opublikowana: nietknięta, dopóki krok nie zostanie opublikowany.
-                previousPoints: lastSnapshot == nil ? nil : state.publishedContourPoints,
-                previousCounts: lastSnapshot == nil ? nil : state.publishedContourCounts,
-                previousBubbles: lastSnapshot == nil ? nil : state.publishedBubbles,
-                previousBubbleIDs: previousPublicationBubbleIDs,
-                // Rekordy brył kroku w toku niosą jego obie pozy: przed krokiem (t) i po nim (t+1).
-                bodies: rigidState.count > 0 ? rigidState.bodies : nil, bodyIDs: rigidState.workingIDs)
-            try beforeCommit(working)
         }
-        // Od tej chwili krok pisze stronę roboczą, która w opublikowanym uchwycie jest stroną t−1.
-        publishedRenderHandoff?.invalidatePreviousContours()
+        func dispatchPrepareEndGates() {
+            encoder.memoryBarrier(scope: .buffers)
+            encoder.setComputePipelineState(pipelines["nativePrepareEndGates"]!)
+            encoder.setBuffer(state.substepControl, offset: 0, index: 0)
+            encoder.setBuffer(state.endGates, offset: 0, index: 1)
+            gateGroups.withUnsafeBytes { encoder.setBytes($0.baseAddress!, length: $0.count, index: 2) }
+            var gateCount = UInt32(gateGroups.count)
+            encoder.setBytes(&gateCount, length: MemoryLayout<UInt32>.stride, index: 3)
+            encoder.dispatchThreads(.init(width: gateGroups.count, height: 1, depth: 1),
+                threadsPerThreadgroup: .init(width: gateGroups.count, height: 1, depth: 1))
+        }
         let encodingEnd = DispatchTime.now().uptimeNanoseconds
-        // Jedyny await/commit: wszystkie etapy zostały już zakodowane.
-        let timing = try await commandExecutor.complete(command)
+        let loop = try await NativeMetalSubstepLoop.run(state: state, previousFrameSubsteps: previousFrameSubstepCount,
+            executor: commandExecutor, prepareContinuation: {
+                // Kolejna para zaczyna od zera liczników kontaktów i kandydatów, jak pierwsza; czasy i liczniki klatki zostają.
+                state.contactControl.contents().storeBytes(of: contactParameters, as: NativeMetalContactControl.self)
+            },
+            encodePair: { pair, substeps in
+                let first = pair == 0
+                let stepsCommand = try makeCommand("native.frame.step.\(scenarioStep).substeps.\(pair)")
+                if first { try encodeInputs(stepsCommand) }
+                try beginCompute(stepsCommand, label: "native.substeps")
+                if first { encodeStepPrefix() }
+                encodeBroadphase()
+                NativeMetalSubstepLoop.encode(encoder, pipelines: pipelines, state: state, forces: forceBuffers, count: count,
+                                              capture: configuration.captureSubsteps, substeps: substeps)
+                encoder.endEncoding()
+                let endCommand = try makeCommand("native.frame.step.\(scenarioStep).end.\(pair)")
+                try beginCompute(endCommand, label: "native.end")
+                encodeEndOfStep()
+                encoder.endEncoding()
+                if first {
+                    // Od pierwszego commitu krok pisze stronę roboczą, która w opublikowanym uchwycie jest stroną t−1.
+                    publishedRenderHandoff?.invalidatePreviousContours()
+                }
+                return (stepsCommand, endCommand)
+            })
+        let timing = NativeMetalCommandTiming(gpuMilliseconds: loop.substepGPUMilliseconds + loop.endGPUMilliseconds)
+        previousFrameSubstepCount = Int(state.substepControl.contents().load(as: NativeMetalSubstepControl.self).counts.y)
         let waitingEnd = DispatchTime.now().uptimeNanoseconds
         let contactResult = state.contactControl.contents().load(as: NativeMetalContactControl.self)
         let solverResult = state.solverControl.contents().load(as: NativeMetalSolverControl.self)
         let safetyResult = state.safetyControl.contents().load(as: NativeMetalSafetyControl.self)
         let substepResult = state.substepControl.contents().load(as: NativeMetalSubstepControl.self)
         var profile = NativeMetalFrameProfile()
-        profile.commandBufferCount = 1
-        profile.encoderCount = 2
+        profile.commandBufferCount = 2 * loop.pairCount
+        profile.encoderCount = 2 * loop.pairCount
         profile.bubbleUploadCount = snapshot.bubbleChanges.count
         profile.segmentUploadCount = snapshot.segmentChanges.count
         profile.bubbleUploadCommandCount = NativeMetalCopyRun.coalesce(snapshot.bubbleChanges.map { ($0.index, $0.index) }).count
@@ -896,7 +969,7 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         profile.encodingStartNanoseconds = encodingStart
         profile.waitingEndNanoseconds = waitingEnd
         profile.stageGPUMilliseconds = ["frame": timing.gpuMilliseconds]
-        let diagnostics = NativeMetalFrameTelemetry(backend: .nativeMetal, commandBufferCount: 1, encoderCount: 2,
+        let diagnostics = NativeMetalFrameTelemetry(backend: .nativeMetal, commandBufferCount: 2 * loop.pairCount, encoderCount: 2 * loop.pairCount,
             cacheHitCount: Int(contactResult.cache.x), cacheResetCount: Int(contactResult.cache.y),
             contactCount: Int(contactResult.counts.y), didEncounterNonFinite: safetyResult.counts.w & 1 != 0,
             gpuMilliseconds: timing.gpuMilliseconds, solverIterationCount: configuration.solverIterationCount,
@@ -1014,7 +1087,7 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
             sideCorrectionCount: Int(safetyResult.counts.y),
             totalMilliseconds: milliseconds(waitingEnd - encodingStart), hasNonFiniteState: false)
         var frame = NativeSolverFrame(bubbles: bubbles, contacts: contacts, report: report,
-            telemetry: .init(backend: .nativeMetal, commandBufferCount: 1, encoderCount: 2,
+            telemetry: .init(backend: .nativeMetal, commandBufferCount: 2 * loop.pairCount, encoderCount: 2 * loop.pairCount,
                 cacheHitCount: Int(contactResult.cache.x), cacheResetCount: Int(contactResult.cache.y),
                 contactCount: contacts.count, gpuMilliseconds: timing.gpuMilliseconds,
                 solverIterationCount: configuration.solverIterationCount,
@@ -1053,6 +1126,24 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         let rigidResult = try rigidState.completed()
         let rigidContacts = hasRigidBodies ? rigidState.contactRecords() : []
         let driveContacts = NativeRigidPolygonState.driveContacts(of: rigidContacts)
+        // Render po końcu kroku (P-B-39): bufor końca kroku już się wykonał, więc hak widzi kontury i bańki kroku, a bufor wywołującego
+        // zawiera tylko render. Odrzucony krok (limit, wartości nieskończone, błąd haka) zostawia ten bufor niezatwierdzony.
+        if let beforeCommit {
+            let working = NativeMetalRenderHandoff(
+                points: state.workingContourPoints, counts: state.workingContourCounts,
+                bubbles: state.workingBubbles,
+                bubbleIDs: snapshot.sourceBubbles.map { ObjectID(rawValue: UInt64(bitPattern: Int64($0.id.rawValue))) },
+                contourStride: state.contourStride,
+                // Strona t−1 kroku w toku to strona opublikowana: nietknięta, dopóki krok nie zostanie opublikowany.
+                previousPoints: lastSnapshot == nil ? nil : state.publishedContourPoints,
+                previousCounts: lastSnapshot == nil ? nil : state.publishedContourCounts,
+                previousBubbles: lastSnapshot == nil ? nil : state.publishedBubbles,
+                previousBubbleIDs: previousPublicationBubbleIDs,
+                // Rekordy brył kroku w toku niosą jego obie pozy: przed krokiem (t) i po nim (t+1).
+                bodies: rigidState.count > 0 ? rigidState.bodies : nil, bodyIDs: rigidState.workingIDs)
+            try beforeCommit(working)
+        }
+        if let commandBuffer { _ = try await commandExecutor.complete(commandBuffer) }
         // Synchroniczna publikacja dopiero po pomyślnym wykonaniu i readbacku.
         rigidState.publish(rigidResult.objects)
         publishedPolygons = rigidResult.objects
@@ -1206,7 +1297,7 @@ enum NativeMetalPipelineCache {
         "nativePrepareSolverContacts", "nativeApplyWarmStart", "nativeUpdateContactMultipliers",
         "nativeSolveJacobi", "nativeMeasureResidual", "nativeReduceSolverResidual",
         "nativeCapturePositions", "nativeContactForces", "nativeAccelerationWithoutContacts", "nativeBroadphaseMargin",
-        "nativeReduceSubstep", "nativeIntegrateSubstep", "nativeBeginStep", "nativeEmitCandidateAdjacency",
+        "nativeReduceSubstep", "nativeIntegrateSubstep", "nativePrepareEndGates", "nativeBeginStep", "nativeEmitCandidateAdjacency",
         "nativeUpdateVelocities", "nativeDampContactNormalMotion", "nativeFinalizeSolverContacts", "nativeFindFastCandidates",
         "nativeResolveCCD", "nativeApplyCenterGuards", "nativeValidateBubbleContainment", "nativeInvalidateSafetyCache", "nativeCheckFinite",
         "nativeAccumulateContactPressure", "nativeSeedStructuralContours", "nativeGenerateContours", "nativeGenerateContoursFused", "nativePrepareRenderData", "nativePrepareRenderDataGrouped",
