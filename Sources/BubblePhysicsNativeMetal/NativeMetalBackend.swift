@@ -58,6 +58,19 @@ package struct NativeMetalInjectedSubstepState: Equatable, Sendable {
     }
 }
 
+/// Stan baniek po jednym podkroku, zapisany przy `captureSubsteps` do odczytu przez test (G4-AC2, G3-AC1): x i v każdej bańki
+/// po podkroku oraz jego długość h. Kluczem jest surowa wartość `ObjectID`.
+package struct NativeMetalSubstepSample: Equatable, Sendable {
+    package struct Body: Equatable, Sendable {
+        package var position: SIMD2<Float>
+        package var velocity: SIMD2<Float>
+        package init(position: SIMD2<Float>, velocity: SIMD2<Float>) { self.position = position; self.velocity = velocity }
+    }
+    package var h: Float
+    package var bubbles: [UInt64: Body]
+    package init(h: Float, bubbles: [UInt64: Body]) { self.h = h; self.bubbles = bubbles }
+}
+
 /// Który wykonawca opublikował klatkę. Neutralny odpowiednik typu diagnostycznego.
 public enum NativeMetalFrameBackend: String, Equatable, Sendable {
     case cpu

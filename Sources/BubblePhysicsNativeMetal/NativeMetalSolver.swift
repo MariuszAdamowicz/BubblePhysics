@@ -227,6 +227,8 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
     private let predict: MTLComputePipelineState
     private let pipelines: [String: MTLComputePipelineState]
     package let configuration: NativeMetalConfiguration
+    /// Podkroki ostatniego kroku w kolejności, gdy `configuration.captureSubsteps`; w przeciwnym razie pusta (szew testów 4.0.0).
+    package private(set) var capturedSubsteps: [NativeMetalSubstepSample] = []
     private let candidateCapacity: Int?
     private let collectDispatchStatistics: Bool
     private let collectStageDiagnostics: Bool

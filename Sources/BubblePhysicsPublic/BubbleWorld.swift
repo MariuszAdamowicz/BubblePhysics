@@ -92,6 +92,10 @@ public final class BubbleWorld {
             configuration: solver), assets: AssetRegistry(device: device))
     }
 
+    /// Podkroki ostatniego kroku zapisane przy `captureSubsteps` (x, v, h po każdym); pusta bez tego przełącznika. Szew testów 4.0.0.
+    package var benchmarkCapturedSubsteps: [NativeMetalSubstepSample] {
+        (stepper as? NativeCompleteStepper)?.capturedSubsteps ?? []
+    }
     package var benchmarkTelemetry: NativeMetalFrameTelemetry? {
         (stepper as? NativeCompleteStepper)?.publishedTelemetry
     }

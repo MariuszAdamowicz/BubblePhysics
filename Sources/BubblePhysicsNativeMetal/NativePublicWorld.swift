@@ -123,6 +123,8 @@ package final class NativePublicWorld {
 
     /// Konfiguracja po `sanitized`, z którą pracuje solver; szew testów przełączników pakietowych.
     package var nativeConfiguration: NativeMetalConfiguration { solver.configuration }
+    /// Podkroki ostatniego kroku zapisane przy `captureSubsteps`; szew testów 4.0.0.
+    package var capturedSubsteps: [NativeMetalSubstepSample] { solver.capturedSubsteps }
 
     package convenience init(device: MTLDevice, configuration: NativeMetalConfiguration = .default) throws {
         try self.init(device: device, configuration: configuration, commandExecutor: nil)
