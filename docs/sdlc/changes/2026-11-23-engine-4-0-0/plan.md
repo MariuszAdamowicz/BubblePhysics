@@ -312,7 +312,7 @@ Każde zadanie zostawia pakiet z kompilującymi się testami (`swift build --bui
 
 | ID | Type | Status | Design updated? | Note |
 |----|------|--------|-----------------|------|
-| [G4-AC6](change-design.md#g4-ac6) | change | pending | no | Kryterium wymaga bańki `.kinematic` „jak w `v3.0.2`”, ale `v3.0.2` odrzuca bańkę `.kinematic` błędem `unsupportedMotionRole` (`RT/TransactionStager.swift:515-517`, test `KinematicStagingTests.testKinematicBubbleIsRejectedOnAddReplaceAndSetMotion`), a [CD-D-9](change-design.md#cd-d-9) mówi „bez zmian w API ról ruchu”. Plan sprawdza bańkę `.pathDriven` i zostawia odrzucenie `.kinematic`. Wymaga poprawki brzmienia G4-AC6 w projekcie. |
+| [G4-AC6](change-design.md#g4-ac6) | change | approved | yes, §G4-AC6 edited 2026-11-23 | Kryterium wymaga bańki `.kinematic` „jak w `v3.0.2`”, ale `v3.0.2` odrzuca bańkę `.kinematic` błędem `unsupportedMotionRole` (`RT/TransactionStager.swift:515-517`, test `KinematicStagingTests.testKinematicBubbleIsRejectedOnAddReplaceAndSetMotion`), a [CD-D-9](change-design.md#cd-d-9) mówi „bez zmian w API ról ruchu”. Plan sprawdza bańkę `.pathDriven` i zostawia odrzucenie `.kinematic`. Autor zatwierdził, a brzmienie G4-AC6 w projekcie jest poprawione. |
 
 ## Replan log
 
