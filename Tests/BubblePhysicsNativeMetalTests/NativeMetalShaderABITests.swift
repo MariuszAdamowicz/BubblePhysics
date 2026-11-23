@@ -263,6 +263,9 @@ final class NativeMetalShaderABITests: XCTestCase {
                 ("identity", MemoryLayout<NativeMetalKinematicPose>.offset(of: \.identity)),
                 ("pose", MemoryLayout<NativeMetalKinematicPose>.offset(of: \.pose)),
                 ("velocity", MemoryLayout<NativeMetalKinematicPose>.offset(of: \.velocity))]),
+            Probe(name: "forceControl", mslSize: "NativeForceControl", swiftSize: MemoryLayout<NativeMetalForceControl>.stride, fields: [
+                ("global", MemoryLayout<NativeMetalForceControl>.offset(of: \.global)),
+                ("counts", MemoryLayout<NativeMetalForceControl>.offset(of: \.counts))]),
             Probe(name: "substepControl", mslSize: "NativeSubstepControl", swiftSize: MemoryLayout<NativeMetalSubstepControl>.stride, fields: [
                 ("time", MemoryLayout<NativeMetalSubstepControl>.offset(of: \.time)),
                 ("counts", MemoryLayout<NativeMetalSubstepControl>.offset(of: \.counts)),
@@ -274,6 +277,7 @@ final class NativeMetalShaderABITests: XCTestCase {
         XCTAssertEqual(MemoryLayout<NativeMetalMotor>.stride, 32)
         XCTAssertEqual(MemoryLayout<NativeMetalKinematicPose>.stride, 48)
         XCTAssertEqual(MemoryLayout<NativeMetalSubstepControl>.stride, 48)
+        XCTAssertEqual(MemoryLayout<NativeMetalForceControl>.stride, 32)
     }
 
     func testLayerEncodingKeepsSignedOrderAndRoundTrips() {

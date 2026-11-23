@@ -1,4 +1,5 @@
 import BubblePhysicsModel
+import Metal
 
 // Lustra Swift rekordów sił silnika 4.0.0 (CD-D-5): host nie liczy już gumki, pól, motoru ani siły globalnej, tylko opisuje je GPU.
 // ABI Swift/MSL: wyłącznie lane'y SIMD o wyrównaniu 16 bajtów; układ pilnuje `NativeMetalShaderABITests`, a odpowiedniki
@@ -42,6 +43,66 @@ struct NativeMetalSubstepControl: Equatable, Sendable {
     var time = SIMD4<Float>.zero // czas kroku, czas upłynięty, h, horyzont zapasu
     var counts = SIMD4<UInt32>.zero // podkroki pary buforów, podkroki klatki, znacznik przebudowy, znacznik limitu
     var limiter = SIMD2<UInt64>.zero // obiekt wyznaczający h, człon h
+}
+
+/// Stałe jąder sił poza rekordami: siła globalna i liczby rekordów w buforach `NativeMetalForceBuffers`.
+struct NativeMetalForceControl: Equatable, Sendable {
+    var global = SIMD4<Float>.zero // siła globalna.xy, reserved
+    var counts = SIMD4<UInt32>.zero // pola, gumki, motory, pozy brył kinematycznych
+}
+
+/// Stałe pętli podkroków wspólne dla Swift i MSL (`NativeForceKernels.metal-source`).
+enum NativeMetalSubstep {
+    /// Najwięcej podkroków w klatce (CD-D-21); kolejny podkrok ustawia znacznik limitu.
+    static let frameLimit = 1024
+    /// Szerokość grupy jąder podkroku; `nativeReduceSubstep` zapisuje liczbę grup dla tej szerokości.
+    static let groupWidth = 64
+    /// Szerokość grupy `nativeReduceSubstep` (jedna grupa na świat): największa potęga dwójki, którą pipeline pomieści, do 1024.
+    static func reductionWidth(_ pipeline: MTLComputePipelineState) -> Int {
+        var width = 1
+        while width * 2 <= min(pipeline.maxTotalThreadsPerThreadgroup, 1024) { width *= 2 }
+        return width
+    }
+    /// Człon wyznaczający h w `NativeMetalSubstepControl.limiter.y`.
+    enum Term: UInt64 {
+        case remainingTime = 0, stiffness = 1, distance = 2, margin = 3
+    }
+    /// Fazy `nativeIntegrateSubstep`: ½ impulsu i ruch; siły z nowego stanu i ½ impulsu; przyspieszenie początku kroku.
+    enum Phase: UInt32 {
+        case kickAndMove = 0, forcesAndKick = 1, initialAcceleration = 2
+    }
+}
+
+/// Bufory rekordów sił jednego kroku na GPU; rosną razem z liczbą rekordów i są używane ponownie między klatkami.
+@MainActor
+final class NativeMetalForceBuffers {
+    private let controlBuffer = NativeMetalReusableBuffer()
+    private let fieldBuffer = NativeMetalReusableBuffer()
+    private let vertexBuffer = NativeMetalReusableBuffer()
+    private let objectIDBuffer = NativeMetalReusableBuffer()
+    private let bandBuffer = NativeMetalReusableBuffer()
+    private let motorBuffer = NativeMetalReusableBuffer()
+    private let poseBuffer = NativeMetalReusableBuffer()
+    private(set) var control: MTLBuffer?
+    private(set) var fields: MTLBuffer?
+    private(set) var fieldVertices: MTLBuffer?
+    private(set) var fieldObjectIDs: MTLBuffer?
+    private(set) var bands: MTLBuffer?
+    private(set) var motors: MTLBuffer?
+    private(set) var kinematicPoses: MTLBuffer?
+
+    func upload(_ input: NativeForceInput, device: MTLDevice) throws {
+        let counts = SIMD4(UInt32(input.fields.count), UInt32(input.bandDrives.count), UInt32(input.motors.count),
+                           UInt32(input.kinematicPoses.count))
+        control = try controlBuffer.upload([NativeMetalForceControl(global: SIMD4(input.globalForce.x, input.globalForce.y, 0, 0),
+                                                                    counts: counts)], device: device)
+        fields = try fieldBuffer.upload(input.fields, device: device)
+        fieldVertices = try vertexBuffer.upload(input.fieldVertices, device: device)
+        fieldObjectIDs = try objectIDBuffer.upload(input.fieldObjectIDs, device: device)
+        bands = try bandBuffer.upload(input.bandDrives, device: device)
+        motors = try motorBuffer.upload(input.motors, device: device)
+        kinematicPoses = try poseBuffer.upload(input.kinematicPoses, device: device)
+    }
 }
 
 /// Dane wejściowe sił jednego kroku, zbudowane z obiektów świata po `MotionControllers.prepare`. Rekordy idą po ID, więc

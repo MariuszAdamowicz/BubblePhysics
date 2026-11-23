@@ -92,6 +92,22 @@ final class NativeMetalPersistentState {
     let bubbleUpdates: MTLBuffer
     let segmentUpdates: MTLBuffer
     let control: MTLBuffer
+    /// Bufory pętli podkroków silnika 4.0.0 (`NativeForceKernels`): float2 na bańkę, poza `broadphaseMargin` (float na bańkę).
+    /// `acceleration` to bieżące a (kontakty i siły bez kontaktów), `nonContactAcceleration` to a₀ z początku kroku,
+    /// `contactForces` to wynik `nativeContactForces`, `referencePositions` to x₀ z ostatniej budowy siatki.
+    let acceleration: MTLBuffer
+    let nonContactAcceleration: MTLBuffer
+    let contactForces: MTLBuffer
+    let referencePositions: MTLBuffer
+    let broadphaseMargin: MTLBuffer
+    /// Jeden `NativeMetalSubstepControl`; czasy, liczniki i obiekt wyznaczający h.
+    let substepControl: MTLBuffer
+    /// Argumenty pośredniej dyspozycji jąder podkroku (trzy uint: liczba grup, 1, 1); zero grup dla podkroku pustego.
+    let substepDispatch: MTLBuffer
+    /// h każdego podkroku klatki (`NativeMetalSubstep.frameLimit` wpisów).
+    let substepSteps: MTLBuffer
+    /// Przy `captureSubsteps`: float4 (x.xy, v.xy) na bańkę na podkrok, indeks podkroku · liczba baniek kroku + indeks bańki. Bez przełącznika nil.
+    let substepCapture: MTLBuffer?
     let renderPackets: MTLBuffer
     let contourStride: Int
     let deformationPing: MTLBuffer
@@ -118,7 +134,8 @@ final class NativeMetalPersistentState {
     var workingSegments: MTLBuffer { publishedIsPing ? segmentsPong : segmentsPing }
 
     init(device: MTLDevice, bubbleCount: Int, segmentCount: Int, candidateCapacity: Int? = nil,
-         contourStride: Int = 64, stageDiagnosticsEnabled: Bool = false, eventCapacity: Int = 1) throws {
+         contourStride: Int = 64, stageDiagnosticsEnabled: Bool = false, eventCapacity: Int = 1,
+         captureSubsteps: Bool = false) throws {
         func capacity(_ count: Int) throws -> Int {
             guard count >= 0 else { throw NativeMetalSolverError.allocationFailed }
             var value = 16
@@ -212,11 +229,40 @@ final class NativeMetalPersistentState {
         contourCountsPong = try buffer("contour.counts.pong", bubbleCapacity, MemoryLayout<UInt32>.stride)
         contourControl = try buffer("contour.control", 1, MemoryLayout<NativeMetalContourControl>.stride)
         control = try buffer("control", 1, MemoryLayout<NativeMetalControl>.stride)
+        acceleration = try buffer("substep.acceleration", bubbleCapacity, MemoryLayout<SIMD2<Float>>.stride)
+        nonContactAcceleration = try buffer("substep.nonContactAcceleration", bubbleCapacity, MemoryLayout<SIMD2<Float>>.stride)
+        contactForces = try buffer("substep.contactForces", bubbleCapacity, MemoryLayout<SIMD2<Float>>.stride)
+        referencePositions = try buffer("substep.referencePositions", bubbleCapacity, MemoryLayout<SIMD2<Float>>.stride)
+        broadphaseMargin = try buffer("substep.broadphaseMargin", bubbleCapacity, MemoryLayout<Float>.stride)
+        substepControl = try buffer("substep.control", 1, MemoryLayout<NativeMetalSubstepControl>.stride)
+        substepDispatch = try buffer("substep.dispatch", 1, 3 * MemoryLayout<UInt32>.stride)
+        substepSteps = try buffer("substep.steps", NativeMetalSubstep.frameLimit, MemoryLayout<Float>.stride)
+        let (captureCount, captureOverflow) = bubbleCapacity.multipliedReportingOverflow(by: NativeMetalSubstep.frameLimit)
+        guard !captureOverflow else { throw NativeMetalSolverError.allocationFailed }
+        substepCapture = captureSubsteps ? try buffer("substep.capture", captureCount, MemoryLayout<SIMD4<Float>>.stride) : nil
         eventCount = try buffer("eventCount", 1, MemoryLayout<UInt32>.stride)
         eventRecords = try buffer("eventRecords", eventCapacity, MemoryLayout<NativeMetalEventRecord>.stride)
     }
 
     func publish() { publishedIsPing.toggle() }
+
+    /// Podkroki ostatniego kroku z bufora `substepSteps` i `substepCapture`: h, x i v każdej z `bubbleIDs` (surowe ID w kolejności
+    /// indeksów bańki) po każdym podkroku. Pusta bez `captureSubsteps`. Liczbę podkroków daje `substepControl.counts.y`.
+    func capturedSubsteps(bubbleIDs: [UInt64]) -> [NativeMetalSubstepSample] {
+        guard let capture = substepCapture else { return [] }
+        let control = substepControl.contents().bindMemory(to: NativeMetalSubstepControl.self, capacity: 1).pointee
+        let substeps = min(Int(control.counts.y), NativeMetalSubstep.frameLimit)
+        let steps = substepSteps.contents().bindMemory(to: Float.self, capacity: NativeMetalSubstep.frameLimit)
+        let states = capture.contents().bindMemory(to: SIMD4<Float>.self, capacity: bubbleCapacity * NativeMetalSubstep.frameLimit)
+        return (0..<substeps).map { substep in
+            var bubbles: [UInt64: NativeMetalSubstepSample.Body] = [:]
+            for (index, id) in bubbleIDs.enumerated() {
+                let state = states[substep * bubbleIDs.count + index]
+                bubbles[id] = .init(position: SIMD2(state.x, state.y), velocity: SIMD2(state.z, state.w))
+            }
+            return NativeMetalSubstepSample(h: steps[substep], bubbles: bubbles)
+        }
+    }
 }
 
 /// Trwały stan GPU i solver Jacobi; publikacja świata czeka na guardy oraz CCD.
@@ -368,7 +414,8 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
                 segmentCount: max(segmentCount, persistentState?.segmentCapacity ?? 0), candidateCapacity: candidateCapacity,
                 contourStride: max(requiredContourStride, persistentState?.contourStride ?? 64),
                 stageDiagnosticsEnabled: collectStageDiagnostics,
-                eventCapacity: max(requestedEventCapacity, persistentState?.eventCapacity ?? 1))
+                eventCapacity: max(requestedEventCapacity, persistentState?.eventCapacity ?? 1),
+                captureSubsteps: configuration.captureSubsteps)
             if let previous = persistentState {
                 // Nie ma klatki w locie. Kopiujemy ukończony stan do nowych shared buffers.
                 memcpy(state.publishedBubbles.contents(), previous.publishedBubbles.contents(),
@@ -1236,7 +1283,8 @@ enum NativeMetalPipelineCache {
         "nativeAddScanBlockOffsets", "nativeFinishScan", "nativeScanSingleGroup", "nativeClearAdjacency", "nativeEmitAdjacency", "nativeBuildAdjacency",
         "nativePrepareSolverContacts", "nativeApplyWarmStart", "nativeUpdateContactMultipliers",
         "nativeSolveJacobi", "nativeMeasureResidual", "nativeReduceSolverResidual",
-        "nativeCapturePositions", "nativeContactForces",
+        "nativeCapturePositions", "nativeContactForces", "nativeAccelerationWithoutContacts", "nativeBroadphaseMargin",
+        "nativeReduceSubstep", "nativeIntegrateSubstep",
         "nativeUpdateVelocities", "nativeDampContactNormalMotion", "nativeFinalizeSolverContacts", "nativeFindFastCandidates",
         "nativeResolveCCD", "nativeApplyCenterGuards", "nativeValidateBubbleContainment", "nativeInvalidateSafetyCache", "nativeCheckFinite",
         "nativeAccumulateContactPressure", "nativeSeedStructuralContours", "nativeGenerateContours", "nativeGenerateContoursFused", "nativePrepareRenderData", "nativePrepareRenderDataGrouped",

@@ -1,5 +1,5 @@
 // Siły silnika 4.0.0 (CD-D-5): rekordy wejściowe kroku. Układ pilnuje NativeMetalShaderABITests względem NativeForceRecords.swift;
-// kernele prawa kontaktu, półimpulsów, ruchu i redukcji h dochodzą w tym pliku w kolejnych zadaniach.
+// jądra prawa kontaktu, sił bez kontaktów, zapasu obwiedni, redukcji h i leapfroga (zadania 7a, 7b); gumka, motor i podział h dochodzą w zadaniu 10.
 // Plik łączy się po Geometry i Contact, więc widzi ich struktury.
 
 // Gumka bańki w roli playerDriven: cel stoi w kroku, siła K_band · (cel − x) liczy się w każdym podkroku.
@@ -114,8 +114,8 @@ NativeContactLaw nativePairContactLaw(float stiffnessA, float radiusA, float sti
 // dokładnie jeden kontakt. Bez krawędzi wejścia i pamięci z poprzedniego kroku: środek po stronie wewnętrznej prostej (d < 0) nie dostaje
 // siły od tej krawędzi (tylna krawędź cienkiej ściany nie wypycha bańki przez ścianę), a naruszenie zgłasza asercja kontaktu.
 // Zwykły odcinek (bez krawędzi wielokąta) jest dwustronny: najbliższy punkt odcinka, normalna od niego.
-// Zwraca prawdę, gdy środek leży w obszarze kontaktu i d < r.
-bool nativeWallContact(NativeSegment s, float2 center, float radius, thread float2 &normal, thread float &distanceValue) {
+// Zwraca prawdę, gdy środek leży w obszarze krawędzi (d może być ≥ r: kandydat bez kontaktu); nativeWallContact dodaje warunek d < r.
+bool nativeWallRegion(NativeSegment s, float2 center, float radius, thread float2 &normal, thread float &distanceValue) {
     float2 start = s.current.xy, end = s.current.zw, edge = end - start;
     float edgeLength = length(edge);
     float2 base = edgeLength > 0 ? float2(-edge.y, edge.x) / edgeLength : float2(0, 1);
@@ -138,7 +138,11 @@ bool nativeWallContact(NativeSegment s, float2 center, float radius, thread floa
         distanceValue = length(delta);
         normal = distanceValue > 0 ? delta / distanceValue : base;
     }
-    return distanceValue < radius;
+    return true;
+}
+// Zwraca prawdę, gdy środek leży w obszarze kontaktu i d < r.
+bool nativeWallContact(NativeSegment s, float2 center, float radius, thread float2 &normal, thread float &distanceValue) {
+    return nativeWallRegion(s, center, radius, normal, distanceValue) && distanceValue < radius;
 }
 
 // Siły kontaktu na bańkę: suma po wierszu sąsiedztwa bańki (uint4: indeks kontaktu, indeks sąsiada, rodzaj 0 para albo 1 odcinek, reserved),
@@ -172,4 +176,305 @@ kernel void nativeContactForces(device NativeBubble *bubbles [[buffer(0)]],
         }
     }
     forces[index] = total;
+}
+
+// MARK: Podkrok (spec. zmiany 3 i 4)
+//
+// Kolejność w kroku: nativeAccelerationWithoutContacts (a₀) → nativeBroadphaseMargin (zapas, x₀ ← x) → siatka i kandydaci → nativeContactForces
+// + nativeIntegrateSubstep faza 2 (przyspieszenie początku kroku) → pętla: nativeReduceSubstep (h) → nativeIntegrateSubstep faza 0 (½ impulsu
+// i ruch) → nativeContactForces (siły z nowego stanu) → nativeIntegrateSubstep faza 1 (przyspieszenie i ½ impulsu). Kontakt jednej bańki zależy od
+// położenia sąsiadki, więc siły liczą się dopiero po ruchu wszystkich baniek; stąd osobne dyspozycje w obrębie podkroku.
+
+struct NativeForceControl {
+    float4 global;  // siła globalna.xy, reserved
+    uint4 counts;   // pola, gumki, motory, pozy brył kinematycznych
+};
+
+// Człony wyznaczające h (NativeSubstepControl.limiter.y); odpowiada NativeMetalSubstep.Term.
+constant ulong nativeTermRemaining = 0;
+constant ulong nativeTermStiffness = 1;
+constant ulong nativeTermDistance = 2;
+constant uint nativeSubstepFrameLimit = 1024;  // NativeMetalSubstep.frameLimit
+constant uint nativeSubstepGroupWidth = 64;    // NativeMetalSubstep.groupWidth
+
+// Bańka statyczna (flaga publiczna albo odwrotność masy 0) stoi: masa nieskończona, ani impulsu, ani ruchu.
+bool nativeIsStatic(NativeBubble b) { return !(b.physical.y > 0) || (b.publicFlags.x != 0 && b.publicFlags.y != 0); }
+float nativeInverseMass(NativeBubble b) { return nativeIsStatic(b) ? 0.0f : b.physical.y; }
+// Bańka napędzana siłami (rola dynamiczna, motor, gumka): siła globalna, pola i opór γ. Role torowe jadą z prędkością z hosta.
+bool nativeIsForceDriven(NativeBubble b) { return b.contact.w > 0.5f; }
+float2 nativeEffectiveVelocity(NativeBubble b) { return nativeIsStatic(b) ? float2(0) : b.motion.xy; }
+
+// Pole sił: zasięg w układzie lokalnym pola (koło albo wielokąt), siła kierunkowa obrócona o kąt pola, radialna i wirowa z zanikiem
+// (1 − d/R)^falloff (falloff 0 to siła stała); poza zasięgiem i w samym środku radialnego i wirowego siła jest zerem.
+float2 nativeFieldForce(NativeForceField f, device float2 *vertices, float2 point) {
+    float2 delta = point - f.pose.xy;
+    float c = cos(f.pose.z), s = sin(f.pose.z);
+    float2 local = float2(c * delta.x + s * delta.y, -s * delta.x + c * delta.y);
+    float distanceValue = length(local), radius = f.strength.w;
+    if (f.shape.z == 0) {
+        if (!(distanceValue <= radius)) return float2(0);
+    } else {
+        bool inside = false;
+        uint start = f.shape.y, count = f.shape.z;
+        for (uint i = 0; i < count; ++i) {
+            float2 a = vertices[start + i], b = vertices[start + (i + 1) % count];
+            if ((a.y > local.y) != (b.y > local.y) && local.x < (b.x - a.x) * (local.y - a.y) / (b.y - a.y) + a.x) inside = !inside;
+        }
+        if (!inside) return float2(0);
+    }
+    if (f.shape.x == 0) return float2(c * f.strength.x - s * f.strength.y, s * f.strength.x + c * f.strength.y);
+    if (!(distanceValue > 0)) return float2(0);
+    float scale = f.strength.z * (f.pose.w == 0 ? 1.0f : pow(max(0.0f, 1 - distanceValue / radius), f.pose.w)) / distanceValue;
+    return f.shape.x == 2 ? float2(-delta.y, delta.x) * scale : delta * scale;
+}
+
+// Pole bez filtra działa na każdego, z filtrem tylko na obiekty z listy (identyfikatory rosnąco); pusty filtr nie działa na nikogo.
+bool nativeFieldAffects(NativeForceField f, device ulong *ids, ulong id) {
+    if (f.filter.z == 0) return true;
+    uint low = f.filter.x, end = f.filter.x + f.filter.y, high = end;
+    while (low < high) {
+        uint mid = low + (high - low) / 2;
+        if (ids[mid] < id) low = mid + 1; else high = mid;
+    }
+    return low < end && ids[low] == id;
+}
+
+// a₀ w punkcie `position`: siła globalna i pola podzielone przez masę; zero dla ról nienapędzanych siłami i dla bańki statycznej.
+float2 nativeNonContactAcceleration(NativeBubble b, float2 position, constant NativeForceControl &forces,
+                                    device NativeForceField *fields, device float2 *vertices, device ulong *ids) {
+    float inverseMass = nativeInverseMass(b);
+    if (!nativeIsForceDriven(b) || !(inverseMass > 0)) return float2(0);
+    float2 force = forces.global.xy;
+    ulong id = ulong(b.identity.x);
+    for (uint i = 0; i < forces.counts.x; ++i) {
+        NativeForceField f = fields[i];
+        if (nativeFieldAffects(f, ids, id)) force += nativeFieldForce(f, vertices, position);
+    }
+    return force * inverseMass;
+}
+
+kernel void nativeAccelerationWithoutContacts(device NativeBubble *bubbles [[buffer(0)]], constant NativeControl &control [[buffer(1)]],
+    constant NativeForceControl &forces [[buffer(2)]], device NativeForceField *fields [[buffer(3)]],
+    device float2 *vertices [[buffer(4)]], device ulong *ids [[buffer(5)]], device float2 *accelerations [[buffer(6)]],
+    uint index [[thread_position_in_grid]]) {
+    if (index >= control.counts.x) return;
+    NativeBubble bubble = bubbles[index];
+    accelerations[index] = nativeNonContactAcceleration(bubble, bubble.position.xy, forces, fields, vertices, ids);
+}
+
+// Zapas obwiedni bańki: max(1,05 · (|v| · t + ½ |a₀| · t²), r / 4), gdzie t to czas pozostały w kroku; x₀ to pozycja z tej budowy siatki.
+// Mnożnik 1,05 sprawia, że bańka bez kontaktów nie wyczerpuje zapasu w pełnym kroku z powodu zaokrąglenia.
+kernel void nativeBroadphaseMargin(device NativeBubble *bubbles [[buffer(0)]], constant NativeControl &control [[buffer(1)]],
+    device float2 *nonContact [[buffer(2)]], device NativeSubstepControl &substep [[buffer(3)]], device float *margins [[buffer(4)]],
+    device float2 *references [[buffer(5)]], uint index [[thread_position_in_grid]]) {
+    if (index >= control.counts.x) return;
+    NativeBubble bubble = bubbles[index];
+    float t = max(substep.time.x - substep.time.y, 0.0f);
+    float travel = length(nativeEffectiveVelocity(bubble)) * t + 0.5f * length(nonContact[index]) * t * t;
+    margins[index] = max(1.05f * travel, 0.25f * bubble.physical.z);
+    references[index] = bubble.position.xy;
+}
+
+// ω_i² z Gershgorina dla sztywności znormalizowanej masami: Σ_j k_j · (1/m_i + 1/√(m_i · m_j)) po kontaktach aktywnych bańki i; dla ściany
+// i bryły m_j = ∞, więc człon partnera znika. k_j z prawa kontaktu (ściana: nativeWallContactLaw, para: nativePairContactLaw).
+float nativeBubbleOmegaSquared(uint index, device NativeBubble *bubbles, device NativeSegment *segments, device uint4 *adjacency,
+                               device uint *degrees, uint limit) {
+    NativeBubble bubble = bubbles[index];
+    float inverseMass = nativeInverseMass(bubble);
+    if (!(inverseMass > 0)) return 0;
+    float radius = bubble.physical.z, stiffness = bubble.contact.y, total = 0;
+    uint degree = min(degrees[index], limit);
+    for (uint j = 0; j < degree; ++j) {
+        uint4 edge = adjacency[index * limit + j];
+        if (edge.z == 0) {
+            uint low = min(index, edge.y), high = max(index, edge.y);
+            NativeBubble first = bubbles[low], second = bubbles[high];
+            float distanceValue = length(second.position.xy - first.position.xy);
+            NativeContactLaw law = nativePairContactLaw(first.contact.y, first.physical.z, second.contact.y, second.physical.z, distanceValue);
+            total += law.stiffness * (inverseMass + sqrt(inverseMass * nativeInverseMass(bubbles[edge.y])));
+        } else {
+            float2 normal; float distanceValue;
+            if (!nativeWallContact(segments[edge.y], bubble.position.xy, radius, normal, distanceValue)) continue;
+            total += nativeWallContactLaw(stiffness, radius, distanceValue).stiffness * inverseMass;
+        }
+    }
+    return total;
+}
+
+// Najmniejsze h z warunku drogi w podkroku najwyżej d / 4 po wierszu sąsiedztwa bańki i (CD-D-22). Warunek: v + A · h / 2 ≤ d / (4 h), gdzie A to
+// suma modułów przyspieszeń końców kontaktu, a v to prędkość zbliżania wzdłuż d (ściana: d od powierzchni, para: odległość środków).
+// Kontakt aktywny (d < r albo d < R) liczy się z |v| w obu kierunkach ruchu. Kandydat bez kontaktu liczy się z v zbliżania i wypada z
+// warunku tylko wtedy, gdy się oddala: v + A · h_max / 2 ≤ 0, gdzie h_max to minimum pozostałych członów. Nierówność kwadratowa ma
+// postać jawną h = d / (2 (s + v)), s = √(v² + A d / 2), która dla A = 0 daje d / (4 v). Nieskończoność oznacza brak ograniczenia.
+// Prędkość punktu ruchomej ściany (bryła kinematyczna) dochodzi w zadaniu 11.
+float nativeBubbleDistanceBound(uint index, float hMax, device NativeBubble *bubbles, device NativeSegment *segments,
+                                device uint4 *adjacency, device uint *degrees, device float2 *accelerations, uint limit) {
+    NativeBubble bubble = bubbles[index];
+    if (!(nativeInverseMass(bubble) > 0)) return INFINITY;
+    float2 velocity = bubble.motion.xy;
+    float radius = bubble.physical.z, best = INFINITY;
+    uint degree = min(degrees[index], limit);
+    for (uint j = 0; j < degree; ++j) {
+        uint4 edge = adjacency[index * limit + j];
+        float distanceValue, approach, accelerationSum, reach;
+        if (edge.z == 0) {
+            NativeBubble other = bubbles[edge.y];
+            float2 delta = other.position.xy - bubble.position.xy;
+            distanceValue = length(delta);
+            float2 normal = distanceValue > 0 ? delta / distanceValue : float2(1, 0);
+            approach = dot(velocity - nativeEffectiveVelocity(other), normal);
+            accelerationSum = length(accelerations[index]) + length(accelerations[edge.y]);
+            reach = radius + other.physical.z;
+        } else {
+            float2 normal;
+            if (!nativeWallRegion(segments[edge.y], bubble.position.xy, radius, normal, distanceValue)) continue;
+            approach = -dot(velocity, normal);
+            accelerationSum = length(accelerations[index]);
+            reach = radius;
+        }
+        bool active = distanceValue < reach;
+        // d ≤ 0 (naruszenie) daje najmniejsze h, nie zero: limit podkroków kończy świat, a asercja kontaktu nazywa przyczynę.
+        float d = max(distanceValue, reach * nativeContactDistanceFloor);
+        float speed;
+        if (active) speed = abs(approach);
+        else {
+            if (approach + accelerationSum * hMax * 0.5f <= 0) continue;
+            speed = approach;
+        }
+        float s = sqrt(speed * speed + accelerationSum * d * 0.5f);
+        float denominator = s + speed;
+        if (!(denominator > 0)) continue;
+        best = min(best, d / (2 * denominator));
+    }
+    return best;
+}
+
+// Redukcja h dla całego świata: jedna grupa, każdy wątek obsługuje co width-ty obiekt (width: potęga dwójki, najwyżej 1024). Dwa przebiegi,
+// bo wyjątek kandydata oddalającego się potrzebuje h_max = min(czas pozostały, 1/ω_max): najpierw maksimum ω², potem minimum członu d / 4.
+// h = min(t_poz, 1/ω_max, d / 4-warunek); człon i bańka wyznaczająca trafiają do `limiter` (diagnostyka limitu podkroków).
+// Podkrok pusty (czas kroku minął, znacznik przebudowy albo limitu) ma h = 0 i zero grup w argumentach pośredniej dyspozycji; limit
+// 1024 podkroków ustawia znacznik, gdy do końca kroku zostało jeszcze czasu, i zostawia obiekt i człon z ostatniego podkroku.
+kernel void nativeReduceSubstep(device NativeBubble *bubbles [[buffer(0)]], device NativeSegment *segments [[buffer(1)]],
+    constant NativeControl &control [[buffer(2)]], device NativeContactControl &contacts [[buffer(3)]],
+    device uint4 *adjacency [[buffer(4)]], device uint *degrees [[buffer(5)]], device float2 *accelerations [[buffer(6)]],
+    device NativeSubstepControl &substep [[buffer(7)]], device uint *dispatchArguments [[buffer(8)]],
+    device float *stepHistory [[buffer(9)]],
+    uint local [[thread_position_in_threadgroup]], uint width [[threads_per_threadgroup]]) {
+    threadgroup float values[1024];
+    threadgroup uint owners[1024];
+    float remaining = substep.time.x - substep.time.y;
+    bool over = !(remaining > 0), stopped = substep.counts.z != 0 || substep.counts.w != 0;
+    bool limited = substep.counts.y >= nativeSubstepFrameLimit;
+    if (over || stopped || limited) {
+        if (local == 0) {
+            if (limited && !over && !stopped) substep.counts.w = 1;
+            substep.time.z = 0;
+            dispatchArguments[0] = 0; dispatchArguments[1] = 1; dispatchArguments[2] = 1;
+        }
+        return;
+    }
+    uint count = control.counts.x, limit = contacts.cache.w;
+    // Przebieg 1: maksimum ω² (przy remisie mniejszy indeks).
+    float best = -1; uint owner = 0;
+    for (uint i = local; i < count; i += width) {
+        float value = nativeBubbleOmegaSquared(i, bubbles, segments, adjacency, degrees, limit);
+        if (value > best) { best = value; owner = i; }
+    }
+    values[local] = best; owners[local] = owner;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint stride = 512; stride > 0; stride >>= 1) {
+        if (local < stride && local + stride < width) {
+            float other = values[local + stride]; uint otherOwner = owners[local + stride];
+            if (other > values[local] || (other == values[local] && otherOwner < owners[local])) { values[local] = other; owners[local] = otherOwner; }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    float omegaSquared = values[0];
+    uint omegaOwner = owners[0];
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    float stiffnessBound = omegaSquared > 0 ? 1 / sqrt(omegaSquared) : INFINITY;
+    float hMax = min(remaining, stiffnessBound);
+    // Przebieg 2: minimum członu d / 4 (przy remisie mniejszy indeks).
+    best = INFINITY; owner = 0;
+    for (uint i = local; i < count; i += width) {
+        float value = nativeBubbleDistanceBound(i, hMax, bubbles, segments, adjacency, degrees, accelerations, limit);
+        if (value < best) { best = value; owner = i; }
+    }
+    values[local] = best; owners[local] = owner;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint stride = 512; stride > 0; stride >>= 1) {
+        if (local < stride && local + stride < width) {
+            float other = values[local + stride]; uint otherOwner = owners[local + stride];
+            if (other < values[local] || (other == values[local] && otherOwner < owners[local])) { values[local] = other; owners[local] = otherOwner; }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if (local != 0) return;
+    float distanceBound = values[0];
+    uint distanceOwner = owners[0];
+    float h = remaining;
+    ulong term = nativeTermRemaining, object = 0;
+    if (stiffnessBound < h) { h = stiffnessBound; term = nativeTermStiffness; object = ulong(bubbles[omegaOwner].identity.x); }
+    if (distanceBound < h) { h = distanceBound; term = nativeTermDistance; object = ulong(bubbles[distanceOwner].identity.x); }
+    // h nie schodzi do zera, żeby zły stan kończył się limitem podkroków, a nie zawieszeniem; ostatni podkrok kończy krok dokładnie.
+    h = max(h, substep.time.x * 1e-7f);
+    uint frameSubstep = substep.counts.y;
+    if (h >= remaining) { h = remaining; substep.time.y = substep.time.x; }
+    else substep.time.y += h;
+    substep.time.z = h;
+    substep.counts.x += 1;
+    substep.counts.y = frameSubstep + 1;
+    substep.limiter = ulong2(object, term);
+    stepHistory[frameSubstep] = h;
+    dispatchArguments[0] = (count + nativeSubstepGroupWidth - 1) / nativeSubstepGroupWidth;
+    dispatchArguments[1] = 1; dispatchArguments[2] = 1;
+}
+
+// Dokładny półimpuls z oporem: dv/dt = a − γ v przy stałym a w połowie podkroku daje v e^(−γ h/2) + a (1 − e^(−γ h/2)) / γ.
+// Współczynnik przy a to (1 − e^(−x)) / γ = (h/2) · (1 − e^(−x)) / x, x = γ h / 2; dla małego x szereg, bez kasowania się cyfr.
+float nativeHalfImpulseFactor(float gamma, float halfStep) {
+    float x = gamma * halfStep;
+    if (x < 0.05f) return halfStep * (1 - x * 0.5f + x * x * (1.0f / 6) - x * x * x * (1.0f / 24) + x * x * x * x * (1.0f / 120));
+    return (1 - exp(-x)) / gamma;
+}
+
+// Leapfrog (kick–drift–kick) po bańkach; faza w mode.x (mode.y: zapis podkroku do `capture`):
+//   0: ½ impulsu z przyspieszeniem a z końca poprzedniego podkroku, potem ruch x += v h i obrót (kąt + ω h, ω e^(−γ h));
+//   1: po nativeContactForces: a = siły kontaktu / m + a₀ w nowym położeniu (pola zależą od położenia), drugie ½ impulsu, zapis podkroku;
+//   2: przyspieszenie początku kroku z a₀ i sił kontaktu, bez ruchu i bez czasu.
+// Bańka statyczna stoi. Bańki torowe i kinematyczne dostają tylko kontakt: bez oporu, siły globalnej i pól (CD-D-9).
+kernel void nativeIntegrateSubstep(device NativeBubble *bubbles [[buffer(0)]], constant NativeControl &control [[buffer(1)]],
+    constant NativeForceControl &forces [[buffer(2)]], device NativeForceField *fields [[buffer(3)]],
+    device float2 *vertices [[buffer(4)]], device ulong *ids [[buffer(5)]], device float2 *accelerations [[buffer(6)]],
+    device float2 *nonContact [[buffer(7)]], device float2 *contactForces [[buffer(8)]],
+    device NativeSubstepControl &substep [[buffer(9)]], device float4 *capture [[buffer(10)]], constant uint4 &mode [[buffer(11)]],
+    uint index [[thread_position_in_grid]]) {
+    if (index >= control.counts.x) return;
+    NativeBubble bubble = bubbles[index];
+    float inverseMass = nativeInverseMass(bubble);
+    if (mode.x == 2) {
+        accelerations[index] = contactForces[index] * inverseMass + nonContact[index];
+        return;
+    }
+    float h = substep.time.z;
+    if (!(h > 0)) return;
+    float halfStep = 0.5f * h;
+    float gamma = nativeIsForceDriven(bubble) ? max(bubble.material.x, 0.0f) : 0.0f;
+    float decay = exp(-gamma * halfStep), factor = nativeHalfImpulseFactor(gamma, halfStep);
+    if (mode.x == 0) {
+        if (!(inverseMass > 0)) return;
+        float2 velocity = bubble.motion.xy * decay + accelerations[index] * factor;
+        bubbles[index].position.xy = bubble.position.xy + velocity * h;
+        bubbles[index].motion = float4(velocity, bubble.motion.z + bubble.motion.w * h, bubble.motion.w * exp(-gamma * h));
+        return;
+    }
+    float2 position = bubble.position.xy, velocity = bubble.motion.xy;
+    if (inverseMass > 0) {
+        float2 a = contactForces[index] * inverseMass + nativeNonContactAcceleration(bubble, position, forces, fields, vertices, ids);
+        velocity = velocity * decay + a * factor;
+        accelerations[index] = a;
+        bubbles[index].motion.xy = velocity;
+    }
+    if (mode.y != 0 && substep.counts.y > 0 && substep.counts.y <= nativeSubstepFrameLimit)
+        capture[(substep.counts.y - 1) * control.counts.x + index] = float4(position, velocity);
 }
