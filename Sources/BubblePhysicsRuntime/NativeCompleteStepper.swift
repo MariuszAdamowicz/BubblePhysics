@@ -143,10 +143,11 @@ package final class NativeCompleteStepper: CompleteStepper {
             value.angularVelocity = object.angularVelocity; value.motionRole = object.motionRole
             value.collisionRadius = object.collisionRadius
             value.structuralShape = object.structuralShape; value.layer = object.layer
+            value.playerDriveTarget = object.playerDriveTarget; value.motorDrive = object.motorDrive
             return value
         }
         let frame = try await native.step(objects: input, materials: state.physicsMaterials,
-            region: state.configuration.simulationRegion, duration: duration,
+            region: state.configuration.simulationRegion, duration: duration, globalForce: state.globalForce,
             joints: Array(state.joints.values), hitTests: hitTests,
             eventBufferCapacity: state.configuration.eventBufferCapacity,
             commandBuffer: commandBuffer,

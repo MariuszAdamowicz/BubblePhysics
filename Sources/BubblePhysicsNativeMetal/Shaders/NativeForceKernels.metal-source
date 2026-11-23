@@ -1,0 +1,32 @@
+// Siły silnika 4.0.0 (CD-D-5): rekordy wejściowe kroku. Układ pilnuje NativeMetalShaderABITests względem NativeForceRecords.swift;
+// kernele prawa kontaktu, półimpulsów, ruchu i redukcji h dochodzą w tym pliku w kolejnych zadaniach.
+// Plik łączy się po Geometry i Contact, więc widzi ich struktury.
+
+// Gumka bańki w roli playerDriven: cel stoi w kroku, siła K_band · (cel − x) liczy się w każdym podkroku.
+struct NativeBandDrive {
+    ulong2 identity; // ID bańki, reserved
+    float4 band;     // cel.xy, K_band, maximumForce (0 = bez limitu)
+};
+// Pole sił; wierzchołki wielokąta i identyfikatory filtra leżą w osobnych buforach, rekord wskazuje ich zakresy.
+struct NativeForceField {
+    ulong2 identity; // ID pola, reserved
+    float4 pose;     // położenie.xy, obrót, falloff
+    float4 strength; // siła kierunkowa.xy, siła radialna albo wirowa, promień zasięgu
+    uint4 shape;     // rodzaj (0 kierunkowe, 1 radialne, 2 wirowe), początek wierzchołków, liczba wierzchołków (0 = koło), reserved
+    uint4 filter;    // początek identyfikatorów, liczba identyfikatorów, filtr obecny (1), reserved
+};
+struct NativeMotor {
+    ulong2 identity; // ID bańki, reserved
+    float4 drive;    // siła.xy, moment, bezwładność
+};
+// Poza bryły kinematycznej na początku kroku; w podkroku w chwili t: start + prędkość · t.
+struct NativeKinematicPose {
+    ulong2 identity; // ID bryły, reserved
+    float4 pose;     // położenie.xy, obrót, reserved
+    float4 velocity; // prędkość liniowa.xy, prędkość kątowa, reserved
+};
+struct NativeSubstepControl {
+    float4 time;     // czas kroku, czas upłynięty, h, horyzont zapasu
+    uint4 counts;    // podkroki pary buforów, podkroki klatki, znacznik przebudowy, znacznik limitu
+    ulong2 limiter;  // obiekt wyznaczający h, człon h
+};

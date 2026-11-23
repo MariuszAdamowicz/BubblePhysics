@@ -1272,7 +1272,7 @@ enum NativeMetalPipelineCache {
 
 /// Wczytuje dołączone pliki `.metal-source` kompilowane w czasie działania.
 enum NativeMetalShaderSource {
-    static let solverFiles = ["NativeGeometryKernels", "NativeXPBDKernels", "NativePostSolveKernels"]
+    static let solverFiles = ["NativeGeometryKernels", "NativeXPBDKernels", "NativeForceKernels", "NativePostSolveKernels"]
 
     static func load(_ name: String) throws -> String {
         guard let url = Bundle.module.url(forResource: name, withExtension: "metal-source") else {

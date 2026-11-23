@@ -242,6 +242,40 @@ final class NativeMetalShaderABITests: XCTestCase {
     }
 
     /// P-B-71: warstwa w `filter.w` to Int32 z odwróconym bitem znaku, więc porządek uint zgadza się z porządkiem Int32.
+    /// Rekordy sił silnika 4.0.0: gumka, pole, motor, poza bryły kinematycznej i sterowanie podkrokami mają ten sam układ w Swift i w shaderze.
+    func testForceRecordsMatchShaderLayouts() throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let sources = try NativeMetalShaderSource.solverFiles.map(source)
+        let probes: [Probe] = [
+            Probe(name: "bandDrive", mslSize: "NativeBandDrive", swiftSize: MemoryLayout<NativeMetalBandDrive>.stride, fields: [
+                ("identity", MemoryLayout<NativeMetalBandDrive>.offset(of: \.identity)),
+                ("band", MemoryLayout<NativeMetalBandDrive>.offset(of: \.band))]),
+            Probe(name: "forceField", mslSize: "NativeForceField", swiftSize: MemoryLayout<NativeMetalForceField>.stride, fields: [
+                ("identity", MemoryLayout<NativeMetalForceField>.offset(of: \.identity)),
+                ("pose", MemoryLayout<NativeMetalForceField>.offset(of: \.pose)),
+                ("strength", MemoryLayout<NativeMetalForceField>.offset(of: \.strength)),
+                ("shape", MemoryLayout<NativeMetalForceField>.offset(of: \.shape)),
+                ("filter", MemoryLayout<NativeMetalForceField>.offset(of: \.filter))]),
+            Probe(name: "motor", mslSize: "NativeMotor", swiftSize: MemoryLayout<NativeMetalMotor>.stride, fields: [
+                ("identity", MemoryLayout<NativeMetalMotor>.offset(of: \.identity)),
+                ("drive", MemoryLayout<NativeMetalMotor>.offset(of: \.drive))]),
+            Probe(name: "kinematicPose", mslSize: "NativeKinematicPose", swiftSize: MemoryLayout<NativeMetalKinematicPose>.stride, fields: [
+                ("identity", MemoryLayout<NativeMetalKinematicPose>.offset(of: \.identity)),
+                ("pose", MemoryLayout<NativeMetalKinematicPose>.offset(of: \.pose)),
+                ("velocity", MemoryLayout<NativeMetalKinematicPose>.offset(of: \.velocity))]),
+            Probe(name: "substepControl", mslSize: "NativeSubstepControl", swiftSize: MemoryLayout<NativeMetalSubstepControl>.stride, fields: [
+                ("time", MemoryLayout<NativeMetalSubstepControl>.offset(of: \.time)),
+                ("counts", MemoryLayout<NativeMetalSubstepControl>.offset(of: \.counts)),
+                ("limiter", MemoryLayout<NativeMetalSubstepControl>.offset(of: \.limiter))])
+        ]
+        assertMatches(probes, try measure(probes, sources: sources, device: device))
+        XCTAssertEqual(MemoryLayout<NativeMetalBandDrive>.stride, 32)
+        XCTAssertEqual(MemoryLayout<NativeMetalForceField>.stride, 80)
+        XCTAssertEqual(MemoryLayout<NativeMetalMotor>.stride, 32)
+        XCTAssertEqual(MemoryLayout<NativeMetalKinematicPose>.stride, 48)
+        XCTAssertEqual(MemoryLayout<NativeMetalSubstepControl>.stride, 48)
+    }
+
     func testLayerEncodingKeepsSignedOrderAndRoundTrips() {
         let layers: [Int32] = [.min, -70_000, -2, -1, 0, 1, 2, 70_000, .max - 1, .max]
         let encoded = layers.map(NativeMetalFilter.encodeLayer)
@@ -251,15 +285,16 @@ final class NativeMetalShaderABITests: XCTestCase {
         XCTAssertEqual(NativeMetalFilter.encodeLayer(0), 0x8000_0000)
     }
 
-    /// Stan przejściowy zmiany 4.0.0 (do zadania 7): host zamienia K_c na dawną podatność c = r / K_c w `contact.x`, ζ_c = 1 w `contact.z`,
-    /// a wolna lane `.y` zostaje 0. Sztywność od `transitionalHardStiffness` w górę to kontakt twardy (c = 0).
+    /// Stan przejściowy zmiany 4.0.0 (do zadania 7): host zamienia K_c na dawną podatność c = r / K_c w `contact.x`, niesie K_c w `contact.y`,
+    /// ζ_c = 1 w `contact.z` i znacznik bańki napędzanej siłami w `contact.w`. Sztywność od `transitionalHardStiffness` w górę to kontakt twardy (c = 0).
     func testHostComputesContactComplianceForBubbleRecord() throws {
-        XCTAssertEqual(NativePublicProperties.contact(stiffness: 5, radius: 20), SIMD4(4, 0, 1, 0))
-        XCTAssertEqual(NativePublicProperties.contact(stiffness: NativePublicProperties.transitionalHardStiffness, radius: 5), SIMD4(0, 0, 1, 0))
-        XCTAssertEqual(NativePublicProperties.contact(stiffness: nil, radius: 5), SIMD4(0, 0, 1, 0))
+        XCTAssertEqual(NativePublicProperties.contact(stiffness: 5, radius: 20, forceDriven: true), SIMD4(4, 5, 1, 1))
+        XCTAssertEqual(NativePublicProperties.contact(stiffness: NativePublicProperties.transitionalHardStiffness, radius: 5, forceDriven: false),
+                       SIMD4(0, NativePublicProperties.transitionalHardStiffness, 1, 0))
+        XCTAssertEqual(NativePublicProperties.contact(stiffness: nil, radius: 5, forceDriven: false), SIMD4(0, 0, 1, 0))
         // Podatność rośnie liniowo z promieniem: ta sama bańka o r = 5 i r = 40 ma c różne dokładnie o 8×.
-        let small = NativePublicProperties.contact(stiffness: 5, radius: 5)
-        let large = NativePublicProperties.contact(stiffness: 5, radius: 40)
+        let small = NativePublicProperties.contact(stiffness: 5, radius: 5, forceDriven: true)
+        let large = NativePublicProperties.contact(stiffness: 5, radius: 40, forceDriven: true)
         XCTAssertEqual(small.x, 1)
         XCTAssertEqual(large.x, 8)
 

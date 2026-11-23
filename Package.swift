@@ -44,7 +44,7 @@ let package = Package(
         .target(name: "BubblePhysicsCore"),
         .target(name: "BubblePhysicsReference"),
         .target(name: "BubblePhysicsNativeMetal", dependencies: ["BubblePhysicsModel"],
-                resources: [.copy("Shaders/NativeGeometryKernels.metal-source"), .copy("Shaders/NativeXPBDKernels.metal-source"), .copy("Shaders/NativePostSolveKernels.metal-source"), .copy("Shaders/NativeRenderKernels.metal-source")]),
+                resources: [.copy("Shaders/NativeGeometryKernels.metal-source"), .copy("Shaders/NativeXPBDKernels.metal-source"), .copy("Shaders/NativeForceKernels.metal-source"), .copy("Shaders/NativePostSolveKernels.metal-source"), .copy("Shaders/NativeRenderKernels.metal-source")]),
         // Narzędzia pomiarowe i adapter `ReferenceWorld` → `NativeSolverInput`; poza modułami produkcyjnymi.
         .target(name: "BubblePhysicsNativeMetalDiagnostics",
                 dependencies: ["BubblePhysicsNativeMetal", "BubblePhysicsReference", "BubblePhysicsModel"]),

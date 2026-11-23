@@ -83,31 +83,10 @@ final class MotionControllersPrepareTests: XCTestCase {
         }
     }
 
-    // MARK: gałąź siłowa .playerDriven (P-B-9, P-B-10)
+    // MARK: bańki: host nie liczy sił (CD-D-5)
 
     private let bubbleMaterial = PhysicsMaterialID(rawValue: 1)
-    private let driven = ObjectID(rawValue: 1)
-
-    /// Bańka m = 2 w (0, 0) z prędkością `velocity` chwycona gumką, plus ewentualne pola i siła globalna.
-    private func drivenState(policy: BubbleDrivePolicy?, target: WorldPoint, velocity: WorldPoint = .zero, globalForce: WorldPoint = .zero,
-                             fields: [ForceFieldDescriptor] = []) throws -> RuntimeState {
-        var transaction = WorldTransaction()
-            .updatePhysicsMaterial(bubbleMaterial, material: try PhysicsMaterial(kind: .bubble, contactStiffness: 1e9))
-            .updateRenderMaterial(RenderMaterialID(rawValue: 1), material: try RenderMaterial())
-            .add(.bubble(try BubbleDescriptor(id: driven, position: .zero, velocity: velocity, targetRadius: 1, mass: 2,
-                physicsMaterialID: bubbleMaterial, renderMaterialID: RenderMaterialID(rawValue: 1), drivePolicy: policy)))
-        for field in fields { transaction = transaction.add(.forceField(field)) }
-        transaction = transaction.beginPlayerDrive(driven, target: target)
-        let state = RuntimeState(configuration: try WorldConfiguration(
-            simulationRegion: WorldRectangle(min: [-1000, -1000], max: [1000, 1000]), globalForce: globalForce))
-        return try TransactionStager.stage(transaction, against: state).state
-    }
-
-    private func preparedVelocity(_ state: RuntimeState) throws -> WorldPoint {
-        var prepared = state
-        try MotionControllers.prepare(&prepared, duration: duration)
-        return try XCTUnwrap(prepared.objects[driven]).velocity
-    }
+    private let render = RenderMaterialID(rawValue: 1)
 
     private func assertEqual(_ a: WorldPoint, _ b: WorldPoint, accuracy: Float = 1e-4, _ message: String = "",
                              file: StaticString = #filePath, line: UInt = #line) {
@@ -115,86 +94,71 @@ final class MotionControllersPrepareTests: XCTestCase {
         XCTAssertEqual(a.y, b.y, accuracy: accuracy, message, file: file, line: line)
     }
 
-    /// G1-AC3 na poziomie hosta, γ > 0: `.dynamic` i `.playerDriven` dostają v · e^(−γ · dt) + F / m · dt (siła globalna i gumka w całości),
-    /// a prędkość `.pathDriven` pochodzi z toru, więc po kroku nie ma w niej ani śladu poprzedniej prędkości.
-    func testHostDampsDynamicAndPlayerDrivenVelocityBeforeAddingForceAndLeavesPathDrivenAlone() throws {
-        let gamma: Float = 0.6, step = Float(duration), mass: Float = 2
-        let dynamicID = ObjectID(rawValue: 11), pathID = ObjectID(rawValue: 13)
-        let startVelocity: WorldPoint = [30, -20], globalForce: WorldPoint = [4, -10]
-        let policy = try BubbleDrivePolicy(bandStiffness: 100)
+    /// Bańki w czterech rolach z tą samą prędkością startową, γ > 0, siłą globalną, polem, gumką i motorem. Host zostawia prędkość ról
+    /// siłowych bez zmian (siły liczy GPU w każdym podkroku), zeruje `.static`, a `.pathDriven` dostaje prędkość z toru (G4-AC6).
+    func testHostLeavesForceDrivenBubbleVelocityAloneZeroesStaticAndTakesPathDrivenFromThePath() throws {
+        let start: WorldPoint = [30, -20], policy = try BubbleDrivePolicy(bandStiffness: 100)
+        let ids = (dynamic: ObjectID(rawValue: 11), motor: ObjectID(rawValue: 12), player: ObjectID(rawValue: 13),
+                   path: ObjectID(rawValue: 14), still: ObjectID(rawValue: 15))
         func bubble(_ id: ObjectID, at x: Float) throws -> WorldObject {
-            .bubble(try BubbleDescriptor(id: id, position: [x, 0], velocity: startVelocity, targetRadius: 1, mass: mass,
-                physicsMaterialID: bubbleMaterial, renderMaterialID: RenderMaterialID(rawValue: 1), drivePolicy: policy))
+            .bubble(try BubbleDescriptor(id: id, position: [x, 0], velocity: start, targetRadius: 1, mass: 2,
+                physicsMaterialID: bubbleMaterial, renderMaterialID: render, drivePolicy: policy))
         }
         let transaction = WorldTransaction()
-            .updatePhysicsMaterial(bubbleMaterial, material: try PhysicsMaterial(kind: .bubble, contactStiffness: 1e9, damping: gamma))
-            .updateRenderMaterial(RenderMaterialID(rawValue: 1), material: try RenderMaterial())
-            .add(try bubble(dynamicID, at: 0)).add(try bubble(driven, at: 50)).add(try bubble(pathID, at: 100))
-            .beginPlayerDrive(driven, target: [53, 54])
-            .setPathDrive(pathID, drive: try PathDrive(points: [[100, 500]], speed: 5))
+            .updatePhysicsMaterial(bubbleMaterial, material: try PhysicsMaterial(kind: .bubble, contactStiffness: 229, damping: 0.6))
+            .updateRenderMaterial(render, material: try RenderMaterial())
+            .add(try bubble(ids.dynamic, at: 0)).add(try bubble(ids.motor, at: 50)).add(try bubble(ids.player, at: 100))
+            .add(try bubble(ids.path, at: 150)).add(try bubble(ids.still, at: 200))
+            .add(.forceField(try ForceFieldDescriptor(id: ObjectID(rawValue: 90), position: .zero,
+                geometry: RangeGeometry(shape: .circle(radius: 1000)), field: .directional(force: [0, 40]))))
+            .setMotorDrive(ids.motor, drive: try MotorDrive(force: [5, 5], torque: 3))
+            .beginPlayerDrive(ids.player, target: [103, 54])
+            .setPathDrive(ids.path, drive: try PathDrive(points: [[150, 500]], speed: 5))
+            .setMotion(ids.still, role: .static)
         var prepared = try TransactionStager.stage(transaction, against: RuntimeState(configuration: try WorldConfiguration(
-            simulationRegion: WorldRectangle(min: [-1000, -1000], max: [1000, 1000]), globalForce: globalForce))).state
+            simulationRegion: WorldRectangle(min: [-1000, -1000], max: [1000, 1000]), globalForce: [4, -10]))).state
         try MotionControllers.prepare(&prepared, duration: duration)
-        let decayed = startVelocity * exp(-gamma * step)
-        assertEqual(try XCTUnwrap(prepared.objects[dynamicID]).velocity, decayed + globalForce / mass * step, "dynamic")
-        // Gumka: cel (53, 54), położenie (50, 0), naciągnięcie (3, 54), F_band = K · (3, 54).
-        assertEqual(try XCTUnwrap(prepared.objects[driven]).velocity, decayed + (WorldPoint(3, 54) * 100 + globalForce) / mass * step, "playerDriven")
-        assertEqual(try XCTUnwrap(prepared.objects[pathID]).velocity, WorldPoint(0, 5), "pathDriven: prędkość z toru, bez tłumienia")
+        for id in [ids.dynamic, ids.motor, ids.player] {
+            let object = try XCTUnwrap(prepared.objects[id])
+            assertEqual(object.velocity, start, "obiekt \(id.rawValue): bez tłumienia, siły globalnej, pola, gumki i motoru")
+            XCTAssertEqual(object.angularVelocity, 0, "obiekt \(id.rawValue): motor nie obraca bańki na hoście")
+        }
+        assertEqual(try XCTUnwrap(prepared.objects[ids.path]).velocity, WorldPoint(0, 5), "pathDriven: prędkość z toru")
+        assertEqual(try XCTUnwrap(prepared.objects[ids.still]).velocity, .zero, "static")
     }
 
-    /// Przyrost prędkości to F / m · dt z F = K · (cel − położenie), bez tłumienia i bez limitu.
-    func testBandForceAddsForceOverMassTimesDtToTheVelocity() throws {
-        let policy = try BubbleDrivePolicy(bandStiffness: 100)
-        // Naciągnięcie (3, 4): F = (300, 400), m = 2.
-        let velocity = try preparedVelocity(drivenState(policy: policy, target: [3, 4], velocity: [1, -2]))
-        assertEqual(velocity, WorldPoint(1 + 300 / 2 / 60, -2 + 400 / 2 / 60))
+    /// Promień kolizji bańki wyznacza przejście promienia raz na krok, jeszcze na hoście, przed broadphase.
+    func testHostSetsBubbleCollisionRadiusFromTheTargetRadius() throws {
+        let id = ObjectID(rawValue: 1)
+        let transaction = WorldTransaction()
+            .updatePhysicsMaterial(bubbleMaterial, material: try PhysicsMaterial(kind: .bubble, contactStiffness: 229))
+            .updateRenderMaterial(render, material: try RenderMaterial())
+            .add(.bubble(try BubbleDescriptor(id: id, position: .zero, targetRadius: 12, mass: 1,
+                physicsMaterialID: bubbleMaterial, renderMaterialID: render)))
+            .startTransition(ParameterTransition(target: .bubbleRadius(id), value: .scalar(24), duration: 2))
+        var prepared = try TransactionStager.stage(transaction, against: RuntimeState(configuration: try WorldConfiguration(
+            simulationRegion: WorldRectangle(min: [-1000, -1000], max: [1000, 1000])))).state
+        try MotionControllers.prepare(&prepared, duration: 1)
+        let object = try XCTUnwrap(prepared.objects[id])
+        XCTAssertEqual(object.targetRadius, 18, accuracy: 1e-4, "w połowie przejścia")
+        XCTAssertEqual(object.collisionRadius, object.targetRadius)
     }
 
-    func testBandForceIsClampedToMaximumForceKeepingTheDirection() throws {
-        let policy = try BubbleDrivePolicy(bandStiffness: 100, maximumForce: 250)
-        // |F| = 500 → obcięte do 250 w kierunku (0,6; 0,8): F = (150, 200).
-        let velocity = try preparedVelocity(drivenState(policy: policy, target: [3, 4]))
-        assertEqual(velocity, WorldPoint(150 / 2 / 60, 200 / 2 / 60))
-        // Poniżej limitu siła nie jest obcinana: naciągnięcie (1, 0) → F = 100.
-        let below = try preparedVelocity(drivenState(policy: policy, target: [1, 0]))
-        assertEqual(below, WorldPoint(100 / 2 / 60, 0))
-    }
-
-    /// CD-D-10 (P-B-9): siła globalna i pole kierunkowe dodają się do siły gumki jak w `.dynamic`; pole z filtrem na inny ID nie działa.
-    func testBandForceAddsGlobalForceAndFieldsLikeADynamicBubble() throws {
-        let policy = try BubbleDrivePolicy(bandStiffness: 100)
-        let own = try ForceFieldDescriptor(id: ObjectID(rawValue: 10), position: .zero,
-            geometry: RangeGeometry(shape: .circle(radius: 100)), field: .directional(force: [0, 40]),
-            filter: ObjectFilter(objectIDs: [driven]))
-        let foreign = try ForceFieldDescriptor(id: ObjectID(rawValue: 11), position: .zero,
-            geometry: RangeGeometry(shape: .circle(radius: 100)), field: .directional(force: [999, 999]),
-            filter: ObjectFilter(objectIDs: [ObjectID(rawValue: 77)]))
-        let state = try drivenState(policy: policy, target: [3, 4], globalForce: [20, -10], fields: [own, foreign])
-        let velocity = try preparedVelocity(state)
-        // F = (300, 400) + (20, −10) + (0, 40) = (320, 430).
-        assertEqual(velocity, WorldPoint(320 / 2 / 60, 430 / 2 / 60))
-    }
-
-    /// Siła globalna wchodzi do `maximumForce` dopiero po obcięciu samej gumki: limit dotyczy gumki, nie sumy sił.
-    func testMaximumForceLimitsOnlyTheBandNotTheGlobalForce() throws {
-        let policy = try BubbleDrivePolicy(bandStiffness: 100, maximumForce: 250)
-        let velocity = try preparedVelocity(drivenState(policy: policy, target: [3, 4], globalForce: [0, -50]))
-        assertEqual(velocity, WorldPoint(150 / 2 / 60, (200 - 50) / 2 / 60))
-    }
-
-    /// Chwycona bańka bez polityki nie istnieje przez stager (chwyt jest odrzucany), a gdyby stan ją miał, nie ma czym jechać:
-    /// dostaje prędkość 0 jak `.playerDriven` bez celu, bez siły globalnej.
-    func testPlayerDrivenBubbleWithoutPolicyGetsZeroVelocity() throws {
-        var state = try drivenState(policy: BubbleDrivePolicy(bandStiffness: 100), target: [3, 4], velocity: [1, -2], globalForce: [20, -10])
-        let chosen = try XCTUnwrap(state.objects[driven])
-        guard case .bubble(let bubble) = chosen.descriptor else { return XCTFail("to nie bańka") }
-        var plain = RuntimeObject(.bubble(try BubbleDescriptor(id: bubble.id, position: bubble.position, velocity: bubble.velocity,
-            targetRadius: bubble.targetRadius, mass: bubble.mass, physicsMaterialID: bubble.physicsMaterialID,
-            renderMaterialID: bubble.renderMaterialID, drivePolicy: nil)))
-        plain.motionRole = .playerDriven; plain.playerDriveTarget = chosen.playerDriveTarget; plain.velocity = chosen.velocity
-        state.objects[driven] = plain
-        XCTAssertEqual(state.objects[driven]?.motionRole, .playerDriven)
-        XCTAssertNotNil(state.objects[driven]?.playerDriveTarget)
-        assertEqual(try preparedVelocity(state), .zero)
+    /// Bryła kinematyczna dostaje prędkość z napędu (CD-D-9) i nie podlega sile globalnej.
+    func testKinematicBodyVelocityComesFromItsDrive() throws {
+        let body = ObjectID(rawValue: 1)
+        let material = PhysicsMaterialID(rawValue: 2)
+        let transaction = WorldTransaction()
+            .updatePhysicsMaterial(material, material: try PhysicsMaterial(kind: .rigid))
+            .updateRenderMaterial(render, material: try RenderMaterial())
+            .add(.rigidBody(try RigidBodyDescriptor(id: body, vertices: [[0, 0], [2, 0], [2, 2], [0, 2]], motionRole: .kinematic,
+                physicsMaterialID: material, renderMaterialID: render)))
+            .setKinematicDrive(body, drive: .velocity(linear: [600, 0], angular: 1.5))
+        var prepared = try TransactionStager.stage(transaction, against: RuntimeState(configuration: try WorldConfiguration(
+            simulationRegion: WorldRectangle(min: [-1000, -1000], max: [1000, 1000]), globalForce: [0, -10]))).state
+        try MotionControllers.prepare(&prepared, duration: duration)
+        let object = try XCTUnwrap(prepared.objects[body])
+        assertEqual(object.velocity, [600, 0], accuracy: 1e-2, "prędkość z napędu, bez siły globalnej")
+        XCTAssertEqual(object.angularVelocity, 1.5, accuracy: 1e-3)
     }
 }

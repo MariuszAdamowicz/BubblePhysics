@@ -18,6 +18,9 @@ package struct NativePublicObject: Equatable, Sendable {
     package var structuralShape: NativeStructuralShape?
     /// Warstwa rysowania i hit-testu; w rekordzie bańki i bryły jako `filter.w`.
     package var layer: Int32 = 0
+    /// Cel gumki bańki w roli `.playerDriven` i napęd motoru: host nie liczy z nich sił, tylko opisuje je GPU (CD-D-5).
+    package var playerDriveTarget: WorldPoint?
+    package var motorDrive: MotorDrive?
 
     /// Stan bańki po kroku solvera: poza, prędkości, promień efektywny i obwiednia konturu (`nil` bez poprawnej obwiedni).
     fileprivate mutating func adopt(_ bubble: NativeSolverBubble, effectiveRadius: Float, bounds: SIMD4<Float>?) {
@@ -75,19 +78,28 @@ struct NativePublicProperties: Equatable, Sendable {
     var speedLimits: SIMD2<Float> = .zero
     /// Warstwa obiektu; w rekordzie bańki jako `filter.w` (`NativeMetalFilter.encodeLayer`).
     var layer: Int32 = 0
-    /// Kontakt bańki: podatność c₀·r/r_ref (0 = kontakt twardy), wolna lane `.y` (zawsze 0), współczynnik tłumienia
-    /// kontaktu miękkiego ζ_c (zawsze, także dla bańki twardej: czyta go tłumik pary); w rekordzie bańki jako `contact`.
+    /// Kontakt bańki: podatność przejściowa c = r / K_c (0 = kontakt twardy), K_c, współczynnik tłumienia kontaktu ζ_c (przejściowo 1)
+    /// i znacznik bańki napędzanej siłami (siła globalna, pola, γ); w rekordzie bańki jako `contact`.
     var contact: SIMD4<Float> = .zero
 
     /// Stan przejściowy zmiany 4.0.0 (do zadania 7, razem z XPBD): sztywność K_c przechodzi w dawną podatność XPBD c = r / K_c.
     /// Sztywność od `transitionalHardStiffness` w górę to kontakt twardy (c = 0), żeby stare sceny twarde działały bez zmian.
-    /// Lane `.z` niesie dawny ζ_c = 1 (tłumienie krytyczne), bo materiał go już nie ma.
+    /// Lane `.y` niesie K_c, `.z` dawny ζ_c = 1 (tłumienie krytyczne), bo materiał go już nie ma, a `.w` znacznik ról siłowych.
     /// Przepełnienie Float wyklucza stager (CD-D-15).
     static let transitionalHardStiffness: Float = 1e9
-    static func contact(stiffness: Float?, radius: Float) -> SIMD4<Float> {
-        guard let stiffness, stiffness < transitionalHardStiffness else { return SIMD4(0, 0, 1, 0) }
-        // Ten sam wzór w Double co walidacja stagera (`validateWorstAlpha`).
-        return SIMD4(Float(Double(radius) / Double(stiffness)), 0, 1, 0)
+    static func contact(stiffness: Float?, radius: Float, forceDriven: Bool) -> SIMD4<Float> {
+        let driven: Float = forceDriven ? 1 : 0
+        guard let stiffness, stiffness < transitionalHardStiffness else { return SIMD4(0, stiffness ?? 0, 1, driven) }
+        // Ten sam wzór w Double co dawna walidacja stagera.
+        return SIMD4(Float(Double(radius) / Double(stiffness)), stiffness, 1, driven)
+    }
+
+    /// Role, w których siły (globalna, pola, γ, gumka, motor) działają na bańkę w podkrokach; role torowe jadą z prędkością hosta.
+    static func isForceDriven(_ role: MotionRole) -> Bool {
+        switch role {
+        case .dynamic, .motorDriven, .playerDriven: return true
+        case .static, .kinematic, .pathDriven: return false
+        }
     }
 }
 
@@ -100,6 +112,8 @@ struct NativePublicSettings: Equatable, Sendable {
     var structuralShapes: [ObjectID: NativeStructuralShape] = [:]
     var staticPolygonMaterials: [ObjectID: PhysicsMaterial] = [:]
     var joints: [Joint] = []
+    /// Dane sił kroku dla GPU (gumka, siła globalna, pola, motor, pozy brył kinematycznych); budowane w `NativePublicWorld.step`.
+    var forces = NativeForceInput()
 }
 
 /// Adapter używa trwałego solvera; pełna publikacja następuje dopiero po powodzeniu GPU.
@@ -155,7 +169,7 @@ package final class NativePublicWorld {
 
     package func step(objects: [NativePublicObject], materials: [PhysicsMaterialID: PhysicsMaterial],
                       region: WorldRectangle, duration: Double,
-                      joints: [Joint] = [], hitTests: [WorldPoint] = [], eventBufferCapacity: Int = 1024, commandBuffer: MTLCommandBuffer? = nil,
+                      globalForce: WorldPoint = .zero, joints: [Joint] = [], hitTests: [WorldPoint] = [], eventBufferCapacity: Int = 1024, commandBuffer: MTLCommandBuffer? = nil,
                       beforeCommit: ((NativeMetalRenderHandoff) throws -> Void)? = nil) async throws -> NativePublicFrame {
         let dt = Float(duration)
         guard dt.isFinite, dt > 0, Double(dt) > 0 else { throw NativeMetalSolverError.invalidSnapshot }
@@ -202,7 +216,8 @@ package final class NativePublicWorld {
                     eventData: SIMD2(b.eventInterest.rawValue, b.mergeGroups.rawValue), filter: b.filter,
                     speedLimits: SIMD2(material.maximumLinearSpeed ?? 0, material.maximumAngularSpeed ?? 0),
                     layer: object.layer,
-                    contact: NativePublicProperties.contact(stiffness: material.contactStiffness, radius: object.collisionRadius))
+                    contact: NativePublicProperties.contact(stiffness: material.contactStiffness, radius: object.collisionRadius,
+                        forceDriven: NativePublicProperties.isForceDriven(object.motionRole)))
                 if let shape = object.structuralShape { structuralShapes[b.id] = shape }
             case .rigidBody(let p):
                 guard let material = materials[p.physicsMaterialID] else { throw NativeMetalSolverError.invalidSnapshot }
@@ -248,7 +263,7 @@ package final class NativePublicWorld {
                 sensors: objects.compactMap { if case .sensor(let sensor) = $0.descriptor { return sensor }; return nil }
                     .sorted { $0.id.rawValue < $1.id.rawValue }, structuralShapes: structuralShapes,
                 staticPolygonMaterials: staticPolygonMaterials,
-                joints: joints))
+                joints: joints, forces: NativeForceInput(objects: objects, globalForce: globalForce)))
         input.hitTests = hitTests
         let frame = try await solver.executeFrame(input: input, scenarioStep: 0,
             commandBuffer: commandBuffer, beforeCommit: beforeCommit)
