@@ -208,7 +208,7 @@ package enum MotionControllers {
             case .physicsMaterial(let id, let parameter):
                 guard let material = state.physicsMaterials[id] else { continue }
                 switch parameter {
-                case .deformability: start = .scalar(material.deformability)
+                case .contactStiffness: start = .scalar(material.contactStiffness ?? 0)
                 case .damping: start = .scalar(material.damping)
                 case .friction: start = .scalar(material.friction)
                 case .restitution: start = .scalar(material.restitution)
@@ -230,12 +230,11 @@ package enum MotionControllers {
             case (.physicsMaterial(let id, let parameter), .scalar(let scalar)):
                 if let m = state.physicsMaterials[id] {
                     state.physicsMaterials[id] = try PhysicsMaterial(kind: m.kind,
-                        deformability: parameter == .deformability ? scalar : m.deformability,
+                        contactStiffness: parameter == .contactStiffness ? scalar : m.contactStiffness,
                         damping: parameter == .damping ? scalar : m.damping,
                         friction: parameter == .friction ? scalar : m.friction,
                         restitution: parameter == .restitution ? scalar : m.restitution,
-                        maximumLinearSpeed: m.maximumLinearSpeed, maximumAngularSpeed: m.maximumAngularSpeed,
-                        contactCompliance: m.contactCompliance, contactDampingRatio: m.contactDampingRatio)
+                        maximumLinearSpeed: m.maximumLinearSpeed, maximumAngularSpeed: m.maximumAngularSpeed)
                 }
             default: break
             }

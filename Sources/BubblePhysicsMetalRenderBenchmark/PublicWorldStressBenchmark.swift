@@ -569,7 +569,7 @@ package enum Stress300Scene {
         let styleID = RenderMaterialID(rawValue: 1)
         let upperStyleID = RenderMaterialID(rawValue: 2)
         var transaction = WorldTransaction()
-            .updatePhysicsMaterial(materialID, material: try PhysicsMaterial(kind: .bubble))
+            .updatePhysicsMaterial(materialID, material: try PhysicsMaterial(kind: .bubble, contactStiffness: 1e9))
             .updatePhysicsMaterial(polygonMaterialID, material: try PhysicsMaterial(kind: .rigid))
             .updateRenderMaterial(styleID, material: try RenderMaterial(texture: decorations?.texture,
                 color: acceptance ? RGBA(1, 1, 1, 0.9) : .white,
@@ -700,7 +700,7 @@ package enum MixedScene {
 
     package static func initialTransaction() throws -> WorldTransaction {
         var transaction = try WorldTransaction()
-            .updatePhysicsMaterial(bubbleMaterial, material: PhysicsMaterial(kind: .bubble))
+            .updatePhysicsMaterial(bubbleMaterial, material: PhysicsMaterial(kind: .bubble, contactStiffness: 1e9))
             .updatePhysicsMaterial(rigidMaterial, material: PhysicsMaterial(kind: .rigid, friction: 0.2, maximumLinearSpeed: 90, maximumAngularSpeed: 8))
             .updateRenderMaterial(style, material: try RenderMaterial())
         var random = StressLCG(seed: 0x4D_1C_5E)

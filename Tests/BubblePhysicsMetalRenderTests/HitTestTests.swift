@@ -57,8 +57,7 @@ final class HitTestTests: XCTestCase {
         let world = try B.makeWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()), region: region)
         // Materiał bez deformowalności i podatności daje bańkę sztywną, bez wgłębienia; tu kontakt jest sprężyną o c = 3e-3 (δ = c · F = 0,3).
         world.submit(try B.baseTransaction()
-            .updatePhysicsMaterial(B.bubbleMaterial, material: PhysicsMaterial(kind: .bubble, deformability: 1,
-                contactCompliance: BubbleContactCompliance(base: 3e-3)))
+            .updatePhysicsMaterial(B.bubbleMaterial, material: PhysicsMaterial(kind: .bubble, contactStiffness: 333.333))
             .add(B.box(10, at: [0.05, 0], half: [0.05, 10]))
             .add(B.bubble(20, at: [-0.9, 0], radius: 1))
             .setGlobalForce([100, 0]))

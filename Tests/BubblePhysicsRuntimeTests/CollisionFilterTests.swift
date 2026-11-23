@@ -13,7 +13,7 @@ final class CollisionFilterTests: XCTestCase {
     }
     private func resources() throws -> WorldTransaction {
         WorldTransaction()
-            .updatePhysicsMaterial(materialID, material: try PhysicsMaterial(kind: .bubble))
+            .updatePhysicsMaterial(materialID, material: try PhysicsMaterial(kind: .bubble, contactStiffness: 1e9))
             .updateRenderMaterial(styleID, material: try RenderMaterial())
     }
 

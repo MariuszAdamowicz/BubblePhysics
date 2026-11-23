@@ -22,7 +22,7 @@ final class NativeMetalRigidPolygonTests: XCTestCase {
     }
     private func step(_ world: NativePublicWorld, _ objects: [NativePublicObject], dt: Double = 1.0/60) async throws -> NativePublicFrame {
         try await world.step(objects: objects,
-            materials: [.init(rawValue: 1): PhysicsMaterial(kind: .bubble), .init(rawValue: 2): PhysicsMaterial(kind: .rigid)],
+            materials: [.init(rawValue: 1): PhysicsMaterial(kind: .bubble, contactStiffness: 1e9), .init(rawValue: 2): PhysicsMaterial(kind: .rigid)],
             region: WorldRectangle(min: [-100,-100], max: [100,100]), duration: dt)
     }
 

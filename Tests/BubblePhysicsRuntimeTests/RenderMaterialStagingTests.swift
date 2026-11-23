@@ -18,7 +18,7 @@ final class RenderMaterialStagingTests: XCTestCase {
     }
     private func resources() throws -> WorldTransaction {
         WorldTransaction()
-            .updatePhysicsMaterial(bubbleMaterial, material: try PhysicsMaterial(kind: .bubble))
+            .updatePhysicsMaterial(bubbleMaterial, material: try PhysicsMaterial(kind: .bubble, contactStiffness: 1e9))
             .updatePhysicsMaterial(rigidMaterial, material: try PhysicsMaterial(kind: .rigid))
             .updateRenderMaterial(look, material: try RenderMaterial())
     }

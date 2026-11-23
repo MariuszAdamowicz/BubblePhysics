@@ -47,7 +47,7 @@ final class NativeMetalContactMemoryTests: XCTestCase {
 
     private func step(_ world: NativePublicWorld, _ objects: [NativePublicObject]) async throws -> NativePublicFrame {
         try await world.step(objects: objects,
-            materials: [bubbleMaterial: try PhysicsMaterial(kind: .bubble), polygonMaterial: try PhysicsMaterial(kind: .rigid)],
+            materials: [bubbleMaterial: try PhysicsMaterial(kind: .bubble, contactStiffness: 1e9), polygonMaterial: try PhysicsMaterial(kind: .rigid)],
             region: WorldRectangle(min: [0, 0], max: [1400, 1100]), duration: 1.0 / 60)
     }
 

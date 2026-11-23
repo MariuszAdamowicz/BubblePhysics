@@ -13,7 +13,7 @@ final class QueryIndexTests: XCTestCase {
 
     private func transaction() throws -> WorldTransaction {
         try WorldTransaction()
-            .updatePhysicsMaterial(bubbleMaterial, material: PhysicsMaterial(kind: .bubble))
+            .updatePhysicsMaterial(bubbleMaterial, material: PhysicsMaterial(kind: .bubble, contactStiffness: 1e9))
             .updatePhysicsMaterial(rigidMaterial, material: PhysicsMaterial(kind: .rigid))
             .updateRenderMaterial(style, material: try RenderMaterial())
     }

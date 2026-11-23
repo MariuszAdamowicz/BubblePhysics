@@ -12,7 +12,7 @@ final class TransactionStagerTests: XCTestCase {
     }
     private func resources() throws -> WorldTransaction {
         WorldTransaction()
-            .updatePhysicsMaterial(materialID, material: try PhysicsMaterial(kind: .bubble))
+            .updatePhysicsMaterial(materialID, material: try PhysicsMaterial(kind: .bubble, contactStiffness: 1e9))
             .updateRenderMaterial(styleID, material: try RenderMaterial())
     }
     private func bubble(_ value: UInt64, role: MotionRole = .dynamic,
@@ -212,7 +212,7 @@ final class TransactionStagerTests: XCTestCase {
         let initial = try TransactionStager.stage(resources().add(.bubble(bubble(1))), against: state()).state
         let transitions = [
             ParameterTransition(target: .globalForce, value: .vector([0, -3]), duration: 0),
-            ParameterTransition(target: .physicsMaterial(materialID, .friction), value: .scalar(2), duration: 1),
+            ParameterTransition(target: .physicsMaterial(materialID, .damping), value: .scalar(2), duration: 1),
             ParameterTransition(target: .bubbleRadius(id(1)), value: .scalar(3), duration: 1)
         ]
         let scheduled = try TransactionStager.stage(transitions.reduce(WorldTransaction()) { $0.startTransition($1) }, against: initial).state
@@ -237,7 +237,7 @@ final class TransactionStagerTests: XCTestCase {
         let initial = try TransactionStager.stage(resources().add(.bubble(bubble(1))), against: state()).state
         let transaction = try WorldTransaction().remove(id(1)).add(.bubble(bubble(2)))
             .updateRenderMaterial(styleID, material: RenderMaterial())
-            .updatePhysicsMaterial(materialID, material: PhysicsMaterial(kind: .bubble, friction: 2))
+            .updatePhysicsMaterial(materialID, material: PhysicsMaterial(kind: .bubble, contactStiffness: 1e9))
             .remove(id(999))
         let batch = TransactionStager.stageBatch([PendingTransaction(token: TransactionToken(rawValue: 1), transaction: transaction)], against: initial)
         XCTAssertEqual(batch.state, initial)
@@ -289,7 +289,7 @@ final class TransactionStagerTests: XCTestCase {
         XCTAssertEqual(bounds.min.y, 1, accuracy: 1e-5); XCTAssertEqual(bounds.max.y, 9, accuracy: 1e-5)
         // Bryły kołowe wymagają materiału `.rigid`, jak wielokąty.
         assertRejected(try resources().add(.rigidBody(circle)), reason: .physicsMaterialNotFound(rigid))
-        assertRejected(try resources().updatePhysicsMaterial(rigid, material: PhysicsMaterial(kind: .bubble)).add(.rigidBody(circle)),
+        assertRejected(try resources().updatePhysicsMaterial(rigid, material: PhysicsMaterial(kind: .bubble, contactStiffness: 1e9)).add(.rigidBody(circle)),
                        reason: .incompatiblePhysicsMaterial(rigid, id(1)))
     }
 
@@ -410,8 +410,8 @@ final class TransactionStagerTests: XCTestCase {
     /// (3,4e38) od c ≈ 4,7e34: c₀ = 1e34 przy r_max = 8 (c = 8e34) jest po złej stronie granicy, a ten sam c₀ przy r = 2 (c = 2e34)
     /// i c₀ = 1e33 przy r_max = 8 (c = 8e33) po dobrej. Model sprzed 3.0.0 (s = 0 z domyślnych wykładników) nie widział promienia.
     private func softBubbleState(base: Float, radius: Float) throws -> (RuntimeState, rejection: TransactionRejectionReason?) {
-        let material = try PhysicsMaterial(kind: .bubble,
-                                           contactCompliance: BubbleContactCompliance(base: base, referenceRadius: 1))
+        // Przejściowo (do zadania 3): K_c = 1 / c₀, bo c = c₀ · r przy r_ref = 1 to dawna podatność c = r / K_c.
+        let material = try PhysicsMaterial(kind: .bubble, contactStiffness: Float(1 / Double(base)))
         let bubble = try BubbleDescriptor(id: id(1), position: .zero, targetRadius: radius, mass: 2,
                                           physicsMaterialID: materialID, renderMaterialID: styleID, eventInterest: [.didAdd])
         let setup = WorldTransaction().updatePhysicsMaterial(materialID, material: material)

@@ -8,7 +8,7 @@ final class NativeMetalMotionRoleTests: XCTestCase {
     let ball = ObjectID(rawValue: 1), wall = ObjectID(rawValue: 2)
     func initial(role: MotionRole = .dynamic, soft: Float = 0, wallAt x: Float? = nil) throws -> RuntimeState {
         var transaction = try WorldTransaction()
-            .updatePhysicsMaterial(.init(rawValue: 1), material: PhysicsMaterial(kind: .bubble, deformability: soft))
+            .updatePhysicsMaterial(.init(rawValue: 1), material: PhysicsMaterial(kind: .bubble, contactStiffness: soft > 0 ? 229 : 1e9))
             .updatePhysicsMaterial(.init(rawValue: 2), material: PhysicsMaterial(kind: .rigid))
             .updateRenderMaterial(.init(rawValue: 1), material: try RenderMaterial())
             .add(.bubble(BubbleDescriptor(id: ball, position: .zero, targetRadius: 1, motionRole: role,

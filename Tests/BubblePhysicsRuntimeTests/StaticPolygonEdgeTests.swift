@@ -19,8 +19,7 @@ final class StaticPolygonEdgeTests: XCTestCase {
     private func compliance(_ radius: Float) -> Float { baseCompliance * radius / referenceRadius }
 
     private func material(damping: Float = 0, friction: Float = 0, maximumLinearSpeed: Float? = 600) throws -> PhysicsMaterial {
-        try PhysicsMaterial(kind: .bubble, deformability: 0, damping: damping, friction: friction, maximumLinearSpeed: maximumLinearSpeed,
-                            contactCompliance: BubbleContactCompliance(base: baseCompliance, referenceRadius: referenceRadius))
+        try PhysicsMaterial(kind: .bubble, contactStiffness: referenceRadius / baseCompliance, damping: damping)
     }
 
     // MARK: sceny

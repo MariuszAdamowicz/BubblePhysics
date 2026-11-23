@@ -9,7 +9,7 @@ final class MotionCommandTests: XCTestCase {
             WorldRectangle(min: [-20,-20], max: [20,20])))
         let id = ObjectID(rawValue: 1)
         world.submit(try WorldTransaction()
-            .updatePhysicsMaterial(.init(rawValue: 1), material: PhysicsMaterial(kind: .bubble))
+            .updatePhysicsMaterial(.init(rawValue: 1), material: PhysicsMaterial(kind: .bubble, contactStiffness: 1e9))
             .updateRenderMaterial(.init(rawValue: 1), material: try RenderMaterial())
             .add(.bubble(BubbleDescriptor(id: id, position: .zero, targetRadius: 0.5,
                 physicsMaterialID: .init(rawValue: 1), renderMaterialID: .init(rawValue: 1),
@@ -48,7 +48,7 @@ final class MotionCommandTests: XCTestCase {
         let merged = ObjectID(rawValue: 3)
         let policy = try BubbleDrivePolicy(bandStiffness: 120)
         world.submit(try WorldTransaction()
-            .updatePhysicsMaterial(material, material: PhysicsMaterial(kind: .bubble))
+            .updatePhysicsMaterial(material, material: PhysicsMaterial(kind: .bubble, contactStiffness: 1e9))
             .updateRenderMaterial(style, material: try RenderMaterial())
             .add(.bubble(BubbleDescriptor(id: ObjectID(rawValue: 1), position: [-1, 0], targetRadius: 0.5,
                 physicsMaterialID: material, renderMaterialID: style)))
@@ -186,7 +186,7 @@ final class MotionCommandTests: XCTestCase {
             WorldRectangle(min: [-20,-20], max: [20,20])))
         let id = ObjectID(rawValue: 1)
         world.submit(try WorldTransaction()
-            .updatePhysicsMaterial(.init(rawValue: 1), material: PhysicsMaterial(kind: .bubble))
+            .updatePhysicsMaterial(.init(rawValue: 1), material: PhysicsMaterial(kind: .bubble, contactStiffness: 1e9))
             .updateRenderMaterial(.init(rawValue: 1), material: try RenderMaterial())
             .add(.bubble(BubbleDescriptor(id: id, position: .zero, targetRadius: 0.5,
                 physicsMaterialID: .init(rawValue: 1), renderMaterialID: .init(rawValue: 1), drivePolicy: policy))))
@@ -221,7 +221,7 @@ final class MotionCommandTests: XCTestCase {
             WorldRectangle(min: [-20,-20], max: [20,20])))
         let id = ObjectID(rawValue: 1)
         world.submit(try WorldTransaction()
-            .updatePhysicsMaterial(.init(rawValue: 1), material: PhysicsMaterial(kind: .bubble))
+            .updatePhysicsMaterial(.init(rawValue: 1), material: PhysicsMaterial(kind: .bubble, contactStiffness: 1e9))
             .updateRenderMaterial(.init(rawValue: 1), material: try RenderMaterial())
             .add(.bubble(BubbleDescriptor(id: id, position: .zero, targetRadius: 0.5,
                 physicsMaterialID: .init(rawValue: 1), renderMaterialID: .init(rawValue: 1),

@@ -10,7 +10,7 @@ final class NativeMetalStructuralOperationTests: XCTestCase {
     func id(_ n: UInt64) -> ObjectID { .init(rawValue: n) }
     func result(_ n: UInt64) -> BubbleResult { .init(id: id(n), physicsMaterialID: material, renderMaterialID: style) }
     func initial(_ bubbles: [BubbleDescriptor]) throws -> RuntimeState {
-        var tx = try WorldTransaction().updatePhysicsMaterial(material, material: PhysicsMaterial(kind: .bubble, deformability: 1))
+        var tx = try WorldTransaction().updatePhysicsMaterial(material, material: PhysicsMaterial(kind: .bubble, contactStiffness: 229))
             .updateRenderMaterial(style, material: try RenderMaterial())
         for b in bubbles { tx = tx.add(.bubble(b)) }
         return try TransactionStager.stage(tx, against: RuntimeState(configuration:
@@ -181,8 +181,7 @@ final class NativeMetalStructuralOperationTests: XCTestCase {
     // (`NativeMetalSolver`, invalidationRecords), więc rekord pary jest nowy (wiek 1), a jego podatność c_a + c_b to c₀·r/r_ref
     // wyniku i partnera, bez śladu po źródle.
     func testMergeResultWithSourceIDStartsItsPairWithAFreshRecordAndTheComplianceOfItsOwnRadius() async throws {
-        let softMaterial = try PhysicsMaterial(kind: .bubble, deformability: 1,
-            contactCompliance: BubbleContactCompliance(base: 0.002, referenceRadius: 1))
+        let softMaterial = try PhysicsMaterial(kind: .bubble, contactStiffness: 500)
         func soft(_ n: UInt64, x: Float) throws -> BubbleDescriptor {
             try BubbleDescriptor(id: id(n), position: [x, 0], targetRadius: 1, physicsMaterialID: material, renderMaterialID: style)
         }
@@ -217,8 +216,7 @@ final class NativeMetalStructuralOperationTests: XCTestCase {
     // Podział: część, która zachowuje ID źródła, dostaje nowy rekord pary (host unieważnia rekord ID strukturalnego) z podatnością
     // z własnego promienia. Partner leży nad źródłem, więc oba kawałki (po ±0,7 w poziomie) nadal na niego nachodzą.
     func testSplitResultWithSourceIDStartsItsPairWithAFreshRecordAndTheComplianceOfItsOwnRadius() async throws {
-        let softMaterial = try PhysicsMaterial(kind: .bubble, deformability: 1,
-            contactCompliance: BubbleContactCompliance(base: 0.002, referenceRadius: 1))
+        let softMaterial = try PhysicsMaterial(kind: .bubble, contactStiffness: 500)
         func soft(_ n: UInt64, y: Float) throws -> BubbleDescriptor {
             try BubbleDescriptor(id: id(n), position: [0, y], targetRadius: 1, physicsMaterialID: material, renderMaterialID: style)
         }

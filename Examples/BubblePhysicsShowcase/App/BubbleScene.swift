@@ -88,7 +88,7 @@ final class BubbleScene: ShowcaseScene {
         let font = try assets.register(font: "Helvetica-Bold", characters: "0123456789")
         self.font = font
         var transaction = WorldTransaction()
-            .updatePhysicsMaterial(Self.bubblePhysics, material: try PhysicsMaterial(kind: .bubble, deformability: 0.6, damping: 1.5))
+            .updatePhysicsMaterial(Self.bubblePhysics, material: try PhysicsMaterial(kind: .bubble, contactStiffness: 229, damping: 1.5))
             .updatePhysicsMaterial(Self.wallPhysics, material: try PhysicsMaterial(kind: .rigid))
             .updateRenderMaterial(Self.wallLook, material: try RenderMaterial(color: RGBA(0.25, 0.27, 0.33, 1)))
         for (index, texture) in textures.enumerated() {

@@ -26,7 +26,7 @@ final class NativeMetalHitTestTests: XCTestCase {
     private func step(_ objects: [NativePublicObject], hitTests: [WorldPoint], world: NativePublicWorld? = nil) async throws -> NativePublicFrame {
         let world = try world ?? NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         return try await world.step(objects: objects,
-            materials: [bubbleMaterial: PhysicsMaterial(kind: .bubble), rigidMaterial: PhysicsMaterial(kind: .rigid)],
+            materials: [bubbleMaterial: PhysicsMaterial(kind: .bubble, contactStiffness: 1e9), rigidMaterial: PhysicsMaterial(kind: .rigid)],
             region: WorldRectangle(min: [-100, -100], max: [100, 100]),
             duration: 1.0 / 60, hitTests: hitTests)
     }

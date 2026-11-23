@@ -1,7 +1,8 @@
 import Foundation
 
 public enum PhysicsParameter: Hashable, Sendable {
-    case deformability, damping, friction, restitution
+    /// `contactStiffness` dotyczy tylko materiału `.bubble`, `friction` i `restitution` tylko materiału `.rigid`.
+    case contactStiffness, damping, friction, restitution
 }
 
 public enum TransitionTarget: Hashable, Sendable {

@@ -33,7 +33,7 @@ final class NativeMetalPreviousContourTests: XCTestCase {
     private func step(_ world: NativePublicWorld, _ objects: [NativePublicObject],
                       beforeCommit: ((NativeMetalRenderHandoff) throws -> Void)? = nil) async throws -> NativePublicFrame {
         try await world.step(objects: objects,
-            materials: [bubbleMaterial: PhysicsMaterial(kind: .bubble), rigidMaterial: PhysicsMaterial(kind: .rigid)],
+            materials: [bubbleMaterial: PhysicsMaterial(kind: .bubble, contactStiffness: 1e9), rigidMaterial: PhysicsMaterial(kind: .rigid)],
             region: WorldRectangle(min: [-100, -100], max: [100, 100]), duration: 1.0 / 60, beforeCommit: beforeCommit)
     }
 

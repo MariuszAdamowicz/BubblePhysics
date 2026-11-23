@@ -15,7 +15,7 @@ final class NativeMetalEventCompactionTests: XCTestCase {
     }
 
     private func step(_ world: NativePublicWorld, _ objects: [NativePublicObject], capacity: Int = 8) async throws -> NativePublicFrame {
-        try await world.step(objects: objects, materials: [material: PhysicsMaterial(kind: .bubble)],
+        try await world.step(objects: objects, materials: [material: PhysicsMaterial(kind: .bubble, contactStiffness: 1e9)],
             region: WorldRectangle(min: [-20, -20], max: [20, 20]),
             duration: 1.0 / 60.0, eventBufferCapacity: capacity)
     }
@@ -168,7 +168,7 @@ final class NativeMetalEventCompactionTests: XCTestCase {
         let interested = NativePublicObject(descriptor: .bubble(try BubbleDescriptor(id: ObjectID(rawValue: 1),
             position: [9, 5], velocity: [20, 0], targetRadius: 1, regionExitPolicy: .wrap,
             physicsMaterialID: material, renderMaterialID: style, eventInterest: .didWrap)))
-        let frame = try await world.step(objects: [interested], materials: [material: PhysicsMaterial(kind: .bubble)],
+        let frame = try await world.step(objects: [interested], materials: [material: PhysicsMaterial(kind: .bubble, contactStiffness: 1e9)],
             region: WorldRectangle(min: [0, 0], max: [10, 10]), duration: 0.25)
         XCTAssertEqual(frame.events, [.didWrap(ObjectID(rawValue: 1))])
     }

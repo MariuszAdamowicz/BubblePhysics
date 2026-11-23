@@ -60,16 +60,6 @@ package final class NativeCompleteStepper: CompleteStepper {
                         if case .rigidBody = object.descriptor { try role(id, value, polygon: true) }
                         else { try role(id, value, polygon: false) }
                     }
-                case .updatePhysicsMaterial(let id, let material):
-                    if material.kind == .rigid && material.deformability != 0 {
-                        throw TransactionRejectionReason.unsupportedPhysicsParameter(id, .deformability)
-                    }
-                case .startTransition(let transition):
-                    if case .physicsMaterial(let id, let parameter) = transition.target,
-                       case .scalar(let value) = transition.value, value > 0,
-                       parameter == .deformability && change.state.physicsMaterials[id]?.kind == .rigid {
-                        throw TransactionRejectionReason.unsupportedPhysicsParameter(id, parameter)
-                    }
                 default: break
                 }
             } catch let reason as TransactionRejectionReason {

@@ -128,8 +128,6 @@ public struct BubbleDescriptor: Equatable, Sendable {
     public let layer: Int32
     /// Naklejka przypięta do bańki; `nil` oznacza brak.
     public let decal: Decal?
-    /// Nadpisuje podstawową podatność c₀ materiału tylko tej bańki; `nil` oznacza wartość z materiału.
-    public let contactCompliance: Float?
     public var properties: PhysicsBodyProperties { PhysicsBodyProperties(layer: layer, filter: filter, eventInterest: eventInterest) }
 
     public init(id: ObjectID, position: WorldPoint, velocity: WorldPoint = .zero,
@@ -138,16 +136,11 @@ public struct BubbleDescriptor: Equatable, Sendable {
                 renderMaterialID: RenderMaterialID, mergeGroups: MergeGroupSet = [],
                 eventInterest: EventInterest = [],
                 drivePolicy: BubbleDrivePolicy? = nil, filter: CollisionFilter = .default,
-                layer: Int32 = 0, decal: Decal? = nil, contactCompliance: Float? = nil) throws {
+                layer: Int32 = 0, decal: Decal? = nil) throws {
         try requireFinite(position, "bubble.position")
         try requireFinite(velocity, "bubble.velocity")
         try requirePositive(targetRadius, "bubble.targetRadius")
         try requirePositive(mass, "bubble.mass")
-        if let contactCompliance {
-            guard contactCompliance.isFinite, contactCompliance >= 0 else {
-                throw ModelValidationError.valueOutOfRange("contactCompliance")
-            }
-        }
         self.id = id
         self.drivePolicy = drivePolicy
         self.position = position
@@ -163,7 +156,6 @@ public struct BubbleDescriptor: Equatable, Sendable {
         self.filter = filter
         self.layer = layer
         self.decal = decal
-        self.contactCompliance = contactCompliance
     }
 }
 

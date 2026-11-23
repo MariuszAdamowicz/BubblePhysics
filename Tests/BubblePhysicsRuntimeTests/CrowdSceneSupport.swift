@@ -36,7 +36,7 @@ enum CrowdScene {
 
     /// Materiał baniek sceny: `maximumLinearSpeed` = 600 jak w specyfikacji sceny tłoku.
     static func bubblePhysics(maximumLinearSpeed: Float? = 600, damping: Float = 0) throws -> PhysicsMaterial {
-        try PhysicsMaterial(kind: .bubble, damping: damping, maximumLinearSpeed: maximumLinearSpeed)
+        try PhysicsMaterial(kind: .bubble, contactStiffness: 1e9, damping: damping)
     }
 
     static func resources(bubble: PhysicsMaterial) throws -> WorldTransaction {
@@ -64,12 +64,11 @@ enum CrowdScene {
 
     static func bubble(_ value: UInt64, at position: WorldPoint, radius: Float, velocity: WorldPoint = .zero,
                        mass: Float? = nil, interest: EventInterest = [.didAdd, .didExitSimulationRegion],
-                       material: PhysicsMaterialID? = nil, contactCompliance: Float? = nil,
+                       material: PhysicsMaterialID? = nil,
                        drivePolicy: BubbleDrivePolicy? = nil) throws -> WorldObject {
         .bubble(try BubbleDescriptor(id: id(value), position: position, velocity: velocity, targetRadius: radius,
                                      mass: mass ?? radius * radius / 400, physicsMaterialID: material ?? bubbleMaterial,
-                                     renderMaterialID: style, eventInterest: interest, drivePolicy: drivePolicy,
-                                     contactCompliance: contactCompliance))
+                                     renderMaterialID: style, eventInterest: interest, drivePolicy: drivePolicy))
     }
 
     /// Świat z ramą ścian i zasobami, po jednym kroku przyjmującym przygotowanie sceny.
@@ -99,9 +98,8 @@ enum CrowdScene {
     /// Bez tłumienia, `maximumLinearSpeed` = 600 jak w scenie tłoku. `dampingRatio` to ζ_c kontaktu miękkiego (domyślnie 1, jak w materiale).
     static func softBubblePhysics(base: Float, referenceRadius: Float = 20, maximumLinearSpeed: Float? = 600,
                                   damping: Float = 0, dampingRatio: Float = 1) throws -> PhysicsMaterial {
-        try PhysicsMaterial(kind: .bubble, damping: damping, maximumLinearSpeed: maximumLinearSpeed,
-                            contactCompliance: BubbleContactCompliance(base: base, referenceRadius: referenceRadius),
-                            contactDampingRatio: dampingRatio)
+        // Przejściowo (do zadania 7): K_c = r_ref / c₀, bo host liczy dawną podatność c = r / K_c. Limit prędkości bańki nie istnieje (G1-AC1).
+        try PhysicsMaterial(kind: .bubble, contactStiffness: base > 0 ? referenceRadius / base : 1e9, damping: damping)
     }
 
     /// Materiał miękki tłoku z P-B-27 i P-B-28: c₀ = 3,85e-3 przy r_ref = 20. Od v2.3.0 kontakt miękki ugina się
@@ -121,12 +119,10 @@ enum CrowdScene {
     /// w ścianę stałą siłą `force`. W stanie ustalonym wgniecenie wynosi δ = c · force (XPBD: podatność razy siła),
     /// niezależnie od masy.
     static func pressedBubble(_ transaction: WorldTransaction, _ value: UInt64, y: Float, radius: Float, force: Float,
-                              side: WallSide = .left, mass: Float = 1, material: PhysicsMaterialID? = nil,
-                              contactCompliance: Float? = nil) throws -> WorldTransaction {
+                              side: WallSide = .left, mass: Float = 1, material: PhysicsMaterialID? = nil) throws -> WorldTransaction {
         let position = WorldPoint(side.sign * (interiorHalfSize.x - radius), y)
         return transaction
-            .add(try bubble(value, at: position, radius: radius, mass: mass, material: material,
-                            contactCompliance: contactCompliance))
+            .add(try bubble(value, at: position, radius: radius, mass: mass, material: material))
             .setMotorDrive(id(value), drive: try MotorDrive(force: [side.sign * force, 0]))
     }
 

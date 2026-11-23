@@ -31,7 +31,7 @@ final class RigidContactMemoryTests: XCTestCase {
     private func measure(bodies: Int) async throws -> (rigid: Int, total: Int) {
         let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         _ = try await world.step(objects: scene(bodies: bodies),
-            materials: [bubbleMaterial: try PhysicsMaterial(kind: .bubble), polygonMaterial: try PhysicsMaterial(kind: .rigid)],
+            materials: [bubbleMaterial: try PhysicsMaterial(kind: .bubble, contactStiffness: 1e9), polygonMaterial: try PhysicsMaterial(kind: .rigid)],
             region: WorldRectangle(min: [0, 0], max: [700, 700]), duration: 1.0 / 60)
         return (world.rigidContactMemoryBytes, world.rigidContactMemoryBytes + world.contactMemoryBytes)
     }
@@ -73,12 +73,12 @@ final class RigidContactMemoryTests: XCTestCase {
             vertices: [[-20, -20], [20, -20], [20, 20], [-20, 20]], position: [100, 100], motionRole: .dynamic,
             physicsMaterialID: polygonMaterial, renderMaterialID: style))))
         var frame = try await world.step(objects: objects,
-            materials: [bubbleMaterial: try PhysicsMaterial(kind: .bubble), polygonMaterial: try PhysicsMaterial(kind: .rigid)],
+            materials: [bubbleMaterial: try PhysicsMaterial(kind: .bubble, contactStiffness: 1e9), polygonMaterial: try PhysicsMaterial(kind: .rigid)],
             region: WorldRectangle(min: [-200, -200], max: [400, 400]), duration: 1.0 / 60)
         XCTAssertGreaterThan(frame.contactCandidateOverflowCount, 0)
         XCTAssertGreaterThanOrEqual(frame.maximumContactCandidatesPerObject, limit)
         frame = try await world.step(objects: Array(frame.objects.values),
-            materials: [bubbleMaterial: try PhysicsMaterial(kind: .bubble), polygonMaterial: try PhysicsMaterial(kind: .rigid)],
+            materials: [bubbleMaterial: try PhysicsMaterial(kind: .bubble, contactStiffness: 1e9), polygonMaterial: try PhysicsMaterial(kind: .rigid)],
             region: WorldRectangle(min: [-200, -200], max: [400, 400]), duration: 1.0 / 60)
         XCTAssertEqual(frame.objects.count, limit + 13)
         for object in frame.objects.values {

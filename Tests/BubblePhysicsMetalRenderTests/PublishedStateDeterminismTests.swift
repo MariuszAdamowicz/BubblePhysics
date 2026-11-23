@@ -83,7 +83,7 @@ final class PublishedStateDeterminismTests: XCTestCase {
                 physicsMaterialID: material, renderMaterialID: style))
         }
         var initial = try WorldTransaction()
-            .updatePhysicsMaterial(material, material: PhysicsMaterial(kind: .bubble))
+            .updatePhysicsMaterial(material, material: PhysicsMaterial(kind: .bubble, contactStiffness: 1e9))
             .updateRenderMaterial(style, material: try RenderMaterial())
         for index in 0..<300 {
             initial = initial.add(try descriptor(index + 1, [Float(index % 20) * 30 + 40, Float(index / 20) * 30 + 40], radius: 5))

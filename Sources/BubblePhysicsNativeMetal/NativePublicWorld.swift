@@ -66,7 +66,7 @@ package struct NativePublicFrame {
 
 struct NativePublicProperties: Equatable, Sendable {
     var flags: SIMD4<UInt32> // enabled, static, wrap, region result (0 unchanged, 1 removed, 2 wrapped)
-    var material: SIMD4<Float> // damping, deformability, 0 (nieużywane), friction
+    var material: SIMD4<Float> // damping, 0 (nieużywane), 0 (nieużywane), friction
     var restitution: Float
     var resources: SIMD2<UInt64> // material ID, render material ID
     var eventData: SIMD2<UInt64> // interest, merge groups
@@ -79,15 +79,15 @@ struct NativePublicProperties: Equatable, Sendable {
     /// kontaktu miękkiego ζ_c (zawsze, także dla bańki twardej: czyta go tłumik pary); w rekordzie bańki jako `contact`.
     var contact: SIMD4<Float> = .zero
 
-    /// c₀ (po nadpisaniu na bańce) · r / r_ref dla bieżącego promienia fizycznego `radius`.
-    /// Lane `.z` zawsze niesie ζ_c, także przy c₀ = 0 (gałąź `guard`): tłumik pary czyta go też dla bańki twardej.
+    /// Stan przejściowy zmiany 4.0.0 (do zadania 7, razem z XPBD): sztywność K_c przechodzi w dawną podatność XPBD c = r / K_c.
+    /// Sztywność od `transitionalHardStiffness` w górę to kontakt twardy (c = 0), żeby stare sceny twarde działały bez zmian.
+    /// Lane `.z` niesie dawny ζ_c = 1 (tłumienie krytyczne), bo materiał go już nie ma.
     /// Przepełnienie Float wyklucza stager (CD-D-15).
-    static func contact(of compliance: BubbleContactCompliance, override: Float?, radius: Float,
-                        dampingRatio: Float) -> SIMD4<Float> {
-        let base = override ?? compliance.base
-        guard base > 0 else { return SIMD4(0, 0, dampingRatio, 0) }
+    static let transitionalHardStiffness: Float = 1e9
+    static func contact(stiffness: Float?, radius: Float) -> SIMD4<Float> {
+        guard let stiffness, stiffness < transitionalHardStiffness else { return SIMD4(0, 0, 1, 0) }
         // Ten sam wzór w Double co walidacja stagera (`validateWorstAlpha`).
-        return SIMD4(Float(compliance.scaledBase(base, radius: radius)), 0, dampingRatio, 0)
+        return SIMD4(Float(Double(radius) / Double(stiffness)), 0, 1, 0)
     }
 }
 
@@ -191,15 +191,13 @@ package final class NativePublicWorld {
                 solverBubbles.append(bubble)
                 properties[id] = NativePublicProperties(
                     flags: SIMD4(1, object.motionRole == .static ? 1 : 0, b.regionExitPolicy == .wrap ? 1 : 0, 0),
-                    material: SIMD4(material.damping, material.deformability, 0, material.friction),
+                    material: SIMD4(material.damping, 0, 0, material.friction),
                     restitution: material.restitution,
                     resources: SIMD2(b.physicsMaterialID.rawValue, b.renderMaterialID.rawValue),
                     eventData: SIMD2(b.eventInterest.rawValue, b.mergeGroups.rawValue), filter: b.filter,
                     speedLimits: SIMD2(material.maximumLinearSpeed ?? 0, material.maximumAngularSpeed ?? 0),
                     layer: object.layer,
-                    contact: NativePublicProperties.contact(of: material.contactCompliance, override: b.contactCompliance,
-                                                            radius: object.collisionRadius,
-                                                            dampingRatio: material.contactDampingRatio))
+                    contact: NativePublicProperties.contact(stiffness: material.contactStiffness, radius: object.collisionRadius))
                 if let shape = object.structuralShape { structuralShapes[b.id] = shape }
             case .rigidBody(let p):
                 guard let material = materials[p.physicsMaterialID] else { throw NativeMetalSolverError.invalidSnapshot }

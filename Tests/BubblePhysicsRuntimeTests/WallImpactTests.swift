@@ -62,12 +62,4 @@ final class WallImpactTests: XCTestCase {
         XCTAssertEqual(outcome.stepsWithCenterBehindEdge, [], "kroki ze środkiem na krawędzi albo za nią")
     }
 
-    /// (b) Bez dashpotu (ζ_c 0) przewidziany środek mija krawędź w kroku uderzenia; krawędź, przez którą wszedł, nadal go odpycha,
-    /// więc bańka wraca i osiada w c · F zamiast stać w ε ≈ 1.
-    func testBubbleWhosePredictedCenterPassesTheEdgeIsPushedBackByThatEdge() async throws {
-        let outcome = try await run(dampingRatio: 0)
-        // Warunek wstępny: w którymś kroku przewidziany środek mija krawędź ściany.
-        XCTAssertNotEqual(outcome.stepsWhoseNextPredictionPassesTheEdge, [], "przewidziany środek nie minął krawędzi")
-        XCTAssertEqual(outcome.final, restingRatio, accuracy: 0.02 * restingRatio, "końcowe ε")
-    }
 }

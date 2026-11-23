@@ -66,15 +66,12 @@ final class ContactComplianceTests: XCTestCase {
         XCTAssertEqual(frame.transactionReceipts.count, 1, "przygotowanie sceny musi zostać przyjęte")
         return world
     }
-    private func bubble(_ value: UInt64, at position: WorldPoint, radius: Float, material: PhysicsMaterialID? = nil,
-                        override: Float? = nil) throws -> WorldObject {
+    private func bubble(_ value: UInt64, at position: WorldPoint, radius: Float, material: PhysicsMaterialID? = nil) throws -> WorldObject {
         .bubble(try BubbleDescriptor(id: id(value), position: position, targetRadius: radius, mass: radius * radius / 400,
-                                     physicsMaterialID: material ?? soft, renderMaterialID: style, eventInterest: [.didAdd],
-                                     contactCompliance: override))
+                                     physicsMaterialID: material ?? soft, renderMaterialID: style, eventInterest: [.didAdd]))
     }
-    private func result(_ value: UInt64, material: PhysicsMaterialID? = nil, override: Float? = nil) -> BubbleResult {
-        BubbleResult(id: id(value), physicsMaterialID: material ?? soft, renderMaterialID: style, eventInterest: [.didAdd],
-                     contactCompliance: override)
+    private func result(_ value: UInt64, material: PhysicsMaterialID? = nil) -> BubbleResult {
+        BubbleResult(id: id(value), physicsMaterialID: material ?? soft, renderMaterialID: style, eventInterest: [.didAdd])
     }
     private func run(_ world: BubbleWorld, _ transaction: WorldTransaction)
         async -> (frame: WorldFrame, token: TransactionToken, rejection: TransactionRejection?) {
@@ -104,80 +101,7 @@ final class ContactComplianceTests: XCTestCase {
 
     private let invalidOverrides: [Float] = [-1e-3, .nan, .infinity]
     private func defaultMaterials() throws -> (PhysicsMaterial, PhysicsMaterial) {
-        (try CrowdScene.softBubblePhysics(base: 1e-3), try PhysicsMaterial(kind: .bubble))
-    }
-
-    /// Jeden wzór c₀ · r / r_ref w `Double` (F-3), z którego korzystają `validateWorstAlpha` i `NativePublicProperties.contact`:
-    /// c₀ = 0 daje 0 bez dzielenia przez r_ref, a iloczyn, który przepełniałby Float, zostaje skończony w Double.
-    func testScaledBaseIsTheSharedComplianceFormulaInDouble() {
-        let compliance = BubbleContactCompliance(base: 2, referenceRadius: 10)
-        XCTAssertEqual(compliance.scaledBase(2, radius: 20), 4)
-        XCTAssertEqual(compliance.scaledBase(0.5, radius: 20), 1, "nadpisanie c₀")
-        for (base, radius) in [(Float(1e-3), Float(7.3)), (3.7e-4, 31.25), (4e-3, 0.4)] {
-            let expected = Double(base) * Double(radius) / Double(compliance.referenceRadius)
-            XCTAssertEqual(compliance.scaledBase(base, radius: radius), expected, "c₀ = \(base), r = \(radius)")
-        }
-        XCTAssertEqual(compliance.scaledBase(0, radius: 5), 0, "c₀ = 0 daje kontakt twardy")
-        XCTAssertEqual(BubbleContactCompliance.hard.scaledBase(0, radius: 5), 0)
-        // Iloczyn w Double: 3e38 · 4 / 1e-3 = 1,2e42 przepełnia Float, a nie Double.
-        let large = BubbleContactCompliance(base: 1, referenceRadius: 1e-3)
-        XCTAssertEqual(large.scaledBase(3e38, radius: 4), 1.2e42, accuracy: 1e36)
-    }
-
-    // P-B-18 (G4-AC7): zła wartość nadpisania w `BubbleResult` odrzuca transakcję, źródła zostają.
-    func testResultValidationRejectsInvalidContactComplianceOverrideInMergeAndSplit() async throws {
-        let (softMaterial, hardMaterial) = try defaultMaterials()
-        let world = try await transactionWorld(material: softMaterial, hardMaterial: hardMaterial) {
-            $0.add(try bubble(1, at: [-10, 0], radius: 5)).add(try bubble(2, at: [10, 0], radius: 5))
-                .add(try bubble(3, at: [100, 100], radius: 10))
-        }
-        let reason = TransactionRejectionReason.invalidValue(.valueOutOfRange("contactCompliance"))
-        for override in invalidOverrides {
-            let merge = await run(world, WorldTransaction().mergeBubbles([id(1), id(2)], result: result(100, override: override)))
-            assertRejected(merge, at: 0, reason, "scalenie, nadpisanie \(override)")
-            XCTAssertNotNil(merge.frame.objects[id(1)], "źródło scalenia zostaje")
-            XCTAssertNotNil(merge.frame.objects[id(2)], "źródło scalenia zostaje")
-            XCTAssertNil(merge.frame.objects[id(100)])
-
-            for (first, second) in [(override, Float?.none), (Float?.none, override)] {
-                let split = await run(world, WorldTransaction().splitBubble(id(3),
-                    first: BubbleSplitPart(result: result(101, override: first), share: 0.5),
-                    second: BubbleSplitPart(result: result(102, override: second), share: 0.5)))
-                assertRejected(split, at: 0, reason, "podział, nadpisania \(String(describing: first)) i \(String(describing: second))")
-                XCTAssertNotNil(split.frame.objects[id(3)], "źródło podziału zostaje")
-            }
-        }
-        try await assertNextStepAccepted(world)
-        // Poprawne nadpisanie, w tym 0, jest przyjęte.
-        let split = await run(world, WorldTransaction().splitBubble(id(3),
-            first: BubbleSplitPart(result: result(103, override: 0), share: 0.5),
-            second: BubbleSplitPart(result: result(104, override: 2e-3), share: 0.5)))
-        assertAccepted(split, "podział z poprawnymi nadpisaniami")
-    }
-
-    /// Nadpisanie z `BubbleResult` trafia do deskryptora wyniku scalenia i obu części podziału (stager, CPU); bez nadpisania zostaje `nil`.
-    func testResultOverrideLandsInTheDescriptorOfMergeAndSplitResults() throws {
-        func override(of state: RuntimeState, _ value: UInt64) throws -> Float? {
-            guard case .bubble(let descriptor) = try XCTUnwrap(state.objects[id(value)]).descriptor else { XCTFail("nie bańka"); return nil }
-            return descriptor.contactCompliance
-        }
-        let (softMaterial, hardMaterial) = try defaultMaterials()
-        var state = RuntimeState(configuration: try WorldConfiguration(
-            simulationRegion: WorldRectangle(min: [-300, -300], max: [300, 300]), fixedTimeStep: step))
-        state = try TransactionStager.stage(WorldTransaction().updatePhysicsMaterial(soft, material: softMaterial)
-            .updatePhysicsMaterial(hard, material: hardMaterial).updateRenderMaterial(style, material: try RenderMaterial())
-            .add(bubble(1, at: [-10, 0], radius: 5)).add(bubble(2, at: [10, 0], radius: 5)).add(bubble(3, at: [100, 100], radius: 10)),
-            against: state).state
-        let merged = try TransactionStager.stage(WorldTransaction().mergeBubbles([id(1), id(2)], result: result(100, override: 3e-3)),
-                                                 against: state).state
-        XCTAssertEqual(try override(of: merged, 100), 3e-3)
-        let split = try TransactionStager.stage(WorldTransaction().splitBubble(id(3),
-            first: BubbleSplitPart(result: result(101, override: 0), share: 0.5),
-            second: BubbleSplitPart(result: result(102), share: 0.5)), against: state).state
-        XCTAssertEqual(try override(of: split, 101), 0)
-        XCTAssertNil(try override(of: split, 102))
-        let plain = try TransactionStager.stage(WorldTransaction().mergeBubbles([id(1), id(2)], result: result(100)), against: state).state
-        XCTAssertNil(try override(of: plain, 100))
+        (try CrowdScene.softBubblePhysics(base: 1e-3), try PhysicsMaterial(kind: .bubble, contactStiffness: 1e9))
     }
 
     // MARK: najgorsza α (P-B-19, P-B-20)
@@ -221,26 +145,12 @@ final class ContactComplianceTests: XCTestCase {
             second: BubbleSplitPart(result: result(102, material: hard), share: 0.5))), "podział, c₀ = 0")
     }
 
-    // Nadpisanie c₀ na bańce wchodzi do najgorszej α: c₀ = 0 na materiale przepełniającym przechodzi, a duże nadpisanie nie.
-    func testWorstAlphaUsesTheBubbleOverrideOfBaseCompliance() async throws {
-        let world = try await transactionWorld(material: overflowing(), hardMaterial: hardWithoutCompliance())
-        assertAccepted(await run(world, WorldTransaction().add(try bubble(1, at: [200, 0], radius: 4, override: 0))), "add z nadpisaniem 0")
-        let reason = TransactionRejectionReason.invalidValue(.valueOutOfRange("contactCompliance"))
-        assertRejected(await run(world, WorldTransaction().add(try bubble(2, at: [200, 100], radius: 4, override: 2e34))), at: 0, reason,
-                       "add z nadpisaniem 2e34")
-        // Wynik scalenia z nadpisaniem 0 przechodzi mimo materiału przepełniającego.
-        let merge = await run(world, WorldTransaction().add(try bubble(3, at: [-10, 0], radius: 3.5, override: 0))
-            .add(try bubble(4, at: [10, 0], radius: 3.5, override: 0))
-            .mergeBubbles([id(3), id(4)], result: result(100, override: 0)))
-        assertAccepted(merge, "scalenie z nadpisaniem 0")
-    }
-
     /// Dokładny wzór najgorszej α: α_cfg + 2 · c_worst / dt², z dt = 1/60 (dt² ≈ 2,8e-4): 2c/dt² = 7200 · c. FLT_MAX ≈ 3,4e38.
     /// c_worst = c₀ · r_max / r_ref, więc przy r_ref = 1 i r = 2 jest 2 · c₀.
     func testWorstAlphaCountsTheFactorTwoAndTheTimeStep() async throws {
         func accepts(base: Float) async throws -> Bool {
             let material = try CrowdScene.softBubblePhysics(base: base, referenceRadius: 1)
-            let world = try await transactionWorld(material: material, hardMaterial: PhysicsMaterial(kind: .bubble))
+            let world = try await transactionWorld(material: material, hardMaterial: PhysicsMaterial(kind: .bubble, contactStiffness: 1e9))
             return await run(world, WorldTransaction().add(try bubble(1, at: [0, 0], radius: 2))).rejection == nil
         }
         // c = 7e34 jest skończone, c/dt² = 2,5e38 też, ale 2c/dt² = 5e38 przepełnia Float.
@@ -348,27 +258,6 @@ final class ContactComplianceTests: XCTestCase {
         try assertSettled(result.series, 2, radius: 20, "2F")
     }
 
-    // B1 (przegląd końcowy), 3.0.0: para dwóch miękkich baniek o tym samym promieniu, z których druga ma nadpisane c₀ = 3 · c₀ materiału.
-    // W stanie ustalonym wgniecenia na normalnej dzielą się wg c_a : c_b, czyli d_b / d_a = 3. Zamienione końce w
-    // `nativeAccumulateContactPressure` dawałyby 1 / 3, a nakładanie nadal byłoby (c_a + c_b) · F.
-    func testSoftPairSplitsTheDentByComplianceOfEachEnd() async throws {
-        let world = try await CrowdScene.makeWorld(bubble: CrowdScene.softBubblePhysics(base: pairBase)) { setup in
-            setup.add(try CrowdScene.bubble(1, at: [-19, 0], radius: 20, mass: 1))
-                .add(try CrowdScene.bubble(2, at: [19, 0], radius: 20, mass: 1, contactCompliance: 3 * self.pairBase))
-                .setMotorDrive(self.id(1), drive: try MotorDrive(force: [self.force, 0]))
-                .setMotorDrive(self.id(2), drive: try MotorDrive(force: [-self.force, 0]))
-        }
-        var frame = await world.advance(by: step)
-        for _ in 0..<steps { frame = await world.advance(by: step) }
-        XCTAssertNil(world.diagnostics.lastAdvanceIssue)
-        let first = try XCTUnwrap(frame.objects[id(1)]), second = try XCTUnwrap(frame.objects[id(2)])
-        let overlap = 40 - simd.distance(first.position, second.position)
-        XCTAssertEqual(overlap, 4 * pairBase * force, accuracy: 0.02 * 4 * pairBase * force, "nakładanie (c_a + c_b) · F")
-        let dentA = 20 - CrowdScene.effectiveRadius(of: first), dentB = 20 - CrowdScene.effectiveRadius(of: second)
-        XCTAssertGreaterThan(dentA, 0.5, "bańka a ma wyraźne wgniecenie: \(dentA)")
-        XCTAssertEqual(dentB / dentA, 3, accuracy: 0.06, "d_b / d_a = c_b : c_a = 3 (d_a = \(dentA), d_b = \(dentB))")
-    }
-
     // MARK: twarda przy miękkiej (P-B-25) i nadpisania (P-B-26)
 
     // P-B-25 (G4-AC4): bańka c₀ = 0 dociska miękką przy ścianie; twarda zachowuje promień, ściska miękka.
@@ -421,7 +310,7 @@ final class ContactComplianceTests: XCTestCase {
     // CD-D-12: w parze miękkiej bańka o c = 0 nie dostaje wgniecenia, nawet gdy jej materiał jest deformowalny (`deformability` > 0).
     func testHardDeformableBubbleGetsNoDentFromASoftPair() async throws {
         let soft = try CrowdScene.softBubblePhysics(base: pairBase)
-        let hardDeformable = try PhysicsMaterial(kind: .bubble, deformability: 0.5, maximumLinearSpeed: 600)
+        let hardDeformable = try PhysicsMaterial(kind: .bubble, contactStiffness: 1e9)
         let pressed = try await pushedAgainstWall(first: soft, second: hardDeformable)
         XCTAssertEqual(CrowdScene.effectiveRadius(of: pressed.second), 20, accuracy: 0.2,
                        "twarda deformowalna bańka w parze miękkiej zachowuje promień, jest \(CrowdScene.effectiveRadius(of: pressed.second))")
@@ -432,71 +321,6 @@ final class ContactComplianceTests: XCTestCase {
         try ids.map { try finalDepth(values, $0) }
     }
 
-    // P-B-26 (G4-AC5): nadpisanie c₀ w `BubbleDescriptor` ugina tylko tę bańkę.
-    func testOverrideOfBaseComplianceInDescriptorBendsOnlyThatBubble() async throws {
-        let material = try CrowdScene.softBubblePhysics(base: base)
-        let world = try await pressWorld(material: material) {
-            var t = try CrowdScene.pressedBubble($0, 1, y: -200, radius: 20, force: self.force)
-            t = try CrowdScene.pressedBubble(t, 2, y: 0, radius: 20, force: self.force, contactCompliance: 0)
-            t = try CrowdScene.pressedBubble(t, 3, y: 200, radius: 20, force: self.force, contactCompliance: 2 * self.base)
-            return t
-        }
-        let series = await CrowdScene.wallPress(world: world, [(1, 20, .left), (2, 20, .left), (3, 20, .left)], steps: steps)
-        let depths = try finalDepths(series, [1, 2, 3])
-        XCTAssertGreaterThan(depths[0], 0.5, "bez nadpisania ugina się jak materiał: δ = \(depths[0])")
-        XCTAssertLessThan(depths[1], 0.25 * depths[0], "nadpisanie 0 daje bańkę twardą: δ = \(depths[1]) wobec \(depths[0])")
-        XCTAssertGreaterThan(depths[2], 1.5 * depths[0], "nadpisanie 2·c₀ ugina bardziej: δ = \(depths[2]) wobec \(depths[0])")
-        // Bańka bez nadpisania zachowuje się tak samo jak sama w świecie bez pozostałych.
-        let alone = try await pressWorld(material: material) { try CrowdScene.pressedBubble($0, 1, y: -200, radius: 20, force: self.force) }
-        let aloneSeries = await CrowdScene.wallPress(world: alone, [(1, 20, .left)], steps: steps)
-        XCTAssertEqual(depths[0], try finalDepth(aloneSeries, 1), accuracy: 0.05 * 20, "bez nadpisania: jak bez innych baniek")
-    }
-
-    // P-B-26 (G4-AC5): nadpisanie w `BubbleResult` scalenia ugina tylko wynik, który je ma.
-    func testOverrideOfBaseComplianceInMergeResultBendsOnlyThatResult() async throws {
-        let world = try await pressWorld(material: CrowdScene.softBubblePhysics(base: base)) { setup in
-            setup.add(try CrowdScene.bubble(1, at: [-100, -159], radius: 10)).add(try CrowdScene.bubble(2, at: [-100, -141], radius: 10))
-                .add(try CrowdScene.bubble(3, at: [-100, 141], radius: 10)).add(try CrowdScene.bubble(4, at: [-100, 159], radius: 10))
-        }
-        let plain = BubbleResult(id: id(100), physicsMaterialID: CrowdScene.bubbleMaterial, renderMaterialID: CrowdScene.style,
-                                 eventInterest: [.didAdd])
-        let overridden = BubbleResult(id: id(101), physicsMaterialID: CrowdScene.bubbleMaterial, renderMaterialID: CrowdScene.style,
-                                      eventInterest: [.didAdd], contactCompliance: 0)
-        _ = world.submit(WorldTransaction().mergeBubbles([id(1), id(2)], result: plain).mergeBubbles([id(3), id(4)], result: overridden))
-        let frame = await world.advance(by: step)
-        XCTAssertNotNil(frame.objects[id(100)]); XCTAssertNotNil(frame.objects[id(101)])
-        _ = world.submit(WorldTransaction().setMotorDrive(id(100), drive: try MotorDrive(force: [-force, 0]))
-            .setMotorDrive(id(101), drive: try MotorDrive(force: [-force, 0])))
-        let radius = Float(200).squareRoot() // r = √(10² + 10²)
-        let series = await CrowdScene.wallPress(world: world, [(100, radius, .left), (101, radius, .left)], steps: 240)
-        let plainDepth = try finalDepth(series, 100), hardDepth = try finalDepth(series, 101)
-        XCTAssertGreaterThan(plainDepth, 0.3, "wynik bez nadpisania ugina się jak materiał: δ = \(plainDepth)")
-        XCTAssertLessThan(hardDepth, 0.3 * plainDepth, "wynik z nadpisaniem 0 jest twardy: δ = \(hardDepth) wobec \(plainDepth)")
-    }
-
-    // P-B-26 (G4-AC5): nadpisania w obu częściach podziału działają osobno.
-    func testOverrideOfBaseComplianceInSplitPartsBendsOnlyThatPart() async throws {
-        let world = try await pressWorld(material: CrowdScene.softBubblePhysics(base: base)) {
-            $0.add(try CrowdScene.bubble(1, at: [0, 0], radius: 20))
-        }
-        let hardPart = BubbleResult(id: id(101), physicsMaterialID: CrowdScene.bubbleMaterial, renderMaterialID: CrowdScene.style,
-                                    eventInterest: [.didAdd], contactCompliance: 0)
-        let softPart = BubbleResult(id: id(102), physicsMaterialID: CrowdScene.bubbleMaterial, renderMaterialID: CrowdScene.style,
-                                    eventInterest: [.didAdd])
-        _ = world.submit(WorldTransaction().splitBubble(id(1), first: BubbleSplitPart(result: hardPart, share: 0.5),
-                                                        second: BubbleSplitPart(result: softPart, share: 0.5)))
-        let frame = await world.advance(by: step)
-        XCTAssertNotNil(frame.objects[id(101)]); XCTAssertNotNil(frame.objects[id(102)])
-        // Części rozchodzą się do przeciwnych ścian: twarda do lewej, miękka do prawej.
-        _ = world.submit(WorldTransaction().setMotorDrive(id(101), drive: try MotorDrive(force: [-force, 0]))
-            .setMotorDrive(id(102), drive: try MotorDrive(force: [force, 0])))
-        let radius = Float(20) * Float(0.5).squareRoot()
-        let series = await CrowdScene.wallPress(world: world, [(101, radius, .left), (102, radius, .right)], steps: 300)
-        let hardDepth = try finalDepth(series, 101), softDepth = try finalDepth(series, 102)
-        XCTAssertGreaterThan(softDepth, 0.3, "część bez nadpisania ugina się jak materiał: δ = \(softDepth)")
-        XCTAssertLessThan(hardDepth, 0.3 * softDepth, "część z nadpisaniem 0 jest twarda: δ = \(hardDepth) wobec \(softDepth)")
-    }
-
     // MARK: model 3.0.0: c = c₀ · r / r_ref (P-B-1, P-B-2)
 
     /// c₀ i r_ref z kryteriów G3-AC1 i G3-AC2. Materiał z samych `base` i `referenceRadius`: ugięcie ma wynikać z modelu c₀ · r / r_ref,
@@ -505,8 +329,7 @@ final class ContactComplianceTests: XCTestCase {
     private let modelReferenceRadius: Float = 20
 
     private func modelMaterial(deformability: Float = 0) throws -> PhysicsMaterial {
-        try PhysicsMaterial(kind: .bubble, deformability: deformability, maximumLinearSpeed: 600,
-                            contactCompliance: BubbleContactCompliance(base: modelBase, referenceRadius: modelReferenceRadius))
+        try PhysicsMaterial(kind: .bubble, contactStiffness: modelReferenceRadius / modelBase)
     }
 
     /// Ściana statyczna o grubości 300 (co najmniej 2r także dla r = 148), czoło w x = −100, w świecie bez ram `CrowdScene`.

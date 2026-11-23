@@ -33,11 +33,10 @@ final class MotionControllersPrepareTests: XCTestCase {
         }
     }
 
-    /// Przejście parametru materiału odtwarza materiał, więc musi zachować podatność kontaktu i ζ_c (G4-AC1, G4-AC2).
-    func testMaterialParameterTransitionKeepsContactComplianceAndDampingRatio() throws {
+    /// Przejście parametru materiału odtwarza materiał, więc musi zachować sztywność kontaktu K_c (G1-AC1).
+    func testMaterialParameterTransitionKeepsContactStiffness() throws {
         let materialID = PhysicsMaterialID(rawValue: 7)
-        let compliance = BubbleContactCompliance(base: 0.174, referenceRadius: 20)
-        let material = try PhysicsMaterial(kind: .bubble, damping: 0.1, contactCompliance: compliance, contactDampingRatio: 0.2)
+        let material = try PhysicsMaterial(kind: .bubble, contactStiffness: 229, damping: 0.1)
         let transaction = WorldTransaction()
             .updatePhysicsMaterial(materialID, material: material)
             .startTransition(ParameterTransition(target: .physicsMaterial(materialID, .damping), value: .scalar(0.5), duration: 1))
@@ -46,8 +45,7 @@ final class MotionControllersPrepareTests: XCTestCase {
         try MotionControllers.prepare(&prepared, duration: duration)
         let transitioned = try XCTUnwrap(prepared.physicsMaterials[materialID])
         XCTAssertNotEqual(transitioned.damping, material.damping, "przejście ruszyło tłumienie")
-        XCTAssertEqual(transitioned.contactDampingRatio, 0.2)
-        XCTAssertEqual(transitioned.contactCompliance, compliance)
+        XCTAssertEqual(transitioned.contactStiffness, 229)
     }
 
     /// Deterministyczny generator (xorshift), by zestawy identyfikatorów były powtarzalne między uruchomieniami.
@@ -94,7 +92,7 @@ final class MotionControllersPrepareTests: XCTestCase {
     private func drivenState(policy: BubbleDrivePolicy?, target: WorldPoint, velocity: WorldPoint = .zero, globalForce: WorldPoint = .zero,
                              fields: [ForceFieldDescriptor] = []) throws -> RuntimeState {
         var transaction = WorldTransaction()
-            .updatePhysicsMaterial(bubbleMaterial, material: try PhysicsMaterial(kind: .bubble))
+            .updatePhysicsMaterial(bubbleMaterial, material: try PhysicsMaterial(kind: .bubble, contactStiffness: 1e9))
             .updateRenderMaterial(RenderMaterialID(rawValue: 1), material: try RenderMaterial())
             .add(.bubble(try BubbleDescriptor(id: driven, position: .zero, velocity: velocity, targetRadius: 1, mass: 2,
                 physicsMaterialID: bubbleMaterial, renderMaterialID: RenderMaterialID(rawValue: 1), drivePolicy: policy)))
@@ -129,7 +127,7 @@ final class MotionControllersPrepareTests: XCTestCase {
                 physicsMaterialID: bubbleMaterial, renderMaterialID: RenderMaterialID(rawValue: 1), drivePolicy: policy))
         }
         let transaction = WorldTransaction()
-            .updatePhysicsMaterial(bubbleMaterial, material: try PhysicsMaterial(kind: .bubble, damping: gamma))
+            .updatePhysicsMaterial(bubbleMaterial, material: try PhysicsMaterial(kind: .bubble, contactStiffness: 1e9, damping: gamma))
             .updateRenderMaterial(RenderMaterialID(rawValue: 1), material: try RenderMaterial())
             .add(try bubble(dynamicID, at: 0)).add(try bubble(driven, at: 50)).add(try bubble(pathID, at: 100))
             .beginPlayerDrive(driven, target: [53, 54])

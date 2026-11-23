@@ -553,15 +553,15 @@ private struct StagingContext {
     func validateWorstAlpha(_ object: RuntimeObject, endRadius: Float? = nil) throws {
         guard case .bubble(let bubble) = object.descriptor, let (materialID, _) = object.material,
               let material = state.physicsMaterials[materialID] else { return }
-        let compliance = material.contactCompliance
-        let base = bubble.contactCompliance ?? compliance.base
+        // Przejściowo (do zadania 7) solver brył i XPBD nadal liczą podatność c = r / K_c.
+        let base = material.contactStiffness.map { 1 / Double($0) } ?? 0
         let stepSquared = Double(state.configuration.fixedTimeStep) * Double(state.configuration.fixedTimeStep)
         var alpha = Double(baseContactCompliance) / stepSquared
         if base > 0 {
             var radii = [object.targetRadius, object.collisionRadius]
             if let endRadius { radii.append(endRadius) }
             if case .scalar(let scheduled)? = state.transitions[.bubbleRadius(bubble.id)]?.value { radii.append(scheduled) }
-            let worst = compliance.scaledBase(base, radius: radii.max() ?? object.targetRadius)
+            let worst = Double(base) * Double(radii.max() ?? object.targetRadius)
             // Host liczy c w Float, więc przepełnienie samego c też jest błędem.
             guard Float(worst).isFinite else { throw ModelValidationError.valueOutOfRange("contactCompliance") }
             alpha += 2 * Double(Float(worst)) / stepSquared
@@ -613,7 +613,16 @@ private struct StagingContext {
         case (.physicsMaterial(let id, let parameter), .scalar(let value)):
             guard state.physicsMaterials[id] != nil else { throw TransactionRejectionReason.physicsMaterialNotFound(id) }
             try requireNonnegative(value, "transition.material")
-            if parameter == .deformability || parameter == .restitution {
+            // K_c należy tylko do materiału bańki, tarcie i restytucja tylko do materiału sztywnego (CD-D-11).
+            let kind = state.physicsMaterials[id]?.kind
+            switch parameter {
+            case .contactStiffness:
+                guard kind == .bubble, value > 0 else { throw ModelValidationError.valueOutOfRange("transition.material") }
+            case .friction, .restitution:
+                guard kind == .rigid else { throw ModelValidationError.valueOutOfRange("transition.material") }
+            case .damping: break
+            }
+            if parameter == .restitution {
                 guard value <= 1 else { throw ModelValidationError.valueOutOfRange("transition.material") }
             }
         case (.bubbleRadius(let id), .scalar(let radius)):
@@ -642,9 +651,7 @@ private struct StagingContext {
             regionExitPolicy: result.regionExitPolicy, physicsMaterialID: result.physicsMaterialID,
             renderMaterialID: result.renderMaterialID, mergeGroups: result.mergeGroups,
             eventInterest: result.eventInterest, drivePolicy: result.drivePolicy,
-            filter: result.filter, layer: result.layer, decal: result.decal,
-            // Zła wartość rzuca `valueOutOfRange("contactCompliance")` z `BubbleDescriptor`, a `stage` zamienia ją na `.invalidValue`.
-            contactCompliance: result.contactCompliance))
+            filter: result.filter, layer: result.layer, decal: result.decal))
     }
     mutating func merge(_ sources: [ObjectID], result: BubbleResult) throws {
         guard sources.count >= 2, Set(sources).count == sources.count else { throw TransactionRejectionReason.invalidStructuralOperation }

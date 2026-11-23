@@ -145,8 +145,8 @@ final class RegionPolicyTests: XCTestCase {
     }
 
     func testMaterialContactPropertiesAreAcceptedAndPublished() async throws {
-        for material in [try PhysicsMaterial(kind: .bubble, friction: 0.5),
-                         try PhysicsMaterial(kind: .bubble, restitution: 0.5)] {
+        for material in [try PhysicsMaterial(kind: .bubble, contactStiffness: 1e9),
+                         try PhysicsMaterial(kind: .bubble, contactStiffness: 1e9)] {
             let world = try BubbleWorld(configuration: initial(policy: .remove).configuration)
             let token = world.submit(WorldTransaction().updatePhysicsMaterial(.init(rawValue: 1), material: material))
             let frame = await world.advance(by: 0.25)
@@ -209,10 +209,10 @@ final class RegionPolicyTests: XCTestCase {
     }
 
     func testMaterialContactTransitionsAreAcceptedAndAdvancePublishedValue() async throws {
-        for parameter in [PhysicsParameter.friction, .restitution] {
+        for parameter in [PhysicsParameter.contactStiffness, .damping] {
             let world = try BubbleWorld(configuration: initial(policy: .remove).configuration)
             let token = world.submit(try WorldTransaction()
-                .updatePhysicsMaterial(.init(rawValue: 1), material: PhysicsMaterial(kind: .bubble))
+                .updatePhysicsMaterial(.init(rawValue: 1), material: PhysicsMaterial(kind: .bubble, contactStiffness: 229, damping: 1))
                 .startTransition(ParameterTransition(target: .physicsMaterial(.init(rawValue: 1), parameter),
                     value: .scalar(0.5), duration: 1)))
             let frame = await world.advance(by: 0.25)
@@ -223,14 +223,16 @@ final class RegionPolicyTests: XCTestCase {
 
             let stepper = try NativeCompleteStepper(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
             let transaction = try WorldTransaction()
-                .updatePhysicsMaterial(.init(rawValue: 1), material: PhysicsMaterial(kind: .bubble))
+                .updatePhysicsMaterial(.init(rawValue: 1), material: PhysicsMaterial(kind: .bubble, contactStiffness: 229, damping: 1))
                 .startTransition(ParameterTransition(target: .physicsMaterial(.init(rawValue: 1), parameter),
                     value: .scalar(0.5), duration: 1))
             let complete = try await stepper.completePublishedStep(TransactionStager.stageBatch([
                 .init(token: .init(rawValue: 1), transaction: transaction)
             ], against: initial(policy: .remove)), duration: 0.25)
             let material = try XCTUnwrap(complete.state.physicsMaterials[.init(rawValue: 1)])
-            XCTAssertEqual(parameter == .friction ? material.friction : material.restitution, 0.125, accuracy: 0.0001)
+            // Liniowo od wartości początkowej do 0,5 po ćwiartce czasu przejścia.
+            let expected: Float = parameter == .contactStiffness ? 229 + (0.5 - 229) * 0.25 : 1 + (0.5 - 1) * 0.25
+            XCTAssertEqual(parameter == .contactStiffness ? (material.contactStiffness ?? 0) : material.damping, expected, accuracy: 0.001)
         }
     }
 
@@ -271,7 +273,7 @@ final class RegionPolicyTests: XCTestCase {
         let state = try initial(policy: .remove)
         let object = try XCTUnwrap(state.objects[.init(rawValue: 1)])
         world.submit(try WorldTransaction()
-            .updatePhysicsMaterial(.init(rawValue: 1), material: PhysicsMaterial(kind: .bubble))
+            .updatePhysicsMaterial(.init(rawValue: 1), material: PhysicsMaterial(kind: .bubble, contactStiffness: 1e9))
             .updateRenderMaterial(.init(rawValue: 1), material: try RenderMaterial()).add(object.descriptor))
         // Limit backlogu (0,25 s) pozwala na jeden krok na wywołanie przy kroku 0,25 s.
         for _ in 0..<3 { _ = await world.advance(by: 0.25) }
@@ -285,7 +287,7 @@ final class RegionPolicyTests: XCTestCase {
         let state = RuntimeState(configuration: try WorldConfiguration(simulationRegion:
             WorldRectangle(min: [0, 0], max: [10, 10]), fixedTimeStep: 0.25))
         return try TransactionStager.stage(WorldTransaction()
-            .updatePhysicsMaterial(.init(rawValue: 1), material: PhysicsMaterial(kind: .bubble))
+            .updatePhysicsMaterial(.init(rawValue: 1), material: PhysicsMaterial(kind: .bubble, contactStiffness: 1e9))
             .updateRenderMaterial(.init(rawValue: 1), material: try RenderMaterial())
             .add(.bubble(BubbleDescriptor(id: .init(rawValue: 1), position: [9, 5], velocity: [4, 0],
                 targetRadius: 1, regionExitPolicy: policy, physicsMaterialID: .init(rawValue: 1),
@@ -295,7 +297,7 @@ final class RegionPolicyTests: XCTestCase {
     private func seededWorld() async throws -> BubbleWorld {
         let world = try BubbleWorld(configuration: initial(policy: .remove).configuration)
         let transaction = try WorldTransaction()
-            .updatePhysicsMaterial(.init(rawValue: 1), material: PhysicsMaterial(kind: .bubble))
+            .updatePhysicsMaterial(.init(rawValue: 1), material: PhysicsMaterial(kind: .bubble, contactStiffness: 1e9))
             .updateRenderMaterial(.init(rawValue: 1), material: try RenderMaterial())
             .add(.bubble(BubbleDescriptor(id: .init(rawValue: 1), position: [3, 3], targetRadius: 0.5,
                 physicsMaterialID: .init(rawValue: 1), renderMaterialID: .init(rawValue: 1))))

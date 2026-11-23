@@ -251,20 +251,15 @@ final class NativeMetalShaderABITests: XCTestCase {
         XCTAssertEqual(NativeMetalFilter.encodeLayer(0), 0x8000_0000)
     }
 
-    /// P-B-33: host liczy c₀·r/r_ref tylko dla c₀ > 0 (z nadpisaniem), a rekord bańki niesie wynik w `contact.x`, ζ_c w `contact.z`
-    /// i zawsze 0 w wolnej lane `.y` (nie ma już wykładnika ściśnięcia).
+    /// Stan przejściowy zmiany 4.0.0 (do zadania 7): host zamienia K_c na dawną podatność c = r / K_c w `contact.x`, ζ_c = 1 w `contact.z`,
+    /// a wolna lane `.y` zostaje 0. Sztywność od `transitionalHardStiffness` w górę to kontakt twardy (c = 0).
     func testHostComputesContactComplianceForBubbleRecord() throws {
-        let compliance = BubbleContactCompliance(base: 2, referenceRadius: 10)
-        // Lane .z niesie ζ_c każdej bańki (CD-D-6), także twardej: tłumik kontaktu miękkiego pary czyta ζ_c obu końców.
-        XCTAssertEqual(NativePublicProperties.contact(of: compliance, override: nil, radius: 20, dampingRatio: 0.7), SIMD4(4, 0, 0.7, 0))
-        XCTAssertEqual(NativePublicProperties.contact(of: compliance, override: 0.5, radius: 20, dampingRatio: 0.7), SIMD4(1, 0, 0.7, 0), "nadpisanie c₀")
-        XCTAssertEqual(NativePublicProperties.contact(of: compliance, override: 0, radius: 20, dampingRatio: 0.7), SIMD4(0, 0, 0.7, 0),
-                       "nadpisanie 0 daje kontakt twardy, ale ζ_c zostaje")
-        XCTAssertEqual(NativePublicProperties.contact(of: .hard, override: nil, radius: 5, dampingRatio: 1), SIMD4(0, 0, 1, 0))
-        XCTAssertEqual(NativePublicProperties.contact(of: .hard, override: nil, radius: 5, dampingRatio: 0), .zero)
+        XCTAssertEqual(NativePublicProperties.contact(stiffness: 5, radius: 20), SIMD4(4, 0, 1, 0))
+        XCTAssertEqual(NativePublicProperties.contact(stiffness: NativePublicProperties.transitionalHardStiffness, radius: 5), SIMD4(0, 0, 1, 0))
+        XCTAssertEqual(NativePublicProperties.contact(stiffness: nil, radius: 5), SIMD4(0, 0, 1, 0))
         // Podatność rośnie liniowo z promieniem: ta sama bańka o r = 5 i r = 40 ma c różne dokładnie o 8×.
-        let small = NativePublicProperties.contact(of: compliance, override: nil, radius: 5, dampingRatio: 1)
-        let large = NativePublicProperties.contact(of: compliance, override: nil, radius: 40, dampingRatio: 1)
+        let small = NativePublicProperties.contact(stiffness: 5, radius: 5)
+        let large = NativePublicProperties.contact(stiffness: 5, radius: 40)
         XCTAssertEqual(small.x, 1)
         XCTAssertEqual(large.x, 8)
 

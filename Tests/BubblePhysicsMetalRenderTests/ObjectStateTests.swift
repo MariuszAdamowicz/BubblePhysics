@@ -20,7 +20,7 @@ final class ObjectStateTests: XCTestCase {
 
     private func baseTransaction() throws -> WorldTransaction {
         try WorldTransaction()
-            .updatePhysicsMaterial(bubbleMaterial, material: PhysicsMaterial(kind: .bubble))
+            .updatePhysicsMaterial(bubbleMaterial, material: PhysicsMaterial(kind: .bubble, contactStiffness: 1e9))
             .updatePhysicsMaterial(polygonMaterial, material: PhysicsMaterial(kind: .rigid))
             .updateRenderMaterial(style, material: try RenderMaterial())
     }

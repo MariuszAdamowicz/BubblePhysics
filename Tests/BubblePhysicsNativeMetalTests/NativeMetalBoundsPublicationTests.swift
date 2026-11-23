@@ -23,7 +23,7 @@ final class NativeMetalBoundsPublicationTests: XCTestCase {
     }
 
     private func initialState() throws -> RuntimeState {
-        let tx = try WorldTransaction().updatePhysicsMaterial(material, material: PhysicsMaterial(kind: .bubble))
+        let tx = try WorldTransaction().updatePhysicsMaterial(material, material: PhysicsMaterial(kind: .bubble, contactStiffness: 1e9))
             .updateRenderMaterial(style, material: try RenderMaterial())
             .add(.bubble(try BubbleDescriptor(id: id, position: [3, 4], targetRadius: 2, mass: 1,
                 physicsMaterialID: material, renderMaterialID: style)))

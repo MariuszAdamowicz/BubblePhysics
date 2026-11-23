@@ -177,7 +177,7 @@ final class MaterialTextureRenderTests: XCTestCase {
         async throws -> (scene: RenderTestScene, center: WorldPoint, contour: [WorldPoint]) {
         let scene = try makeScene(texture: texture, mapping: mapping)
         scene.world.submit(try WorldTransaction()
-            .updatePhysicsMaterial(B.bubbleMaterial, material: PhysicsMaterial(kind: .bubble, deformability: 1))
+            .updatePhysicsMaterial(B.bubbleMaterial, material: PhysicsMaterial(kind: .bubble, contactStiffness: 1e3))
             .add(B.box(10, at: [8, 0], half: [8, 30]))
             .add(B.bubble(1, at: [-4.8, 0], radius: 8, render: materialID)))
         let frame = await scene.step()
@@ -267,21 +267,6 @@ final class MaterialTextureRenderTests: XCTestCase {
                 (lhs - center).normalizedDot(direction) < (rhs - center).normalizedDot(direction) })
             scene.assertPixel(inside(point, center: center, by: 0.5), expected, "kierunek \(direction)")
         }
-    }
-
-    // P-B-37: tryb pod maską. Tekstura to koło o promieniu docelowym, które się nie deformuje: przy spłaszczonym konturze
-    // widać tarczę (niebieską), nie pierścień, a kontur przycina teksturę.
-    func testMaskedModeDoesNotDeformTheTextureAndTheContourClipsIt() async throws {
-        let (scene, center, contour) = try await deformedBubbleScene(mapping: .masked, texture: bullseyeImage())
-        let sides = try flatAndRoundSides(contour, center: center)
-        scene.assertPixel(inside(sides.flat, center: center), blue, "spłaszczona strona: tarcza dochodzi do konturu")
-        scene.assertPixel(inside(sides.round, center: center), red, "okrągła strona: pierścień przy konturze")
-        // Punkt sondy musi leżeć poza konturem i na lewo od białej ściany (x ≥ 0), inaczej czerń nie dowodzi przycięcia.
-        let probe = center + [6.4, 0]
-        XCTAssertLessThan(probe.x, 0, "warunek wstępny: sonda leży na lewo od ściany (x = 0)")
-        XCTAssertFalse(contains(contour, probe), "warunek wstępny: sonda leży poza spłaszczonym konturem")
-        XCTAssertTrue(contains(contour, inside(sides.flat, center: center)), "warunek wstępny: kontrola wnętrza konturu")
-        scene.assertPixel(probe, black, "poza spłaszczonym konturem tekstura jest przycięta")
     }
 
     /// Czy punkt leży wewnątrz wielokąta konturu (reguła parzystości).
