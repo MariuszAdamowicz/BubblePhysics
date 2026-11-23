@@ -30,3 +30,146 @@ struct NativeSubstepControl {
     uint4 counts;    // podkroki pary buforów, podkroki klatki, znacznik przebudowy, znacznik limitu
     ulong2 limiter;  // obiekt wyznaczający h, człon h
 };
+
+// MARK: Prawo kontaktu (spec. zmiana 2)
+//
+// ε = x / r to ugięcie względne, F = K · ε / (1 − ε)². Siła rośnie bez granic, gdy środek zbliża się do przeszkody (d = r · (1 − ε) → 0),
+// więc nie ma przenikania. Funkcje poniżej są wspólne dla jądra sił (nativeContactForces) i dla redukcji h, która potrzebuje
+// sztywności kontaktu. Odniesienie w Double: Tests/BubblePhysicsRuntimeTests/ContactLawReference.swift.
+
+// Dolna granica odległości w prawie, względem promienia: d = 0 dałoby siłę nieskończoną. Siła pozostaje skończona, a naruszenie
+// (d ≤ 0) zgłasza asercja kontaktu na końcu kroku, nie prawo.
+constant float nativeContactDistanceFloor = 1e-6f;
+// Stała liczba kroków Newtona dla pary różnych materiałów (CD-D-16): rachunek w Double przy zbieżności 1e-4 dał najwyżej 10 kroków
+// dla K_b / K_a do 1000, przy r 24–148 i q od 10⁻⁴ do 10⁶.
+constant uint nativePairNewtonSteps = 12;
+
+struct NativeContactLaw {
+    float force;      // wspólna siła kontaktu F ≥ 0
+    float epsilonA;   // ugięcie względne pierwszego końca (ściana i bryła: jedyne)
+    float epsilonB;   // ugięcie względne drugiego końca (ściana i bryła: 0)
+    float stiffness;  // k = dF/dδ, δ to zbliżenie powierzchni; dla pary dwie sprężyny szeregowo
+};
+
+// Odwrotność prawa: ε / (1 − ε)² = q w (0, 1). Postać ε = 2q / ((2q + 1) + √(4q + 1)) nie gubi cyfr dla małych q
+// (postać ((2q + 1) − √(4q + 1)) / (2q) traci w float32 ok. 6 % przy q = 10⁻³).
+float nativeEpsilonFromForceRatio(float q) {
+    if (!(q > 0)) return 0;
+    return 2 * q / ((2 * q + 1) + sqrt(4 * q + 1));
+}
+// 1 − ε z tego samego q, bez odejmowania (ε bliskie 1 przy dużym q): 1 − ε = 2 / (1 + √(4q + 1)).
+float nativeRestFromForceRatio(float q) {
+    return 2 / (1 + sqrt(max(4 * q, 0.0f) + 1));
+}
+
+// Ściana, statyczne koło i kapsuła, bryła kinematyczna: d to odległość środka bańki od powierzchni, x = r − d, F = K · (r − d) · r / d².
+NativeContactLaw nativeWallContactLaw(float stiffness, float radius, float distance) {
+    NativeContactLaw law = { 0, 0, 0, 0 };
+    float d = max(distance, radius * nativeContactDistanceFloor);
+    if (!(stiffness > 0) || !(radius > 0) || !(d < radius)) return law;
+    float rest = d / radius;
+    law.epsilonA = (radius - d) / radius;
+    law.force = stiffness * (radius - d) * radius / (d * d);
+    law.stiffness = stiffness * (1 + law.epsilonA) / (radius * rest * rest * rest);
+    return law;
+}
+
+// Para baniek o promieniach r_a, r_b i środkach w odległości d: F rozwiązuje r_a ε(F / K_a) + r_b ε(F / K_b) = δ, δ = r_a + r_b − d.
+// Ten sam materiał: postać zamknięta F = K · δ · R / d², R = r_a + r_b. Różne materiały: g(F) = Σ r_i ε(F / K_i) − δ jest rosnąca
+// i wklęsła, a rozwiązanie zamknięte dla K_min = min(K_a, K_b) jest dolnym ograniczeniem F (ε(F / K_i) ≤ ε(F / K_min)), więc Newton
+// od niego zbiega monotonicznie od dołu i nie daje ujemnego F. Liczba kroków jest stała (bez wyjścia po zbieżności).
+NativeContactLaw nativePairContactLaw(float stiffnessA, float radiusA, float stiffnessB, float radiusB, float distance) {
+    NativeContactLaw law = { 0, 0, 0, 0 };
+    float R = radiusA + radiusB;
+    float d = max(distance, R * nativeContactDistanceFloor);
+    float overlap = R - d;
+    if (!(stiffnessA > 0) || !(stiffnessB > 0) || !(overlap > 0)) return law;
+    float lowest = min(stiffnessA, stiffnessB) * overlap * R / (d * d);
+    float force = lowest;
+    if (stiffnessA != stiffnessB) {
+        for (uint step = 0; step < nativePairNewtonSteps; ++step) {
+            float qa = force / stiffnessA, qb = force / stiffnessB;
+            float ea = nativeEpsilonFromForceRatio(qa), eb = nativeEpsilonFromForceRatio(qb);
+            float ra = nativeRestFromForceRatio(qa), rb = nativeRestFromForceRatio(qb);
+            float residual = radiusA * ea + radiusB * eb - overlap;
+            float slope = radiusA * ra * ra * ra / ((1 + ea) * stiffnessA) + radiusB * rb * rb * rb / ((1 + eb) * stiffnessB);
+            if (!(slope > FLT_MIN)) break;
+            // F* ≥ lowest, więc zaokrąglenie nie może zejść poniżej dolnego ograniczenia.
+            force = max(force - residual / slope, lowest);
+        }
+    }
+    float qa = force / stiffnessA, qb = force / stiffnessB;
+    float ea = nativeEpsilonFromForceRatio(qa), eb = nativeEpsilonFromForceRatio(qb);
+    float ra = nativeRestFromForceRatio(qa), rb = nativeRestFromForceRatio(qb);
+    float compliance = radiusA * ra * ra * ra / ((1 + ea) * stiffnessA) + radiusB * rb * rb * rb / ((1 + eb) * stiffnessB);
+    law.force = force; law.epsilonA = ea; law.epsilonB = eb;
+    law.stiffness = compliance > FLT_MIN ? 1 / compliance : 0;
+    return law;
+}
+
+// Krawędź statycznego wielokąta albo zwykły odcinek względem środka bańki: obszar kontaktu, normalna od przeszkody do środka i odległość.
+// Krawędź wielokąta (flags.w bit 0) odpycha tylko ze swojego obszaru: wnętrza (rzut środka w 0 < t < 1, środek po stronie zewnętrznej
+// prostej, normalna zewnętrzna stała, d = odległość od prostej) albo wypukłego wierzchołka początkowego (normalna od wierzchołka,
+// d = odległość od wierzchołka). Obszary sąsiednich krawędzi się dopełniają (nativePastSegmentEnd), więc środek ma przy wierzchołku
+// dokładnie jeden kontakt. Bez krawędzi wejścia i pamięci z poprzedniego kroku: środek po stronie wewnętrznej prostej (d < 0) nie dostaje
+// siły od tej krawędzi (tylna krawędź cienkiej ściany nie wypycha bańki przez ścianę), a naruszenie zgłasza asercja kontaktu.
+// Zwykły odcinek (bez krawędzi wielokąta) jest dwustronny: najbliższy punkt odcinka, normalna od niego.
+// Zwraca prawdę, gdy środek leży w obszarze kontaktu i d < r.
+bool nativeWallContact(NativeSegment s, float2 center, float radius, thread float2 &normal, thread float &distanceValue) {
+    float2 start = s.current.xy, end = s.current.zw, edge = end - start;
+    float edgeLength = length(edge);
+    float2 base = edgeLength > 0 ? float2(-edge.y, edge.x) / edgeLength : float2(0, 1);
+    if (s.flags.w & 1) {
+        float2 outward = base * s.region.z;
+        float along = dot(center - start, edge);
+        bool convexStart = (s.flags.w & 2) != 0;
+        if (convexStart && along <= 0 && nativePastSegmentEnd(center, s.region.xy, start)) {
+            float2 delta = center - start;
+            distanceValue = length(delta);
+            normal = distanceValue > 0 ? delta / distanceValue : outward;
+        } else if (along > 0 && !nativePastSegmentEnd(center, start, end) && dot(center - start, outward) >= 0) {
+            normal = outward;
+            distanceValue = dot(center - start, outward);
+        } else {
+            return false;
+        }
+    } else {
+        float2 delta = center - nativeClosestPoint(center, s.current);
+        distanceValue = length(delta);
+        normal = distanceValue > 0 ? delta / distanceValue : base;
+    }
+    return distanceValue < radius;
+}
+
+// Siły kontaktu na bańkę: suma po wierszu sąsiedztwa bańki (uint4: indeks kontaktu, indeks sąsiada, rodzaj 0 para albo 1 odcinek, reserved),
+// jak buduje je nativeBuildAdjacency. Geometria liczy się od zera z bieżących położeń, nie z rekordu kontaktu, bo w podkroku środek już
+// się przesunął. Siła pary liczy się w kolejności indeksów (mniejszy pierwszy), więc obie baniki dostają dokładnie przeciwne wektory.
+// Zapis, nie dodawanie: `forces[i]` to wyłącznie siła kontaktów.
+kernel void nativeContactForces(device NativeBubble *bubbles [[buffer(0)]],
+    device NativeSegment *segments [[buffer(1)]], constant NativeControl &control [[buffer(2)]],
+    device NativeContactControl &contacts [[buffer(3)]], device uint4 *adjacency [[buffer(4)]],
+    device uint *degrees [[buffer(5)]], device float2 *forces [[buffer(6)]],
+    uint index [[thread_position_in_grid]]) {
+    if (index >= control.counts.x) return;
+    NativeBubble bubble = bubbles[index];
+    float radius = bubble.physical.z, stiffness = bubble.contact.y;
+    float2 total = 0;
+    uint limit = contacts.cache.w, degree = min(degrees[index], limit);
+    for (uint j = 0; j < degree; ++j) {
+        uint4 edge = adjacency[index * limit + j];
+        if (edge.z == 0) {
+            uint low = min(index, edge.y), high = max(index, edge.y);
+            NativeBubble first = bubbles[low], second = bubbles[high];
+            float2 delta = second.position.xy - first.position.xy;
+            float distanceValue = length(delta);
+            float2 normal = distanceValue > 0 ? delta / distanceValue : float2(1, 0);
+            NativeContactLaw law = nativePairContactLaw(first.contact.y, first.physical.z, second.contact.y, second.physical.z, distanceValue);
+            total += (index == low ? -law.force : law.force) * normal;
+        } else {
+            float2 normal; float distanceValue;
+            if (!nativeWallContact(segments[edge.y], bubble.position.xy, radius, normal, distanceValue)) continue;
+            total += nativeWallContactLaw(stiffness, radius, distanceValue).force * normal;
+        }
+    }
+    forces[index] = total;
+}
