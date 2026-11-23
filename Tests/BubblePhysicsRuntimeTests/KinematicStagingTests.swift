@@ -23,7 +23,7 @@ final class KinematicStagingTests: XCTestCase {
                              physicsMaterialID: materialID, renderMaterialID: styleID)
     }
     private func box(_ value: UInt64, role: MotionRole) throws -> RigidBodyDescriptor {
-        try RigidBodyDescriptor(id: id(value), vertices: [[0, 0], [2, 0], [2, 2], [0, 2]], motionRole: role,
+        try RigidBodyDescriptor(id: id(value), vertices: [[0, 0], [2, 0], [2, 2], [0, 2]], position: [5, 0], motionRole: role,
                               physicsMaterialID: polygonMaterialID, renderMaterialID: styleID)
     }
     private func assertRejected(_ transaction: WorldTransaction, against state: RuntimeState, index: Int,

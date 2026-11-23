@@ -47,7 +47,14 @@ public enum TransactionRejectionReason: Error, Equatable, Sendable {
     case invalidStructuralOperation
     /// Zły punkt bańki: `add` i `replace` ze środkiem, w którym bańki nie da się poprawnie postawić, oraz
     /// `mergeBubbles` i `splitBubble`, dla których silnik nie znalazł poprawnego punktu wyniku (ID wyniku albo części).
+    ///
+    /// Dotyczy też bryły: `add`, `replace` i `replaceRigidBodies` bryły, której wnętrze obejmuje środek bańki kolidującej z nią
+    /// według filtrów (brzeg liczy się jako wnętrze). ID to bańka, której środek leży w bryle.
     case invalidPlacement(ObjectID, PlacementIssue)
+    /// Świat zawierałby po transakcji bańkę i bryłę dynamiczną (rola `.dynamic`, `.motorDriven`, `.playerDriven` albo `.pathDriven`).
+    /// Nieobsługiwane w 4.0.0: bańka spotyka się tylko z bryłami statycznymi i kinematycznymi. Świat z samymi bańkami i świat
+    /// z samymi bryłami dynamicznymi działają. Indeks operacji wskazuje ostatnią operację transakcji, bo reguła sprawdza stan po niej.
+    case unsupportedBubbleWithDynamicRigidBody
 }
 
 public struct TransactionRejection: Error, Equatable, Sendable {

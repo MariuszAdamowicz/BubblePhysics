@@ -404,46 +404,31 @@ final class TransactionStagerTests: XCTestCase {
         } catch { XCTFail("Unexpected fixture failure: \(error)", file: file, line: line) }
     }
 
-    // MARK: najgorsza α przy największym promieniu (P-B-5, G3-AC5)
+    // MARK: bez walidacji α (CD-D-15 nie obowiązuje w 4.0.0)
 
-    /// Bańka miękka z c₀ i r_ref = 1; r_ref = 1 daje c = c₀ · r. Przy dt = 1/60 2 / dt² = 7200, więc α = 7200 · c przepełnia Float
-    /// (3,4e38) od c ≈ 4,7e34: c₀ = 1e34 przy r_max = 8 (c = 8e34) jest po złej stronie granicy, a ten sam c₀ przy r = 2 (c = 2e34)
-    /// i c₀ = 1e33 przy r_max = 8 (c = 8e33) po dobrej. Model sprzed 3.0.0 (s = 0 z domyślnych wykładników) nie widział promienia.
-    private func softBubbleState(base: Float, radius: Float) throws -> (RuntimeState, rejection: TransactionRejectionReason?) {
-        // Przejściowo (do zadania 3): K_c = 1 / c₀, bo c = c₀ · r przy r_ref = 1 to dawna podatność c = r / K_c.
-        let material = try PhysicsMaterial(kind: .bubble, contactStiffness: Float(1 / Double(base)))
-        let bubble = try BubbleDescriptor(id: id(1), position: .zero, targetRadius: radius, mass: 2,
-                                          physicsMaterialID: materialID, renderMaterialID: styleID, eventInterest: [.didAdd])
-        let setup = WorldTransaction().updatePhysicsMaterial(materialID, material: material)
+    /// Sprzed 4.0.0 stager odrzucał materiał, którego podatność c = r / K_c przepełniała α = 2c / dt² w Float. K_c to teraz sztywność
+    /// siły kontaktu, a nie podatność solvera, więc ani bardzo miękki materiał, ani duży promień, ani przejście promienia nie dają
+    /// `valueOutOfRange("contactCompliance")`.
+    func testVerySoftMaterialAndLargeRadiusAreNotRejectedByAnAlphaCheck() throws {
+        let soft = try PhysicsMaterial(kind: .bubble, contactStiffness: 1e-34)
+        let bubble = try BubbleDescriptor(id: id(1), position: .zero, targetRadius: 8, mass: 2,
+                                          physicsMaterialID: materialID, renderMaterialID: styleID)
+        let setup = WorldTransaction().updatePhysicsMaterial(materialID, material: soft)
             .updateRenderMaterial(styleID, material: try RenderMaterial()).add(.bubble(bubble))
-        do { return (try TransactionStager.stage(setup, against: state()).state, nil) }
-        catch let rejection as TransactionRejection { return (try state(), rejection.reason) }
+        let initial = try TransactionStager.stage(setup, against: state()).state
+        XCTAssertNoThrow(try TransactionStager.stage(WorldTransaction().startTransition(
+            ParameterTransition(target: .bubbleRadius(id(1)), value: .scalar(1000), duration: 1)), against: initial))
+        XCTAssertNoThrow(try TransactionStager.stage(WorldTransaction().updatePhysicsMaterial(
+            materialID, material: PhysicsMaterial(kind: .bubble, contactStiffness: 1e-38)), against: initial))
+        XCTAssertNoThrow(try TransactionStager.stage(WorldTransaction().replace(id(1), with: .bubble(
+            BubbleDescriptor(id: id(1), position: .zero, targetRadius: 90, mass: 2, physicsMaterialID: materialID,
+                             renderMaterialID: styleID))), against: initial))
     }
 
-    func testSoftBubbleIsRejectedWhenWorstAlphaAtMaximumRadiusIsNotFinite() throws {
-        let overflow = TransactionRejectionReason.invalidValue(.valueOutOfRange("contactCompliance"))
-        XCTAssertEqual(try softBubbleState(base: 1e34, radius: 8).rejection, overflow, "c₀ · r_max / r_ref = 8e34, α = 5,8e38")
-        XCTAssertNil(try softBubbleState(base: 1e34, radius: 2).rejection, "ten sam c₀ przy r = 2: c = 2e34, α = 1,4e38")
-        XCTAssertNil(try softBubbleState(base: 1e33, radius: 8).rejection, "c₀ dziesięć razy mniejszy przy r_max = 8")
-    }
+    // MARK: stabilność gumki, ścieżki add, replace, scalenia i podziału (próg: BandStabilityThresholdTests)
 
-    /// r_max to największy z promieni: bieżącego, docelowego i końca przejścia, także trwającego (nowy promień, który mieści się
-    /// w Float tylko dla mniejszego końca, jest odrzucany, a mniejszy cel przyjęty).
-    func testWorstAlphaUsesTheLargestRadiusOfTheRunningAndTheNewRadiusTransition() throws {
-        let overflow = TransactionRejectionReason.invalidValue(.valueOutOfRange("contactCompliance"))
-        let (initial, rejection) = try softBubbleState(base: 1e34, radius: 2)
-        XCTAssertNil(rejection)
-        assertRejected(WorldTransaction().startTransition(ParameterTransition(target: .bubbleRadius(id(1)), value: .scalar(8), duration: 1)),
-                       against: initial, reason: overflow)
-        XCTAssertNoThrow(try TransactionStager.stage(
-            WorldTransaction().startTransition(ParameterTransition(target: .bubbleRadius(id(1)), value: .scalar(3), duration: 1)),
-            against: initial))
-    }
-
-    // MARK: stabilność gumki (P-B-6, CD-D-9)
-
-    /// Przy dt = 1/60 granica K · dt² / m < 1 to K < 3600 · m: K = 1000 przechodzi dla m = 2 (0,14), a nie dla m = 0,2 (1,39).
-    private let bandStiffness: Float = 1000
+    /// Przy dt = 1/60 granica K ≤ m / (16 · dt²) to K ≤ 225 · m: K = 100 przechodzi dla m = 0,5 (112), a nie dla m = 0,4 (90).
+    private let bandStiffness: Float = 100
     private func band() throws -> BubbleDrivePolicy { try BubbleDrivePolicy(bandStiffness: bandStiffness) }
     private func bandBubble(_ value: UInt64, mass: Float, position: WorldPoint = .zero) throws -> BubbleDescriptor {
         try BubbleDescriptor(id: id(value), position: position, targetRadius: 2, mass: mass,
@@ -464,23 +449,10 @@ final class TransactionStagerTests: XCTestCase {
     func testAddRejectsABandBubbleWithTooSmallAMass() throws {
         let initial = try TransactionStager.stage(resources(), against: state()).state
         assertBandUnstable(WorldTransaction().add(.bubble(try bandBubble(1, mass: 0.2))), against: initial)
-        // Tuż poniżej granicy K = 3600 · m (m = 0,3 → 1 080 > 1 000 jest jeszcze stabilne).
-        XCTAssertNoThrow(try TransactionStager.stage(WorldTransaction().add(.bubble(try bandBubble(1, mass: 0.3))), against: initial))
+        assertBandUnstable(WorldTransaction().add(.bubble(try bandBubble(1, mass: 0.4))), against: initial)
+        // Tuż nad granicą K = 225 · m (m = 0,5 → 112 > 100 jest stabilne).
+        XCTAssertNoThrow(try TransactionStager.stage(WorldTransaction().add(.bubble(try bandBubble(1, mass: 0.5))), against: initial))
         XCTAssertNoThrow(try TransactionStager.stage(WorldTransaction().add(.bubble(try bandBubble(1, mass: 2))), against: initial))
-        // Granica leży przy K = 3600 · m: m = 1 przy K = 3599 przechodzi, przy 3601 nie.
-        func descriptor(_ value: UInt64, stiffness: Float) throws -> BubbleDescriptor {
-            try BubbleDescriptor(id: id(value), position: .zero, targetRadius: 2, mass: 1, physicsMaterialID: materialID,
-                                 renderMaterialID: styleID, drivePolicy: BubbleDrivePolicy(bandStiffness: stiffness))
-        }
-        XCTAssertNoThrow(try TransactionStager.stage(WorldTransaction().add(.bubble(try descriptor(2, stiffness: 3599))), against: initial))
-        assertBandUnstable(WorldTransaction().add(.bubble(try descriptor(2, stiffness: 3601))), against: initial)
-    }
-
-    func testBubbleWithoutBandIsNotCheckedForBandStability() throws {
-        let initial = try TransactionStager.stage(resources(), against: state()).state
-        let light = try BubbleDescriptor(id: id(1), position: .zero, targetRadius: 2, mass: 0.001,
-                                         physicsMaterialID: materialID, renderMaterialID: styleID)
-        XCTAssertNoThrow(try TransactionStager.stage(WorldTransaction().add(.bubble(light)), against: initial))
     }
 
     func testReplaceRejectsABandBubbleWithTooSmallAMass() throws {

@@ -25,19 +25,26 @@ final class PlacementValidationTests: XCTestCase {
             .updatePhysicsMaterial(rigidMaterial, material: try PhysicsMaterial(kind: .rigid))
             .updateRenderMaterial(style, material: try RenderMaterial())
     }
+    /// Od 4.0.0 środek bańki nie może stać w kolidującej z nią bryle (G7-AC1), więc scenariusze, w których bryła przykrywa źródła
+    /// łączenia albo podziału, rozdzielają filtry: źródła (`sourceFilter`) nie kolidują z bryłą `gateFilter`, a wynik (`resultFilter`)
+    /// tak, więc kandydaci wyniku są blokowani, choć źródła stoją poprawnie.
+    private let sourceFilter = CollisionFilter(category: 0b01, mask: 0b01)
+    private let gateFilter = CollisionFilter(category: 0b10, mask: 0b10)
+    private let resultFilter = CollisionFilter(category: 0b10, mask: 0b10)
     private func bubble(_ value: UInt64, at position: WorldPoint, radius: Float = 2, velocity: WorldPoint = .zero,
-                        policy: RegionExitPolicy = .remove) throws -> WorldObject {
+                        policy: RegionExitPolicy = .remove, filter: CollisionFilter = .default) throws -> WorldObject {
         .bubble(try BubbleDescriptor(id: id(value), position: position, velocity: velocity, targetRadius: radius,
                                      mass: 2, regionExitPolicy: policy, physicsMaterialID: bubbleMaterial,
-                                     renderMaterialID: style, eventInterest: [.didAdd]))
+                                     renderMaterialID: style, eventInterest: [.didAdd], filter: filter))
     }
-    private func result(_ value: UInt64) -> BubbleResult {
-        BubbleResult(id: id(value), physicsMaterialID: bubbleMaterial, renderMaterialID: style, eventInterest: [.didAdd])
+    private func result(_ value: UInt64, filter: CollisionFilter = .default) -> BubbleResult {
+        BubbleResult(id: id(value), physicsMaterialID: bubbleMaterial, renderMaterialID: style, eventInterest: [.didAdd],
+                     filter: filter)
     }
     private func body(_ value: UInt64, _ shape: RigidShape, at position: WorldPoint = .zero,
-                      role: MotionRole = .static) throws -> WorldObject {
+                      role: MotionRole = .static, filter: CollisionFilter = .default) throws -> WorldObject {
         .rigidBody(try RigidBodyDescriptor(id: id(value), shape: shape, position: position, motionRole: role,
-                                           physicsMaterialID: rigidMaterial, renderMaterialID: style))
+                                           physicsMaterialID: rigidMaterial, renderMaterialID: style, filter: filter))
     }
     private func rectangle(_ low: WorldPoint, _ high: WorldPoint) throws -> RigidShape {
         .polygon(try PolygonGeometry(vertices: [low, [high.x, low.y], high, [low.x, high.y]]))
@@ -108,35 +115,6 @@ final class PlacementValidationTests: XCTestCase {
         XCTAssertNoThrow(try stage(WorldTransaction().add(bubble(2, at: [10.01, 10])), against: state))
     }
 
-    /// F-2: tolerancja wspólnego środka idzie ze steppera (jak `baseContactCompliance`), a nie z domyślnej konfiguracji solvera.
-    /// Dla r = 2 część względna to 2e-4; odstęp 0,005 jest powyżej domyślnej tolerancji solvera (1e-4) i poniżej 0,01.
-    func testCoincidentCenterToleranceComesFromTheStepper() async throws {
-        func addNear(positionTolerance: Float) async throws -> TransactionRejection? {
-            let world = BubbleWorld(configuration: try configuration(),
-                                    stepper: PositionToleranceStepper(positionTolerance: positionTolerance))
-            _ = world.submit(try resources().add(bubble(1, at: [10, 10])))
-            let setup = await world.advance(by: step)
-            XCTAssertEqual(setup.transactionReceipts.count, 1, "przygotowanie sceny musi zostać przyjęte")
-            return await run(world, WorldTransaction().add(try bubble(2, at: [10.005, 10]))).rejection
-        }
-        let wide = try await addNear(positionTolerance: 0.01)
-        XCTAssertEqual(wide, TransactionRejection(operationIndex: 0, reason: .invalidPlacement(id(2), .coincidentCenter)))
-        let narrow = try await addNear(positionTolerance: 1e-4)
-        XCTAssertNil(narrow)
-
-        let state = try staged([resources().add(bubble(1, at: [10, 10]))])
-        XCTAssertThrowsError(try TransactionStager.stage(WorldTransaction().add(bubble(2, at: [10.005, 10])), against: state,
-                                                         positionTolerance: 0.01))
-        XCTAssertNoThrow(try stage(WorldTransaction().add(bubble(2, at: [10.005, 10])), against: state))
-    }
-
-    /// Natywny stepper podaje tolerancję, z którą `NativePublicWorld` buduje konfigurację solvera; domyślna w protokole to 1e-4.
-    func testNativeStepperExposesTheSolverPositionTolerance() throws {
-        XCTAssertEqual(try NativeCompleteStepper(device: nil).positionTolerance, NativePublicWorld.positionTolerance)
-        XCTAssertEqual(NativePublicWorld.positionTolerance, 1e-4)
-        XCTAssertEqual(PositionToleranceStepper.protocolDefault, 1e-4)
-    }
-
     func testAddCoincidentWithBubbleCreatedEarlierInTheSameTransactionIsRejected() throws {
         let state = try staged([resources()])
         XCTAssertThrowsError(try stage(WorldTransaction().add(bubble(1, at: [5, 5])).add(bubble(2, at: [5, 5])),
@@ -172,12 +150,14 @@ final class PlacementValidationTests: XCTestCase {
     }
 
     func testAddReportsRegionBeforeRigidBodyBeforeCoincidentCenter() throws {
-        // Dynamiczna bryła może wystawać poza region; bańka 1 stoi w jej wnętrzu.
+        // Dynamiczna bryła może wystawać poza region; bańka 1 stoi w jej wnętrzu, bo jej filtr z bryłą nie koliduje (G7-AC1),
+        // a bańka 2 koliduje i z bryłą, i z bańką 1.
         let state = try staged([resources()
-            .add(bubble(1, at: [0, 0]))
-            .add(body(10, rectangle([-10, -10], [150, 10]), role: .dynamic))])
+            .add(bubble(1, at: [0, 0], filter: sourceFilter))
+            .add(body(10, rectangle([-10, -10], [150, 10]), role: .dynamic, filter: gateFilter))])
+        let probeFilter = CollisionFilter(category: 0b11)
         func reason(_ point: WorldPoint) -> TransactionRejectionReason? {
-            do { _ = try stage(WorldTransaction().add(bubble(2, at: point)), against: state); return nil }
+            do { _ = try stage(WorldTransaction().add(bubble(2, at: point, filter: probeFilter)), against: state); return nil }
             catch let rejection as TransactionRejection { return rejection.reason }
             catch { return nil }
         }
@@ -261,7 +241,7 @@ final class PlacementValidationTests: XCTestCase {
             XCTAssertEqual(PlacementGeometry.issue(at: point, radius: 2, filter: filter, in: state, excluding: excluding), expected,
                            "skan stanu, punkt \(point)")
             XCTAssertEqual(PlacementGeometry.issue(at: point, radius: 2, filter: filter, in: state, excluding: excluding,
-                                                   rigidBodies: bodies, positionTolerance: PlacementGeometry.defaultPositionTolerance),
+                                                   rigidBodies: bodies),
                            expected, "gotowa lista brył, punkt \(point)")
         }
         XCTAssertEqual(Set(bodies.map(\.id)), [id(100), id(101), id(102), id(103), id(104)], "lista ma tylko bryły")
@@ -345,8 +325,7 @@ final class PlacementValidationTests: XCTestCase {
             for (other, radius) in others {
                 let position = try XCTUnwrap(outcome.frame.objects[id(other)], file: file, line: line).position
                 XCTAssertGreaterThan(simd_distance(center, position),
-                    PlacementGeometry.coincidentCenterTolerance(radius: resultRadius, otherRadius: radius,
-                                                                positionTolerance: PlacementGeometry.defaultPositionTolerance),
+                    PlacementGeometry.coincidentCenterTolerance(radius: resultRadius, otherRadius: radius),
                     "nie na środku bańki \(other)", file: file, line: line)
             }
             centers.append(center)
@@ -393,9 +372,10 @@ final class PlacementValidationTests: XCTestCase {
 
     func testMergeFallsBackToTheSpiralAroundTheHeaviestSourceWhenEarlierCandidatesAreBlocked() throws {
         // Ściana przykrywa punkt styku, kandydatów pośrednich i oba środki źródeł; wolne jest dopiero trzecie okrążenie spirali.
-        let state = try staged([resources().add(bubble(1, at: [-10, 0])).add(bubble(2, at: [10, 0]))])
-        let wall = WorldTransaction().add(try body(100, rectangle([-12, -50], [12, 50])))
-        let after = try stage(wall.mergeBubbles([id(1), id(2)], result: result(4)), against: state)
+        let state = try staged([resources().add(bubble(1, at: [-10, 0], filter: sourceFilter))
+            .add(bubble(2, at: [10, 0], filter: sourceFilter))])
+        let wall = WorldTransaction().add(try body(100, rectangle([-12, -50], [12, 50]), filter: gateFilter))
+        let after = try stage(wall.mergeBubbles([id(1), id(2)], result: result(4, filter: resultFilter)), against: state)
         let center = try XCTUnwrap(after.objects[id(4)]).position
         XCTAssertEqual(center.x, -10 - 3 * Float(8).squareRoot() / 4, accuracy: 1e-4)
         XCTAssertEqual(center.y, 0, accuracy: 1e-4)
@@ -424,10 +404,13 @@ final class PlacementValidationTests: XCTestCase {
 
     // P-B-6
     func testMergeWithoutAnyValidCandidateIsRejectedWithTheContactPointCause() async throws {
-        let world = try await makeWorld { $0.add(try self.bubble(1, at: [-10, 0])).add(try self.bubble(2, at: [10, 0])) }
+        let world = try await makeWorld {
+            $0.add(try self.bubble(1, at: [-10, 0], filter: self.sourceFilter))
+                .add(try self.bubble(2, at: [10, 0], filter: self.sourceFilter))
+        }
         let outcome = await run(world, WorldTransaction()
-            .add(try body(100, try rectangle([-50, -50], [50, 50])))
-            .mergeBubbles([id(1), id(2)], result: result(4)))
+            .add(try body(100, try rectangle([-50, -50], [50, 50]), filter: gateFilter))
+            .mergeBubbles([id(1), id(2)], result: result(4, filter: resultFilter)))
         assertRejected(outcome, at: 1, .invalidPlacement(id(4), .insideRigidBody))
         XCTAssertNotNil(outcome.frame.objects[id(1)])
         XCTAssertNotNil(outcome.frame.objects[id(2)])
@@ -443,9 +426,10 @@ final class PlacementValidationTests: XCTestCase {
         // transakcji co scalenie.
         let world = try await makeWorld()
         let outcome = await run(world, WorldTransaction()
-            .add(try bubble(1, at: [-95, 0], radius: 8)).add(try bubble(2, at: [-99, 0], radius: 1))
-            .add(try body(100, try rectangle([-100, -100], [100, 100])))
-            .mergeBubbles([id(1), id(2)], result: result(4)))
+            .add(try bubble(1, at: [-95, 0], radius: 8, filter: sourceFilter))
+            .add(try bubble(2, at: [-99, 0], radius: 1, filter: sourceFilter))
+            .add(try body(100, try rectangle([-100, -100], [100, 100]), filter: gateFilter))
+            .mergeBubbles([id(1), id(2)], result: result(4, filter: resultFilter)))
         assertRejected(outcome, at: 3, .invalidPlacement(id(4), .outsideRegion))
         try await assertNextStepAccepted(world)
     }
@@ -453,9 +437,10 @@ final class PlacementValidationTests: XCTestCase {
     // MARK: split
 
     private func splitTransaction(after base: WorldTransaction = WorldTransaction(),
-                                  first: UInt64 = 2, second: UInt64 = 3) -> WorldTransaction {
-        base.splitBubble(id(1), first: BubbleSplitPart(result: result(first), share: 0.5),
-                                       second: BubbleSplitPart(result: result(second), share: 0.5))
+                                  first: UInt64 = 2, second: UInt64 = 3,
+                                  partFilter: CollisionFilter = .default) -> WorldTransaction {
+        base.splitBubble(id(1), first: BubbleSplitPart(result: result(first, filter: partFilter), share: 0.5),
+                                       second: BubbleSplitPart(result: result(second, filter: partFilter), share: 0.5))
     }
 
     // P-B-7
@@ -559,9 +544,10 @@ final class PlacementValidationTests: XCTestCase {
 
     // P-B-8
     func testSplitWithoutAnyValidCandidateIsRejectedWithTheCentroidCause() async throws {
-        let world = try await makeWorld { $0.add(try self.bubble(1, at: [0, 0], radius: 10)) }
+        let world = try await makeWorld { $0.add(try self.bubble(1, at: [0, 0], radius: 10, filter: self.sourceFilter)) }
         let outcome = await run(world, splitTransaction(
-            after: WorldTransaction().add(try body(100, try rectangle([-50, -50], [50, 50])))))
+            after: WorldTransaction().add(try body(100, try rectangle([-50, -50], [50, 50]), filter: gateFilter)),
+            partFilter: resultFilter))
         assertRejected(outcome, at: 1, .invalidPlacement(id(2), .insideRigidBody))
         XCTAssertNotNil(outcome.frame.objects[id(1)], "źródło zostaje")
         XCTAssertNil(outcome.frame.objects[id(2)])
@@ -572,34 +558,12 @@ final class PlacementValidationTests: XCTestCase {
     func testSplitRejectionReportsTheCentroidCauseNotTheLastCandidateCause() async throws {
         // Centroid pierwszej części (-101,24; 0) leży poza regionem, a wszyscy kandydaci w regionie, w tym ostatni punkt
         // spirali, są w bryle: przyczyna z centroidu to outsideRegion, z ostatniego kandydata insideRigidBody.
-        let world = try await makeWorld { $0.add(try self.bubble(1, at: [-97, 0], radius: 10)) }
+        let world = try await makeWorld { $0.add(try self.bubble(1, at: [-97, 0], radius: 10, filter: self.sourceFilter)) }
         let outcome = await run(world, splitTransaction(
-            after: WorldTransaction().add(try body(100, try rectangle([-100, -100], [100, 100])))))
+            after: WorldTransaction().add(try body(100, try rectangle([-100, -100], [100, 100]), filter: gateFilter)),
+            partFilter: resultFilter))
         assertRejected(outcome, at: 1, .invalidPlacement(id(2), .outsideRegion))
         XCTAssertNotNil(outcome.frame.objects[id(1)], "źródło zostaje")
         try await assertNextStepAccepted(world)
-    }
-}
-
-/// Krok bez zmian stanu, z tolerancją pozycji podawaną stagerowi.
-@MainActor
-private final class PositionToleranceStepper: CompleteStepper {
-    let positionTolerance: Float
-    init(positionTolerance: Float) { self.positionTolerance = positionTolerance }
-    func completeStep(_ batch: StagedTransactionBatch, duration: Double, hitTests: [WorldPoint],
-                      commandBuffer: MTLCommandBuffer?,
-                      beforeCommit: ((NativeMetalRenderHandoff?, RuntimeState) throws -> Void)?) async throws -> CompletedRuntimeStep {
-        CompletedRuntimeStep(state: batch.state)
-    }
-    /// Domyślna tolerancja z extension `CompleteStepper`, dla steppera, który jej nie podaje.
-    static var protocolDefault: Float { DefaultToleranceStepper().positionTolerance }
-}
-
-@MainActor
-private final class DefaultToleranceStepper: CompleteStepper {
-    func completeStep(_ batch: StagedTransactionBatch, duration: Double, hitTests: [WorldPoint],
-                      commandBuffer: MTLCommandBuffer?,
-                      beforeCommit: ((NativeMetalRenderHandoff?, RuntimeState) throws -> Void)?) async throws -> CompletedRuntimeStep {
-        CompletedRuntimeStep(state: batch.state)
     }
 }

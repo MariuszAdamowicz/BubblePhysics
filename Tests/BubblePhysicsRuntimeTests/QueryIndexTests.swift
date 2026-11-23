@@ -246,11 +246,13 @@ final class QueryIndexTests: XCTestCase {
         var expected: [UInt64: (WorldPoint, Float)] = [:]
         for index in 0..<400 {
             let x = Float(index % 20) * 9 - 90, y = Float(index / 20) * 9 - 90
-            change = change.add(try bubble(UInt64(index + 1), at: [x, y], radius: 3 + Float(index % 3)))
+            change = change.add(try bubble(UInt64(index + 1), at: [x, y], radius: 3 + Float(index % 3),
+                                           filter: CollisionFilter(category: 0b01, mask: 0b01)))
             expected[UInt64(index + 1)] = ([x, y], 3 + Float(index % 3))
         }
         // Jeden bardzo duży obiekt obejmuje wiele komórek siatki.
-        change = change.add(try rigid(1000, shape: box(half: 80), at: [0, 0]))
+        // Filtr bryły nie koliduje z filtrem baniek, bo środek bańki nie może stać w kolidującej z nią bryle (G7-AC1).
+        change = change.add(try rigid(1000, shape: box(half: 80), at: [0, 0], filter: CollisionFilter(category: 0b10, mask: 0b10)))
         let state = try TransactionStager.stage(change, against: RuntimeState(configuration: WorldConfiguration(
             simulationRegion: WorldRectangle(min: [-100, -100], max: [100, 100])))).state
         let index = QueryIndex(state: state)

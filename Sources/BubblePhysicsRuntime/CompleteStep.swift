@@ -16,15 +16,8 @@ package protocol CompleteStepper: AnyObject {
                       beforeCommit: ((NativeMetalRenderHandoff?, RuntimeState) throws -> Void)?) async throws -> CompletedRuntimeStep
     /// Wołane po publikacji kroku; odrzucony krok lub klatka go nie wywołują.
     func didPublish(_ step: CompletedRuntimeStep)
-    /// Podstawowa podatność konfiguracji solvera (`NativeMetalConfiguration.contactCompliance`), czyli α_cfg · dt². Stager dzieli ją przez
-    /// dt² i sprawdza skończoność najgorszej α pary (CD-D-15).
-    var baseContactCompliance: Float { get }
-    /// Tolerancja położenia solvera; stager liczy z niej próg wspólnego środka baniek (CD-D-7).
-    var positionTolerance: Float { get }
 }
 extension CompleteStepper {
-    package var baseContactCompliance: Float { 0 }
-    package var positionTolerance: Float { PlacementGeometry.defaultPositionTolerance }
     package func validate(_ change: StagedWorldChange) throws {}
     package func didPublish(_ step: CompletedRuntimeStep) {}
 

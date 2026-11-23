@@ -100,7 +100,7 @@ final class MotionDampingTests: XCTestCase {
     func testRestBandInSaturationDeflectsByTheFullMaximumForceForEveryDampingAndMass() async throws {
         let radius: Float = 24, maximumForce: Float = 1200
         let expected = baseCompliance * (radius / referenceRadius) * maximumForce
-        for mass: Float in [0.34, 1.36, 5.44] {
+        for mass: Float in [0.5, 1.36, 5.44] {
             var deflections: [Float] = []
             for gamma: Float in [0, 0.6, 4] {
                 let policy = try BubbleDrivePolicy(bandStiffness: 100, maximumForce: maximumForce)

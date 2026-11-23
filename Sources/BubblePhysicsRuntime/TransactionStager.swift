@@ -150,15 +150,10 @@ extension StagedTransactionBatch {
 
 package enum TransactionStager {
     /// `textureExists` mówi, czy tekstura jest w rejestrze zasobów świata; Runtime nie zna rejestru.
-    /// `baseContactCompliance` to podstawowa podatność konfiguracji solvera (α_cfg · dt²); stager sprawdza z nią skończoność α pary.
-    /// `positionTolerance` to tolerancja położenia solvera, z której stager liczy próg wspólnego środka baniek.
     package static func stage(_ transaction: WorldTransaction, against state: RuntimeState,
-        baseContactCompliance: Float = 0,
-        positionTolerance: Float = PlacementGeometry.defaultPositionTolerance,
         textureExists: @escaping (TextureID) -> Bool = { _ in false },
         glyphLookup: @escaping GlyphLookup = { _ in nil }) throws -> StagedWorldChange {
-        var candidate = StagingContext(state: state, textureExists: textureExists, glyphLookup: glyphLookup,
-                                       baseContactCompliance: baseContactCompliance, positionTolerance: positionTolerance)
+        var candidate = StagingContext(state: state, textureExists: textureExists, glyphLookup: glyphLookup)
         for (index, operation) in transaction.operations.enumerated() {
             do { try candidate.apply(operation) }
             catch let error as TransactionRejectionReason {
@@ -177,8 +172,6 @@ package enum TransactionStager {
     /// To tylko staging: nie wykonuje kroku fizyki ani nie publikuje stanu na zewnątrz.
     package static func stageBatch(_ pending: [PendingTransaction], against state: RuntimeState,
         validate: ((StagedWorldChange) throws -> Void)? = nil,
-        baseContactCompliance: Float = 0,
-        positionTolerance: Float = PlacementGeometry.defaultPositionTolerance,
         textureExists: @escaping (TextureID) -> Bool = { _ in false },
         glyphLookup: @escaping GlyphLookup = { _ in nil }) -> StagedTransactionBatch {
         var candidate = state
@@ -188,9 +181,7 @@ package enum TransactionStager {
         for submission in pending {
             do {
                 let change = try stage(submission.transaction, against: candidate,
-                                       baseContactCompliance: baseContactCompliance, positionTolerance: positionTolerance,
-                                       textureExists: textureExists,
-                                       glyphLookup: glyphLookup)
+                                       textureExists: textureExists, glyphLookup: glyphLookup)
                 try validate?(change)
                 candidate = change.state
                 changes.append(change)
@@ -216,10 +207,6 @@ private struct StagingContext {
     var state: RuntimeState
     let textureExists: (TextureID) -> Bool
     let glyphLookup: GlyphLookup
-    /// Podstawowa podatność konfiguracji solvera, z której stager liczy α_cfg = c / dt² (CD-D-15).
-    let baseContactCompliance: Float
-    /// Tolerancja położenia solvera ze steppera; z niej idzie próg wspólnego środka (`PlacementGeometry.coincidentCenterTolerance`).
-    let positionTolerance: Float
     var created: [ObjectID] = []
     var removed: [ObjectID] = []
     var replaced: [ObjectID] = []
@@ -233,7 +220,7 @@ private struct StagingContext {
             // Poza `add(_:)`: podział i scalenie dodają wynik w środku źródła, zanim silnik poprawi jego punkt.
             if let added = state.objects[descriptor.id] {
                 try validatePlacement(added, excluding: [descriptor.id])
-                try validateWorstAlpha(added)
+                try validateRigidPlacement(added)
             }
         case .remove(let id): try remove(id)
         case .replace(let id, let descriptor):
@@ -243,7 +230,7 @@ private struct StagingContext {
             discardObjectTransitions(id)
             try validate(replacement)
             try validatePlacement(replacement, excluding: [id])
-            try validateWorstAlpha(replacement)
+            try validateRigidPlacement(replacement, excluding: [id])
             state.objects[id] = replacement
             try validateJoints(attachedTo: id)
             replaced.append(id)
@@ -254,7 +241,6 @@ private struct StagingContext {
             for objectID in state.objects.keys.sorted(by: { $0.rawValue < $1.rawValue }) {
                 if let existing = state.objects[objectID], existing.material?.0 == id {
                     try validate(existing)
-                    try validateWorstAlpha(existing)
                 }
             }
         case .updateRenderMaterial(let id, let material):
@@ -376,7 +362,10 @@ private struct StagingContext {
                 guard case .rigidBody = try object(id).descriptor else { throw TransactionRejectionReason.incompatibleObjectKind(id) }
             }
             for id in sources { try remove(id) }
-            for result in results { try add(.rigidBody(result)) }
+            for result in results {
+                try add(.rigidBody(result))
+                if let added = state.objects[result.id] { try validateRigidPlacement(added) }
+            }
         case .addJoint(let joint): try add(joint)
         case .removeJoint(let id):
             guard state.joints[id] != nil else { throw TransactionRejectionReason.jointNotFound(id) }
@@ -426,9 +415,16 @@ private struct StagingContext {
     func validatePlacement(_ object: RuntimeObject, excluding: Set<ObjectID>) throws {
         guard case .bubble(let bubble) = object.descriptor else { return }
         if let issue = PlacementGeometry.issue(at: object.position, radius: object.targetRadius, filter: bubble.filter, in: state,
-                                               excluding: excluding, positionTolerance: positionTolerance) {
+                                               excluding: excluding) {
             throw TransactionRejectionReason.invalidPlacement(bubble.id, issue)
         }
+    }
+    /// Bryła nie może stanąć nad środkiem kolidującej z nią bańki (G7-AC1): to ta sama przyczyna `.insideRigidBody` co dla bańki
+    /// wstawionej w bryłę, z ID bańki, której środek leży w bryle. Bryły nie sprawdza się względem regionu ani wspólnego środka.
+    func validateRigidPlacement(_ object: RuntimeObject, excluding: Set<ObjectID> = []) throws {
+        guard case .rigidBody(let body) = object.descriptor,
+              let bubble = PlacementGeometry.bubbleInside(body, at: object, in: state, excluding: excluding) else { return }
+        throw TransactionRejectionReason.invalidPlacement(bubble, .insideRigidBody)
     }
     mutating func remove(_ id: ObjectID) throws {
         let existing = try object(id)
@@ -537,36 +533,15 @@ private struct StagingContext {
         }
     }
 
-    /// Gumka całkuje siłę jawnie, więc wymaga K · dt² / m < 1 (CD-D-9). `validate(_:)` widzi masę każdej bańki po dodaniu, zamianie,
-    /// scaleniu i podziale (podział zmniejsza masę), więc jedno sprawdzenie obejmuje wszystkie cztery ścieżki.
+    /// Gumka w podkrokach wymaga ω_band · dt ≤ 0,25, czyli K ≤ m / (16 · dt²), ok. 225 · m przy dt = 1/60 (CD-D-20). `validate(_:)`
+    /// widzi masę każdej bańki po dodaniu, zamianie, scaleniu i podziale (podział zmniejsza masę), więc jedno sprawdzenie obejmuje
+    /// wszystkie cztery ścieżki.
     private func validateBandStability(of bubble: BubbleDescriptor) throws {
         guard let stiffness = bubble.drivePolicy?.bandStiffness else { return }
         let step = Double(state.configuration.fixedTimeStep)
-        guard Double(stiffness) * step * step / Double(bubble.mass) < 1 else {
+        guard Double(stiffness) * 16 * step * step <= Double(bubble.mass) else {
             throw ModelValidationError.valueOutOfRange("drive.bandStiffness")
         }
-    }
-
-    /// Najgorsza α pary z tą bańką, α_cfg + 2 · c_worst / dt², musi być skończonym Float (CD-D-15), żeby GPU nie dostało podatności,
-    /// która przepełnia Float. c_worst = c₀ · r_max / r_ref, gdzie r_max to największy z promieni: bieżącego, docelowego, celu
-    /// trwającego `startTransition` i `endRadius` nowego przejścia. Przy c₀ = 0 podatności się nie liczy.
-    func validateWorstAlpha(_ object: RuntimeObject, endRadius: Float? = nil) throws {
-        guard case .bubble(let bubble) = object.descriptor, let (materialID, _) = object.material,
-              let material = state.physicsMaterials[materialID] else { return }
-        // Przejściowo (do zadania 7) solver brył i XPBD nadal liczą podatność c = r / K_c.
-        let base = material.contactStiffness.map { 1 / Double($0) } ?? 0
-        let stepSquared = Double(state.configuration.fixedTimeStep) * Double(state.configuration.fixedTimeStep)
-        var alpha = Double(baseContactCompliance) / stepSquared
-        if base > 0 {
-            var radii = [object.targetRadius, object.collisionRadius]
-            if let endRadius { radii.append(endRadius) }
-            if case .scalar(let scheduled)? = state.transitions[.bubbleRadius(bubble.id)]?.value { radii.append(scheduled) }
-            let worst = Double(base) * Double(radii.max() ?? object.targetRadius)
-            // Host liczy c w Float, więc przepełnienie samego c też jest błędem.
-            guard Float(worst).isFinite else { throw ModelValidationError.valueOutOfRange("contactCompliance") }
-            alpha += 2 * Double(Float(worst)) / stepSquared
-        }
-        guard Float(alpha).isFinite else { throw ModelValidationError.valueOutOfRange("contactCompliance") }
     }
 
     /// Górna granica modułu składowej napędu kinematycznego (pozycja, obrót, prędkość). Solver dzieli różnicę póz przez `dt`
@@ -629,7 +604,6 @@ private struct StagingContext {
             let existing = try object(id)
             guard case .bubble(let bubble) = existing.descriptor else { throw TransactionRejectionReason.incompatibleObjectKind(id) }
             try requirePositive(radius, "transition.radius")
-            try validateWorstAlpha(existing, endRadius: radius)
             if existing.motionRole == .static {
                 try state.configuration.validate(BubbleDescriptor(id: id, position: bubble.position,
                     targetRadius: radius, motionRole: .static,
@@ -680,7 +654,7 @@ private struct StagingContext {
         let snapshot = state, excluded = Set(sources), bodies = PlacementGeometry.rigidBodies(in: snapshot)
         func issue(_ point: WorldPoint) -> PlacementIssue? {
             PlacementGeometry.issue(at: point, radius: resultRadius, filter: result.filter, in: snapshot, excluding: excluded,
-                                    rigidBodies: bodies, positionTolerance: positionTolerance)
+                                    rigidBodies: bodies)
         }
         // Kandydaci idą w kolejności ID, jak punkt styku, żeby ten sam układ dawał ten sam środek niezależnie od kolejności
         // `sources` w operacji (G3-AC4).
@@ -696,7 +670,6 @@ private struct StagingContext {
         if var merged = state.objects[result.id] {
             StructuralOperations.initializeMerge(&merged, sources: inputs)
             state.objects[result.id] = merged
-            try validateWorstAlpha(merged)
         }
     }
     mutating func split(_ source: ObjectID, first: BubbleSplitPart, second: BubbleSplitPart) throws {
@@ -724,7 +697,6 @@ private struct StagingContext {
             try StructuralOperations.initializeSplit(&a, &b, source: existing, shares: shares)
             try resolveSplitCenters(&a, &b, source: existing)
             try validate(a); try validate(b)
-            try validateWorstAlpha(a); try validateWorstAlpha(b)
             state.objects[first.result.id] = a; state.objects[second.result.id] = b
         }
     }
@@ -741,7 +713,7 @@ private struct StagingContext {
             guard case .bubble(let descriptor) = part.descriptor else { throw TransactionRejectionReason.incompatibleObjectKind(id) }
             func issue(_ point: WorldPoint) -> PlacementIssue? {
                 PlacementGeometry.issue(at: point, radius: part.targetRadius, filter: descriptor.filter, in: snapshot,
-                                        excluding: excluding, rigidBodies: bodies, positionTolerance: positionTolerance)
+                                        excluding: excluding, rigidBodies: bodies)
             }
             guard let resolved = StructuralOperations.resolvedSplitCenter(centroid: part.position,
                 sourceCenter: source.position, partRadius: part.targetRadius, issue: issue) else {

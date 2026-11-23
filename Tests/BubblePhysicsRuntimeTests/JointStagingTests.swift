@@ -82,7 +82,7 @@ final class JointStagingTests: XCTestCase {
     // MARK: P-B-26: bańka tylko w więzie dystansowym
 
     func testHingeAndWeldWithBubbleAreRejectedExplicitlyButDistanceIsAccepted() throws {
-        let state = try world([bubble(1), box(2), bubble(3, at: 10)])
+        let state = try world([bubble(1), box(2, at: 5), bubble(3, at: 10)])
         assertRejected(WorldTransaction().addJoint(hinge(1, 1, 2)), against: state, index: 0, reason: .unsupportedJointBody(joint(1)))
         assertRejected(WorldTransaction().addJoint(hinge(1, 2, 1)), against: state, reason: .unsupportedJointBody(joint(1)))
         assertRejected(WorldTransaction().addJoint(weld(4, 1, 2)), against: state, reason: .unsupportedJointBody(joint(4)))
@@ -96,7 +96,7 @@ final class JointStagingTests: XCTestCase {
     }
 
     func testRejectedJointTransactionLeavesStateUnchangedInsideBatch() throws {
-        let state = try world([bubble(1), box(2)])
+        let state = try world([bubble(1), box(2, at: 5)])
         let bad = WorldTransaction().addJoint(distance(1, 1, 2)).addJoint(hinge(2, 1, 2))
         let batch = TransactionStager.stageBatch([PendingTransaction(token: TransactionToken(rawValue: 7), transaction: bad)],
                                                  against: state)

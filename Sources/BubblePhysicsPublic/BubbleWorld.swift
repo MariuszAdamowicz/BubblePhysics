@@ -310,7 +310,6 @@ public final class BubbleWorld {
             // Punkty przekazane temu krokowi; zapytania złożone w czasie kroku czekają na następny.
             let hitTestBatch = pendingHitTests
             let batch = TransactionStager.stageBatch(pending, against: state, validate: stepper.validate,
-                baseContactCompliance: stepper.baseContactCompliance, positionTolerance: stepper.positionTolerance,
                 textureExists: { [assets] texture in assets?.contains(texture) ?? false },
                 glyphLookup: { [assets] source in assets?.glyphLookup(source) })
             // Obiekty z partii znamy przed krokiem; zawinięcia dopiero po nim, więc w klatce z krokiem ich nie ma. Zawiniętą bańkę

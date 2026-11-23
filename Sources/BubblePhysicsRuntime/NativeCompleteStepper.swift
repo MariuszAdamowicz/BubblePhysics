@@ -11,19 +11,13 @@ package final class NativeCompleteStepper: CompleteStepper {
     /// Historia policzona w ostatnim kroku; wchodzi do `previousBlockers` i `previousContacts` dopiero w `didPublish`,
     /// więc krok lub klatka odrzucone przez świat zostawiają stepper bez zmian.
     private var candidateHistory: (blockers: [ObjectID: ObjectID], contacts: Set<ContactPair>)?
-    /// Podstawowa podatność konfiguracji solvera (α_cfg · dt²), po tej samej normalizacji co w solverze.
-    private let configuredContactCompliance: Float
     package init(device: MTLDevice?, configuration: NativeMetalConfiguration = .default) throws {
         native = try device.map { try NativePublicWorld(device: $0, configuration: configuration) }
-        configuredContactCompliance = configuration.sanitized.contactCompliance
     }
     /// Szew testów: stepper na gotowym świecie natywnym (np. z wstrzykniętym wykonawcą poleceń).
-    package init(world: NativePublicWorld, configuration: NativeMetalConfiguration = .default) {
+    package init(world: NativePublicWorld) {
         native = world
-        configuredContactCompliance = configuration.sanitized.contactCompliance
     }
-    package var baseContactCompliance: Float { configuredContactCompliance }
-    package var positionTolerance: Float { NativePublicWorld.positionTolerance }
     /// Pary z dostarczonym `contactBegan` po ostatnio opublikowanym kroku; szew testów `didPublish`.
     package var publishedContactPairs: Set<ContactPair> { previousContacts }
     package var publishedRenderHandoff: NativeMetalRenderHandoff? { native?.publishedRenderHandoff }
@@ -65,6 +59,29 @@ package final class NativeCompleteStepper: CompleteStepper {
             } catch let reason as TransactionRejectionReason {
                 throw TransactionRejection(operationIndex: index, reason: reason)
             }
+        }
+        try rejectBubbleWithDynamicRigidBody(change)
+    }
+
+    /// W 4.0.0 bańka nie spotyka się z bryłą dynamiczną (CD-D-2, G7-AC4): reguła patrzy na stan po całej transakcji, więc nie zależy
+    /// od tego, która operacja wprowadziła bryłę ani bańkę (`add`, `replace`, `replaceRigidBodies`, `setMotion`, napędy). Świat
+    /// z samymi bańkami albo z samymi bryłami dynamicznymi przechodzi. Odrzucenie wskazuje ostatnią operację transakcji.
+    private func rejectBubbleWithDynamicRigidBody(_ change: StagedWorldChange) throws {
+        var hasBubble = false, hasDynamicBody = false
+        for object in change.state.objects.values {
+            switch object.descriptor {
+            case .bubble: hasBubble = true
+            case .rigidBody:
+                switch object.motionRole {
+                case .dynamic, .motorDriven, .playerDriven, .pathDriven: hasDynamicBody = true
+                case .static, .kinematic: break
+                }
+            case .forceField, .sensor: break
+            }
+        }
+        guard !(hasBubble && hasDynamicBody) else {
+            throw TransactionRejection(operationIndex: max(0, change.operations.count - 1),
+                                       reason: .unsupportedBubbleWithDynamicRigidBody)
         }
     }
 
