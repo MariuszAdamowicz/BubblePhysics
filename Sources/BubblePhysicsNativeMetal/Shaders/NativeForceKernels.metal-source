@@ -221,6 +221,7 @@ struct NativeForceControl {
 constant ulong nativeTermRemaining = 0;
 constant ulong nativeTermStiffness = 1;
 constant ulong nativeTermDistance = 2;
+constant ulong nativeTermMargin = 3;
 constant uint nativeSubstepFrameLimit = 1024;  // NativeMetalSubstep.frameLimit
 constant uint nativeSubstepGroupWidth = 64;    // NativeMetalSubstep.groupWidth
 
@@ -291,14 +292,16 @@ kernel void nativeAccelerationWithoutContacts(device NativeBubble *bubbles [[buf
 
 // Zapas obwiedni bańki: max(1,05 · (|v| · t + ½ |a₀| · t²), r / 4), gdzie t to czas pozostały w kroku; x₀ to pozycja z tej budowy siatki.
 // Mnożnik 1,05 sprawia, że bańka bez kontaktów nie wyczerpuje zapasu w pełnym kroku z powodu zaokrąglenia.
+// `minimumOnly` != 0 (przełącznik pakietowy minimumMarginOnly, G5-AC3) zostawia tylko r / 4. Wywołanie przy każdej budowie siatki, także przy
+// przebudowie w tej samej klatce, liczy zapas z czasu pozostałego w kroku i ustawia x₀ na bieżące położenie.
 kernel void nativeBroadphaseMargin(device NativeBubble *bubbles [[buffer(0)]], constant NativeControl &control [[buffer(1)]],
     device float2 *nonContact [[buffer(2)]], device NativeSubstepControl &substep [[buffer(3)]], device float *margins [[buffer(4)]],
-    device float2 *references [[buffer(5)]], uint index [[thread_position_in_grid]]) {
+    device float2 *references [[buffer(5)]], constant uint &minimumOnly [[buffer(6)]], uint index [[thread_position_in_grid]]) {
     if (index >= control.counts.x) return;
     NativeBubble bubble = bubbles[index];
     float t = max(substep.time.x - substep.time.y, 0.0f);
     float travel = length(nativeEffectiveVelocity(bubble)) * t + 0.5f * length(nonContact[index]) * t * t;
-    margins[index] = max(1.05f * travel, 0.25f * bubble.physical.z);
+    margins[index] = minimumOnly != 0 ? 0.25f * bubble.physical.z : max(1.05f * travel, 0.25f * bubble.physical.z);
     references[index] = bubble.position.xy;
 }
 
@@ -376,16 +379,34 @@ float nativeBubbleDistanceBound(uint index, float hMax, device NativeBubble *bub
     return best;
 }
 
-// Redukcja h dla całego świata: jedna grupa, każdy wątek obsługuje co width-ty obiekt (width: potęga dwójki, najwyżej 1024). Dwa przebiegi,
-// bo wyjątek kandydata oddalającego się potrzebuje h_max = min(czas pozostały, 1/ω_max): najpierw maksimum ω², potem minimum członu d / 4.
-// h = min(t_poz, 1/ω_max, d / 4-warunek); człon i bańka wyznaczająca trafiają do `limiter` (diagnostyka limitu podkroków).
+// h_zapasu bańki i (CD-D-23): największe h, przy którym odległość od x₀ po podkroku nie przekracza zapasu, |x − x₀| + |v| h + ½ |a| h² ≤ zapas,
+// z a z początku podkroku (przyspieszenie z końca poprzedniego). Liczy się odległość od x₀, nie przebyta droga, więc drgania nie wyczerpują
+// zapasu; człon jest ostrożny, bo nie zna kierunku. h = 2 · zostało / (|v| + √(v² + 2 a · zostało)) nie traci cyfr przy a → 0.
+// Zero oznacza zapas już wyczerpany (podkrok pusty i przebudowa), a nieskończoność bańkę bez ruchu: statyczną albo bez prędkości i przyspieszenia.
+float nativeBubbleMarginBound(uint index, device NativeBubble *bubbles, device float2 *accelerations, device float *margins,
+                              device float2 *references) {
+    NativeBubble bubble = bubbles[index];
+    if (!(nativeInverseMass(bubble) > 0)) return INFINITY;
+    float left = margins[index] - length(bubble.position.xy - references[index]);
+    if (isnan(left)) return INFINITY;
+    if (left <= 0) return 0;
+    float speed = length(bubble.motion.xy), acceleration = length(accelerations[index]);
+    float denominator = speed + sqrt(speed * speed + 2 * acceleration * left);
+    return denominator > 0 ? 2 * left / denominator : INFINITY;
+}
+
+// Redukcja h dla całego świata: jedna grupa, każdy wątek obsługuje co width-ty obiekt (width: potęga dwójki, najwyżej 1024). Trzy przebiegi,
+// bo wyjątek kandydata oddalającego się potrzebuje h_max = min(czas pozostały, 1/ω_max): najpierw maksimum ω², potem minimum członu d / 4,
+// na końcu minimum h_zapasu.
+// h = min(t_poz, 1/ω_max, d / 4-warunek, h_zapasu); człon i bańka wyznaczająca trafiają do `limiter` (diagnostyka limitu podkroków).
+// Gdy h_zapasu wyznacza h, podkrok się odbywa i ustawia znacznik przebudowy (counts.z); wyczerpany zapas daje podkrok pusty ze znacznikiem.
 // Podkrok pusty (czas kroku minął, znacznik przebudowy albo limitu) ma h = 0 i zero grup w argumentach pośredniej dyspozycji; limit
 // 1024 podkroków ustawia znacznik, gdy do końca kroku zostało jeszcze czasu, i zostawia obiekt i człon z ostatniego podkroku.
 kernel void nativeReduceSubstep(device NativeBubble *bubbles [[buffer(0)]], device NativeSegment *segments [[buffer(1)]],
     constant NativeControl &control [[buffer(2)]], device NativeContactControl &contacts [[buffer(3)]],
     device uint4 *adjacency [[buffer(4)]], device uint *degrees [[buffer(5)]], device float2 *accelerations [[buffer(6)]],
     device NativeSubstepControl &substep [[buffer(7)]], device uint *dispatchArguments [[buffer(8)]],
-    device float *stepHistory [[buffer(9)]],
+    device float *stepHistory [[buffer(9)]], device float *margins [[buffer(10)]], device float2 *references [[buffer(11)]],
     uint local [[thread_position_in_threadgroup]], uint width [[threads_per_threadgroup]]) {
     threadgroup float values[1024];
     threadgroup uint owners[1024];
@@ -436,13 +457,44 @@ kernel void nativeReduceSubstep(device NativeBubble *bubbles [[buffer(0)]], devi
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
-    if (local != 0) return;
     float distanceBound = values[0];
     uint distanceOwner = owners[0];
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    // Przebieg 3: minimum h_zapasu (przy remisie mniejszy indeks).
+    best = INFINITY; owner = 0;
+    for (uint i = local; i < count; i += width) {
+        float value = nativeBubbleMarginBound(i, bubbles, accelerations, margins, references);
+        if (value < best) { best = value; owner = i; }
+    }
+    values[local] = best; owners[local] = owner;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint stride = 512; stride > 0; stride >>= 1) {
+        if (local < stride && local + stride < width) {
+            float other = values[local + stride]; uint otherOwner = owners[local + stride];
+            if (other < values[local] || (other == values[local] && otherOwner < owners[local])) { values[local] = other; owners[local] = otherOwner; }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if (local != 0) return;
+    float marginBound = values[0];
+    uint marginOwner = owners[0];
+    // Zapas którejś bańki już wyczerpany: podkrok pusty, kolejny bufor poleceń tej klatki zaczyna od przebudowy siatki.
+    if (marginBound <= 0) {
+        substep.counts.z = 1;
+        substep.time.z = 0;
+        substep.limiter = ulong2(ulong(bubbles[marginOwner].identity.x), nativeTermMargin);
+        dispatchArguments[0] = 0; dispatchArguments[1] = 1; dispatchArguments[2] = 1;
+        return;
+    }
     float h = remaining;
     ulong term = nativeTermRemaining, object = 0;
     if (stiffnessBound < h) { h = stiffnessBound; term = nativeTermStiffness; object = ulong(bubbles[omegaOwner].identity.x); }
     if (distanceBound < h) { h = distanceBound; term = nativeTermDistance; object = ulong(bubbles[distanceOwner].identity.x); }
+    // Człon zapasu wyznacza h tylko wtedy, gdy jest ostro najmniejszy: ten podkrok zużywa zapas do końca, a po nim siatka się przebudowuje.
+    if (marginBound < h) {
+        h = marginBound; term = nativeTermMargin; object = ulong(bubbles[marginOwner].identity.x);
+        substep.counts.z = 1;
+    }
     // h nie schodzi do zera, żeby zły stan kończył się limitem podkroków, a nie zawieszeniem; ostatni podkrok kończy krok dokładnie.
     h = max(h, substep.time.x * 1e-7f);
     uint frameSubstep = substep.counts.y;

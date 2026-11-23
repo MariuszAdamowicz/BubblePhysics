@@ -47,6 +47,8 @@ final class NativeMetalSubstepKernelTests: XCTestCase {
         let step: Float
         let capture: Bool
         let limit = NativeMetalSolver.candidateLimitPerObject
+        /// Zapas tylko r / 4 w `nativeBroadphaseMargin` (przełącznik `minimumMarginOnly`).
+        var minimumMarginOnly = false
 
         init(bodies: [Body], segments: [NativeSolverSegment] = [], rows: [[(neighbor: UInt32, kind: UInt32)]] = [],
              forces input: NativeForceInput = NativeForceInput(), step: Float = 1.0 / 60, capture: Bool = false) throws {
@@ -81,8 +83,16 @@ final class NativeMetalSubstepKernelTests: XCTestCase {
                 counts: SIMD4(UInt32(bodies.count), UInt32(segments.count), 0, 0), physics: SIMD4(step, 0, 0, 0), contactDamping: .zero)
             state.contactControl.contents().bindMemory(to: NativeMetalContactControl.self, capacity: 1).pointee = NativeMetalContactControl(
                 limits: .zero, counts: .zero, cache: SIMD4(0, 0, 0, UInt32(limit)), thresholds: .zero, cellWidth: .zero)
+            // Bez wywołania `.margin` zapas jest nieskończony, a x₀ to środek startowy: człon zapasu nie wpływa na h.
+            for index in 0..<bodies.count { setMargin(index, 1e9, reference: bodies[index].center) }
             try forces.upload(input, device: device)
             substep = NativeMetalSubstepControl(time: SIMD4(step, 0, 0, 0))
+        }
+
+        /// Zapas i x₀ bańki tak, jakby siatkę zbudowano przy tym zapasie i w tym punkcie.
+        func setMargin(_ index: Int, _ margin: Float, reference: Point) {
+            state.broadphaseMargin.contents().bindMemory(to: Float.self, capacity: count)[index] = margin
+            state.referencePositions.contents().bindMemory(to: Point.self, capacity: count)[index] = reference
         }
 
         // MARK: Odczyt i zapis stanu GPU
@@ -124,13 +134,16 @@ final class NativeMetalSubstepKernelTests: XCTestCase {
                                             state.broadphaseMargin, state.referencePositions].enumerated() {
                         encoder.setBuffer(buffer, offset: 0, index: index)
                     }
+                    var minimumOnly: UInt32 = minimumMarginOnly ? 1 : 0
+                    encoder.setBytes(&minimumOnly, length: MemoryLayout<UInt32>.stride, index: 6)
                     threads(encoder)
                 case .reduce:
                     let pipeline = pipelines["nativeReduceSubstep"]!
                     encoder.setComputePipelineState(pipeline)
                     for (index, buffer) in [state.workingBubbles, state.workingSegments, state.control, state.contactControl,
                                             state.adjacency, state.adjacencyCounts, state.acceleration, state.substepControl,
-                                            state.substepDispatch, state.substepSteps].enumerated() {
+                                            state.substepDispatch, state.substepSteps, state.broadphaseMargin,
+                                            state.referencePositions].enumerated() {
                         encoder.setBuffer(buffer, offset: 0, index: index)
                     }
                     encoder.dispatchThreadgroups(.init(width: 1, height: 1, depth: 1),
@@ -539,6 +552,106 @@ final class NativeMetalSubstepKernelTests: XCTestCase {
         try rig.submit([.reduce])
         XCTAssertEqual(rig.substep.counts.w, 0, "krok skończony dokładnie w 1024. podkroku to nie przekroczenie")
         XCTAssertEqual(rig.dispatchGroups, 0)
+    }
+
+    // MARK: Zapas obwiedni: tryb minimalny i człon h_zapasu (CD-D-23)
+
+    func testMinimumMarginOnlyDropsTheMotionTermAndKeepsAQuarterRadius() throws {
+        let bodies = [Body(id: 1, center: [100, 200], velocity: [3000, 0], mass: 0.36, radius: 12),
+                      Body(id: 2, center: [0, 0], velocity: [0, 0], mass: 0.5, radius: 40)]
+        let rig = try Rig(bodies: bodies, forces: NativeForceInput(objects: [], globalForce: [50, 0]))
+        rig.minimumMarginOnly = true
+        try rig.submit([.acceleration, .margin])
+        XCTAssertEqual(rig.margin(0), 3, "szybka bańka dostaje tylko r / 4")
+        XCTAssertEqual(rig.margin(1), 10)
+        for index in 0..<2 { XCTAssertEqual(rig.reference(index), bodies[index].center, "x₀ ← x także w trybie minimalnym") }
+        rig.minimumMarginOnly = false
+        try rig.submit([.margin])
+        XCTAssertGreaterThan(rig.margin(0), 40, "bez przełącznika człon ruchu: 1,05 · 3000 / 60 = 52,5")
+    }
+
+    /// Największe h z ½ a h² + v h = zapas (a stałe w podkroku), w Double.
+    private func marginBound(left: Double, speed: Double, acceleration: Double) -> Double {
+        if acceleration == 0 { return left / speed }
+        return (-speed + (speed * speed + 2 * acceleration * left).squareRoot()) / acceleration
+    }
+
+    func testMarginTermSetsHFromTheRemainingMarginAndFlagsARebuildAfterThatSubstep() throws {
+        for (speed, acceleration) in [(Double(1000), Double(0)), (200, 1e5), (0, 4e5)] {
+            let rig = try Rig(bodies: [Body(id: 9, center: [10, 20], velocity: [Float(speed), 0], mass: 0.36)])
+            // Zapas 6 j, bańka przesunęła się o 4 j od x₀: zostają 2 j.
+            rig.setMargin(0, 6, reference: [6, 20])
+            rig.setAcceleration(0, [Float(acceleration), 0])
+            try rig.submit([.reduce])
+            let control = rig.substep
+            let expected = marginBound(left: 2, speed: speed, acceleration: acceleration)
+            XCTAssertLessThan(expected, 1.0 / 60, "człon zapasu ma wyznaczać h")
+            XCTAssertLessThanOrEqual(relative(Double(control.time.z), expected), 1e-3, "v \(speed), a \(acceleration)")
+            XCTAssertEqual(control.limiter.y, NativeMetalSubstep.Term.margin.rawValue)
+            XCTAssertEqual(control.limiter.x, 9, "obiekt: bańka z wyczerpywanym zapasem")
+            XCTAssertEqual(control.counts.z, 1, "znacznik przebudowy po tym podkroku")
+            XCTAssertEqual(control.counts.y, 1, "ten podkrok się odbywa")
+            XCTAssertEqual(rig.dispatchGroups, 1)
+            // Następny podkrok tego bufora jest pusty.
+            let time = control.time.y
+            try rig.submit([.reduce])
+            XCTAssertEqual(rig.substep.time.z, 0)
+            XCTAssertEqual(rig.substep.time.y, time, "czas nie płynie po znaczniku")
+            XCTAssertEqual(rig.substep.counts.y, 1)
+            XCTAssertEqual(rig.dispatchGroups, 0)
+        }
+    }
+
+    func testMarginTermUsesTheDistanceFromTheReferenceNotThePathTravelled() throws {
+        // Bańka stoi 0,5 j od x₀ (zapas 6) i leci w stronę x₀. Człon jest ostrożny, bo liczy |x − x₀| + |v| h bez kierunku: h = (6 − 0,5) / v.
+        let rig = try Rig(bodies: [Body(id: 3, center: [0.5, 0], velocity: [-1000, 0])])
+        rig.setMargin(0, 6, reference: [0, 0])
+        try rig.submit([.reduce])
+        XCTAssertLessThanOrEqual(relative(Double(rig.substep.time.z), 5.5 / 1000), 1e-3,
+                                 "zostaje 6 − 0,5 j, liczone od odległości od x₀, nie od przebytej drogi")
+        XCTAssertEqual(rig.substep.limiter.y, NativeMetalSubstep.Term.margin.rawValue)
+    }
+
+    func testEnoughMarginLeavesHAndTheFlagUntouched() throws {
+        // v = 100: w całym kroku bańka przejdzie 1,67 j < zapas 6.
+        let rig = try Rig(bodies: [Body(id: 1, center: [0, 0], velocity: [100, 0])])
+        rig.setMargin(0, 6, reference: [0, 0])
+        try rig.submit([.reduce])
+        XCTAssertEqual(rig.substep.time.z, 1.0 / 60)
+        XCTAssertEqual(rig.substep.counts.z, 0)
+        XCTAssertEqual(rig.substep.limiter.y, NativeMetalSubstep.Term.remainingTime.rawValue)
+    }
+
+    func testMarginTermDoesNotFlagWhenAnotherTermIsSmaller() throws {
+        // Kandydat do ściany 14 j, v = 1000: d / 4 daje 3,5 ms, zapas 6 j starczyłby na 6 ms.
+        let rig = try Rig(bodies: [Body(id: 21, center: [100, -14], velocity: [0, 1000])], segments: wallSegments(), rows: [wallRow])
+        rig.setMargin(0, 6, reference: [100, -14])
+        try rig.submit([.reduce])
+        XCTAssertEqual(rig.substep.limiter.y, NativeMetalSubstep.Term.distance.rawValue)
+        XCTAssertEqual(rig.substep.counts.z, 0, "człon zapasu nie wyznaczył h, więc nie ma przebudowy")
+    }
+
+    func testExhaustedMarginFlagsARebuildInsteadOfMakingATinySubstep() throws {
+        // Bańka jest już 6 j od x₀ przy zapasie 6, a druga 7 j: żadna nie ma zapasu.
+        for offset: Float in [6, 7] {
+            let rig = try Rig(bodies: [Body(id: 4, center: [offset, 0], velocity: [1000, 0])])
+            rig.setMargin(0, 6, reference: [0, 0])
+            try rig.submit([.reduce])
+            let control = rig.substep
+            XCTAssertEqual(control.counts.z, 1, "przesunięcie \(offset)")
+            XCTAssertEqual(control.time.z, 0)
+            XCTAssertEqual(control.time.y, 0, "czas nie płynie")
+            XCTAssertEqual(control.counts.y, 0, "podkrok pusty nie jest liczony")
+            XCTAssertEqual(rig.dispatchGroups, 0)
+        }
+    }
+
+    func testStaticBubblesNeverExhaustTheirMargin() throws {
+        let rig = try Rig(bodies: [Body(id: 1, center: [50, 0], velocity: [1000, 0], role: .static)])
+        rig.setMargin(0, 0, reference: [0, 0])
+        try rig.submit([.reduce])
+        XCTAssertEqual(rig.substep.counts.z, 0)
+        XCTAssertEqual(rig.substep.time.z, 1.0 / 60)
     }
 
     func testRebuildFlagMakesTheRemainingSubstepsOfTheBufferEmpty() throws {

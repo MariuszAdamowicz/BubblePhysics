@@ -752,7 +752,8 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         // Początek każdej pary: a₀, zapas obwiedni i x₀, potem siatka i kandydaci z zapasem (kolejna para zaczyna od przebudowy).
         func encodeBroadphase() {
         // a₀, zapas obwiedni i x₀, potem siatka i kandydaci z zapasem.
-        NativeMetalSubstepLoop.encodeBroadphaseInputs(encoder, pipelines: pipelines, state: state, forces: forceBuffers, count: count)
+        NativeMetalSubstepLoop.encodeBroadphaseInputs(encoder, pipelines: pipelines, state: state, forces: forceBuffers, count: count,
+                                                      minimumMarginOnly: configuration.minimumMarginOnly)
         dispatchReduction("nativePrepareGrid", buffers: [state.workingBubbles, state.control, state.contactControl, state.broadphaseMargin])
         dispatch("nativeBuildGrid", buffers: [state.workingBubbles, state.control, state.contactControl, state.grid], threads: state.bubbleCapacity)
         NativeMetalGridSort.encode(encoder, pipelines: pipelines, grid: state.grid, capacity: state.bubbleCapacity)
@@ -974,7 +975,8 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
             contactCount: Int(contactResult.counts.y), didEncounterNonFinite: safetyResult.counts.w & 1 != 0,
             gpuMilliseconds: timing.gpuMilliseconds, solverIterationCount: configuration.solverIterationCount,
             ccdCandidateCount: Int(safetyResult.counts.x), guardCorrectionCount: Int(safetyResult.counts.y),
-            cacheInvalidationCount: Int(safetyResult.counts.z), substepCount: Int(substepResult.counts.y))
+            cacheInvalidationCount: Int(safetyResult.counts.z), substepCount: Int(substepResult.counts.y),
+            gridRebuildCount: loop.rebuildCount)
         func rejectSafety(_ reason: NativeMetalWorldError, guardCause: NativeMetalGuardCause? = nil,
                           detail: NativeMetalFailureDetail? = nil) -> NativeMetalSafetyFailure {
             .init(reason: reason, telemetry: diagnostics, profile: profile, guardCause: guardCause, detail: detail)
@@ -1092,7 +1094,8 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
                 contactCount: contacts.count, gpuMilliseconds: timing.gpuMilliseconds,
                 solverIterationCount: configuration.solverIterationCount,
                 ccdCandidateCount: Int(safetyResult.counts.x), guardCorrectionCount: Int(safetyResult.counts.y),
-                cacheInvalidationCount: Int(safetyResult.counts.z), substepCount: Int(substepResult.counts.y)),
+                cacheInvalidationCount: Int(safetyResult.counts.z), substepCount: Int(substepResult.counts.y),
+                gridRebuildCount: loop.rebuildCount),
             profile: profile, contours: contours, renderData: renderData,
             bubbleEffectiveRadii: effectiveRadii, bubbleBoundsRecords: bubbleBounds, isComplete: true)
         if !snapshot.hitTests.isEmpty {
