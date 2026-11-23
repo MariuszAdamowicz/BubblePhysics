@@ -8,6 +8,7 @@
 
 **Plugin version:** 0.7.11
 **Agent Sessions:** claude-code: 57e1ec5d-55c2-4b0f-8128-9fc22ccffaaf
+**Self-review:** CAP_REACHED — round-2 findings fixed, not re-reviewed. Uwagi rundy 2: (1) brak górnego limitu podkroków — ciąg Zenona przy bryle kinematycznej wciskającej bańkę w ścianę; (2) G1-AC2 przez graf symboli niewykonalne, bo `friction`/`restitution` zostają dla `.rigid`; (3) asercja d > 0 nie pokrywa progu 1e-3 z G6-AC4; (4) „za krawędzią / po wewnętrznej stronie krawędzi” niezdefiniowane dla wielokąta z krawędziami jednostronnymi; (5) kryteria bez parametrów sceny (G2-AC2, G3-AC1 γ, G4-AC1, G5-AC2 „klatka uderzenia”, G8-AC2 „szybkie bańki”); (6) G1-AC1 bez γ = ∞; (7) G3-AC3 nie wchodzi w reżim h_obrotu (ω > 384 rad/s).
 
 ---
 
@@ -65,25 +66,25 @@ flowchart LR
 ### Goals
 
 **G1: Materiał bańki to K_c i γ, a usunięte elementy znikają z API**
-- [ ] G1-AC1 — `PhysicsMaterial` rodzaju `.bubble` tworzy się z `contactStiffness` (K_c) i `damping` (γ). K_c ≤ 0, NaN albo ∞ oraz γ < 0 albo NaN dają `ModelValidationError.valueOutOfRange` z nazwą pola · `verify: swift test`
-- [ ] G1-AC2 — Kod, który używa `contactCompliance`, `BubbleContactCompliance`, `contactDampingRatio`, `deformability`, `friction`/`restitution`/limitów prędkości materiału bańki, nadpisania `contactCompliance` na `BubbleDescriptor`, `SolverGuardCause`, `WorldRejectionReason.solverGuard` albo publicznych pól `NativeMetalConfiguration` (iteracje, podatność, cache, teleport, CCD) nie istnieje w publicznym interfejsie modułów `BubblePhysics*` (graf symboli bez tych nazw). `docs/MIGRATION-v4.md` wymienia każdy z tych elementów i jego zastępstwo albo powód usunięcia · `verify: swift package dump-symbol-graph + grep nazw`
+- [ ] G1-AC1 — `PhysicsMaterial` rodzaju `.bubble` tworzy się z `contactStiffness` (K_c) i `damping` (γ). K_c ≤ 0, NaN albo ∞ oraz γ < 0, NaN albo ∞ dają `ModelValidationError.valueOutOfRange` z nazwą pola · `verify: swift test`
+- [ ] G1-AC2 — Symbole `BubbleContactCompliance`, `contactCompliance` (materiał i `BubbleDescriptor`), `contactDampingRatio`, `deformability`, `SolverGuardCause`, `WorldRejectionReason.solverGuard` oraz publiczne pola `NativeMetalConfiguration` (`solverIterationCount`, `contactCompliance`, `cacheExpiryFrames`, `teleportDistanceMultiplier`, `ccdVelocityMultiplier`) nie występują w publicznym grafie symboli produktów `BubblePhysics` i `BubblePhysicsMetalRender` (moduły Public, Runtime, NativeMetal; bez `BubblePhysicsLegacy`). Materiał `.bubble` utworzony z `friction`, `restitution` albo limitem prędkości różnym od domyślnego jest odrzucany `valueOutOfRange`. `docs/MIGRATION-v4.md` wymienia każdy z tych elementów i jego zastępstwo albo powód usunięcia · `verify: swift package dump-symbol-graph + grep nazw`
 - [ ] G1-AC3 — Materiał `.rigid` przyjmuje te same pola i wartości co w `v3.0.2` (tarcie, restytucja, limity prędkości, γ), a testy brył bez baniek przechodzą bez zmiany oczekiwań · `verify: swift test`
 
 **G2: Prawo kontaktu z granicą na promieniu (statyka)**
 - [ ] G2-AC1 — Przy K_c = 229 bańka „2” (r 24, m 1) i 7168 (r 148, m 38) dociśnięta stałą siłą F = 100, 1200 i 20 000 do ściany staje z ε spełniającym ε / (1 − ε)² = F / K_c ± 2 % (N4). Para tego samego materiału daje to samo z R = r_a + r_b zamiast r · `verify: swift test`
-- [ ] G2-AC2 — Przy F = 10², 10³, 10⁴, 10⁵ statyczne ε zgadza się z odwrotnością prawa ± 1 %, a odległość środka od ściany jest > 0 (N3) · `verify: swift test`
+- [ ] G2-AC2 — Przy K_c = 229 bańki „2” i 7168 dociśnięte do ściany siłą F = 10², 10³, 10⁴, 10⁵ mają statyczne ε zgodne z odwrotnością prawa ε = ((2F + K_c) − √(K_c² + 4 F K_c)) / (2F) ± 1 %, a odległość środka od ściany jest > 0 (N3) · `verify: swift test`
 - [ ] G2-AC3 — W parze tego samego materiału wgniecenia dzielą się w proporcji r_a : r_b ± 2 %. W parze różnych K_a ≠ K_b suma ugięć równa się nakładaniu, a siła zgadza się z rozwiązaniem równania r_a ε(F/K_a) + r_b ε(F/K_b) = δ policzonym w Double ± 1 % · `verify: swift test`
 - [ ] G2-AC4 — Bańka dociśnięta do statycznego koła, statycznej kapsuły i bryły dynamicznej spełnia to samo prawo co przy ścianie, z d mierzonym od środka bańki do powierzchni bryły ± 2 % · `verify: swift test`
 - [ ] G2-AC5 — Dla każdej pary w kontakcie cięciwy konturów obu baniek pokrywają się (różnica ≤ 1e-3 · R), a kontury się nie przenikają (N8) · `verify: swift test`
 
 **G3: Brak przejścia przy dowolnej prędkości i sile**
-- [ ] G3-AC1 — Bańki „2”, 128 i 7168 wystrzelone prostopadle i ukośnie w ścianę grubości 1 z prędkością 10², 10³, 3 · 10³, 10⁴ j/s mają środek po stronie zewnętrznej krawędzi po każdym podkroku. Przy γ = 0 i bez gumki najmniejsza odległość zgadza się z bilansem energii U(ε_max) = ½ m v_n² ± 10 %, gdzie v_n to składowa normalna prędkości, a U(ε) = ∫F dx = K_c · r · (1/(1 − ε) + ln(1 − ε) − 1). Przy każdej prędkości i γ nie ma `worldFailed` (N1) · `verify: swift test`
+- [ ] G3-AC1 — Bańki „2”, 128 i 7168 wystrzelone prostopadle i ukośnie w ścianę grubości 1 z prędkością 10², 10³, 3 · 10³, 10⁴ j/s mają po każdym podkroku środek poza bryłą ściany i po stronie startowej jej płaszczyzny (nie przechodzą na drugą stronę). Przy γ = 0 i bez gumki najmniejsza odległość zgadza się z bilansem energii U(ε_max) = ½ m v_n² ± 10 %, gdzie v_n to składowa normalna prędkości, a U(ε) = ∫F dx = K_c · r · (1/(1 − ε) + ln(1 − ε) − 1). Przy każdej z tych prędkości i γ ∈ {0; 1} nie ma `worldFailed` (N1) · `verify: swift test`
 - [ ] G3-AC2 — Para czołowa i ukośna przy tych samych prędkościach, także „2” na 7168, ma odległość środków > 0 po każdym podkroku, a środki nie zamieniają się stronami wzdłuż prostej zderzenia (N2) · `verify: swift test`
-- [ ] G3-AC3 — Bańka uderzona krawędzią bryły dynamicznej wirującej z prędkością kątową 10, 50 i 200 rad/s ma środek po stronie zewnętrznej bryły po każdym podkroku, a świat nie zgłasza odrzucenia ani `worldFailed` · `verify: swift test`
+- [ ] G3-AC3 — Bańka uderzona krawędzią bryły dynamicznej wirującej z prędkością kątową 10, 50, 200 i 500 rad/s (ostatnia uruchamia warunek obrotu w h, bo przekracza 384 rad/s) ma środek poza bryłą po każdym podkroku, a świat nie zgłasza odrzucenia ani `worldFailed` · `verify: swift test`
 - [ ] G3-AC4 — Bańka ściśnięta przez 10 s między dwiema bryłami dynamicznymi dociśniętymi siłą globalną do ściany kończy każdą klatkę z d > 0 i bez `worldFailed` · `verify: swift test`
 
 **G4: Całkowanie siłowe spójne fizycznie**
-- [ ] G4-AC1 — Bańka bez gumki, z γ = 0, uderza w ścianę i odbija się z prędkością równą prędkości przed uderzeniem ± 2 % (N5) · `verify: swift test`
+- [ ] G4-AC1 — Bańka „2” i 7168 (K_c = 229) bez gumki, z γ = 0, uderza prostopadle w ścianę z prędkością 10², 10³ i 10⁴ j/s i odbija się z prędkością równą prędkości przed uderzeniem ± 2 % (N5) · `verify: swift test`
 - [ ] G4-AC2 — Przy γ > 0, bez gumki: ubytek energii (kinetycznej i sprężystej) między chwilą t₀ = 0,1 s przed pierwszym kontaktem a t₁ = 0,1 s po jego końcu równa się ∫ γ · m · |v|² dt po całym przedziale [t₀, t₁] ± 5 %. Innej straty nie ma (N5) · `verify: swift test`
 - [ ] G4-AC3 — Ta sama scena (zderzenie pary, odbicie od ściany, gumka ciągnąca bańkę w tłum, bańka w polu radialnym) liczona z naturalną liczbą podkroków i z wymuszonym czterokrotnie drobniejszym podziałem kończy 1 s symulacji z pozycjami zgodnymi do 1 j i prędkościami do 2 % · `verify: swift test`
 - [ ] G4-AC4 — Gumka liczy się w każdym podkroku. Bańka ciągnięta przy stałym naciągnięciu s ustala prędkość v = K_band · s / (m · γ) ± 1 %. Stosunek prędkości dwóch baniek jest odwrotny do mas. `maximumForce` ogranicza siłę gumki tylko wtedy, gdy jest ustawione. Puszczenie zachowuje prędkość. Gumka z K_band · dt² / m ≥ 1 (np. K_band = 10⁴, m = 1) jest przyjmowana przez stager i bańka dochodzi do celu bez wartości nieskończonych · `verify: swift test`
@@ -92,28 +93,29 @@ flowchart LR
 
 **G5: Podkroki dobrane z geometrii i częstości**
 - [ ] G5-AC1 — Tłum w spoczynku i swobodny ruch wolniejszy niż d / (2 dt) liczą dokładnie 1 podkrok na krok (N6) · `verify: swift test`
-- [ ] G5-AC2 — Liczba podkroków rośnie z ω · dt i z v · dt / d zgodnie ze wzorem na h. Przy K_c = 229 i bańce „2” (r 24, m 1): przy statycznym docisku F = 20 000 do ściany 3 podkroki ± 1 (ω · dt ≈ 2,2); przy czołowym uderzeniu w ścianę z prędkością 1000 j/s 15–40 podkroków w klatce uderzenia (tolerancja wokół wyliczonych 20–30), potem znowu 1 (N6) · `verify: swift test`
+- [ ] G5-AC2 — Liczba podkroków rośnie z ω · dt i z v · dt / d zgodnie ze wzorem na h. Przy K_c = 229 i bańce „2” (r 24, m 1): przy statycznym docisku F = 20 000 do ściany 3 podkroki ± 1 (ω · dt ≈ 2,2); przy czołowym uderzeniu w ścianę z prędkością 1000 j/s największa liczba podkroków w jednej klatce w czasie kontaktu wynosi 15–40 (tolerancja wokół wyliczonych 20–30), a od pierwszej klatki po końcu kontaktu, w której d > 2 · v · dt, znowu 1 (N6) · `verify: swift test`
 - [ ] G5-AC3 — Bryła dynamiczna wirująca z prędkością kątową, przy której obrót w kroku 1/60 przekracza 128 · 0,05 rad, przechodzi krok bez odrzucenia, a jej obrót na podkrok nie przekracza 128 · 0,05 rad · `verify: swift test`
 - [ ] G5-AC4 — Bańka, której suma przesunięć w podkrokach przekracza zapas obwiedni kandydatów, dostaje kontakty z obiektami, do których dojechała w tym samym kroku (przebudowa siatki), co widać po braku przejścia w G3-AC1 przy 10⁴ j/s i po kontakcie z bańką leżącą dalej niż |v| · dt na początku kroku · `verify: swift test`
 
 **G6: Stabilność tłumu i asercje zamiast korekt**
 - [ ] G6-AC1 — Tłum 4 × 10, 150 baniek, gumka bez `maximumForce` ciągnie po kolei po kilka baniek w róg przez 60 s: zero `worldFailed`, zero wartości nieskończonych, d > 0 w każdej klatce, przenikanie konturów 0 (N7) · `verify: swift test`
-- [ ] G6-AC2 — Stan z d ≤ 0 albo ze środkiem po wewnętrznej stronie krawędzi statycznej, wstrzyknięty diagnostycznie po podkrokach, przełącza świat w `worldFailed` z przyczyną naruszenia kontaktu i identyfikatorami obiektów w diagnostyce. Krok nie jest odrzucany ani powtarzany · `verify: swift test`
+- [ ] G6-AC2 — Stan z d ≤ 0 w parze albo ze środkiem bańki wewnątrz bryły statycznej (test punktu w wielokącie, kole lub kapsule), wstrzyknięty diagnostycznie po podkrokach, przełącza świat w `worldFailed` z przyczyną naruszenia kontaktu i identyfikatorami obiektów w diagnostyce. Krok nie jest odrzucany ani powtarzany · `verify: swift test`
 - [ ] G6-AC3 — Wartość NaN albo ∞ w stanie przełącza świat w `worldFailed(.nonFiniteValues)`, jak w `v3.0.2` · `verify: swift test`
-- [ ] G6-AC4 — Bańka z `regionExitPolicy == .wrap` zawinięta na wolne miejsce symuluje się dalej bez `worldFailed`. Zawinięta tak, że jej środek trafia w bryłę statyczną albo bliżej niż 1e-3 · (r_a + r_b) od środka innej bańki, przełącza świat w `worldFailed` z przyczyną naruszenia kontaktu, bo asercja biegnie po regionie (CD-D-19) · `verify: swift test`
+- [ ] G6-AC4 — Bańka z `regionExitPolicy == .wrap` zawinięta na wolne miejsce symuluje się dalej bez `worldFailed`. Zawinięta na miejsce nakładające się z inną bańką przy d > 0 symuluje się dalej, a para rozsuwa się siłą kontaktu. Zawinięta tak, że jej środek trafia do wnętrza bryły statycznej albo dokładnie na środek innej bańki (d = 0), przełącza świat w `worldFailed` z przyczyną naruszenia kontaktu, bo asercja biegnie po regionie (CD-D-19) · `verify: swift test`
+- [ ] G6-AC5 — Bryła kinematyczna jadąca stałą prędkością 100 j/s prostopadle do ściany wciska w nią bańkę „2”. Krok kończy się w skończonym czasie (bez zawieszenia klatki), a świat przechodzi w `worldFailed` z przyczyną kroku bez postępu i identyfikatorami bańki i bryły (CD-D-4, CD-D-21) · `verify: swift test`
 
 **G7: Transakcja nie tworzy stanu niemożliwego**
-- [ ] G7-AC1 — Wstawienie, `replace` albo zmiana pozycji bańki ze środkiem we wnętrzu bryły statycznej albo za którąkolwiek jej krawędzią jest odrzucana błędem walidacji transakcji. Świat zostaje w stanie sprzed transakcji · `verify: swift test`
+- [ ] G7-AC1 — Wstawienie, `replace` albo zmiana pozycji bańki ze środkiem wewnątrz bryły statycznej (test punktu w wielokącie, kole lub kapsule; brzeg liczy się jako wnętrze) jest odrzucana błędem walidacji transakcji. Świat zostaje w stanie sprzed transakcji · `verify: swift test`
 - [ ] G7-AC2 — Wstawienie albo zmiana pozycji bańki w odległości od środka innej bańki mniejszej niż 1e-3 · (r_a + r_b) jest odrzucana tym samym błędem · `verify: swift test`
 - [ ] G7-AC3 — Łączenie albo podział, którego wynikowy środek trafiłby w bryłę statyczną albo na środek innej bańki (G7-AC1, G7-AC2), jest odrzucany tym samym błędem i nie zmienia świata · `verify: swift test`
 
 **G8: Telemetria i wydajność**
 - [ ] G8-AC1 — `NativeMetalFrameTelemetry` podaje liczbę podkroków w klatce, czas GPU fizyki i czas GPU konturu osobno, a benchmark stress raportuje histogram podkroków (p95, maksimum). Pola po XPBD, CCD i strażnikach znikają · `verify: swift test`
-- [ ] G8-AC2 — Benchmark `Benchmarks/iOS/BubblePhysicsBench` na iPhonie X, w Release, ze 150 bańkami w trzech scenach (tłum w spoczynku, gumka w pełnym naciągnięciu do ściany, zderzenie dwóch szybkich baniek) ma p95 klatki ≤ 16,67 ms. Raport podaje histogram podkroków i czas fizyki osobno od konturu (A6). To bramka tagu `v4.0.0`: przekroczenie wstrzymuje tag i wraca do autora jako decyzja o lokalnym h (CD-D-7) · `verify: pomiar na iPhonie X, raport w docs/benchmarks/`
+- [ ] G8-AC2 — Benchmark `Benchmarks/iOS/BubblePhysicsBench` na iPhonie X, w Release, ze 150 bańkami w trzech scenach (tłum w spoczynku, gumka w pełnym naciągnięciu do ściany, czołowe zderzenie dwóch baniek 128 z prędkością 10³ j/s każda) ma p95 klatki ≤ 16,67 ms. Raport podaje histogram podkroków i czas fizyki osobno od konturu (A6). To bramka tagu `v4.0.0`: przekroczenie wstrzymuje tag i wraca do autora jako decyzja o lokalnym h (CD-D-7) · `verify: pomiar na iPhonie X, raport w docs/benchmarks/`
 - [ ] G8-AC3 — Bazowe wyniki perf guard i benchmarku stress są odświeżone na 4.0.0 (kryterium raportowe, bez progu: progiem wydajności jest G8-AC2), a raport w `docs/benchmarks/` podaje ich zmianę względem `v3.0.2` zmierzoną naprzemiennie na tym samym Macu · `verify: swift run -c release BubblePhysicsPerfGuard`
 
 **G9: Wydanie 4.0.0 i przyjęcie w grze**
-- [ ] G9-AC1 — Testy z listy „do usunięcia” (spec. 4) są usunięte. Testy z listy „do zachowania” przechodzą z oczekiwaniem przeliczonym na nowe prawo. Testy nowe N1–N8 oraz testy z G3-AC3, G3-AC4, G4-AC3, G4-AC5, G4-AC6, G5-AC3, G5-AC4, G6-AC2, G6-AC4 i G7 istnieją i przechodzą. Pełne `swift test` jest zielone · `verify: swift test`
+- [ ] G9-AC1 — Testy z listy „do usunięcia” (spec. 4) są usunięte. Testy z listy „do zachowania” przechodzą z oczekiwaniem przeliczonym na nowe prawo. Testy nowe N1–N8 oraz testy z G3-AC3, G3-AC4, G4-AC3, G4-AC5, G4-AC6, G5-AC3, G5-AC4, G6-AC2, G6-AC4, G6-AC5 i G7 istnieją i przechodzą. Pełne `swift test` jest zielone · `verify: swift test`
 - [ ] G9-AC2 — Showcase i benchmark stress kompilują się i działają na kontakcie z K_c (bez kontaktu twardego, przegubów z bańkami i kontaktu PBD bańka–bryła) · `verify: xcodebuild Showcase i BubblePhysicsBench`
 - [ ] G9-AC3 — Przed tagiem `v4.0.0` gałąź gry wskazująca na gałąź silnika przechodzi bramkę przeciskania z projektu gry (G2-AC10 w `solution-design.md` gry, kryterium A1 specyfikacji) na Macu. Scena to plansza 4 × 10, ziarna 1–5 × 3 powtórzenia, gumka bez `maximumForce` i jeden materiał. Wynik: 15/15 przebiegów zaliczonych, wszystkie 40 łączeń sceny wykonane w każdym przebiegu, przenikanie konturów 0, ucieczki 0 w granicy ścisłej, zero `worldFailed` (A1). Raport podaje wersje `PhysicsGate.json` i `PhysicsTuning.json` oraz rozbieżności względem specyfikacji · `verify: bramka PhysicsLab w 2KBubbles`
 - [ ] G9-AC4 — `CHANGELOG.md`, wersja w `README.md` i `MigrationGuideTests` wskazują 4.0.0, a `docs/MIGRATION-v4.md` opisuje zmiany zachowania prostymi słowami (spec. 7) · `verify: swift test`
@@ -154,6 +156,7 @@ Gumkę (cel, K_band, opcjonalne `maximumForce`), siłę globalną, opisy pól z 
    - Dla bryły dynamicznej v_zbl zawiera prędkość punktu bryły: |v_bryły| + |ω_bryły| · ρ_bryły, gdzie ρ_bryły to promień obwiedni od środka masy.
    - h_obrotu = 128 · 0,05 / |ω_bryły| (CD-D-3).
    - Stałe 1, 2, 128 i 0,05 to stałe metody i istniejącego próbkowania, a nie parametry strojenia.
+   - **Krok bez postępu (CD-D-21).** Gdy wyliczone h spada poniżej rozdzielczości float32 pozostałego czasu kroku (h < 2⁻²⁰ · dt), czasu kroku nie da się dalej posunąć. Zdarza się to tylko wtedy, gdy ruch poza siłami (bryła kinematyczna, korekta bryła–bryła) zamyka bańkę bez wyjścia (ciąg Zenona). Świat przechodzi wtedy w `worldFailed` z przyczyną kroku bez postępu i identyfikatorami obiektów, które wyznaczyły h. Granica wynika z formatu liczb, a nie ze strojenia, i zapada po kilkudziesięciu podkrokach, bo d maleje co najmniej geometrycznie.
 2. **Pół impulsu:** v ← v · e^(−γ h/2) + a · h/2 (najpierw opór, potem siła, jak dziś). Bryły dynamiczne robią to samo z siłą i momentem od baniek.
 3. **Ruch:** x ← x + v · h. Obrót bańki: kąt + ω · h, ω · e^(−γ h). Bryły dynamiczne przechodzą cały istniejący potok brył z krokiem h: predykcja z próbkowaniem obrotu względem ścian, CCD bryła–bryła, kontakty bryła–bryła i wypychanie ze ścian (CD-D-2). Bez brył dynamicznych nic z tego się nie koduje.
 4. **Siły z nowego stanu → a.** Kontakt według prawa (niżej), gumka K_band · (cel − x) z opcjonalnym obcięciem, siła globalna, pola z bieżącej pozycji i motor. Bryła dostaje siłę równą i przeciwną w punkcie styku (siła i moment).
@@ -174,18 +177,18 @@ Iloczyn mnożników oporu po podkrokach daje e^(−γ · dt), a suma impulsów d
 
 **4. Koniec kroku.**
 - `nativeCheckFinite` zostaje.
-- Nowa asercja sprawdza każdy kontakt i każdą krawędź statyczną: d > 0 i środek po stronie zewnętrznej. Naruszenie to błąd silnika: `worldFailed` z nową przyczyną i identyfikatorami obiektów (CD-D-12). Zastępuje to `nativeValidateBubbleContainment` i ostatnią pętlę strażnika.
+- Nowa asercja po każdym kroku (i diagnostycznie po podkroku) sprawdza dwie rzeczy: każda para ma d > 0, a środek żadnej bańki nie leży wewnątrz bryły statycznej (test punktu w wielokącie, kole lub kapsule). Dla krawędzi jednostronnej w kontakcie sprawdza też, czy środek nie zmienił strony jej prostej względem początku podkroku w obszarze rzutu odcinka. To wyłapuje przejście przez cienką ścianę. Naruszenie to błąd silnika: `worldFailed` z nową przyczyną i identyfikatorami obiektów (CD-D-12). Zastępuje to `nativeValidateBubbleContainment` i ostatnią pętlę strażnika.
 - Kontur: cięciwa bańki a leży w r_a · (1 − ε_a) od jej środka. Zastępuje to podział c_a : c_b (`NativePostSolveKernels.metal-source:728-732`), więc cięciwy obu baniek się pokrywają. Przycinanie krawędzią ściany, wygładzanie i majoranta zostają.
 - Zdarzenia kontaktu, łączenia i sensory czytają rekordy kontaktów końca kroku jak dziś.
 - Region (`nativeApplyPublicRegion`) działa raz na krok, po podkrokach i przed asercjami. Zawinięcie (`.wrap`) to jedyne przesunięcie środka poza siłami, wybrane przez grę polityką regionu. Asercja po regionie wyłapuje zawinięcie na zajęte miejsce (CD-D-19, G6-AC4).
 
 **Walidacja transakcji (CD-D-8).** `TransactionStager` odrzuca błędem walidacji każdą zmianę, po której środek bańki leżałby:
-- we wnętrzu bryły statycznej albo za którąś z jej krawędzi;
+- wewnątrz bryły statycznej (test punktu w bryle; brzeg liczy się jako wnętrze);
 - bliżej niż 1e-3 · (r_a + r_b) od środka innej bańki.
 
 Dotyczy to wstawienia, `replace`, zmiany pozycji oraz wyniku łączenia i podziału.
 
-**Znane ograniczenie (CD-D-4).** Pozycyjne korekty bryła–bryła i wypychanie bryły ze ściany przesuwają bryłę poza siłami, więc nie podlegają warunkowi d / 2. Gwarancja z konstrukcji obejmuje ściany, pary baniek oraz ruch brył z całkowania. Skrajny przypadek korekty wyłapuje asercja d > 0 (`worldFailed` z przyczyną). Tak samo jest z bryłą kinematyczną, która wciska bańkę w ścianę, bo jej ruch jest zadany i ignoruje siły.
+**Znane ograniczenie (CD-D-4).** Pozycyjne korekty bryła–bryła i wypychanie bryły ze ściany przesuwają bryłę poza siłami, więc nie podlegają warunkowi d / 2. Gwarancja z konstrukcji obejmuje ściany, pary baniek oraz ruch brył z całkowania. Skrajny przypadek korekty wyłapuje asercja d > 0 (`worldFailed` z przyczyną). Tak samo jest z bryłą kinematyczną, która wciska bańkę w ścianę, bo jej ruch jest zadany i ignoruje siły. Ten przypadek kończy krok bez postępu (CD-D-21, G6-AC5), a nie zawieszeniem klatki.
 
 ```mermaid
 flowchart TD
@@ -208,7 +211,7 @@ flowchart TD
 
 - **`Sources/BubblePhysicsPublic/Model/Resources.swift`** — `PhysicsMaterial` dla `.bubble`: `contactStiffness` i `damping`. Usunięte: `BubbleContactCompliance`, `contactDampingRatio`, `deformability`. Pola `friction`, `restitution` i limity prędkości zostają tylko dla `.rigid` (CD-D-11).
 - **`Sources/BubblePhysicsPublic/Model/Objects.swift`** — usunięte nadpisanie `contactCompliance` na `BubbleDescriptor`.
-- **`Sources/BubblePhysicsPublic/Diagnostics.swift`**, **`Sources/BubblePhysicsPublic/BubbleWorld.swift`** — usunięte `SolverGuardCause`, `WorldRejectionReason.solverGuard`, `lastSolverGuardCause`, licznik zawartych par i `makeBenchmarkWorld(solverIterationLimit:pairCorrectionLimit:)`. Nowa przyczyna `WorldFailureReason` dla naruszenia asercji kontaktu, z identyfikatorami w diagnostyce.
+- **`Sources/BubblePhysicsPublic/Diagnostics.swift`**, **`Sources/BubblePhysicsPublic/BubbleWorld.swift`** — usunięte `SolverGuardCause`, `WorldRejectionReason.solverGuard`, `lastSolverGuardCause`, licznik zawartych par i `makeBenchmarkWorld(solverIterationLimit:pairCorrectionLimit:)`. Nowe przyczyny `WorldFailureReason`: naruszenie asercji kontaktu i krok bez postępu, z identyfikatorami w diagnostyce.
 - **`Sources/BubblePhysicsRuntime/MotionControllers.swift`** — host liczy tylko prędkość zadaną ról kinematycznych. γ, gumka, pola i motor przechodzą do danych wejściowych GPU.
 - **`Sources/BubblePhysicsRuntime/TransactionStager.swift`** — walidacja położenia środka (G7), usunięcie walidacji przepełnienia α (`:553`) i strażnika sztywności gumki `validateBandStability` (`:542`, CD-D-20).
 - **`Sources/BubblePhysicsRuntime/NativeCompleteStepper.swift`** — przekazanie danych gumki, pól i motoru do kroku natywnego oraz odbiór telemetrii podkroków.
@@ -223,7 +226,7 @@ flowchart TD
 - **`Sources/BubblePhysicsNativeMetal/NativeJointState.swift`**, **`NativeRigidPolygonState.swift`**, **`NativeMetalBufferLayout.swift`** — przeguby tylko bryła–bryła. Statyczna ściana w kontakcie z bańką nie czyta tarcia ani restytucji. Nowy układ rekordu bańki.
 - **`Sources/BubblePhysicsMetalRenderBenchmark/PublicWorldStressBenchmark.swift`**, **`Benchmarks/macOS/BubblePhysicsPerfGuard`**, **`Benchmarks/iOS/BubblePhysicsBench`** — kontakt z K_c, sceny z G8-AC2, histogram podkroków, nowe wartości bazowe.
 - **`Examples/BubblePhysicsShowcase`** — `BubbleScene` i `RigidScene` na kontakcie z K_c, bez `deformability` i kontaktu twardego.
-- **`Tests/…`** — audyt według spec. 4 (usuń, zachowaj z przeliczeniem, nowe N1–N8) oraz testy z G3-AC3, G3-AC4, G4-AC3, G4-AC5, G4-AC6, G5-AC3, G5-AC4, G6-AC2, G6-AC4 i G7.
+- **`Tests/…`** — audyt według spec. 4 (usuń, zachowaj z przeliczeniem, nowe N1–N8) oraz testy z G3-AC3, G3-AC4, G4-AC3, G4-AC5, G4-AC6, G5-AC3, G5-AC4, G6-AC2, G6-AC4, G6-AC5 i G7.
 - **`docs/MIGRATION-v4.md`** (nowy), **`CHANGELOG.md`**, **`README.md`**, **`docs/integration-guide.md`** — opis wydania i migracji.
 
 ## Error handling
@@ -233,6 +236,7 @@ flowchart TD
 - **Wartości nieskończone** prowadzą do `worldFailed(.nonFiniteValues)`, bez zmian (G6-AC3).
 - **Transakcja tworząca stan niemożliwy** jest odrzucana błędem walidacji. Świat żyje dalej w stanie sprzed transakcji (G7).
 - **Przepełnienie kandydatów** jest raportowane jak dziś (`contactCandidateOverflow`). Kontakt pominięty przez limit nie łamie asercji, dopóki geometria jest poprawna. Gdy ją złamie, kończy się na `worldFailed` jak wyżej.
+- **Krok bez postępu** (h < 2⁻²⁰ · dt) kończy się `worldFailed` z przyczyną i identyfikatorami, więc klatka nie zawiesza się na dokładaniu buforów (CD-D-21, G6-AC5).
 - **Brak podkroków w buforze** to nie błąd. Klatka dostaje następny bufor poleceń (CD-D-18).
 
 ## Testing & verification
@@ -266,6 +270,7 @@ flowchart TD
 | CD-D-18 | Kodowanie pętli podkroków i przebudowy siatki | Liczba podkroków i potrzeba przebudowy siatki są znane dopiero na GPU | 2 × liczba z poprzedniej klatki z wczesnym wyjściem i dobiciem buforem; odczyt CPU po każdym podkroku; stała liczba maksymalna; przebudowa kodowana po każdym podkroku z wczesnym wyjściem | 2 × poprzednia (min. 2), puste podkroki wychodzą od razu; brak podkroków albo znacznik przebudowy → następny bufor tej samej klatki, zaczynający od przebudowy, jeśli znacznik ustawiony | bez odczytu CPU w środku bufora; typowa klatka nie płaci za przebudowę, a koszt pustych dyspozycji jest mały | auto (spec. zmiana 3) | G5-AC2, G5-AC4, G8-AC2 | klatka uderzenia albo szybkiego przelotu może mieć 2–3 bufory poleceń |
 | CD-D-19 | Zawinięcie regionu a reguła „tylko siły” | `.wrap` przesuwa środek poza siłami i może postawić bańkę w bryle albo na innej bańce | asercja po regionie i `worldFailed`; odroczenie zawinięcia do wolnego miejsca; walidacja jak w stagerze | region przed asercjami; zawinięcie na zajęte miejsce → `worldFailed` z przyczyną | zawinięcie to polityka wybrana przez grę, a nie korekta silnika; odroczenie byłoby nowym zachowaniem, o które nikt nie prosił; gra używa `.remove` | auto (kod `NativePostSolveKernels.metal-source:953`, przegląd projektu) | G6-AC4 | gra z `.wrap` musi zapewnić wolne miejsce po drugiej stronie |
 | CD-D-20 | Strażnik sztywności gumki w stagerze znika | `validateBandStability` (`TransactionStager.swift:542`) odrzuca K_band · dt² / m ≥ 1, bo dziś gumka całkuje się raz na krok | zostawić; usunąć | usunąć: gumka jest w podkroku i wchodzi do ω_max | specyfikacja, zmiana 5: warunek przestaje być ograniczeniem; strażnik blokowałby to, co podkroki obsługują | auto (spec. zmiana 5) | G4-AC4 | testy strażnika gumki trafiają na listę „do usunięcia” |
+| CD-D-21 | Krok bez postępu kończy świat | Ruch poza siłami (bryła kinematyczna, korekta bryła–bryła) może dać ciąg malejących h bez końca i zawiesić klatkę | limit liczby podkroków; minimalne h z rozdzielczości float32; brak limitu | h < 2⁻²⁰ · dt → `worldFailed` z przyczyną kroku bez postępu i obiektami wyznaczającymi h | granica wynika z formatu liczb (czasu nie da się posunąć), a nie ze strojenia; zgodne z decyzją 5 specyfikacji („bez nowego parametru”) | auto (przegląd projektu, runda 2) | G6-AC5 | nowa przyczyna `WorldFailureReason` obok naruszenia kontaktu (CD-D-12) |
 
 ## Key facts & assumptions
 
