@@ -122,7 +122,7 @@ flowchart LR
   - od pierwszej klatki po końcu kontaktu, w której d > 4 · v · dt, znowu jest 1 podkrok (N6).
 
   `verify: swift test`
-- [ ] G5-AC3 — Lekka bańka „2” w spoczynku, bez sił (zapas z początku kroku = r / 4 = 6 j), zostaje w trakcie kroku uderzona czołowo bańką 128 lecącą 10³ j/s i wypchnięta z prędkością do ok. 1,7 · 10³ j/s w stronę trzeciej przeszkody (cienka ściana albo bańka 128 w spoczynku). Przeszkoda leży tak, że na początku kroku nie jest kandydatem „2”: odległość obwiedni powiększonych o zapasy obu obiektów (zapas bańki 128 jako przeszkody to 16 j) jest dodatnia. Jednocześnie przeszkoda leży w zasięgu ruchu „2” w tym kroku, policzonym w jednowymiarowej symulacji odniesienia (do ok. 28 j).
+- [ ] G5-AC3 — Lekka bańka „2” w spoczynku, bez sił (zapas z początku kroku = r / 4 = 6 j), zostaje uderzona czołowo bańką 128 lecącą 10³ j/s i wypchnięta w stronę trzeciej przeszkody: cienkiej ściany albo, w drugim wariancie, bańki „2” w spoczynku (zapas 6 j). Przy K_c = 229 zderzenie trwa ok. 5 klatek: bańka 128 długo wchodzi w „2”, zanim ta ruszy, a przebudowa siatki zachodzi w klatce wybicia. Odstęp startowy dobiera się w jednowymiarowej symulacji odniesienia tak, żeby w klatce wybicia szczelina między „2” a przeszkodą była większa niż suma zapasów obu obiektów (przeszkoda nie jest kandydatem na początku kroku), ale mniejsza niż droga „2” w tym kroku. Ocena autora: największa droga w jednym kroku to ok. 19 j przy zapasie ok. 6 j, więc okno szczeliny wynosi ok. 6–19 j dla ściany i ok. 12–19 j dla bańki „2”. Wariant z bańką 128 jako przeszkodą (zapas 16 j) jest niewykonalny i nie wchodzi do testu.
   - Żadna bańka nie przechodzi przez przeszkodę ani przez inną bańkę: środek po każdym podkroku poza bryłą i po stronie startowej, odległość środków > 0.
   - Telemetria tej klatki podaje co najmniej jedną przebudowę siatki.
   - Ta sama scena z pakietowym przełącznikiem „zapas = tylko minimum r / 4” dla wszystkich baniek daje ten sam brak przejścia (CD-D-23).
@@ -367,7 +367,7 @@ flowchart TD
 
 - **Najważniejsza reguła:** środek bańki przesuwają tylko siły. Żaden mechanizm silnika nie poprawia pozycji bańki poza całkowaniem (jedyny wyjątek to zawinięcie regionu wybrane przez grę, CD-D-19). Naruszenie geometrii to błąd silnika, a nie stan do naprawienia.
 - K_c = 229 daje ε 0,648 przy F ≈ 1200, jak w strojeniu gry v5. Przy lekkim kontakcie bańki są miększe (ε 0,3 przy 140 zamiast 556). Ocenia to autor w laboratorium gry, a zmiana dotyczy tylko K_c.
-- Liczby podkroków to rachunki i symulacje 1D z ocen autora, a nie pomiary:
+- Liczby podkroków to rachunki i symulacje 1D z ocen autora, a nie pomiary. Dotyczą zderzenia ze ścianą; zderzenie dwóch baniek przy K_c = 229 rozkłada się na kilka klatek, więc w scenie z dwiema bańkami 128 (G8-AC2) szczyt podkroków na klatkę będzie niższy, za to przez więcej klatek:
   - w typowej grze 1 podkrok, przy F = 20 000 ok. 3 (specyfikacja);
   - przy d / 4 sama faza dojazdu daje ok. 20 podkroków dla „2” i 29 dla 7168 przy 10³ j/s, a warunek przy odjeździe mniej więcej podwaja te liczby;
   - przy 3 · 10³ j/s to łącznie do ok. 100 podkroków, daleko poniżej limitu 1024 (CD-D-21).
@@ -394,4 +394,5 @@ Szczegóły są w commitach gałęzi `feature/engine-4-0-0`.
   - próg sztywności gumki w stagerze zamiast osobnego członu h (CD-D-20; dawny osobny warunek gumki wycofany);
   - testy w zakresie prędkości gry do 3 · 10³ j/s (CD-D-25);
   - pola sił zostają w podkroku (CD-D-5).
+- **Piąta ocena autora:** wariant G5-AC3 z bańką 128 jako przeszkodą niewykonalny; zamiast niej bańka „2”, zasięg poprawiony z ok. 28 j na ok. 19 j, zderzenie trwa ok. 5 klatek.
 - **Przegląd odchudzonej wersji:** runda 1 — 4 uwagi poprawione (scena G5-AC3 z odwróconymi masami, scena G6-AC1, próg gumki przy dt we Float, odwracalność opisana jako przybliżona). Runda 2: CAP_REACHED — round-2 findings fixed, not re-reviewed. Uwagi rundy 2: (1) limit 4096 w scenie G6-AC5 zadziałałby poniżej granicy float32, obniżony do 1024; (2) CD-D-22 z innym zakresem prędkości niż Architecture; (3) Components bez modułu `BubblePhysicsNativeMetalDiagnostics` i `Package.swift`; (4) G4-AC4 bez czasu i geometrii sceny.
