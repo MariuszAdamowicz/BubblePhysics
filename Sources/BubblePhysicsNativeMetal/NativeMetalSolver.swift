@@ -226,7 +226,7 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
     private let queue: MTLCommandQueue
     private let predict: MTLComputePipelineState
     private let pipelines: [String: MTLComputePipelineState]
-    private let configuration: NativeMetalConfiguration
+    package let configuration: NativeMetalConfiguration
     private let candidateCapacity: Int?
     private let collectDispatchStatistics: Bool
     private let collectStageDiagnostics: Bool

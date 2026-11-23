@@ -121,6 +121,9 @@ package final class NativePublicWorld {
     /// w kroku bez GPU. Zduplikowany koniec odfiltrowuje historia kompaktora, bo koniec bez pary w historii jest pomijany.
     private var contactHistory: Set<ContactPair> = []
 
+    /// Konfiguracja po `sanitized`, z którą pracuje solver; szew testów przełączników pakietowych.
+    package var nativeConfiguration: NativeMetalConfiguration { solver.configuration }
+
     package convenience init(device: MTLDevice, configuration: NativeMetalConfiguration = .default) throws {
         try self.init(device: device, configuration: configuration, commandExecutor: nil)
     }

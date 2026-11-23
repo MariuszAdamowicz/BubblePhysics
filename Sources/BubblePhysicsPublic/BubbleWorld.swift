@@ -30,6 +30,7 @@ public final class BubbleWorld {
     private var pendingRenderState: BubbleWorldRenderState?
     /// Stan końcowy „zawiódł”: ustawiony raz, nigdy nie czyszczony.
     private var failureReason: WorldFailureReason?
+    private var failureDetail: WorldFailureDetail?
     private var lastRejectionReason: WorldRejectionReason?
     private var lastSolverGuardCause: SolverGuardCause?
     private var containedBubblePairCount = 0
@@ -65,6 +66,19 @@ public final class BubbleWorld {
         }
         self.init(configuration: configuration, stepper: try NativeCompleteStepper(device: device), assets: registry,
                   lifecycle: lifecycle)
+    }
+
+    /// Szew testów silnika 4.0.0: świat z konfiguracją natywną (przełączniki pakietowe podkroków); nie jest API gry.
+    package static func makeBenchmarkWorld(configuration: WorldConfiguration, device: MTLDevice,
+                                           native: NativeMetalConfiguration = .default) throws -> BubbleWorld {
+        try BubbleWorld(configuration: configuration,
+                        stepper: NativeCompleteStepper(device: device, configuration: native),
+                        assets: AssetRegistry(device: device))
+    }
+
+    /// Konfiguracja natywna, z którą pracuje solver świata; szew testów przełączników.
+    package var benchmarkNativeConfiguration: NativeMetalConfiguration? {
+        (stepper as? NativeCompleteStepper)?.nativeConfiguration
     }
 
     /// Konstruktor wyłącznie dla diagnostycznego harnessu; limit nie jest parametrem API gry.
@@ -115,7 +129,7 @@ public final class BubbleWorld {
             eventOverflow: lastFrame.eventOverflow,
             contactCandidateOverflow: contactCandidateOverflow,
             maximumContactCandidatesPerObject: maximumContactCandidatesPerObject,
-            failureReason: failureReason, lastRejectionReason: lastRejectionReason,
+            failureReason: failureReason, failureDetail: failureDetail, lastRejectionReason: lastRejectionReason,
             lastSolverGuardCause: lastSolverGuardCause, containedBubblePairCount: containedBubblePairCount,
             didRenderLastAdvance: didRenderLastAdvance)
     }
@@ -405,8 +419,9 @@ public final class BubbleWorld {
             lastAdvanceIssue = .stepFailed
             lastRejectionReason = reason
             lastSolverGuardCause = cause
-        case .failed(let reason):
+        case .failed(let reason, let detail):
             failureReason = reason
+            failureDetail = detail
             pending.removeAll()
             dropHitTests()
             lastAdvanceIssue = .worldFailed
@@ -417,7 +432,7 @@ public final class BubbleWorld {
         case cancelled, frameRejected
         /// Przyczyna jest tylko przy `.solverGuard`.
         case stepRejected(WorldRejectionReason, SolverGuardCause?)
-        case failed(WorldFailureReason)
+        case failed(WorldFailureReason, WorldFailureDetail? = nil)
     }
 
     /// Skutek błędu kroku: tylko błąd wykonania GPU i NaN/±∞ kończą świat; błąd gry odrzuca klatkę;
@@ -427,6 +442,11 @@ public final class BubbleWorld {
         if error is GameRenderError { return .frameRejected }
         if error is WorldRenderCommandError { return .failed(.commandExecutionFailed) }
         if let failure = error as? NativeMetalSafetyFailure {
+            switch failure.reason {
+            case .contactViolation: return .failed(.contactViolation, failure.detail.map(worldFailureDetail))
+            case .substepLimitExceeded: return .failed(.substepLimitExceeded, failure.detail.map(worldFailureDetail))
+            default: break
+            }
             let outcome = outcome(of: failure.reason)
             guard case .stepRejected(.solverGuard, _) = outcome else { return outcome }
             let cause: SolverGuardCause? = switch failure.guardCause {
@@ -454,7 +474,21 @@ public final class BubbleWorld {
         case .invalidFrame: return .stepRejected(.invalidFrame, nil)
         case .frameInFlight: return .stepRejected(.frameInFlight, nil)
         case .unavailable: return .stepRejected(.unexpected, nil)
+        case .contactViolation: return .failed(.contactViolation)
+        case .substepLimitExceeded: return .failed(.substepLimitExceeded)
         }
+    }
+
+    private static func worldFailureDetail(_ detail: NativeMetalFailureDetail) -> WorldFailureDetail {
+        let term: WorldSubstepTerm? = switch detail.limitingTerm {
+        case .remainingTime: .remainingTime
+        case .stiffness: .stiffness
+        case .distance: .distance
+        case .margin: .margin
+        case nil: nil
+        }
+        return WorldFailureDetail(objects: detail.objectIDs.map { ObjectID(rawValue: $0) }, edgeIndex: detail.edgeIndex,
+                                  distance: detail.distance, limitingTerm: term)
     }
 }
 

@@ -22,6 +22,7 @@ package final class NativeCompleteStepper: CompleteStepper {
     package var publishedContactPairs: Set<ContactPair> { previousContacts }
     package var publishedRenderHandoff: NativeMetalRenderHandoff? { native?.publishedRenderHandoff }
     package var publishedTelemetry: NativeMetalFrameTelemetry? { native?.publishedTelemetry }
+    package var nativeConfiguration: NativeMetalConfiguration? { native?.nativeConfiguration }
     package var publishedContourCPUReadbackCount: Int { native?.publishedContourCPUReadbackCount ?? 0 }
     package var publishedFrameProfile: NativeMetalFrameProfile? { native?.lastPublishedProfile }
 

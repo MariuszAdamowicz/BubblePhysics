@@ -8,6 +8,18 @@ public struct NativeMetalConfiguration: Equatable, Sendable {
     /// Limit λ pary bańka–bańka (CD-D-9). Przełącznik wyłącznie dla testów bliźniaczych z dawnym oczekiwaniem
     /// (CD-D-20): poza publicznym `init`, więc gra go nie widzi; `sanitized` go zachowuje.
     package var pairCorrectionLimit = true
+    /// Przełączniki pakietowe silnika 4.0.0, widoczne tylko dla testów i diagnostyki (poza publicznym `init`). Domyślnie
+    /// wszystkie są wyłączone i nie zmieniają silnika; `sanitized` je zachowuje.
+    /// Mnożnik drobniejszego podziału podkroku (G4-AC3): 1 to podział naturalny, 4 daje czterokrotnie drobniejszy.
+    package var substepSplitMultiplier = 1
+    /// Zapas obwiedni tylko r / 4, bez członu z prędkości i przyspieszenia (G5-AC3).
+    package var minimumMarginOnly = false
+    /// Zapis x, v i h po każdym podkroku do odczytu przez test (rozwinięcie `nativeCapturePositions`).
+    package var captureSubsteps = false
+    /// Asercja kontaktu po każdym podkroku, a nie tylko na końcu kroku (G6-AC2).
+    package var assertEverySubstep = false
+    /// Stan wstrzykiwany po wskazanym podkroku, by sprawdzić asercję kontaktu (G6-AC2).
+    package var injectedSubstepState: NativeMetalInjectedSubstepState?
 
     public init(solverIterationCount: Int = 8, cacheExpiryFrames: Int = 30,
                 teleportDistanceMultiplier: Float = 2, ccdVelocityMultiplier: Float = 1,
@@ -30,7 +42,19 @@ public struct NativeMetalConfiguration: Equatable, Sendable {
             ? teleportDistanceMultiplier : Self.default.teleportDistanceMultiplier
         value.ccdVelocityMultiplier = ccdVelocityMultiplier.isFinite && ccdVelocityMultiplier > 0
             ? ccdVelocityMultiplier : Self.default.ccdVelocityMultiplier
+        value.substepSplitMultiplier = max(1, substepSplitMultiplier)
         return value
+    }
+}
+
+/// Stan bańki wstrzykiwany po podkroku (G6-AC2): przesuwa środek obiektu `objectID` na `position` po podkroku `afterSubstep`
+/// (liczonym od 0 w klatce), żeby asercja kontaktu zobaczyła d ≤ 0 albo środek w bryle.
+package struct NativeMetalInjectedSubstepState: Equatable, Sendable {
+    package var afterSubstep: Int
+    package var objectID: UInt64
+    package var position: SIMD2<Float>
+    package init(afterSubstep: Int, objectID: UInt64, position: SIMD2<Float>) {
+        self.afterSubstep = afterSubstep; self.objectID = objectID; self.position = position
     }
 }
 
@@ -54,13 +78,23 @@ public struct NativeMetalFrameTelemetry: Equatable, Sendable {
     public let didEncounterNonFinite: Bool
     public let fallbackReason: String?
     public let gpuMilliseconds: Double
+    /// Liczba podkroków fizyki w klatce (G8-AC1).
+    public let substepCount: Int
+    /// Liczba przebudów siatki w klatce (G8-AC1).
+    public let gridRebuildCount: Int
+    /// Czas GPU fizyki: suma buforów podkroków. Osobno od konturu (G8-AC1).
+    public let physicsGPUMilliseconds: Double
+    /// Czas GPU konturu: bufor końca kroku (G8-AC1).
+    public let contourGPUMilliseconds: Double
 
     public init(backend: NativeMetalFrameBackend = .cpu, commandBufferCount: Int = 0,
                 encoderCount: Int = 0, cacheHitCount: Int = 0, cacheResetCount: Int = 0,
                 contactCount: Int = 0, didEncounterNonFinite: Bool = false,
                 fallbackReason: String? = nil, gpuMilliseconds: Double = 0,
                 solverIterationCount: Int = 0, ccdCandidateCount: Int = 0,
-                guardCorrectionCount: Int = 0, cacheInvalidationCount: Int = 0) {
+                guardCorrectionCount: Int = 0, cacheInvalidationCount: Int = 0,
+                substepCount: Int = 0, gridRebuildCount: Int = 0, physicsGPUMilliseconds: Double = 0,
+                contourGPUMilliseconds: Double = 0) {
         self.backend = backend
         self.commandBufferCount = commandBufferCount
         self.encoderCount = encoderCount
@@ -74,5 +108,9 @@ public struct NativeMetalFrameTelemetry: Equatable, Sendable {
         self.didEncounterNonFinite = didEncounterNonFinite
         self.fallbackReason = fallbackReason
         self.gpuMilliseconds = gpuMilliseconds
+        self.substepCount = substepCount
+        self.gridRebuildCount = gridRebuildCount
+        self.physicsGPUMilliseconds = physicsGPUMilliseconds
+        self.contourGPUMilliseconds = contourGPUMilliseconds
     }
 }

@@ -177,6 +177,52 @@ final class BubbleWorldCompletionTests: XCTestCase {
         try await assertWorldStaysFailed(world, stepper: stepper, lastFrame: frame, expectedCalls: 1)
     }
 
+    // P-B-22 (G6-AC2): naruszenie kontaktu to błąd silnika. Świat kończy się z nową przyczyną, a diagnostyka niesie ID obiektów,
+    // krawędź i odległość. Krok nie jest odrzucany ani powtarzany: kolejka porzucona, stepper nie jest wołany drugi raz.
+    func testContactViolationFailsTheWorldAndExposesTheDetail() async throws {
+        let detail = NativeMetalFailureDetail(objectIDs: [7, 9], edgeIndex: 2, distance: -0.5)
+        let stepper = ScriptedStepper([.complete, .fail(safety(.contactViolation, detail: detail)), .complete])
+        let world = try world(stepper: stepper)
+        XCTAssertNil(world.diagnostics.failureDetail, "przed jakimkolwiek błędem")
+        let first = await world.advance(by: 0.125)
+        world.submit(WorldTransaction())
+        let failed = await world.advance(by: 0.125)
+        XCTAssertEqual(failed, first, "advance zwraca ostatnią klatkę")
+        XCTAssertEqual(world.diagnostics.failureReason, .contactViolation)
+        XCTAssertEqual(world.diagnostics.failureDetail, WorldFailureDetail(
+            objects: [ObjectID(rawValue: 7), ObjectID(rawValue: 9)], edgeIndex: 2, distance: -0.5))
+        XCTAssertEqual(world.diagnostics.lastAdvanceIssue, .worldFailed)
+        XCTAssertNil(world.diagnostics.lastRejectionReason, "to nie jest odrzucenie kroku")
+        XCTAssertEqual(world.diagnostics.pendingTransactionCount, 0)
+        try await assertWorldStaysFailed(world, stepper: stepper, lastFrame: first, expectedCalls: 2)
+    }
+
+    // P-B-25 (G6-AC5): przekroczenie limitu podkroków kończy świat; diagnostyka podaje obiekt i człon, który wyznaczył h.
+    func testSubstepLimitFailsTheWorldAndNamesTheLimitingObjectAndTerm() async throws {
+        let terms: [(NativeMetalSubstepTerm, WorldSubstepTerm)] = [
+            (.remainingTime, .remainingTime), (.stiffness, .stiffness), (.distance, .distance), (.margin, .margin)]
+        for (native, expected) in terms {
+            let detail = NativeMetalFailureDetail(objectIDs: [4], limitingTerm: native)
+            let stepper = ScriptedStepper([.fail(safety(.substepLimitExceeded, detail: detail)), .complete])
+            let world = try world(stepper: stepper)
+            _ = await world.advance(by: 0.125)
+            XCTAssertEqual(world.diagnostics.failureReason, .substepLimitExceeded, "\(native)")
+            XCTAssertEqual(world.diagnostics.failureDetail,
+                           WorldFailureDetail(objects: [ObjectID(rawValue: 4)], limitingTerm: expected), "\(native)")
+            XCTAssertEqual(world.diagnostics.lastAdvanceIssue, .worldFailed)
+        }
+    }
+
+    // Awaria bez szczegółów zostawia szczegóły puste; przyczyna „zawiódł” jest ustawiona mimo to.
+    func testFailureWithoutDetailLeavesDetailEmpty() async throws {
+        for reason in [NativeMetalWorldError.nonFinite, .contactViolation, .substepLimitExceeded] {
+            let world = try world(stepper: ScriptedStepper([.fail(safety(reason))]))
+            _ = await world.advance(by: 0.125)
+            XCTAssertNotNil(world.diagnostics.failureReason, "\(reason)")
+            XCTAssertNil(world.diagnostics.failureDetail, "\(reason)")
+        }
+    }
+
     // P-B-55: stan końcowy wygrywa z pauzą i z krokiem; submit zwraca token, którego żadna klatka nie potwierdzi.
     private func assertWorldStaysFailed(_ world: BubbleWorld, stepper: ScriptedStepper, lastFrame: WorldFrame,
                                         expectedCalls: Int) async throws {
@@ -514,9 +560,10 @@ final class BubbleWorldCompletionTests: XCTestCase {
     }
 }
 
-private func safety(_ reason: NativeMetalWorldError, cause: NativeMetalGuardCause? = nil) -> NativeMetalSafetyFailure {
+private func safety(_ reason: NativeMetalWorldError, cause: NativeMetalGuardCause? = nil,
+                    detail: NativeMetalFailureDetail? = nil) -> NativeMetalSafetyFailure {
     NativeMetalSafetyFailure(reason: reason, telemetry: NativeMetalFrameTelemetry(), profile: NativeMetalFrameProfile(),
-                             guardCause: cause)
+                             guardCause: cause, detail: detail)
 }
 
 /// Wyłącznie zewnętrzna granica ukończenia kroku jest kontrolowana przez test.

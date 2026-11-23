@@ -259,6 +259,28 @@ extension NativeMetalFrameExecuting {
 
 package enum NativeMetalWorldError: Error {
     case unavailable, invalidFrame, frameInFlight, nonFinite, guardFailure
+    /// Asercja kontaktu: d ≤ 0 w parze kolidującej, środek w bryle albo zmiana strony krawędzi (G6-AC2). Błąd silnika.
+    case contactViolation
+    /// Klatka przekroczyła limit 1024 podkroków (G6-AC5). Błąd silnika.
+    case substepLimitExceeded
+}
+
+/// Człon, który wyznaczył h w ostatnim podkroku: pozostały czas kroku, 1/ω_max (sztywność), d / (4 · v) albo h_zapasu.
+package enum NativeMetalSubstepTerm: Sendable, Equatable {
+    case remainingTime, stiffness, distance, margin
+}
+
+/// Szczegóły awarii silnika: ID obiektów (surowe wartości `ObjectID`), krawędź, odległość d i człon h.
+package struct NativeMetalFailureDetail: Sendable, Equatable {
+    package var objectIDs: [UInt64]
+    package var edgeIndex: Int?
+    package var distance: Float?
+    package var limitingTerm: NativeMetalSubstepTerm?
+    package init(objectIDs: [UInt64], edgeIndex: Int? = nil, distance: Float? = nil,
+                 limitingTerm: NativeMetalSubstepTerm? = nil) {
+        self.objectIDs = objectIDs; self.edgeIndex = edgeIndex; self.distance = distance
+        self.limitingTerm = limitingTerm
+    }
 }
 
 /// Przyczyna odrzucenia przez strażnik (`NativeMetalWorldError.guardFailure`), odczytana z bitów statusu GPU:
@@ -274,8 +296,11 @@ package struct NativeMetalSafetyFailure: Error {
     package let profile: NativeMetalFrameProfile
     /// Tylko przy `.guardFailure`; `nil` przy każdym innym powodzie.
     package let guardCause: NativeMetalGuardCause?
+    /// Tylko przy `.contactViolation` i `.substepLimitExceeded`; `nil` przy każdym innym powodzie.
+    package let detail: NativeMetalFailureDetail?
     package init(reason: NativeMetalWorldError, telemetry: NativeMetalFrameTelemetry, profile: NativeMetalFrameProfile,
-                 guardCause: NativeMetalGuardCause? = nil) {
+                 guardCause: NativeMetalGuardCause? = nil, detail: NativeMetalFailureDetail? = nil) {
         self.reason = reason; self.telemetry = telemetry; self.profile = profile; self.guardCause = guardCause
+        self.detail = detail
     }
 }
