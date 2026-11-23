@@ -13,6 +13,7 @@
 
 **Plugin version:** 0.7.11
 **Agent Sessions:** claude-code: ca9caf94-f667-4817-9350-6d22399ebca1
+**Agent Sessions:** claude-code: 16e9c99f-b156-404d-bed6-ef59c058ff89
 
 ---
 
@@ -279,7 +280,7 @@ Testy GPU pomijają się (`XCTSkip`) bez urządzenia Metal, więc liczą się ty
 
 | Slice | Name | Delivers | Seams | Behaviours | Status |
 |-------|------|----------|-------|------------|--------|
-| 1 | Silnik 4.0.0 w pakiecie | Gra może zbudować się na gałęzi silnika: nowy materiał, prawo kontaktu, podkroki, asercje, walidacja transakcji, telemetria; Showcase i benchmark iOS się budują ([G1](change-design.md#g1-ac1)–[G7](change-design.md#g7-ac4), [G8-AC1](change-design.md#g8-ac1) w części silnika, [G9-AC1](change-design.md#g9-ac1), [G9-AC2](change-design.md#g9-ac2)) | Model, Runtime, `NM/`, shadery, moduł diagnostyczny, `BubblePhysicsReferenceBench`, stress i perf guard na K_c, Showcase, bloki kodu przewodnika, tabela symboli `docs/MIGRATION-v4.md` | [P-B-1](#p-b-1)–[P-B-27](#p-b-27), [P-B-31](#p-b-31), [P-B-32](#p-b-32), [P-B-35](#p-b-35)–[P-B-39](#p-b-39) | todo |
+| 1 | Silnik 4.0.0 w pakiecie | Gra może zbudować się na gałęzi silnika: nowy materiał, prawo kontaktu, podkroki, asercje, walidacja transakcji, telemetria; Showcase i benchmark iOS się budują ([G1](change-design.md#g1-ac1)–[G7](change-design.md#g7-ac4), [G8-AC1](change-design.md#g8-ac1) w części silnika, [G9-AC1](change-design.md#g9-ac1), [G9-AC2](change-design.md#g9-ac2)) | Model, Runtime, `NM/`, shadery, moduł diagnostyczny, `BubblePhysicsReferenceBench`, stress i perf guard na K_c, Showcase, bloki kodu przewodnika, tabela symboli `docs/MIGRATION-v4.md` | [P-B-1](#p-b-1)–[P-B-27](#p-b-27), [P-B-31](#p-b-31), [P-B-32](#p-b-32), [P-B-35](#p-b-35)–[P-B-39](#p-b-39) | wip |
 | 2 | Wydanie 4.0.0 | Pomiar na iPhonie X, nowe bazy, dokumentacja wydania, bramka gry i tag ([G8-AC1](change-design.md#g8-ac1) w części benchmarku, [G8-AC2](change-design.md#g8-ac2), [G8-AC3](change-design.md#g8-ac3), [G9-AC3](change-design.md#g9-ac3), [G9-AC4](change-design.md#g9-ac4)) | stress i benchmark iOS (sceny, histogram), perf guard (bazy), `CHANGELOG.md`, `README.md`, `docs/MIGRATION-v4.md` (zachowanie i ograniczenia), `docs/integration-guide.md` (wydanie) | [P-B-28](#p-b-28)–[P-B-30](#p-b-30), [P-B-33](#p-b-33), [P-B-34](#p-b-34) | unplanned |
 
 Wycinek 1 ma sens sam: cały pakiet, Showcase i benchmark iOS działają na nowym silniku z zielonym `swift test`, a autor może od razu podpiąć gałąź gry i stroić. Brakuje w nim dowodu wydajności na iPhonie X, nowych baz, dokumentacji wydania i bramki gry. Bez nich nie ma tagu. Wycinek 2 domyka wydanie i może zmienić się po pomiarze: przekroczenie budżetu wraca do autora jako decyzja o lokalnym h.
