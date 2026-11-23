@@ -289,18 +289,12 @@ final class NativeMetalShaderABITests: XCTestCase {
         XCTAssertEqual(NativeMetalFilter.encodeLayer(0), 0x8000_0000)
     }
 
-    /// Stan przejściowy zmiany 4.0.0 (do zadania 7): host zamienia K_c na dawną podatność c = r / K_c w `contact.x`, niesie K_c w `contact.y`,
-    /// ζ_c = 1 w `contact.z` i znacznik bańki napędzanej siłami w `contact.w`. Sztywność od `transitionalHardStiffness` w górę to kontakt twardy (c = 0).
-    func testHostComputesContactComplianceForBubbleRecord() throws {
-        XCTAssertEqual(NativePublicProperties.contact(stiffness: 5, radius: 20, forceDriven: true), SIMD4(4, 5, 1, 1))
-        XCTAssertEqual(NativePublicProperties.contact(stiffness: NativePublicProperties.transitionalHardStiffness, radius: 5, forceDriven: false),
-                       SIMD4(0, NativePublicProperties.transitionalHardStiffness, 1, 0))
-        XCTAssertEqual(NativePublicProperties.contact(stiffness: nil, radius: 5, forceDriven: false), SIMD4(0, 0, 1, 0))
-        // Podatność rośnie liniowo z promieniem: ta sama bańka o r = 5 i r = 40 ma c różne dokładnie o 8×.
-        let small = NativePublicProperties.contact(stiffness: 5, radius: 5, forceDriven: true)
-        let large = NativePublicProperties.contact(stiffness: 5, radius: 40, forceDriven: true)
-        XCTAssertEqual(small.x, 1)
-        XCTAssertEqual(large.x, 8)
+    /// Rekord bańki niesie K_c w `contact.y` i znacznik bańki napędzanej siłami w `contact.w`; podatność XPBD c = r / K_c i ζ_c
+    /// zniknęły razem z XPBD (zadanie 7c), więc `contact.x` i `contact.z` to zero niezależnie od K_c i promienia.
+    func testHostWritesStiffnessAndForceDrivenFlagToBubbleRecord() throws {
+        XCTAssertEqual(NativePublicProperties.contact(stiffness: 5, forceDriven: true), SIMD4(0, 5, 0, 1))
+        XCTAssertEqual(NativePublicProperties.contact(stiffness: 1e9, forceDriven: false), SIMD4(0, 1e9, 0, 0))
+        XCTAssertEqual(NativePublicProperties.contact(stiffness: nil, forceDriven: false), SIMD4(0, 0, 0, 0))
 
         let id = NativeSolverBubbleID(rawValue: 4)
         var properties = NativePublicProperties(flags: SIMD4(1, 0, 0, 0), material: .zero, restitution: 0,

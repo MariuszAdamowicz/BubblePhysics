@@ -119,11 +119,11 @@ final class NativeForceRecordsTests: XCTestCase {
 
     // Rekord bańki niesie K_c, a oznaczenie bańki napędzanej siłami (siła globalna, pola, γ) nie obejmuje ról torowych.
     func testBubbleContactRecordCarriesStiffnessAndForceDrivenFlag() {
-        let transitional = NativePublicProperties.contact(stiffness: 5, radius: 20, forceDriven: true)
-        XCTAssertEqual(transitional, SIMD4(4, 5, 1, 1), "podatność przejściowa, K_c, ζ_c, bańka napędzana siłami")
-        XCTAssertEqual(NativePublicProperties.contact(stiffness: 5, radius: 20, forceDriven: false).w, 0)
-        XCTAssertEqual(NativePublicProperties.contact(stiffness: 229, radius: 24, forceDriven: true).y, 229)
-        XCTAssertEqual(NativePublicProperties.contact(stiffness: nil, radius: 5, forceDriven: true), SIMD4(0, 0, 1, 1))
+        XCTAssertEqual(NativePublicProperties.contact(stiffness: 5, forceDriven: true), SIMD4(0, 5, 0, 1),
+                       "zero podatności i ζ_c (po XPBD), K_c, bańka napędzana siłami")
+        XCTAssertEqual(NativePublicProperties.contact(stiffness: 5, forceDriven: false).w, 0)
+        XCTAssertEqual(NativePublicProperties.contact(stiffness: 229, forceDriven: true).y, 229)
+        XCTAssertEqual(NativePublicProperties.contact(stiffness: nil, forceDriven: true), SIMD4(0, 0, 0, 1))
         for role in [MotionRole.dynamic, .motorDriven, .playerDriven] { XCTAssertTrue(NativePublicProperties.isForceDriven(role), "\(role)") }
         for role in [MotionRole.static, .kinematic, .pathDriven] { XCTAssertFalse(NativePublicProperties.isForceDriven(role), "\(role)") }
     }

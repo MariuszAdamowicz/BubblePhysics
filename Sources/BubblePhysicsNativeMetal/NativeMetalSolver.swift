@@ -290,6 +290,7 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
     var hasSensorPairHistory: Bool { previousSensorPairCount > 0 || previousPolygonSensorPairCount > 0 }
     private let rigidState: NativeRigidPolygonState
     private let jointState: NativeJointState
+    private let forceBuffers = NativeMetalForceBuffers()
     private(set) var publishedPolygons: [ObjectID: NativePublicObject] = [:]
     private(set) var publishedDriveContacts: [ObjectID: [DriveBlockingContact]] = [:]
     /// Kontakty brył ostatniego kroku z sumą normalnych Δλ (zdarzenia kontaktu w `NativePublicWorld`).
@@ -314,6 +315,9 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
 
     /// Limit k kandydatów kontaktu na obiekt, wspólny dla baniek, odcinków i brył (zadanie 14: k = 48; zadanie 32: k = 128, bo wiersz statycznej ściany scena mieszana wypełnia wszystkimi bryłami w zasięgu).
     package static let candidateLimitPerObject = 128
+
+    /// Iteracje solvera brył raz na krok (silnik 4.0.0: stała, dawna wartość domyślna `solverIterationCount`).
+    static let rigidSolverIterationCount = 8
 
     /// Suma długości buforów związanych z kontaktami; 0 przed pierwszym krokiem.
     var contactMemoryBytes: Int {
@@ -372,17 +376,17 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         let count = snapshot.sourceBubbles.count
         let segmentCount = snapshot.sourceSegments.count
         try rigidState.prepare(snapshot.publicSettings?.rigidPolygons ?? [], bubbleCount: count,
-            timeStep: snapshot.configuration.timeStep)
+            timeStep: snapshot.configuration.timeStep, bubbleCandidates: false)
         let joints = snapshot.publicSettings?.joints ?? []
         if joints.isEmpty {
             // Bez więzów lista identyfikatorów i słownik encji nie są potrzebne, wystarczą liczby.
             try jointState.prepareWithoutJoints(bubbleCount: count,
-                bodyCount: snapshot.publicSettings?.rigidPolygons.count ?? 0, iterations: configuration.solverIterationCount)
+                bodyCount: snapshot.publicSettings?.rigidPolygons.count ?? 0, iterations: Self.rigidSolverIterationCount)
         } else {
             try jointState.prepare(joints,
                 bubbleIDs: snapshot.sourceBubbles.map { ObjectID(rawValue: UInt64(bitPattern: Int64($0.id.rawValue))) },
                 bodyIDs: (snapshot.publicSettings?.rigidPolygons ?? []).map { $0.object.descriptor.id },
-                iterations: configuration.solverIterationCount)
+                iterations: Self.rigidSolverIterationCount)
         }
         let hasJoints = jointState.count > 0
         let hasRigidBodies = snapshot.publicSettings?.rigidPolygons.contains { $0.object.motionRole != .static || $0.hasRoundCore } == true
@@ -453,7 +457,7 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         var parameters = NativeMetalControl(counts: SIMD4(UInt32(count), UInt32(segmentCount), UInt32(truncatingIfNeeded: scenarioStep), 0),
             physics: SIMD4(snapshot.configuration.timeStep, snapshot.configuration.linearDamping,
                            snapshot.configuration.angularDamping, snapshot.configuration.contactStiffness),
-            contactDamping: SIMD4(snapshot.configuration.contactDamping, configuration.pairCorrectionLimit ? 1 : 0, 0, 0))
+            contactDamping: SIMD4(snapshot.configuration.contactDamping, 0, 0, 0))
         if let region = snapshot.publicSettings?.region {
             parameters.region = SIMD4(region.min.x, region.min.y, region.max.x, region.max.y)
         }
@@ -462,55 +466,23 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
             counts: SIMD4(UInt32(state.contourStride), UInt32(lastSnapshot?.sourceBubbles.count ?? 0), 0, 0),
             shape: SIMD4(contourConfiguration.maxContourSegmentLength, 0,
                          contourConfiguration.contourSurfaceTension, contourConfiguration.positionTolerance))
-        let solverParameters = NativeMetalSolverControl(
-            counts: SIMD4(1, 0, 0, UInt32(clamping: configuration.solverIterationCount)),
-            physics: SIMD4(configuration.contactCompliance / (snapshot.configuration.timeStep * snapshot.configuration.timeStep),
-                          snapshot.configuration.positionTolerance, 0, 0))
+        let solverParameters = NativeMetalSolverControl(counts: .zero,
+            physics: SIMD4(0, snapshot.configuration.positionTolerance, 0, 0))
         state.solverControl.contents().storeBytes(of: solverParameters, as: NativeMetalSolverControl.self)
         state.safetyControl.contents().storeBytes(of: NativeMetalSafetyControl(counts: .zero), as: NativeMetalSafetyControl.self)
         memset(state.scratch.contents(), 0, state.scratch.length)
-        // Wyłącznie zmiany wejścia gry mogą oznaczać teleport; normalna predykcja nie resetuje cache.
-        // Poprzedni krok zwykle ma te same obiekty w tej samej kolejności, więc para po indeksie zastępuje słownik;
-        // słownik powstaje tylko wtedy, gdy zestaw albo kolejność się zmieniły.
-        let previousBubbleList = lastSnapshot?.sourceBubbles ?? []
-        let previousSegmentList = lastSnapshot?.sourceSegments ?? []
-        let bubblesAligned = previousBubbleList.count == snapshot.sourceBubbles.count
-            && zip(previousBubbleList, snapshot.sourceBubbles).allSatisfy { $0.id == $1.id }
-        let segmentsAligned = previousSegmentList.count == snapshot.sourceSegments.count
-            && zip(previousSegmentList, snapshot.sourceSegments).allSatisfy { $0.id == $1.id }
-        let previousBubbles = bubblesAligned ? [:] : Dictionary(uniqueKeysWithValues: previousBubbleList.map { ($0.id, $0) })
-        let previousSegments = segmentsAligned ? [:] : Dictionary(uniqueKeysWithValues: previousSegmentList.map { ($0.id, $0) })
-        var invalidationRecords: [SIMD2<Int64>] = []
-        var teleportedBubbles: Set<Int64> = []
-        for (index, bubble) in snapshot.sourceBubbles.enumerated() {
-            if let previous = bubblesAligned ? previousBubbleList[index] : previousBubbles[bubble.id],
-               (bubble.center - previous.center).euclideanLength > configuration.teleportDistanceMultiplier * bubble.targetRadius {
-                invalidationRecords.append(SIMD2(Int64(bubble.id.rawValue), 0))
-                teleportedBubbles.insert(Int64(bubble.id.rawValue))
-            }
-        }
-        for (index, segment) in snapshot.sourceSegments.enumerated() {
-            if let previous = segmentsAligned ? previousSegmentList[index] : previousSegments[segment.id], previous != segment {
-                invalidationRecords.append(SIMD2(Int64(segment.id), 1))
-            }
-        }
-        if let structuralShapes = snapshot.publicSettings?.structuralShapes {
-            for id in structuralShapes.keys.sorted(by: { $0.rawValue < $1.rawValue }) {
-                let value = Int64(bitPattern: id.rawValue)
-                if teleportedBubbles.insert(value).inserted {
-                    invalidationRecords.append(SIMD2(value, 0))
-                }
-            }
-        }
-        for (index, value) in invalidationRecords.enumerated() {
-            state.invalidations.contents().advanced(by: index * MemoryLayout<SIMD2<Int64>>.stride).storeBytes(of: value, as: SIMD2<Int64>.self)
-        }
+        // Bez historii kontaktów (silnik 4.0.0 nie ma cache λ, krawędzi wejścia ani teleportu): rekordy kontaktów końca kroku powstają od zera,
+        // więc `limits.w` (liczba rekordów poprzedniego cache) i liczba unieważnień to zero.
         let contactParameters = NativeMetalContactControl(
-            limits: SIMD4(nextFrame, UInt32(clamping: configuration.cacheExpiryFrames), UInt32(state.contactCapacity), UInt32(state.publishedCacheCount)),
-            counts: .zero, cache: SIMD4(0, 0, UInt32(invalidationRecords.count), UInt32(Self.candidateLimitPerObject)),
+            limits: SIMD4(nextFrame, UInt32(clamping: configuration.cacheExpiryFrames), UInt32(state.contactCapacity), 0),
+            counts: .zero, cache: SIMD4(0, 0, 0, UInt32(Self.candidateLimitPerObject)),
             thresholds: SIMD4(configuration.teleportDistanceMultiplier, configuration.ccdVelocityMultiplier,
                               snapshot.configuration.contactTolerance, snapshot.configuration.separationTolerance), cellWidth: .zero)
         state.contactControl.contents().storeBytes(of: contactParameters, as: NativeMetalContactControl.self)
+        // Czasy i liczniki pętli podkroków: czas kroku, zero upłyniętego, zero podkroków; `substepControl` jest współdzielony z GPU.
+        state.substepControl.contents().storeBytes(of: NativeMetalSubstepControl(time: SIMD4(snapshot.configuration.timeStep, 0, 0, 0)),
+                                                   as: NativeMetalSubstepControl.self)
+        try forceBuffers.upload(snapshot.publicSettings?.forces ?? NativeForceInput(), device: device)
         memset(state.dispatchStatistics.contents(), 0, state.dispatchStatistics.length)
         memset(state.candidateOverflow.contents(), 0, state.candidateOverflow.length)
         state.eventCount.contents().storeBytes(of: UInt32(0), as: UInt32.self)
@@ -654,14 +626,7 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         rigidState.encodeInputs(blit)
         blit.endEncoding()
         guard let encoder = command.makeComputeCommandEncoder() else { throw NativeMetalSolverError.commandSetupFailed }
-        encoder.label = "native.predict"
-        encoder.setComputePipelineState(predict)
-        encoder.setBuffer(state.workingBubbles, offset: 0, index: 0)
-        encoder.setBuffer(state.control, offset: 0, index: 1)
-        if count > 0 {
-            encoder.dispatchThreads(.init(width: count, height: 1, depth: 1),
-                threadsPerThreadgroup: .init(width: min(predict.threadExecutionWidth, predict.maxTotalThreadsPerThreadgroup), height: 1, depth: 1))
-        }
+        encoder.label = "native.step"
         func dispatch(_ name: String, buffers: [MTLBuffer], threads: Int) {
             let pipeline = pipelines[name]!
             encoder.memoryBarrier(scope: .buffers)
@@ -704,25 +669,61 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
             NativeMetalScan.encode(encoder, pipelines: pipelines, buffers: scanBuffers, mode: mode, maximum: maximum,
                                    singleGroup: true)
         }
+        dispatch("nativeBeginStep", buffers: [state.workingBubbles, state.control], threads: count)
+        // Bryły raz na krok (solver brył bez baniek: bańki dostają kontakt z pętli podkroków). `solverPositionsPing` to tylko wskazanie
+        // dla parametrów jąder brył, które czytają je wyłącznie dla końców więzów z bańkami i kandydatów bańka–bryła (tu nieobecnych).
         if hasRigidBodies {
             dispatch("nativeRigidPredict", buffers: [rigidState.bodies, rigidState.vertices, rigidState.control,
                 state.control, state.workingSegments, state.safetyControl, rigidState.walls, jointState.ranges, jointState.exclusions],
                 threads: rigidState.count)
+            NativeMetalRigidCandidates.encode(encoder, pipelines: pipelines, bodies: rigidState.bodies,
+                bubbles: state.workingBubbles, positions: state.solverPositionsPing, control: rigidState.control,
+                rows: rigidState.candidates, rowCounts: rigidState.rowCounts, overflow: state.candidateOverflow,
+                jointRanges: jointState.ranges, jointPartners: jointState.exclusions, bodyCount: rigidState.count)
+            // CCD bryła–bryła po wierszach kandydatów, przed pętlą: faza 1 liczy czas uderzenia, faza 2 cofa bryły.
+            dispatch("nativeRigidResolveCCD", buffers: [rigidState.bodies, rigidState.vertices, rigidState.triangles,
+                rigidState.control, rigidState.candidates, rigidState.rowCounts], threads: rigidState.count)
+            dispatch("nativeRigidApplyCCD", buffers: [rigidState.bodies, rigidState.control], threads: rigidState.count)
+            for _ in 0..<Self.rigidSolverIterationCount {
+                dispatch("nativeRigidContacts", buffers: [rigidState.bodies, rigidState.vertices, rigidState.triangles,
+                    state.workingBubbles, state.solverPositionsPing, rigidState.control, rigidState.contacts,
+                    state.safetyControl, rigidState.candidates, rigidState.rowCounts], threads: rigidState.rowCapacity)
+                dispatch("nativeRigidApplyBodies", buffers: [rigidState.bodies, rigidState.control, rigidState.contacts,
+                    rigidState.candidates, rigidState.rowCounts], threads: rigidState.count)
+                if hasJoints {
+                    dispatch("nativeSolveJoints", buffers: [rigidState.bodies, state.workingBubbles, state.solverPositionsPing,
+                        jointState.records, jointState.corrections, jointState.control, state.control], threads: jointState.count)
+                    dispatch("nativeApplyJointBodies", buffers: [rigidState.bodies, jointState.corrections,
+                        jointState.references, jointState.ranges, jointState.control], threads: rigidState.count)
+                }
+                dispatch("nativeRigidGuardWalls", buffers: [rigidState.bodies, rigidState.vertices, rigidState.triangles, rigidState.control,
+                    jointState.ranges, jointState.exclusions], threads: rigidState.count)
+            }
         }
-        dispatchReduction("nativePrepareGrid", buffers: [state.workingBubbles, state.control, state.contactControl])
+        // a₀, zapas obwiedni i x₀, potem siatka i kandydaci z zapasem.
+        NativeMetalSubstepLoop.encodeBroadphaseInputs(encoder, pipelines: pipelines, state: state, forces: forceBuffers, count: count)
+        dispatchReduction("nativePrepareGrid", buffers: [state.workingBubbles, state.control, state.contactControl, state.broadphaseMargin])
         dispatch("nativeBuildGrid", buffers: [state.workingBubbles, state.control, state.contactControl, state.grid], threads: state.bubbleCapacity)
         NativeMetalGridSort.encode(encoder, pipelines: pipelines, grid: state.grid, capacity: state.bubbleCapacity)
         dispatch("nativeEmitCandidates", buffers: [state.workingBubbles, state.control, state.contactControl,
             state.grid, state.workingSegments, state.candidateRows, state.candidateRowCounts, state.candidateOverflow,
-            jointState.ranges, jointState.exclusions], threads: count)
+            jointState.ranges, jointState.exclusions, state.broadphaseMargin], threads: count)
         dispatch("nativePrepareCandidateCounts", buffers: [state.control, state.candidateRowCounts, state.scanValues], threads: count * 2)
         scan(mode: 0, maximum: max(1, count * 2))
         prepareIndirectArguments()
         dispatch("nativeCompactCandidates", buffers: [state.control, state.contactControl, state.candidateRows,
             state.candidateRowCounts, state.candidates, state.scanOffsets, state.dispatchStatistics],
             threads: count * Self.candidateLimitPerObject)
-        // Poprzedni opublikowany cache (pamięć krawędzi wejścia, BF-D-1 z 3.0.2) jest tylko czytany; scalanie pisze do workingCache.
-        // `control` daje liczbę odcinków do przeglądu krawędzi tego samego właściciela.
+        // Sąsiedztwo z kandydatów (także tych, które jeszcze nie dotykają), potem pętla podkroków zamiast predykcji i XPBD.
+        dispatch("nativeClearAdjacency", buffers: [state.control, state.adjacencyCounts], threads: count)
+        dispatchContacts("nativeEmitCandidateAdjacency", buffers: [state.contactControl, state.candidates, state.adjacency,
+            state.adjacencyCounts, state.candidateOverflow], argument: 0)
+        dispatch("nativeBuildAdjacency", buffers: [state.control, state.contactControl,
+            state.adjacency, state.adjacencyCounts, state.candidateOverflow], threads: count)
+        NativeMetalSubstepLoop.encode(encoder, pipelines: pipelines, state: state, forces: forceBuffers, count: count,
+                                      capture: configuration.captureSubsteps)
+        // Rekordy kontaktów końca kroku z końcowych położeń (zdarzenia, scalanie i kontur czytają je dalej): kandydaci → kontakty w
+        // zasięgu rozdzielenia → rekordy bez historii (`limits.w` = 0, więc dopasowanie do poprzedniego cache niczego nie znajduje).
         dispatchContacts("nativeBuildContacts", buffers: [state.workingBubbles, state.workingSegments, state.contactControl,
             state.candidates, state.contacts, state.contactCache, state.control], argument: 0)
         dispatchContacts("nativePrepareContactFlags", buffers: [state.contacts, state.contactControl, state.scanValues], argument: 0)
@@ -732,10 +733,7 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         dispatchContacts("nativeMatchContactCache", buffers: [state.contactCache, state.activeContacts, state.mergedCache,
             state.contactControl, state.invalidations, state.workingBubbles, state.workingSegments, state.control,
             state.scanValues, state.dispatchStatistics], argument: 1)
-        dispatch("nativeRetainContactCache", buffers: [state.contactCache, state.activeContacts, state.mergedCache,
-            state.contactControl, state.invalidations, state.workingBubbles, state.workingSegments, state.control,
-            state.scanValues, state.dispatchStatistics], threads: state.publishedCacheCount)
-        scan(mode: 2, maximum: state.contactCapacity + state.publishedCacheCount)
+        scan(mode: 2, maximum: state.contactCapacity)
         dispatchContacts("nativeCompactContactCache", buffers: [state.mergedCache, state.workingCache, state.contactControl,
             state.scanValues, state.scanOffsets, state.dispatchStatistics], argument: 2)
         prepareIndirectArguments()
@@ -745,81 +743,6 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
             state.adjacencyCounts, state.candidateOverflow], argument: 3)
         dispatch("nativeBuildAdjacency", buffers: [state.control, state.contactControl,
             state.adjacency, state.adjacencyCounts, state.candidateOverflow], threads: count)
-        dispatchContacts("nativePrepareSolverContacts", buffers: [state.workingBubbles, state.workingSegments, state.workingCache,
-            state.control, state.contactControl, state.contactEndpoints, state.adjacencyCounts], argument: 3)
-        dispatch("nativeApplyWarmStart", buffers: [state.workingBubbles, state.workingCache, state.control,
-            state.contactControl, state.adjacency, state.adjacencyCounts, state.solverPositionsPing,
-            state.bubbleContactCorrection], threads: count)
-        var inputPositions = state.solverPositionsPing
-        var outputPositions = state.solverPositionsPong
-        func measureResidual() {
-            dispatch("nativeMeasureResidual", buffers: [state.workingBubbles, state.workingSegments, state.workingCache,
-                inputPositions, state.control, state.contactControl, state.adjacency, state.adjacencyCounts,
-                state.solverControl, state.scratch], threads: count)
-            dispatchReduction("nativeReduceSolverResidual", buffers: [state.control, state.solverControl, state.scratch,
-                state.dispatchStatistics])
-        }
-        // Pomiar przed korekcją pozwala warm-startowi zakończyć się bez dodatkowej iteracji.
-        measureResidual()
-        if hasRigidBodies {
-            NativeMetalRigidCandidates.encode(encoder, pipelines: pipelines, bodies: rigidState.bodies,
-                bubbles: state.workingBubbles, positions: inputPositions, control: rigidState.control,
-                rows: rigidState.candidates, rowCounts: rigidState.rowCounts, overflow: state.candidateOverflow,
-                jointRanges: jointState.ranges, jointPartners: jointState.exclusions, bodyCount: rigidState.count)
-            // CCD bryła–bryła po wierszach kandydatów, przed pętlą: faza 1 liczy czas uderzenia, faza 2 cofa bryły.
-            dispatch("nativeRigidResolveCCD", buffers: [rigidState.bodies, rigidState.vertices, rigidState.triangles,
-                rigidState.control, rigidState.candidates, rigidState.rowCounts], threads: rigidState.count)
-            dispatch("nativeRigidApplyCCD", buffers: [rigidState.bodies, rigidState.control], threads: rigidState.count)
-        }
-        for _ in 0..<configuration.solverIterationCount {
-            dispatchContacts("nativeUpdateContactMultipliers", buffers: [state.workingBubbles, state.workingSegments,
-                state.workingCache, inputPositions, state.control, state.contactControl, state.solverControl,
-                state.contactEndpoints, state.adjacencyCounts, state.contactCorrections], argument: 3)
-            dispatch("nativeSolveJacobi", buffers: [state.workingBubbles, inputPositions, outputPositions, state.control,
-                state.contactControl, state.solverControl, state.adjacency, state.adjacencyCounts,
-                state.contactCorrections, state.scratch, state.bubbleContactCorrection], threads: count)
-            swap(&inputPositions, &outputPositions)
-            measureResidual()
-            if hasRigidBodies {
-                dispatch("nativeRigidContacts", buffers: [rigidState.bodies, rigidState.vertices, rigidState.triangles,
-                    state.workingBubbles, inputPositions, rigidState.control, rigidState.contacts,
-                    state.safetyControl, rigidState.candidates, rigidState.rowCounts], threads: rigidState.rowCapacity)
-                dispatch("nativeRigidApplyBodies", buffers: [rigidState.bodies, rigidState.control, rigidState.contacts,
-                    rigidState.candidates, rigidState.rowCounts], threads: rigidState.count)
-            }
-            if hasJoints {
-                dispatch("nativeSolveJoints", buffers: [rigidState.bodies, state.workingBubbles, inputPositions,
-                    jointState.records, jointState.corrections, jointState.control, state.control], threads: jointState.count)
-                dispatch("nativeApplyJointBodies", buffers: [rigidState.bodies, jointState.corrections,
-                    jointState.references, jointState.ranges, jointState.control], threads: rigidState.count)
-                dispatch("nativeApplyJointBubbles", buffers: [state.workingBubbles, inputPositions, jointState.corrections,
-                    jointState.references, jointState.ranges, jointState.control, state.solverControl], threads: count)
-            }
-            if hasRigidBodies {
-                dispatch("nativeRigidGuardWalls", buffers: [rigidState.bodies, rigidState.vertices, rigidState.triangles, rigidState.control,
-                    jointState.ranges, jointState.exclusions], threads: rigidState.count)
-                dispatch("nativeRigidApplyBubbles", buffers: [state.workingBubbles, inputPositions, rigidState.control,
-                    rigidState.contacts, state.solverControl, rigidState.candidates, rigidState.rowCounts], threads: count)
-            }
-        }
-        if let diagnosticPostSolver = state.diagnosticPostSolverPositions {
-            dispatch("nativeCapturePositions", buffers: [inputPositions, diagnosticPostSolver, state.control], threads: count)
-        }
-        dispatch("nativeFindFastCandidates", buffers: [state.workingBubbles, state.workingSegments,
-            state.control, state.contactControl, state.guardedBubbles, state.safetyControl], threads: count)
-        dispatch("nativeResolveCCD", buffers: [state.workingBubbles, state.workingSegments, inputPositions,
-            state.control, state.contactControl, state.guardedBubbles, state.safetyControl, state.dispatchStatistics], threads: count)
-        // Cache roboczy tego kroku: krawędź wejścia bańki to rekord cechy 1 zbudowany w tym kroku (BF-D-2 z 3.0.2).
-        dispatch("nativeApplyCenterGuards", buffers: [state.workingBubbles, state.workingSegments, inputPositions,
-            state.control, state.contactControl, state.guardedBubbles, state.safetyControl, state.dispatchStatistics,
-            state.workingCache], threads: count)
-        dispatch("nativeValidateBubbleContainment", buffers: [state.workingBubbles, inputPositions,
-            state.control, state.solverControl, state.safetyControl], threads: count * count)
-        if let diagnosticPostGuard = state.diagnosticPostGuardPositions {
-            dispatch("nativeCapturePositions", buffers: [inputPositions, diagnosticPostGuard, state.control], threads: count)
-        }
-        dispatchContacts("nativeFinalizeSolverContacts", buffers: [state.workingBubbles, state.workingSegments,
-            state.workingCache, inputPositions, state.contactControl, state.contactEndpoints], argument: 3)
         if snapshot.publicSettings != nil {
             encoder.memoryBarrier(scope: .buffers)
             let pipeline = pipelines["nativeCompactMergeEvents"]!
@@ -834,12 +757,6 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
                 threadsPerThreadgroup: .init(width: min(pipeline.threadExecutionWidth, pipeline.maxTotalThreadsPerThreadgroup),
                                              height: 1, depth: 1))
         }
-        dispatch("nativeUpdateVelocities", buffers: [state.workingBubbles, inputPositions, state.control,
-            state.bubbleContactCorrection], threads: count)
-        dispatch("nativeDampContactNormalMotion", buffers: [state.workingBubbles, state.workingSegments,
-            state.workingCache, state.control, state.contactControl, state.adjacency, state.adjacencyCounts], threads: count)
-        dispatchContacts("nativeInvalidateSafetyCache", buffers: [state.workingBubbles, state.workingCache,
-            state.control, state.contactControl, state.guardedBubbles, state.safetyControl], argument: 3)
         dispatchContacts("nativeCheckFinite", buffers: [state.workingBubbles, state.workingSegments, state.workingCache,
             state.control, state.contactControl, state.solverControl, state.safetyControl],
             argument: 4)
@@ -865,8 +782,6 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         if snapshot.publicSettings != nil {
             dispatch("nativeApplyPublicRegion", buffers: [state.workingBubbles, state.workingContourPoints,
                 state.renderPackets, state.workingContourCounts, state.control, state.contourControl, state.safetyControl], threads: count)
-            dispatchContacts("nativeInvalidateRegionCache", buffers: [state.workingBubbles, state.workingCache,
-                state.control, state.contactControl], argument: 3)
             if pairCount > 0 {
                 encoder.memoryBarrier(scope: .buffers)
                 let pipeline = pipelines["nativeCompactSensorEvents"]!
@@ -967,6 +882,7 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         let contactResult = state.contactControl.contents().load(as: NativeMetalContactControl.self)
         let solverResult = state.solverControl.contents().load(as: NativeMetalSolverControl.self)
         let safetyResult = state.safetyControl.contents().load(as: NativeMetalSafetyControl.self)
+        let substepResult = state.substepControl.contents().load(as: NativeMetalSubstepControl.self)
         var profile = NativeMetalFrameProfile()
         profile.commandBufferCount = 1
         profile.encoderCount = 2
@@ -985,9 +901,15 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
             contactCount: Int(contactResult.counts.y), didEncounterNonFinite: safetyResult.counts.w & 1 != 0,
             gpuMilliseconds: timing.gpuMilliseconds, solverIterationCount: configuration.solverIterationCount,
             ccdCandidateCount: Int(safetyResult.counts.x), guardCorrectionCount: Int(safetyResult.counts.y),
-            cacheInvalidationCount: Int(safetyResult.counts.z))
-        func rejectSafety(_ reason: NativeMetalWorldError, guardCause: NativeMetalGuardCause? = nil) -> NativeMetalSafetyFailure {
-            .init(reason: reason, telemetry: diagnostics, profile: profile, guardCause: guardCause)
+            cacheInvalidationCount: Int(safetyResult.counts.z), substepCount: Int(substepResult.counts.y))
+        func rejectSafety(_ reason: NativeMetalWorldError, guardCause: NativeMetalGuardCause? = nil,
+                          detail: NativeMetalFailureDetail? = nil) -> NativeMetalSafetyFailure {
+            .init(reason: reason, telemetry: diagnostics, profile: profile, guardCause: guardCause, detail: detail)
+        }
+        // Limit podkroków sprawdza się najpierw (R3): obiekt i człon h pochodzą z ostatniego podkroku klatki.
+        guard substepResult.counts.w == 0 else {
+            throw rejectSafety(.substepLimitExceeded, detail: NativeMetalFailureDetail(objectIDs: [substepResult.limiter.x],
+                limitingTerm: NativeMetalSubstep.Term(rawValue: substepResult.limiter.y).map(Self.term)))
         }
         guard safetyResult.counts.w & 1 == 0 else { throw rejectSafety(.nonFinite) }
         guard safetyResult.counts.w & 2 == 0 else {
@@ -997,17 +919,6 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
             throw rejectSafety(.guardFailure, guardCause: cause)
         }
         guard safetyResult.counts.w & 4 == 0 else { throw rejectSafety(.invalidFrame) }
-        if let postSolver = state.diagnosticPostSolverPositions,
-           let postGuard = state.diagnosticPostGuardPositions {
-            let solverValues = postSolver.contents().bindMemory(to: SIMD2<Float>.self, capacity: state.bubbleCapacity)
-            let guardValues = postGuard.contents().bindMemory(to: SIMD2<Float>.self, capacity: state.bubbleCapacity)
-            let solverPositions = (0..<count).map { SIMD2<Float>(solverValues[$0].x, solverValues[$0].y) }
-            let guardPositions = (0..<count).map { SIMD2<Float>(guardValues[$0].x, guardValues[$0].y) }
-            guard solverPositions.allSatisfy(\.isFiniteVector), guardPositions.allSatisfy(\.isFiniteVector) else {
-                throw rejectSafety(.nonFinite)
-            }
-            stageDiagnostics = .init(postSolverPositions: solverPositions, postGuardPositions: guardPositions)
-        }
         let cacheRecords = state.workingCache.contents().bindMemory(to: NativeContactCacheRecord.self, capacity: state.contactCapacity)
         let completedCache = Array(UnsafeBufferPointer(start: cacheRecords, count: Int(contactResult.counts.z)))
         guard completedCache.allSatisfy({ $0.geometry.x.isFinite && $0.geometry.y.isFinite
@@ -1108,7 +1019,7 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
                 contactCount: contacts.count, gpuMilliseconds: timing.gpuMilliseconds,
                 solverIterationCount: configuration.solverIterationCount,
                 ccdCandidateCount: Int(safetyResult.counts.x), guardCorrectionCount: Int(safetyResult.counts.y),
-                cacheInvalidationCount: Int(safetyResult.counts.z)),
+                cacheInvalidationCount: Int(safetyResult.counts.z), substepCount: Int(substepResult.counts.y)),
             profile: profile, contours: contours, renderData: renderData,
             bubbleEffectiveRadii: effectiveRadii, bubbleBoundsRecords: bubbleBounds, isComplete: true)
         if !snapshot.hitTests.isEmpty {
@@ -1151,6 +1062,8 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         wrappedPolygons = rigidResult.wrapped
         let previousIDs = previousPublicationBubbleIDs
         let hadPreviousPublication = lastSnapshot != nil
+        capturedSubsteps = configuration.captureSubsteps
+            ? state.capturedSubsteps(bubbleIDs: snapshot.sourceBubbles.map { UInt64(bitPattern: Int64($0.id.rawValue)) }) : []
         state.publish()
         previousSensorPairs = pairCount > 0 ? currentSensorPairs : nil
         previousSensorPairCount = pairCount
@@ -1179,6 +1092,15 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         }
         if readsContours { publishedContourCPUReadbackCount += 1 }
         return frame
+    }
+
+    private static func term(_ term: NativeMetalSubstep.Term) -> NativeMetalSubstepTerm {
+        switch term {
+        case .remainingTime: return .remainingTime
+        case .stiffness: return .stiffness
+        case .distance: return .distance
+        case .margin: return .margin
+        }
     }
 
     /// Kolejność baniek ostatniej publikacji, czyli strony t−1 po publikacji następnego kroku.
@@ -1284,7 +1206,7 @@ enum NativeMetalPipelineCache {
         "nativePrepareSolverContacts", "nativeApplyWarmStart", "nativeUpdateContactMultipliers",
         "nativeSolveJacobi", "nativeMeasureResidual", "nativeReduceSolverResidual",
         "nativeCapturePositions", "nativeContactForces", "nativeAccelerationWithoutContacts", "nativeBroadphaseMargin",
-        "nativeReduceSubstep", "nativeIntegrateSubstep",
+        "nativeReduceSubstep", "nativeIntegrateSubstep", "nativeBeginStep", "nativeEmitCandidateAdjacency",
         "nativeUpdateVelocities", "nativeDampContactNormalMotion", "nativeFinalizeSolverContacts", "nativeFindFastCandidates",
         "nativeResolveCCD", "nativeApplyCenterGuards", "nativeValidateBubbleContainment", "nativeInvalidateSafetyCache", "nativeCheckFinite",
         "nativeAccumulateContactPressure", "nativeSeedStructuralContours", "nativeGenerateContours", "nativeGenerateContoursFused", "nativePrepareRenderData", "nativePrepareRenderDataGrouped",

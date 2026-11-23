@@ -464,7 +464,9 @@ final class NativeMetalChainKernelTests: XCTestCase {
                 let buffers: [MTLBuffer] = [try! makeBuffer(bubbles, device: device), control, contacts,
                     try! makeBuffer(grid, device: device), try! makeBuffer(segments, device: device), rows, rowCounts, overflow,
                     try! makeBuffer([SIMD4<UInt32>](repeating: .zero, count: bubbleCount), device: device),
-                    try! makeBuffer([UInt64(0)], device: device)]
+                    try! makeBuffer([UInt64(0)], device: device),
+                    // Zapas obwiedni zero: zasięg jak w odniesieniu poniżej (r + r + tolerancja).
+                    try! makeBuffer([Float](repeating: 0, count: bubbleCount), device: device)]
                 for (index, buffer) in buffers.enumerated() { encoder.setBuffer(buffer, offset: 0, index: index) }
                 encoder.dispatchThreads(.init(width: bubbleCount, height: 1, depth: 1),
                     threadsPerThreadgroup: .init(width: min(pipeline.threadExecutionWidth, bubbleCount), height: 1, depth: 1))

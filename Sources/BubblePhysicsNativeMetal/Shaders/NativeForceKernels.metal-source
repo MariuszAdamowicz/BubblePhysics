@@ -178,6 +178,33 @@ kernel void nativeContactForces(device NativeBubble *bubbles [[buffer(0)]],
     forces[index] = total;
 }
 
+// Początek kroku (dawny prolog nativePredict bez ruchu): `position.zw` to środek z początku kroku (zapas, kontur i interpolacja liczą od
+// niego), wynik regionu z poprzedniego kroku się czyści, a bańka statyczna dostaje zerową prędkość liniową i kątową. Ruch liczy pętla
+// podkroków; limitów prędkości bańki nie ma (materiał bańki to tylko K_c i γ).
+kernel void nativeBeginStep(device NativeBubble *bubbles [[buffer(0)]], constant NativeControl &control [[buffer(1)]],
+    uint index [[thread_position_in_grid]]) {
+    if (index >= control.counts.x) return;
+    NativeBubble bubble = bubbles[index];
+    bubble.publicFlags.w = 0;
+    bubble.position.zw = bubble.position.xy;
+    if (bubble.publicFlags.x && bubble.publicFlags.y) { bubble.motion.xy = 0; bubble.motion.w = 0; }
+    bubbles[index] = bubble;
+}
+
+// Sąsiedztwo z kandydatów broadphase (nie z kontaktów aktywnych na początku kroku): w podkroku bańka dochodzi do kandydata, który
+// jeszcze nie dotykał, a redukcja h i siły czytają wiersze sąsiedztwa. Wiersz bańki niesie (indeks kandydata + 1, sąsiad, rodzaj, 0 albo 1),
+// jak nativeEmitAdjacency; nativeBuildAdjacency sortuje wiersz i odejmuje 1. Para trafia do wierszy obu baniek, odcinek do wiersza bańki.
+kernel void nativeEmitCandidateAdjacency(device NativeContactControl &contacts [[buffer(0)]],
+    device NativeCandidate *candidates [[buffer(1)]], device uint4 *adjacency [[buffer(2)]],
+    device atomic_uint *degrees [[buffer(3)]], device atomic_uint *overflow [[buffer(4)]],
+    uint index [[thread_position_in_grid]]) {
+    if (index >= contacts.counts.x) return;
+    NativeCandidate candidate = candidates[index];
+    uint limit = contacts.cache.w, a = candidate.metadata.y, b = candidate.metadata.z, kind = candidate.metadata.x;
+    nativeAppendAdjacency(adjacency, degrees, limit, a, uint4(index + 1, b, kind, kind == 0 ? 0 : 1), overflow);
+    if (kind == 0) nativeAppendAdjacency(adjacency, degrees, limit, b, uint4(index + 1, a, 0, 1), overflow);
+}
+
 // MARK: Podkrok (spec. zmiany 3 i 4)
 //
 // Kolejność w kroku: nativeAccelerationWithoutContacts (a₀) → nativeBroadphaseMargin (zapas, x₀ ← x) → siatka i kandydaci → nativeContactForces

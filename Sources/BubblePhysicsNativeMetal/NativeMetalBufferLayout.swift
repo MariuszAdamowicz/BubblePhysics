@@ -13,7 +13,7 @@ struct NativeMetalBubble: Equatable, Sendable {
     var eventData = SIMD2<UInt64>.zero // interest, merge groups
     var bounds = SIMD4<Float>.zero // AABB zdeformowanego konturu po kroku: min.xy, max.xy
     var filter = NativeMetalFilter.default // kategoria, maska, reserved, warstwa (`NativeMetalFilter.encodeLayer`)
-    var contact = SIMD4<Float>.zero // podatność c₀·r/r_ref (0 = kontakt twardy), reserved, ζ_c (współczynnik tłumienia kontaktu miękkiego, także dla bańki twardej), reserved
+    var contact = SIMD4<Float>.zero // zero (dawna podatność XPBD), K_c, zero (dawne ζ_c), znacznik bańki napędzanej siłami (siła globalna, pola, γ)
 
     init(_ bubble: NativeSolverBubble) {
         identity = SIMD2(Int64(bubble.id.rawValue), 0)

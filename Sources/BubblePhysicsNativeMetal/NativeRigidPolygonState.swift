@@ -185,7 +185,9 @@ final class NativeRigidPolygonState {
         return value
     }
 
-    func prepare(_ inputs: [NativeRigidPolygonInput], bubbleCount: Int, timeStep: Float) throws {
+    /// `bubbleCandidates: false` wyłącza kandydatów bańka–bryła w `nativeRigidEmitCandidates` (`control.w` = 1): w silniku 4.0.0 wiersze
+    /// brył niosą tylko pary brył, a bańki dostają kontakt z pętli podkroków.
+    func prepare(_ inputs: [NativeRigidPolygonInput], bubbleCount: Int, timeStep: Float, bubbleCandidates: Bool = true) throws {
         current = inputs; count = inputs.count
         let limit = NativeMetalSolver.candidateLimitPerObject
         let total = UInt64(count) * UInt64(limit)
@@ -200,7 +202,7 @@ final class NativeRigidPolygonState {
         _ = try buffer("rowCounts", count: count, stride: MemoryLayout<SIMD2<UInt32>>.stride)
         _ = try buffer("walls", count: count, stride: MemoryLayout<NativeRigidWall>.stride)
         let control = try buffer("control", count: 1, stride: 16)
-        control.contents().storeBytes(of: SIMD4(UInt32(count), UInt32(bubbleCount), UInt32(limit), 0), as: SIMD4<UInt32>.self)
+        control.contents().storeBytes(of: SIMD4(UInt32(count), UInt32(bubbleCount), UInt32(limit), bubbleCandidates ? 0 : 1), as: SIMD4<UInt32>.self)
         records = []; changes = []; remaps = []
         var vertices: [SIMD2<Float>] = [], triangles: [SIMD4<UInt32>] = []
         let old = Dictionary(uniqueKeysWithValues: publishedInputs.enumerated().map { ($0.element.object.descriptor.id, ($0.offset, $0.element)) })

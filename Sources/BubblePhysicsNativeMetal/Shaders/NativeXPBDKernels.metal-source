@@ -855,8 +855,9 @@ NativeJointEnd nativeJointEnd(uint entity, float2 anchor, device NativeRigidBody
     end.point = anchor; end.arm = 0; end.velocity = 0; end.inverseMass = 0; end.inverseInertia = 0; end.angle = 0; end.omega = 0;
     if (entity == 0xFFFFFFFFu) return end;
     if (entity < bubbleCount) {
-        // Bańka jest zaczepiona w środku masy; środek bierzemy z bufora pozycji solvera, nie z rekordu.
-        end.point = positions[entity].xy; end.velocity = bubbles[entity].motion.xy; end.inverseMass = bubbles[entity].physical.y;
+        // Bańka jest zaczepiona w środku masy. Silnik 4.0.0 nie koryguje baniek w solverze więzów (nie ma XPBD, a ruch baniek liczą
+        // siły w podkrokach), więc koniec bańki jest kotwicą: jej bieżący środek, nieskończona masa. Przeguby z bańkami znikają w zadaniu 11.
+        end.point = bubbles[entity].position.xy; end.velocity = bubbles[entity].motion.xy; end.inverseMass = 0;
         return end;
     }
     NativeRigidBody b = bodies[entity - bubbleCount];

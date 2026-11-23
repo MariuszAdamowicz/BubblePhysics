@@ -13,7 +13,7 @@ struct NativeBubble {
     ulong2 eventData;
     float4 bounds;
     uint4 filter; // kategoria, maska, reserved, warstwa (Int32 z odwróconym bitem znaku)
-    float4 contact; // podatność c₀·r/r_ref (0 = kontakt twardy), reserved, ζ_c (współczynnik tłumienia kontaktu miękkiego, także dla bańki twardej), reserved
+    float4 contact; // zero (dawna podatność XPBD), K_c, zero (dawne ζ_c), znacznik bańki napędzanej siłami (siła globalna, pola, γ)
 };
 // Podatność końca kontaktu: c = c₀·r/r_ref, liczona przez hosta w `contact.x` z bieżącego promienia fizycznego bańki.
 // Zero oznacza kontakt twardy jak w v2.1.0.
@@ -182,13 +182,15 @@ kernel void nativePredict(device NativeBubble *bubbles [[buffer(0)]],
 }
 
 // Rozmiar komórki obejmuje największą średnicę: wystarcza dziewięć sąsiadów.
+// Komórka siatki obejmuje największą średnicę z zapasem obwiedni (2 · (r + zapas) + tolerancja): para kandydatów leży wtedy w
+// sąsiednich komórkach (zapas to droga bańki w kroku, nativeBroadphaseMargin).
 kernel void nativePrepareGrid(device NativeBubble *bubbles [[buffer(0)]],
     constant NativeControl &control [[buffer(1)]], device NativeContactControl &contacts [[buffer(2)]],
-    uint local [[thread_position_in_threadgroup]]) {
+    device float *margins [[buffer(3)]], uint local [[thread_position_in_threadgroup]]) {
     threadgroup float maxima[256];
     float width = contacts.thresholds.w;
     for (uint i = local; i < control.counts.x; i += 256)
-        width = max(width, 2 * bubbles[i].physical.z + contacts.thresholds.w);
+        width = max(width, 2 * (bubbles[i].physical.z + margins[i]) + contacts.thresholds.w);
     maxima[local] = width;
     threadgroup_barrier(mem_flags::mem_threadgroup);
     for (uint stride = 128; stride > 0; stride /= 2) {
@@ -284,7 +286,7 @@ kernel void nativeEmitCandidates(device NativeBubble *bubbles [[buffer(0)]],
     device NativeGridEntry *grid [[buffer(3)]], device NativeSegment *segments [[buffer(4)]],
     device NativeCandidate *rows [[buffer(5)]], device uint *rowCounts [[buffer(6)]],
     device atomic_uint *overflow [[buffer(7)]], device uint4 *jointRanges [[buffer(8)]],
-    device ulong *jointPartners [[buffer(9)]], uint index [[thread_position_in_grid]]) {
+    device ulong *jointPartners [[buffer(9)]], device float *margins [[buffer(10)]], uint index [[thread_position_in_grid]]) {
     if (index >= control.counts.x) return;
     NativeBubble a = bubbles[index];
     if (!all(isfinite(a.position))) {
@@ -311,7 +313,7 @@ kernel void nativeEmitCandidates(device NativeBubble *bubbles [[buffer(0)]],
             NativeBubble b = bubbles[j];
             if (!nativeFilterAccepts(a.filter, b.filter)) continue;
             if (nativeJointExcluded(jointRanges, jointPartners, index, ulong(b.identity.x))) continue;
-            float reach = a.physical.z + b.physical.z + contacts.thresholds.w;
+            float reach = a.physical.z + b.physical.z + margins[index] + margins[j] + contacts.thresholds.w;
             if (all(abs(a.position.xy - b.position.xy) <= reach)) {
                 NativeCandidate candidate = { long2(a.identity.x, b.identity.x), uint4(0, index, j, 1) };
                 nativeInsertCandidate(row, count, dropped, limit, candidate);
@@ -322,7 +324,7 @@ kernel void nativeEmitCandidates(device NativeBubble *bubbles [[buffer(0)]],
         NativeSegment s = segments[j];
         if (!nativeFilterAccepts(a.filter, s.filter)) continue;
         if (s.flags.y && nativeJointExcluded(jointRanges, jointPartners, index, ulong(s.identity.y))) continue;
-        float reach = a.physical.z + contacts.thresholds.w;
+        float reach = a.physical.z + margins[index] + contacts.thresholds.w;
         float2 lower = min(s.current.xy, s.current.zw) - reach;
         float2 upper = max(s.current.xy, s.current.zw) + reach;
         if (all(a.position.xy >= lower) && all(a.position.xy <= upper)) {
@@ -359,7 +361,9 @@ kernel void nativeRigidEmitCandidates(device NativeRigidBody *bodies [[buffer(0)
     device NativeCandidate *row = rows + index * limit;
     uint count = 0, dropped = 0;
     // Statyczny wielokąt dla baniek to odcinki; statyczne koło i kapsuła nie mają odcinków, więc bańki łapie solver brył.
-    if (!b.flags.x || nativeRigidIsRound(b)) {
+    // `counts.w != 0` wyłącza kandydatów bańka–bryła: w silniku 4.0.0 bańki nie wchodzą do solvera brył (zadanie 11 daje im kontakt z
+    // pętli podkroków), więc wiersze niosą tylko pary brył.
+    if ((!b.flags.x || nativeRigidIsRound(b)) && counts.w == 0) {
         float2 bodyLow = min(b.pose.xy, b.previous.xy) - b.physical.z;
         float2 bodyHigh = max(b.pose.xy, b.previous.xy) + b.physical.z;
         // Grupa sprawdza bańki w porcjach po `width`: każdy wątek jedną, a wątek 0 wpisuje trafienia do wiersza
