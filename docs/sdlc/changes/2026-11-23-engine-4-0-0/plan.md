@@ -8,7 +8,7 @@
 **References:** specyfikacja autora `2KBubbles-iOS/docs/benchmarks/stage-0/v4.0.0-engine-spec.md` (gałąź gry `feature/2kbubbles-ios-prd`, commit `ef1e7f7`); punkt wyjścia tag `v3.0.2` (`74c3503`)
 **Strategy:** slices
 **Test command:** `swift test`
-**Status:** Draft
+**Status:** Approved
 **Template version:** default/0.3.3
 
 **Plugin version:** 0.7.11
