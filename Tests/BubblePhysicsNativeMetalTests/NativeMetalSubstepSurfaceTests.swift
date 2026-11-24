@@ -100,7 +100,7 @@ final class NativeMetalSubstepSurfaceTests: XCTestCase {
         let labels = Set(Mirror(reflecting: NativeMetalFrameTelemetry()).children.compactMap(\.label))
         XCTAssertEqual(labels, ["backend", "commandBufferCount", "encoderCount", "contactCount", "didEncounterNonFinite", "fallbackReason",
                                 "gpuMilliseconds", "substepCount", "gridRebuildCount", "substepBufferCount", "executionPath",
-                                "singleGroupWidth", "physicsGPUMilliseconds", "contourGPUMilliseconds"])
+                                "singleGroupWidth", "physicsGPUMilliseconds", "contourGPUMilliseconds", "candidatePairCount"])
     }
 
     // G6-AC2, G6-AC5: awaria silnika niesie obiekty, krawędź, odległość i człon h.
