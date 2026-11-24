@@ -40,7 +40,7 @@ struct NativeMetalKinematicPose: Equatable, Sendable {
 
 /// Sterowanie pętlą podkroków na GPU: czasy, liczniki i obiekt wyznaczający h w ostatnim podkroku.
 struct NativeMetalSubstepControl: Equatable, Sendable {
-    var time = SIMD4<Float>.zero // czas kroku, czas upłynięty, h, horyzont zapasu
+    var time = SIMD4<Float>.zero // czas kroku, czas upłynięty, h, mnożnik wymuszonego podziału h (substepSplitMultiplier; < 1 znaczy 1)
     var counts = SIMD4<UInt32>.zero // podkroki pary buforów, podkroki klatki, znacznik przebudowy, znacznik limitu
     var limiter = SIMD2<UInt64>.zero // obiekt wyznaczający h, człon h
 }

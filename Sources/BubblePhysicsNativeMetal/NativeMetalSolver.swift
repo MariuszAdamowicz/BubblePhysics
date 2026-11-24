@@ -487,7 +487,7 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         // Czasy i liczniki pętli podkroków: czas kroku, zero upłyniętego, zero podkroków; `substepControl` jest współdzielony z GPU.
         // Świat bez baniek nie ma podkroków: czas kroku jest od razu upłyniony, więc bramki końca kroku (bryły, sensory) się otwierają.
         state.substepControl.contents().storeBytes(of: NativeMetalSubstepControl(time: SIMD4(snapshot.configuration.timeStep,
-            count == 0 ? snapshot.configuration.timeStep : 0, 0, 0)),
+            count == 0 ? snapshot.configuration.timeStep : 0, 0, Float(configuration.substepSplitMultiplier))),
                                                    as: NativeMetalSubstepControl.self)
         try forceBuffers.upload(snapshot.publicSettings?.forces ?? NativeForceInput(), device: device)
         memset(state.dispatchStatistics.contents(), 0, state.dispatchStatistics.length)

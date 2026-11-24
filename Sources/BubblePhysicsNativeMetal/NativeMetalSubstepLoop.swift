@@ -25,13 +25,13 @@ enum NativeMetalSubstepLoop {
             threadsPerThreadgroup: .init(width: NativeMetalSubstep.groupWidth, height: 1, depth: 1))
     }
 
-    /// a₀ z siły globalnej i pól (gumka i motor dochodzą w zadaniu 10) oraz zapas obwiedni i x₀ z położeń początku kroku. Przy przebudowie
+    /// a₀ z siły globalnej, pól, gumki i motoru oraz zapas obwiedni i x₀ z położeń początku kroku. Przy przebudowie
     /// w tej samej klatce liczy się z czasu pozostałego w kroku; `minimumMarginOnly` zostawia sam zapas r / 4.
     static func encodeBroadphaseInputs(_ encoder: MTLComputeCommandEncoder, pipelines: [String: MTLComputePipelineState],
                                        state: NativeMetalPersistentState, forces: NativeMetalForceBuffers, count: Int,
                                        minimumMarginOnly: Bool = false) {
         bind(encoder, pipelines["nativeAccelerationWithoutContacts"]!, [state.workingBubbles, state.control, forces.control!,
-            forces.fields!, forces.fieldVertices!, forces.fieldObjectIDs!, state.nonContactAcceleration])
+            forces.fields!, forces.fieldVertices!, forces.fieldObjectIDs!, state.nonContactAcceleration, forces.bands!, forces.motors!])
         dispatch(encoder, count: count)
         bind(encoder, pipelines["nativeBroadphaseMargin"]!, [state.workingBubbles, state.control, state.nonContactAcceleration,
             state.substepControl, state.broadphaseMargin, state.referencePositions])
@@ -55,6 +55,8 @@ enum NativeMetalSubstepLoop {
             state.substepControl, state.substepCapture ?? state.acceleration])
         var mode = SIMD4<UInt32>(phase.rawValue, capture ? 1 : 0, 0, 0)
         encoder.setBytes(&mode, length: MemoryLayout<SIMD4<UInt32>>.stride, index: 11)
+        encoder.setBuffer(forces.bands!, offset: 0, index: 12)
+        encoder.setBuffer(forces.motors!, offset: 0, index: 13)
         if indirect { dispatchIndirect(encoder, state: state) } else { dispatch(encoder, count: count) }
     }
 
@@ -72,7 +74,7 @@ enum NativeMetalSubstepLoop {
         for _ in 0..<substeps {
             bind(encoder, reduction, [state.workingBubbles, state.workingSegments, state.control, state.contactControl,
                 state.adjacency, state.adjacencyCounts, state.acceleration, state.substepControl, state.substepDispatch,
-                state.substepSteps, state.broadphaseMargin, state.referencePositions])
+                state.substepSteps, state.broadphaseMargin, state.referencePositions, forces.control!, forces.bands!])
             encoder.dispatchThreadgroups(.init(width: 1, height: 1, depth: 1), threadsPerThreadgroup: .init(width: width, height: 1, depth: 1))
             integrate(encoder, pipelines: pipelines, state: state, forces: forces, phase: .kickAndMove, capture: capture,
                       count: count, indirect: true)

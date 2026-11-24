@@ -143,7 +143,7 @@ final class NativeMetalSubstepKernelTests: XCTestCase {
                     for (index, buffer) in [state.workingBubbles, state.workingSegments, state.control, state.contactControl,
                                             state.adjacency, state.adjacencyCounts, state.acceleration, state.substepControl,
                                             state.substepDispatch, state.substepSteps, state.broadphaseMargin,
-                                            state.referencePositions].enumerated() {
+                                            state.referencePositions, forces.control!, forces.bands!].enumerated() {
                         encoder.setBuffer(buffer, offset: 0, index: index)
                     }
                     encoder.dispatchThreadgroups(.init(width: 1, height: 1, depth: 1),
@@ -177,7 +177,7 @@ final class NativeMetalSubstepKernelTests: XCTestCase {
 
         private func bindForces(_ encoder: MTLComputeCommandEncoder, output: MTLBuffer) {
             for (index, buffer) in [state.workingBubbles, state.control, forces.control!, forces.fields!, forces.fieldVertices!,
-                                    forces.fieldObjectIDs!, output].enumerated() {
+                                    forces.fieldObjectIDs!, output, forces.bands!, forces.motors!].enumerated() {
                 encoder.setBuffer(buffer, offset: 0, index: index)
             }
         }
@@ -199,6 +199,8 @@ final class NativeMetalSubstepKernelTests: XCTestCase {
             }
             var mode = SIMD4<UInt32>(phase.rawValue, capture ? 1 : 0, 0, 0)
             encoder.setBytes(&mode, length: MemoryLayout<SIMD4<UInt32>>.stride, index: 11)
+            encoder.setBuffer(forces.bands!, offset: 0, index: 12)
+            encoder.setBuffer(forces.motors!, offset: 0, index: 13)
         }
 
         // MARK: Klatka
@@ -310,6 +312,110 @@ final class NativeMetalSubstepKernelTests: XCTestCase {
         XCTAssertNotEqual(rig.nonContactAcceleration(0), .zero)
         XCTAssertEqual(rig.nonContactAcceleration(2), .zero, "rola torowa nie dostaje sił")
         XCTAssertEqual(rig.nonContactAcceleration(3), .zero, "bańka statyczna ma masę nieskończoną")
+    }
+
+    // MARK: Gumka i motor w a₀, ω_max i podkroku (zadanie 10)
+
+    /// Wejście sił z samymi rekordami gumki i motoru (rekordy leżą rosnąco po ID, jak buduje je `NativeForceInput`).
+    private func driveInput(bands: [NativeMetalBandDrive] = [], motors: [NativeMetalMotor] = [], globalForce: WorldPoint = .zero) -> NativeForceInput {
+        var input = NativeForceInput(objects: [], globalForce: globalForce)
+        input.bandDrives = bands
+        input.motors = motors
+        return input
+    }
+
+    func testAccelerationAddsBandWithOptionalCapAndMotorForceForTheirOwnersOnly() throws {
+        let input = driveInput(bands: [
+            NativeMetalBandDrive(identity: SIMD2(1, 0), band: SIMD4(30, -20, 22, 0)),
+            NativeMetalBandDrive(identity: SIMD2(2, 0), band: SIMD4(30, -20, 22, 10)),
+            NativeMetalBandDrive(identity: SIMD2(4, 0), band: SIMD4(100, 0, 22, 0))],
+            motors: [NativeMetalMotor(identity: SIMD2(3, 0), drive: SIMD4(6, -8, 2, 1))], globalForce: [1, 1])
+        let bodies = [Body(id: 1, center: [10, 20], mass: 0.5), Body(id: 2, center: [10, 20], mass: 0.5),
+                      Body(id: 3, center: [10, 20], mass: 2), Body(id: 4, center: [0, 0], role: .path),
+                      Body(id: 5, center: [10, 20], mass: 1)]
+        let rig = try Rig(bodies: bodies, forces: input)
+        try rig.submit([.acceleration])
+        // Gumka bez limitu: K · (cel − x) = 22 · (20, −40); siła globalna (1, 1); masa 0,5.
+        XCTAssertEqual(rig.nonContactAcceleration(0).x, (22 * 20 + 1) / 0.5, accuracy: 1e-3)
+        XCTAssertEqual(rig.nonContactAcceleration(0).y, (22 * -40 + 1) / 0.5, accuracy: 1e-3)
+        // Z limitem 10 siła gumki (|F| = 22 · √(20² + 40²) ≈ 984) ma długość 10 i ten sam kierunek; siła globalna nie jest obcinana.
+        let direction = SIMD2<Float>(20, -40) / (20 * 20 + 40 * 40).squareRoot()
+        XCTAssertEqual(rig.nonContactAcceleration(1).x, (10 * direction.x + 1) / 0.5, accuracy: 1e-3)
+        XCTAssertEqual(rig.nonContactAcceleration(1).y, (10 * direction.y + 1) / 0.5, accuracy: 1e-3)
+        // Motor: siła (6, −8) na masę 2 plus siła globalna.
+        XCTAssertEqual(rig.nonContactAcceleration(2).x, (6 + 1) / 2, accuracy: 1e-5)
+        XCTAssertEqual(rig.nonContactAcceleration(2).y, (-8 + 1) / 2, accuracy: 1e-5)
+        XCTAssertEqual(rig.nonContactAcceleration(3), .zero, "rola torowa nie dostaje gumki")
+        XCTAssertEqual(rig.nonContactAcceleration(4), [1, 1], "bańka bez rekordu dostaje tylko siłę globalną")
+    }
+
+    /// Gumka liczy się z bieżącego położenia w każdym podkroku: bez oporu jedno 1/60 s pod sprężyną o ω = √(K/m) przesuwa bańkę
+    /// jak oscylator harmoniczny (x(t) = cel + (x₀ − cel) cos ωt), a nie jak stała siła z początku kroku (ta dałaby ½ a₀ t² ≈ 278 zamiast 99).
+    /// Podział wymuszony 4 × daje ω h ≈ 0,25, więc błąd metody leapfrog jest rzędu procentów.
+    func testBandSpringFollowsTheHarmonicOscillatorBecauseItUsesTheCurrentPosition() throws {
+        let stiffness: Float = 40_000, mass: Float = 1, target: Float = 50
+        let omega = Double(stiffness / mass).squareRoot()
+        let rig = try Rig(bodies: [Body(id: 1, center: [0, 0], mass: mass)], forces: driveInput(
+            bands: [NativeMetalBandDrive(identity: SIMD2(1, 0), band: SIMD4(target, 0, stiffness, 0))]))
+        var control = rig.substep
+        control.time.w = 4
+        rig.substep = control
+        let substeps = try rig.runFrame()
+        // ω = 200: 1/ω = 0,005, a z podziałem 4 × h = 0,00125, więc krok ma ok. 14 podkroków.
+        XCTAssertGreaterThanOrEqual(substeps, 12)
+        let t = 1.0 / 60
+        let expected = Double(target) * (1 - cos(omega * t))
+        XCTAssertEqual(Double(rig.bubble(0).position.x), expected, accuracy: 0.03 * Double(target))
+        let expectedVelocity = Double(target) * omega * sin(omega * t)
+        XCTAssertEqual(Double(rig.bubble(0).motion.x), expectedVelocity, accuracy: 0.05 * Double(target) * omega)
+    }
+
+    func testBandStiffnessLimitsTheSubstepThroughOmegaMax() throws {
+        // Bez kontaktów jedyny człon sztywności to gumka: h = 1 / ω = √(m / K) przy K = 300 000, m = 0,36.
+        let rig = try Rig(bodies: [Body(id: 1, center: [0, 0], mass: 0.36)], forces: driveInput(
+            bands: [NativeMetalBandDrive(identity: SIMD2(1, 0), band: SIMD4(0, 0, 300_000, 0))]))
+        try rig.beginFrame()
+        try rig.submit([.reduce])
+        let expected = (0.36 / 300_000.0).squareRoot()
+        XCTAssertEqual(Double(rig.substep.time.z), expected, accuracy: 1e-6 * 10)
+        XCTAssertEqual(rig.substep.limiter.y, NativeMetalSubstep.Term.stiffness.rawValue)
+        XCTAssertEqual(rig.substep.limiter.x, 1)
+    }
+
+    func testMotorTorqueSpinsTheBubbleExactlyForAnyDampingAndForceRolesOnly() throws {
+        // dω/dt = M / I − γ ω; I = 0,5 · 2 · 3² = 9, M = 4,5, więc przy γ = 0 ω po kroku = 0,5 / 60, a przy γ = 2 ω = M/(Iγ) (1 − e^(−γ h)).
+        for gamma: Float in [0, 2] {
+            let rig = try Rig(bodies: [Body(id: 1, center: [0, 0], mass: 2, damping: gamma), Body(id: 2, center: [50, 0], mass: 2, role: .path)],
+                              forces: driveInput(motors: [NativeMetalMotor(identity: SIMD2(1, 0), drive: SIMD4(0, 0, 4.5, 9)),
+                                                          NativeMetalMotor(identity: SIMD2(2, 0), drive: SIMD4(0, 0, 4.5, 9))]))
+            try rig.runFrame()
+            let h = 1.0 / 60, g = Double(gamma)
+            let expected = g == 0 ? 0.5 * h : 0.5 / g * (1 - exp(-g * h))
+            XCTAssertEqual(Double(rig.bubble(0).motion.w), expected, accuracy: 1e-6, "γ \(gamma)")
+            XCTAssertEqual(rig.bubble(1).motion.w, 0, "rola torowa nie dostaje momentu")
+        }
+    }
+
+    func testForcedSplitMultiplierDividesTheStepIntoEqualPartsAndKeepsTheResult() throws {
+        // Bańka w spoczynku pod stałą siłą globalną: naturalnie jeden podkrok, z mnożnikiem 4 dokładnie cztery równe, bez mikropodkroku z zaokrąglenia.
+        var results: [(substeps: UInt32, velocity: Float, position: Float, history: [Float])] = []
+        for multiplier: Float in [1, 4, 7] {
+            let rig = try Rig(bodies: [Body(id: 1, center: [0, 0], velocity: [3, 0], mass: 0.5, damping: 1)],
+                              forces: NativeForceInput(objects: [], globalForce: [3, 0]))
+            var control = rig.substep
+            control.time.w = multiplier
+            rig.substep = control
+            try rig.runFrame()
+            let history = rig.state.substepSteps.contents().bindMemory(to: Float.self, capacity: 8)
+            results.append((rig.substep.counts.y, rig.bubble(0).motion.x, rig.bubble(0).position.x, (0..<Int(rig.substep.counts.y)).map { history[$0] }))
+        }
+        XCTAssertEqual(results.map(\.substeps), [1, 4, 7])
+        for result in results.dropFirst() {
+            XCTAssertEqual(result.history.reduce(0, +), 1.0 / 60, accuracy: 1e-7, "suma h to czas kroku")
+            XCTAssertEqual(result.history.max() ?? 0, result.history.min() ?? 0, accuracy: 1e-7, "równe części")
+            XCTAssertEqual(result.velocity, results[0].velocity, accuracy: 1e-4, "ten sam wynik przy stałej sile")
+            XCTAssertEqual(result.position, results[0].position, accuracy: 1e-4)
+        }
     }
 
     // MARK: nativeBroadphaseMargin
