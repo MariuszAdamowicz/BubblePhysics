@@ -77,17 +77,18 @@ final class StaticPolygonEdgeTests: XCTestCase {
         return (tail.last ?? 0, (tail.max() ?? 0) - (tail.min() ?? 0), position)
     }
 
-    /// Bańka r 148 dociśnięta do środka długiej krawędzi ściany T 48 albo T 400: ugięcie r · ε dla pięciu sił, w tym najsilniejszej z
-    /// ugięciem większym niż T, i równe w obu grubościach. Dwustronne krawędzie dawały drugą sprężynę od tyłu.
+    /// Bańka r 148 (m 1, γ 5: przy m ≈ 55 z `CrowdScene` osiada w minutę) dociśnięta do środka długiej krawędzi ściany T 48 albo T 400:
+    /// ugięcie r · ε dla pięciu sił, w tym dwóch z ugięciem większym niż T (F = 1500 daje 52, F = 2500 daje 77), i równe w obu grubościach.
+    /// Dwustronne krawędzie dawały drugą sprężynę od tyłu.
     func testThinWallDeflectsByTheFrontEdgeOnlyAndTheSameAsAThickWall() async throws {
         let radius: Float = 148, faceX: Float = -100
-        for pressure: Float in [300, 700, 900, 1100, 1300] {
+        for pressure: Float in [300, 700, 1100, 1500, 2500] {
             let expected = deflection(radius, force: pressure)
             var deflections: [Float] = []
             for thickness: Float in [48, 400] {
                 let world = try await world(extent: 1000, bubble: material(),
                                             polygons: [rectangle(faceX: faceX, thickness: thickness)]) {
-                    try $0.add(CrowdScene.bubble(1, at: [faceX + radius, 0], radius: radius))
+                    try $0.add(CrowdScene.bubble(1, at: [faceX + radius, 0], radius: radius, mass: 1))
                         .setMotorDrive(id(1), drive: MotorDrive(force: [-pressure, 0]))
                 }
                 let rest = try await settleAgainstFace(world, radius: radius, faceX: faceX, steps: 1200)
@@ -300,34 +301,30 @@ final class StaticPolygonEdgeTests: XCTestCase {
         }
     }
 
-    /// Bańka r 12 z prędkością (1 200, −1 800) wchodzi skosem w cienką ścianę T 48 (x od −148 do −100, y do 400) nad jej tylnym
-    /// górnym narożnikiem wypukłym: środek z początku kroku (−160, 420) leży na zewnątrz prostych krawędzi górnej i tylnej, a
-    /// przewidziany środek (−140, 390) rzutuje się do wnętrza obu odcinków. Droga środka przecina jednak tylko krawędź górną
-    /// (prostą x = −148 mija przy y 402, nad odcinkiem), więc odpycha tylko ona, wzdłuż +y: x i prędkość x zostają jak przed
-    /// krokiem, a żaden krok nie kończy się ze środkiem w ścianie. Tylna krawędź wciągałaby bańkę w lewo, za ścianę.
+    /// Bańka r 12 (m 0,36, γ 5) z prędkością (1 200, −1 800) wchodzi skosem w cienką ścianę T 48 (x od −148 do −100, y do 400) nad jej
+    /// tylnym górnym narożnikiem wypukłym i mija go o kilka jednostek nad krawędzią górną. Ściana jest jednostronna: odpycha od zewnątrz
+    /// siłą z prawa kontaktu wzdłuż normalnej wierzchołka i krawędzi górnej, a tylna krawędź nie wciąga bańki w lewo, za ścianę. Żaden krok
+    /// nie kończy się ze środkiem w ścianie, bańka odbija się w górę (vy zmienia znak), jej x rośnie w każdym kroku, a prędkość x zostaje
+    /// bliska tej z oporu (1 200 · e^(−γ t)): zderzenie z wierzchołkiem odejmuje jej najwyżej 12 %, a tylna krawędź odjęłaby ją całą.
     func testObliqueEntryAcrossAConvexCornerIsPushedOutByTheCrossedEdgeOnly() async throws {
-        let radius: Float = 12, velocity = WorldPoint(1200, -1800)
-        let world = try await world(extent: 2500, bubble: material(),
+        let radius: Float = 12, velocity = WorldPoint(1200, -1800), damping: Float = 5
+        let world = try await world(extent: 2500, bubble: material(damping: damping),
                                     polygons: [rectangle(faceX: -100, thickness: 48)]) {
             try $0.add(CrowdScene.bubble(1, at: [-220, 510], radius: radius, velocity: velocity))
         }
+        var previousX = -Float.infinity, bounced = false
         for index in 0..<6 {
             let frame = try await advance(world)
             let state = try XCTUnwrap(frame.objects[id(1)])
             let position = state.position
-            XCTAssertFalse(position.x > -148 && position.x < -100 && position.y < 400,
-                           "krok \(index): środek w ścianie: \(position)")
-            if index == 1 {
-                // Środek z początku kroku uderzenia; przewidziany środek to (−140, 390).
-                XCTAssertEqual(position.x, -160, accuracy: 1e-3, "faza trajektorii")
-                XCTAssertEqual(position.y, 420, accuracy: 1e-3, "faza trajektorii")
-            } else if index == 2 {
-                // Krok uderzenia: krawędź górna wypycha wzdłuż +y, więc x i prędkość x zostają (tarcie 0).
-                XCTAssertGreaterThanOrEqual(position.y, 400, "środek po kroku uderzenia nad krawędzią górną: \(position)")
-                XCTAssertEqual(position.x, -140, accuracy: 0.05, "tylna krawędź wciągnęła środek w lewo: \(position)")
-                XCTAssertEqual(state.velocity.x, velocity.x, accuracy: 0.01 * velocity.x,
-                               "tylna krawędź wyhamowała prędkość x: \(state.velocity)")
-            }
+            XCTAssertFalse(position.x > -148 && position.x < -100 && position.y < 400, "krok \(index): środek w ścianie: \(position)")
+            XCTAssertGreaterThan(position.x, previousX, "krok \(index): tylna krawędź cofnęła bańkę: \(position)")
+            previousX = position.x
+            if state.velocity.y > 0 { bounced = true }
+            // Do kroku `index` minęło index + 2 kroków (krok przyjęcia sceny to pierwszy).
+            let dragged = velocity.x * exp(-damping * Float(CrowdScene.step) * Float(index + 2))
+            XCTAssertGreaterThan(state.velocity.x, 0.88 * dragged, "krok \(index): prędkość x \(state.velocity.x), z oporu \(dragged)")
         }
+        XCTAssertTrue(bounced, "bańka odbiła się od ściany")
     }
 }

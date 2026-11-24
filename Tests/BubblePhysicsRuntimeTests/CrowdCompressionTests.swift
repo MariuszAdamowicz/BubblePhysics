@@ -73,20 +73,27 @@ final class CrowdCompressionTests: XCTestCase {
     }
 
     // P-B-27: tłok B = 2,5 z materiałem miękkim, a materiał naprawdę działa. W prawie kontaktu środek nigdy nie dochodzi do krawędzi ściany,
-    // więc środki zostają w ramie. Dowodem działania materiału jest kontur: średni promień efektywny / docelowy w ostatniej sekundzie jest
-    // poniżej 1 i jest mniejszy niż przy bańce 100 razy sztywniejszej (to samo ziarno, ten sam przebieg).
-    func testSoftCrowdBalance2_5KeepsStepsAcceptedAndCompressesContoursMoreThanAStiffBubble() async throws {
+    // więc środki zostają w ramie, a średni promień efektywny / docelowy w ostatniej sekundzie jest poniżej 1. Dowodem, że K_c ma wpływ na
+    // kontur, jest porównanie dwóch materiałów w tym samym przebiegu (to samo ziarno) przy B = 1,5: bańka 15 razy miększa (K_c = 1333) ma
+    // mocniej wgnieciony kontur niż sztywna (K_c = 20 000). Przy B = 2,5 tłok jest tak gęsty, że o konturze decyduje upakowanie, nie materiał
+    // (K_c 1333, 5195 i 20 000 dają 0,418; 0,414 i 0,439, bez monotonii), a bańka 100 razy sztywniejsza (K_c ≈ 5 · 10⁵) kończy świat limitem
+    // podkroków, bo wzrost promienia wciska bańki w siebie szybciej, niż podkroki nadążają.
+    func testSoftCrowdBalance2_5KeepsStepsAcceptedAndSofterMaterialCompressesContoursMore() async throws {
         let softWorld = try await CrowdScene.makeWorld(bubble: CrowdScene.softCrowdPhysics())
         let soft = try await CrowdScene.runCrowd(world: softWorld, balance: 2.5, seed: 2_500, extraSteps: 600)
         assertCrowdKeptStepsAccepted(soft, world: softWorld, balance: 2.5)
-        let stiffWorld = try await CrowdScene.makeWorld(bubble: CrowdScene.softBubblePhysics(base: 3.85e-5))
-        let stiff = try await CrowdScene.runCrowd(world: stiffWorld, balance: 2.5, seed: 2_500, extraSteps: 600)
-        XCTAssertNil(stiff.firstIssue?.issue, "przebieg odniesienia z bańką 100 razy sztywniejszą")
         XCTAssertEqual(soft.lastSecond.count, CrowdScene.lastSecondSteps)
-        XCTAssertEqual(stiff.lastSecond.count, CrowdScene.lastSecondSteps)
-        let stiffRatio = stiff.meanEffectiveRadiusRatioInLastSecond, softRatio = soft.meanEffectiveRadiusRatioInLastSecond
-        XCTAssertLessThan(softRatio, 1, "średni promień efektywny / docelowy w ostatniej sekundzie: miękki \(softRatio), sztywny \(stiffRatio)")
-        XCTAssertLessThan(softRatio, stiffRatio, "miększa bańka ma mocniej wgnieciony kontur: miękki \(softRatio), sztywny \(stiffRatio)")
+        XCTAssertLessThan(soft.meanEffectiveRadiusRatioInLastSecond, 1, "średni promień efektywny / docelowy w ostatniej sekundzie")
+        var ratios: [Float: Float] = [:]
+        for base: Float in [0.015, 0.001] {   // K_c = r_ref / c₀ = 1333 i 20 000
+            let world = try await CrowdScene.makeWorld(bubble: CrowdScene.softBubblePhysics(base: base))
+            let report = try await CrowdScene.runCrowd(world: world, balance: 1.5, seed: 2_500, extraSteps: 600)
+            assertCrowdKeptStepsAccepted(report, world: world, balance: 1.5)
+            XCTAssertEqual(report.lastSecond.count, CrowdScene.lastSecondSteps)
+            ratios[base] = report.meanEffectiveRadiusRatioInLastSecond
+        }
+        let softer = try XCTUnwrap(ratios[0.015]), stiffer = try XCTUnwrap(ratios[0.001])
+        XCTAssertLessThan(softer, stiffer, "miększa bańka ma mocniej wgnieciony kontur: K_c 1333 → \(softer), K_c 20 000 → \(stiffer)")
     }
 
     // P-B-28: silniejszy nacisk (B = 2,5 wobec 1,5, to samo ziarno) mocniej ściska kontury.

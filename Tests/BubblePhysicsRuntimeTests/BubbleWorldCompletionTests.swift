@@ -343,7 +343,7 @@ final class BubbleWorldCompletionTests: XCTestCase {
         let bubble = try BubbleDescriptor(id: ObjectID(rawValue: 1), position: [150, 18.3], targetRadius: 8,
             physicsMaterialID: bubbleMaterial, renderMaterialID: style, eventInterest: .contact)
         state = try TransactionStager.stage(WorldTransaction()
-            .updatePhysicsMaterial(bubbleMaterial, material: PhysicsMaterial(kind: .bubble, contactStiffness: 1e9))
+            .updatePhysicsMaterial(bubbleMaterial, material: PhysicsMaterial(kind: .bubble, contactStiffness: 1852, damping: 5))
             .updatePhysicsMaterial(rigidMaterial, material: PhysicsMaterial(kind: .rigid))
             .updateRenderMaterial(style, material: try RenderMaterial()).add(.rigidBody(floor)).add(.bubble(bubble)),
             against: state).state

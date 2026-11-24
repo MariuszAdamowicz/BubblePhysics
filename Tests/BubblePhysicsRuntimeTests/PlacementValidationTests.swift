@@ -21,7 +21,7 @@ final class PlacementValidationTests: XCTestCase {
     }
     private func resources() throws -> WorldTransaction {
         WorldTransaction()
-            .updatePhysicsMaterial(bubbleMaterial, material: try PhysicsMaterial(kind: .bubble, contactStiffness: 1e9))
+            .updatePhysicsMaterial(bubbleMaterial, material: try PhysicsMaterial(kind: .bubble, contactStiffness: 1852))
             .updatePhysicsMaterial(rigidMaterial, material: try PhysicsMaterial(kind: .rigid))
             .updateRenderMaterial(style, material: try RenderMaterial())
     }

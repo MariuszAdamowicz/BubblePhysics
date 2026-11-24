@@ -15,8 +15,8 @@ enum CrowdScene {
     static let wallThickness: Float = 48
     static let interiorHalfSize = WorldPoint(180, 320)
     static let interiorArea = Double(360 * 640)
-    /// Margines strażnika środka: środek zrzutowany na krawędź ściany leży o `margin` w głąb wnętrza.
-    static let guardMargin: Float = 1e-3
+    /// Tolerancja położenia przy sprawdzaniu, czy środek leży w ramie ścian (zaokrąglenie float32 przy ścianie).
+    static let frameTolerance: Float = 1e-3
 
     static let bubbleMaterial = PhysicsMaterialID(rawValue: 1)
     static let wallMaterial = PhysicsMaterialID(rawValue: 2)
@@ -34,8 +34,9 @@ enum CrowdScene {
         try WorldConfiguration(simulationRegion: region(), fixedTimeStep: step, eventBufferCapacity: 4096)
     }
 
-    /// Materiał baniek sceny: `maximumLinearSpeed` = 600 jak w specyfikacji sceny tłoku.
-    static func bubblePhysics(maximumLinearSpeed: Float? = 600, damping: Float = 0) throws -> PhysicsMaterial {
+    /// Materiał baniek sceny bardzo sztywny (K_c = 1e9): kontakt bańki ze ścianą albo z inną bańką ustępuje tu o ułamek promienia, więc
+    /// scena używa go tylko tam, gdzie kontakt nie jest przedmiotem testu (gumka, opór, stager). Limitu prędkości bańka nie ma (G1-AC1).
+    static func bubblePhysics(damping: Float = 0) throws -> PhysicsMaterial {
         try PhysicsMaterial(kind: .bubble, contactStiffness: 1e9, damping: damping)
     }
 
@@ -84,9 +85,9 @@ enum CrowdScene {
         return world
     }
 
-    /// Środek w prostokącie ograniczonym wewnętrznymi krawędziami ścian, z tolerancją `guardMargin`.
+    /// Środek w prostokącie ograniczonym wewnętrznymi krawędziami ścian, z tolerancją `frameTolerance`.
     static func isInsideFrame(_ point: WorldPoint) -> Bool {
-        abs(point.x) <= interiorHalfSize.x + guardMargin && abs(point.y) <= interiorHalfSize.y + guardMargin
+        abs(point.x) <= interiorHalfSize.x + frameTolerance && abs(point.y) <= interiorHalfSize.y + frameTolerance
     }
 
     // MARK: materiał miękki i docisk do ściany (wycinek 3)
@@ -94,17 +95,14 @@ enum CrowdScene {
     /// Drugi materiał baniek sceny, np. twardy obok miękkiego w jednym świecie.
     static let secondBubbleMaterial = PhysicsMaterialID(rawValue: 3)
 
-    /// Materiał baniek z podatnością kontaktu c = base · r / referenceRadius; reszta jak w `bubblePhysics`.
-    /// Bez tłumienia, `maximumLinearSpeed` = 600 jak w scenie tłoku. `dampingRatio` to ζ_c kontaktu miękkiego (domyślnie 1, jak w materiale).
-    static func softBubblePhysics(base: Float, referenceRadius: Float = 20, maximumLinearSpeed: Float? = 600,
-                                  damping: Float = 0, dampingRatio: Float = 1) throws -> PhysicsMaterial {
-        // Przejściowo (do zadania 7): K_c = r_ref / c₀, bo host liczy dawną podatność c = r / K_c. Limit prędkości bańki nie istnieje (G1-AC1).
+    /// Materiał baniek z K_c = r_ref / c₀, gdzie c₀ = `base` to dawna podatność kontaktu (przy małej sile bańka o promieniu r_ref ugina się
+    /// o c₀ · F); od 4.0.0 kontakt ma prawo F = K_c · ε / (1 − ε)², bez przenikania. `damping` to opór γ. Dla `base` ≤ 0 K_c = 1e9.
+    static func softBubblePhysics(base: Float, referenceRadius: Float = 20, damping: Float = 0) throws -> PhysicsMaterial {
         try PhysicsMaterial(kind: .bubble, contactStiffness: base > 0 ? referenceRadius / base : 1e9, damping: damping)
     }
 
-    /// Materiał miękki tłoku z P-B-27 i P-B-28: c₀ = 3,85e-3 przy r_ref = 20. Od v2.3.0 kontakt miękki ugina się
-    /// o pełne c · F (CD-D-16), czyli 3,85× mniej niż dawne c₀ = 1e-3 z częściową korektą prędkości; c₀ przeskalowane o ten
-    /// współczynnik zachowuje dawny wygląd: kontakt realnie ustępuje, a bańki nie wchodzą w siebie bez granic.
+    /// Materiał miękki tłoku z P-B-27 i P-B-28: c₀ = 3,85e-3 przy r_ref = 20, czyli K_c ≈ 5195. Kontakt realnie ustępuje (kontur bańki
+    /// w tłoku jest wyraźnie wgnieciony), a bańki nie wchodzą w siebie bez granic.
     static func softCrowdPhysics() throws -> PhysicsMaterial {
         try softBubblePhysics(base: 3.85e-3)
     }

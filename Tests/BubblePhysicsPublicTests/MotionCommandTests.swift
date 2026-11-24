@@ -39,8 +39,9 @@ final class MotionCommandTests: XCTestCase {
         XCTAssertThrowsError(try BubbleDrivePolicy(bandStiffness: -.infinity))
     }
 
-    /// Wynik scalenia jedzie z polityką z `BubbleResult`: z gumką K = 120 i masą 2 przesuwa się w pierwszym kroku o ≈ 0,17
-    /// (v = F / m · dt = 10), a bez polityki nie da się go chwycić.
+    /// Wynik scalenia jedzie z polityką z `BubbleResult`: z gumką K = 120 i masą 2 przesuwa się w pierwszym kroku o ½ · (F / m) · dt² ≈ 0,083
+    /// (a = 120 · 10 / 2 = 600; całkowanie siłowe leapfrog daje drogę stałego przyspieszenia, nie v · dt = 0,17 jak dawna korekta pozycyjna),
+    /// a bez polityki nie da się go chwycić.
     func testMergedBubbleDrivesWithDrivePolicyFromBubbleResult() async throws {
         let world = try BubbleWorld(configuration: WorldConfiguration(simulationRegion:
             WorldRectangle(min: [-20,-20], max: [20,20])))
@@ -61,7 +62,7 @@ final class MotionCommandTests: XCTestCase {
         XCTAssertEqual(frame.transactionReceipts.count, 1)
         let feedback = try XCTUnwrap(frame.driveFeedback.first)
         XCTAssertEqual(feedback.objectID, merged)
-        XCTAssertEqual(feedback.achievedPoint.x, 0.17, accuracy: 0.03)
+        XCTAssertEqual(feedback.achievedPoint.x, 0.5 * 600 / 3600, accuracy: 1e-3)
         XCTAssertNil(world.diagnostics.lastAdvanceIssue)
     }
 
