@@ -152,8 +152,10 @@ final class NativeRigidPolygonState {
     private(set) var bodyUploadCount = 0
     private(set) var geometryUploadCount = 0
     private(set) var count = 0
-    /// Pojemność wierszy kandydatów: bryły × k.
+    /// Pojemność wierszy kandydatów: bryły × 128 (pojemność buforów, niezależna od `candidateLimit`).
     private(set) var rowCapacity = 0
+    /// Długość wiersza kandydatów brył (G8-AC4): najwyżej pojemność 128; mniejsza wartość skraca wiersz, bufory zostają.
+    private(set) var candidateLimit = NativeMetalSolver.candidateLimitPerObject
     var bodies: MTLBuffer { buffers["working"]! }
     /// Rekordy ostatniej publikacji: poza po kroku (`pose`) i przed nim (`previous`, `pose.w`); `nil`, gdy nie ma brył.
     var publishedBodies: MTLBuffer? { publishedInputs.isEmpty ? nil : buffers["published"] }
@@ -194,10 +196,12 @@ final class NativeRigidPolygonState {
 
     /// Wiersze brył niosą tylko pary brył (`control.w` = 1): bańki nie wchodzą do solvera brył, a ich kontakt z bryłami liczy pętla podkroków
     /// na kandydatach z osobnych wierszy (`bubbleCandidates`, `bubbleControl.w` = 2).
-    func prepare(_ inputs: [NativeRigidPolygonInput], bubbleCount: Int, timeStep: Float) throws {
+    func prepare(_ inputs: [NativeRigidPolygonInput], bubbleCount: Int, timeStep: Float,
+                 candidateLimit rowLimit: Int = NativeMetalSolver.candidateLimitPerObject) throws {
         current = inputs; count = inputs.count
-        let limit = NativeMetalSolver.candidateLimitPerObject
-        let total = UInt64(count) * UInt64(limit)
+        let limit = min(max(1, rowLimit), NativeMetalSolver.candidateLimitPerObject)
+        candidateLimit = limit
+        let total = UInt64(count) * UInt64(NativeMetalSolver.candidateLimitPerObject)
         guard total <= UInt64(UInt32.max) else { throw NativeMetalSolverError.capacityOverflow }
         rowCapacity = Int(total)
         _ = try buffer("published", count: count, stride: MemoryLayout<NativeRigidBody>.stride)
@@ -358,7 +362,7 @@ final class NativeRigidPolygonState {
     /// bryły, bryła–bryła z wiersza bryły o mniejszym indeksie, a kontakt ze ścianą z sondy `nativeRigidPredict` tylko
     /// wtedy, gdy wiersze nie mają dla tej pary kontaktu (jego odpowiednikiem sumy Δλ jest pęd zatrzymany przez sweep razy krok).
     func contactRecords() -> [ContactRecord] {
-        let limit = NativeMetalSolver.candidateLimitPerObject
+        let limit = candidateLimit
         let counts = rowCounts.contents().bindMemory(to: SIMD2<UInt32>.self, capacity: max(1, count))
         let keys = candidates.contents()
         let wallRecords = walls.contents().bindMemory(to: NativeRigidWall.self, capacity: max(1, count))

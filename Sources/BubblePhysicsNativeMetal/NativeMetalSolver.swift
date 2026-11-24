@@ -286,7 +286,7 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
     private(set) var publishedContourCPUReadbackCount = 0
 
     /// Limit k kandydatów kontaktu na obiekt, wspólny dla baniek, odcinków i brył (zadanie 14: k = 48; zadanie 32: k = 128, bo wiersz statycznej ściany scena mieszana wypełnia wszystkimi bryłami w zasięgu).
-    package static let candidateLimitPerObject = 128
+    nonisolated package static let candidateLimitPerObject = 128
 
     /// Szczegóły naruszenia asercji kontaktu z rekordu GPU: obiekty (bańka i drugi koniec), odległość i dla zmiany strony krawędzi numer krawędzi
     /// w wielokącie właściciela (kolejność identyfikatorów jego odcinków; krawędzie współliniowe są scalone).
@@ -357,7 +357,7 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         let count = snapshot.sourceBubbles.count
         let segmentCount = snapshot.sourceSegments.count
         try rigidState.prepare(snapshot.publicSettings?.rigidPolygons ?? [], bubbleCount: count,
-            timeStep: snapshot.configuration.timeStep)
+            timeStep: snapshot.configuration.timeStep, candidateLimit: configuration.candidateLimitPerObject)
         let joints = snapshot.publicSettings?.joints ?? []
         if joints.isEmpty {
             // Bez więzów lista identyfikatorów i słownik encji nie są potrzebne, wystarczą liczby.
@@ -451,7 +451,7 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         // więc `limits.w` (liczba rekordów poprzedniego cache) i liczba unieważnień to zero.
         let contactParameters = NativeMetalContactControl(
             limits: SIMD4(nextFrame, 0, UInt32(state.contactCapacity), 0),
-            counts: .zero, cache: SIMD4(0, 0, 0, UInt32(Self.candidateLimitPerObject)),
+            counts: .zero, cache: SIMD4(0, 0, 0, UInt32(configuration.candidateLimitPerObject)),
             thresholds: SIMD4(0, 0, snapshot.configuration.contactTolerance, snapshot.configuration.separationTolerance), cellWidth: .zero)
         state.contactControl.contents().storeBytes(of: contactParameters, as: NativeMetalContactControl.self)
         // Czasy i liczniki pętli podkroków: czas kroku, zero upłyniętego, zero podkroków; `substepControl` jest współdzielony z GPU.

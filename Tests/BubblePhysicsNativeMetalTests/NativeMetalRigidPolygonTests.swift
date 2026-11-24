@@ -161,4 +161,26 @@ final class NativeMetalRigidPolygonTests: XCTestCase {
         // Czterokrotnie więcej ciał: liniowo około 4×, kwadratowo około 16×.
         XCTAssertLessThan(large / small, 8, "small=\(small)s large=\(large)s")
     }
+
+    /// P-B-40: `candidateLimit` skraca wiersze brył (długość wiersza w `control.z` i `bubbleControl.z`), a pojemność buforów zostaje na 128 na bryłę.
+    func testCandidateLimitShortensTheRowsButKeepsTheBufferCapacity() throws {
+        let inputs = try (0..<4).map { try input($0) }
+        func rows(_ limit: Int?) throws -> (control: SIMD4<UInt32>, bubbleControl: SIMD4<UInt32>, capacity: Int) {
+            let state = NativeRigidPolygonState(device: try XCTUnwrap(MTLCreateSystemDefaultDevice()))
+            if let limit {
+                try state.prepare(inputs, bubbleCount: 2, timeStep: 1 / 60, candidateLimit: limit)
+            } else {
+                try state.prepare(inputs, bubbleCount: 2, timeStep: 1 / 60)
+            }
+            return (state.control.contents().load(as: SIMD4<UInt32>.self), state.bubbleControl.contents().load(as: SIMD4<UInt32>.self),
+                    state.rowCapacity)
+        }
+        let full = try rows(nil)
+        XCTAssertEqual(full.control.z, UInt32(NativeMetalSolver.candidateLimitPerObject), "domyślny limit to pojemność 128")
+        XCTAssertEqual(full.capacity, 4 * NativeMetalSolver.candidateLimitPerObject)
+        let short = try rows(3)
+        XCTAssertEqual(short.control.z, 3)
+        XCTAssertEqual(short.bubbleControl.z, 3)
+        XCTAssertEqual(short.capacity, full.capacity, "pojemność buforów zostaje na 128 na bryłę")
+    }
 }
