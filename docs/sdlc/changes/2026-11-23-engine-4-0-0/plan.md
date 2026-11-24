@@ -489,6 +489,17 @@ Zadania 18–22 wykonuje agent. Zadania 23–25 wymagają człowieka albo wychod
     ```
 
 23. **Człowiek:** pomiar na iPhonie X w Release (podpis z własnego `Signing.local.xcconfig`, fizyczne urządzenie), cztery sceny [G8-AC2](change-design.md#g8-ac2), raporty z jednego przebiegu na jednym commicie w jednym pliku `docs/benchmarks/v4.0.0-iphone-x.md` (powtórka nadpisuje plik, historia zostaje w git), z mierzonym commitem i z oboma czekaniami CPU (`host_waiting_p95_ms`, `host_render_wait_p95_ms`), co mierzy koszt odstępstwa od [CD-D-18](change-design.md#cd-d-18); p95 klatki powyżej 16,67 ms w którejkolwiek scenie wstrzymuje tag i wraca do autora jako decyzja o lokalnym h, covering [P-B-29](#p-b-29) · verify: `F=docs/benchmarks/v4.0.0-iphone-x.md && for n in resting-crowd band-to-wall head-on-128 shot-into-crowd; do grep -q "scene=$n" $F || exit 1; done && test "$(grep -o 'p95_gate=pass' $F | wc -l)" -eq 4 && ! grep -q 'p95_gate=fail' $F`
+
+    ```text
+    $ F=docs/benchmarks/v4.0.0-iphone-x.md && for n in resting-crowd band-to-wall head-on-128 shot-into-crowd; do grep -q "scene=$n" $F || exit 1; done && test "$(grep -o 'p95_gate=pass' $F | wc -l)" -eq 4 && ! grep -q 'p95_gate=fail' $F
+    raport @ec27333, mierzony kod 8ef9d87, iPhone X (A11), iOS 16.7.16, Release
+    scene=resting-crowd    p95_ms=11.9766  substep_p95=1   host_waiting_p95_ms=5.6511   host_render_wait_p95_ms=4.4737  p95_gate=pass
+    scene=band-to-wall     p95_ms=13.3956  substep_p95=2   host_waiting_p95_ms=6.7525   host_render_wait_p95_ms=4.5328  p95_gate=pass
+    scene=head-on-128      p95_ms=21.4722  substep_p95=11  host_waiting_p95_ms=13.5921  host_render_wait_p95_ms=5.0095  p95_gate=fail
+    scene=shot-into-crowd  p95_ms=58.8353  substep_p95=50  host_waiting_p95_ms=51.3893  host_render_wait_p95_ms=4.5947  p95_gate=fail
+    exit=1 — NIEZALICZONE: dwie sceny ponad 16,67 ms; tag wstrzymany, decyzja autora o lokalnym h
+    ```
+
 24. **Człowiek, poza repozytorium:** bramka przeciskania na gałęzi gry wskazującej na `feature/engine-4-0-0` (warunek wejścia: gra zmigrowana do 4.0.0), raport w `docs/benchmarks/v4.0.0-game-gate.md` ze stałymi kluczami `runs=15/15`, `joins_all=yes` (40 łączeń w każdym przebiegu), `penetration=0`, `escapes=0`, `worldFailed=0` i z wersjami `PhysicsGate.json` i `PhysicsTuning.json` oraz rozbieżnościami względem specyfikacji, covering [P-B-33](#p-b-33) · verify: `F=docs/benchmarks/v4.0.0-game-gate.md && for k in 'runs=15/15' 'joins_all=yes' 'penetration=0' 'escapes=0' 'worldFailed=0'; do grep -qx "$k" $F || exit 1; done`
 25. **Człowiek:** PR gałęzi do `main` (opis zmieniany przez `gh api PATCH`), scalenie po zaliczeniu zadań 23 i 24, anotowany tag `v4.0.0` („BubblePhysics 4.0.0”) na commicie scalającym · verify: `git ls-remote --tags origin v4.0.0 | grep -q v4.0.0`
 
