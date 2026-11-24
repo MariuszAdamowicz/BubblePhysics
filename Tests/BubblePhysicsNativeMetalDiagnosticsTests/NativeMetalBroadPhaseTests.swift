@@ -39,8 +39,9 @@ final class NativeMetalBroadPhaseTests: XCTestCase {
         world.addBubble(try .init(id: .init(rawValue: 1), center: .zero, mass: 1, targetRadius: 1))
         let first = try await solver.executeFrame(world: world, scenarioStep: 1)
         XCTAssertEqual(first.contactCandidateOverflowCount, 0)
+        // Środki rozsunięte o 0,1 j: nakładające się, ale nie wspólne (d = 0 to naruszenie asercji kontaktu silnika 4.0.0).
         for id in 2...3 {
-            world.addBubble(try .init(id: .init(rawValue: id), center: .zero, mass: 1, targetRadius: 1))
+            world.addBubble(try .init(id: .init(rawValue: id), center: .init(x: Float(id - 1) * 0.1, y: 0), mass: 1, targetRadius: 1))
         }
         let frame = try await solver.executeFrame(world: world, scenarioStep: 2)
         XCTAssertGreaterThan(frame.contactCandidateOverflowCount, 0, "3 pary przy pojemności 1 muszą zwiększyć licznik")

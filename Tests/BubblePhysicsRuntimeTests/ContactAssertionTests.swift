@@ -95,6 +95,21 @@ final class ContactAssertionTests: XCTestCase {
         ForceScene.assertHealthy(bodyWorld, "bańka z filtrem wykluczającym bryłę")
     }
 
+    /// Stan, którego silnik nie całkuje, nie jest jego błędem: dwie bańki nieruchome (statyczne) z d = 0 i nieruchoma bańka w bryle nie dają
+    /// `worldFailed`, a ruchoma bańka w tej samej bryle tak (poprzedni test).
+    func testStaticBubblesAreNotAssertedAgainstEachOtherNorBodies() async throws {
+        let pair = try ForceScene.makeWorld(native: injecting(1, to: [200, 0])) {
+            try $0.add(ForceScene.bubble(1, at: [0, 0], role: .static)).add(ForceScene.bubble(2, at: [200, 0], role: .static))
+        }
+        _ = try await ForceScene.run(pair, frames: 10)
+        ForceScene.assertHealthy(pair, "dwie bańki statyczne")
+        let inBody = try ForceScene.makeWorld(native: injecting(1, to: [10, 10])) {
+            try $0.add(ForceScene.bubble(1, at: [300, 0], role: .static)).add(ForceScene.square(2, at: .zero, side: 100))
+        }
+        _ = try await ForceScene.run(inBody, frames: 10)
+        ForceScene.assertHealthy(inBody, "bańka statyczna w bryle")
+    }
+
     // MARK: P-B-23 (G6-AC3)
 
     func testNonFinitePositionFailsTheWorldWithNonFiniteValues() async throws {

@@ -783,7 +783,8 @@ bool nativeClaimViolation(device atomic_uint &claim, uint kind) {
 
 // Asercje jednej bańki względem wszystkich pozostałych obiektów (bez list kandydatów: asercja nie może zależeć od tego, co broadphase zdążył
 // zobaczyć, a wstrzyknięty stan i zawinięcie regionu stawiają bańkę poza zasięgiem zapasu). `counts.x` to liczba brył.
-// 1. Para kolidująca według filtrów ma d > 0 (liczy bańka o mniejszym indeksie); bańka usunięta przez region (publicFlags.w = 1) nie liczy się.
+// 1. Para kolidująca według filtrów ma d > 0 (liczy bańka o mniejszym indeksie); bańka usunięta przez region (publicFlags.w = 1) nie liczy się,
+//    a para dwóch baniek nieruchomych też nie (patrz niżej).
 // 2. Środek nie leży w bryle nieruchomej (statycznej ani kinematycznej) kolidującej według filtrów, w pozie z bieżącej chwili kroku;
 //    brzeg liczy się jako wnętrze (koło, kapsuła i wielokąt z trójkątów).
 // 3. Strona jednostronnej krawędzi (krawędź statycznego wielokąta): środek, który na początku kroku leżał po stronie zewnętrznej prostej
@@ -799,9 +800,13 @@ kernel void nativeAssertContacts(device NativeBubble *bubbles [[buffer(0)]], dev
     float2 center = bubble.position.xy, start = bubble.position.zw;
     if (!all(isfinite(center)) || bubble.publicFlags.w == 1) return;
     ulong id = ulong(bubble.identity.x);
+    // Bańka nieruchoma (statyczna) nie całkuje się: stan, którego silnik nie zmienia, nie jest jego błędem, więc pary dwóch nieruchomych baniek
+    // i kontakty nieruchomej bańki z bryłą i krawędzią nie podlegają asercji.
+    bool movable = nativeInverseMass(bubble) > 0;
     for (uint other = index + 1; other < control.counts.x; ++other) {
         NativeBubble neighbor = bubbles[other];
         if (neighbor.publicFlags.w == 1 || !nativeFilterAccepts(bubble.filter, neighbor.filter)) continue;
+        if (!movable && !(nativeInverseMass(neighbor) > 0)) continue;
         float d = length(neighbor.position.xy - center);
         if (d <= 0) {
             if (nativeClaimViolation(claim, nativeViolationPair)) {
@@ -810,6 +815,7 @@ kernel void nativeAssertContacts(device NativeBubble *bubbles [[buffer(0)]], dev
             return;
         }
     }
+    if (!movable) return;
     float fraction = nativeStepFraction(substep);
     for (uint b = 0; b < counts.x; ++b) {
         NativeRigidBody body = bodies[b];
