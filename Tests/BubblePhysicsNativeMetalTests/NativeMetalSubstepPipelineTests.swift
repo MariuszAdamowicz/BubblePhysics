@@ -214,4 +214,19 @@ final class NativeMetalSubstepPipelineTests: XCTestCase {
         let padded = try broadphase(a, far, margins: [90, 0], slack: 0.5, wall: wall)
         XCTAssertEqual(padded.rows.map { [$0.metadata.x, $0.metadata.y, $0.metadata.z] }, [[1, 0, 0]], "100 ≤ 12 + 90 + 0,5")
     }
+
+    // MARK: jądro pętli jednej grupy (CD-D-27)
+
+    /// Jądro `nativeSubstepLoopSingleGroup` jest jedynym jądrem jednej grupy (osobny broadphase jednej grupy znika), a jego pamięć grupy,
+    /// statyczna razem z dynamiczną, mieści się w 16 KB, czyli w tym, co dają A11 i Mac M1 Pro (32 KB), z zapasem na wariant sprzętu.
+    func testSubstepLoopKernelIsTheOnlySingleGroupKernelAndFitsSixteenKilobytes() throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let pipelines = try NativeMetalPipelineCache.pipelines(for: device).stages
+        let pipeline = try XCTUnwrap(pipelines["nativeSubstepLoopSingleGroup"], "brak jądra nativeSubstepLoopSingleGroup")
+        XCTAssertNil(pipelines["nativeBroadphaseSingleGroup"], "broadphase jednej grupy ma być tylko funkcją urządzenia")
+        let total = pipeline.staticThreadgroupMemoryLength + NativeMetalSubstep.singleGroupMemoryLength
+        XCTAssertLessThanOrEqual(total, 16 * 1024, "pamięć grupy jądra pętli: statyczna \(pipeline.staticThreadgroupMemoryLength) + dynamiczna")
+        XCTAssertLessThanOrEqual(total, device.maxThreadgroupMemoryLength)
+        XCTAssertGreaterThanOrEqual(NativeMetalSolver.singleGroupWidth(pipeline), 1)
+    }
 }

@@ -31,6 +31,13 @@ final class NativeMetalSubstepPairsTests: XCTestCase {
             region: WorldRectangle(min: [-4000, -4000], max: [4000, 4000]), duration: 1.0 / 60, beforeCommit: beforeCommit)
     }
 
+    /// Świat z wymuszoną ścieżką wielu dyspozycji: pary buforów to ta ścieżka, a mały świat domyślnie liczy krok jedną dyspozycją (CD-D-27).
+    private func multipleDispatchWorld() throws -> NativePublicWorld {
+        var configuration = NativeMetalConfiguration.default
+        configuration.forceMultipleDispatches = true
+        return try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()), configuration: configuration)
+    }
+
     /// Najmniejsza liczba par, których pojemność (2 × poprzednia klatka, najmniej 2, potem podwajanie) mieści `substeps` podkroków.
     private func expectedPairs(previous: Int, substeps: Int) -> Int {
         var size = max(2, 2 * previous), capacity = size, pairs = 1
@@ -47,7 +54,7 @@ final class NativeMetalSubstepPairsTests: XCTestCase {
 
     /// Bańka w spoczynku liczy 1 podkrok, więc klatka ma jedną parę: bufor podkroków i bufor końca kroku.
     func testQuietFrameUsesOnePairOfCommandBuffers() async throws {
-        let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
+        let world = try multipleDispatchWorld()
         var frame = try await step(world, [bubble(1, at: [0, 0])])
         for _ in 0..<3 { frame = try await step(world, Array(frame.objects.values)) }
         XCTAssertEqual(frame.profile.commandBufferCount, 2)
@@ -57,7 +64,7 @@ final class NativeMetalSubstepPairsTests: XCTestCase {
     /// Uderzenie w ścianę z 1000 j/s: w klatkach z wieloma podkrokami liczba buforów to 2 × liczba par z podwajania, a liczba podkroków
     /// jest taka sama jak przy jednym buforze z limitem (podział na pary nie zmienia fizyki).
     func testImpactFrameEscalatesWithDoublingPairs() async throws {
-        let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
+        let world = try multipleDispatchWorld()
         var frame = try await step(world, [bubble(1, at: [wallX - 24 - 100, 0], velocity: [1000, 0]), wall()])
         var previous = substeps(world)
         var escalated = 0
@@ -81,7 +88,7 @@ final class NativeMetalSubstepPairsTests: XCTestCase {
     /// buforów biegną tylko w ostatnim buforze końca kroku (bramki `nativePrepareEndGates`). Pierwsza klatka z uderzeniem 10³ j/s ma
     /// wiele par (para startowa ma 2 podkroki), a każde zdarzenie ma się pojawić dokładnie raz.
     func testEndOfStepEventsFireOnceInAFrameWithSeveralPairs() async throws {
-        let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
+        let world = try multipleDispatchWorld()
         let group = MergeGroupSet(rawValue: 1)
         func merging(_ value: UInt64, x: Float) throws -> NativePublicObject {
             NativePublicObject(descriptor: .bubble(try BubbleDescriptor(id: ObjectID(rawValue: value), position: [x, 500],
@@ -201,7 +208,7 @@ final class NativeMetalSubstepPairsTests: XCTestCase {
     /// Klatka z wieloma parami kończy się w ostatnim buforze końca kroku, który ma sloty `EndArgument` policzone z rzeczywistych liczników:
     /// długość dyspozycji impulsów to licznik cache'u końca kroku, a grup jest co najmniej jedna.
     func testFinalPairOfASeveralPairFrameHasEndArgumentsFromTheRealCounters() async throws {
-        let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
+        let world = try multipleDispatchWorld()
         var frame = try await step(world, [bubble(1, at: [wallX - 24 - 100, 0], velocity: [1000, 0]), wall()])
         var checked = 0
         for _ in 0..<30 {
@@ -246,7 +253,7 @@ final class NativeMetalSubstepPairsTests: XCTestCase {
     /// Hak renderu dostaje uchwyt ze stanem końca kroku: w chwili wywołania kontury roboczego uchwytu są już policzone i równe
     /// konturom, które ten sam uchwyt (strona opublikowana) pokaże po kroku.
     func testRenderHookSeesTheContoursOfTheFinishedStep() async throws {
-        let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
+        let world = try multipleDispatchWorld()
         var frame = try await step(world, [bubble(1, at: [0, 0], velocity: [600, 0])])
         var seen: [ObjectID: [WorldPoint]] = [:]
         frame = try await step(world, Array(frame.objects.values)) { seen = $0.debugContourSnapshot() }
@@ -259,7 +266,7 @@ final class NativeMetalSubstepPairsTests: XCTestCase {
     /// Hak, który rzuca, odrzuca krok: nic się nie publikuje, a następny krok się udaje.
     func testThrowingRenderHookRejectsTheStepAndTheNextStepSucceeds() async throws {
         struct HookError: Error {}
-        let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
+        let world = try multipleDispatchWorld()
         var frame = try await step(world, [bubble(1, at: [0, 0], velocity: [600, 0])])
         let published = try XCTUnwrap(world.publishedRenderHandoff)
         do {

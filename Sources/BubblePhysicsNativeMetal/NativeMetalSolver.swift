@@ -809,25 +809,34 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
             dispatch("nativeBuildAdjacency", buffers: [state.control, state.contactControl,
                 state.adjacency, state.adjacencyCounts, state.candidateOverflow], threads: count)
         }
-        // Ścieżka jednej dyspozycji (CD-D-27): ta sama budowa, ale jedną grupą wątków w jądrze `nativeBroadphaseSingleGroup` (do zadania 37 jeszcze
-        // z parami buforów). Wskaźniki idą jedną strukturą (bufor argumentów), bo jądro ma ponad 31 buforów; adresy GPU w kolejności pól struktury
-        // `NativeBroadphaseBuffers`, a `useResource` udostępnia każdy bufor. Bryły są kandydatami tylko przy `hasRigidBodies`.
-        func encodeBroadphaseSingleGroup() {
+        // Ścieżka jednej dyspozycji (CD-D-27): cały krok baniek (broadphase, siły początkowe, pętla podkroków z przebudową siatki) w jądrze
+        // `nativeSubstepLoopSingleGroup`, jedną grupą wątków i jedną dyspozycją. Wskaźniki idą jedną strukturą (bufor argumentów), bo jądro ma
+        // ponad 31 buforów; adresy GPU w kolejności pól struktury `NativeBroadphaseBuffers`, a `useResource` udostępnia każdy bufor.
+        // Bryły są kandydatami tylko przy `hasRigidBodies`.
+        func encodeSubstepLoopSingleGroup() {
             guard count > 0 else { return }
-            let pipeline = pipelines["nativeBroadphaseSingleGroup"]!
+            let pipeline = pipelines["nativeSubstepLoopSingleGroup"]!
             let buffers: [MTLBuffer] = [state.workingBubbles, state.control, state.contactControl, state.grid, state.workingSegments,
                 state.candidateRows, state.candidateRowCounts, state.candidateOverflow, jointState.ranges, jointState.exclusions,
                 state.broadphaseMargin, state.referencePositions, state.nonContactAcceleration, forceBuffers.control!, forceBuffers.fields!,
                 forceBuffers.fieldVertices!, forceBuffers.fieldObjectIDs!, forceBuffers.bands!, forceBuffers.motors!, state.substepControl,
                 rigidState.bodies, rigidState.bubbleControl, rigidState.bubbleCandidates, rigidState.bubbleRowCounts, state.scanValues,
-                state.scanOffsets, state.candidates, state.dispatchStatistics, state.adjacency, state.adjacencyCounts]
+                state.scanOffsets, state.candidates, state.dispatchStatistics, state.adjacency, state.adjacencyCounts,
+                state.acceleration, state.contactForces, state.substepSteps, state.substepDispatch, rigidState.vertices, rigidState.triangles,
+                state.substepCapture ?? state.acceleration, state.contactAssertion]
             var table = buffers.map(\.gpuAddress)
-            var parameters = SIMD4<UInt32>(configuration.minimumMarginOnly ? 1 : 0, UInt32(configuration.gridHashBucketCount),
-                                           hasRigidBodies ? 1 : 0, 0)
+            let injection = configuration.injectedSubstepState
+            var parameters = NativeMetalSingleGroupParameters(
+                flags: SIMD4(configuration.minimumMarginOnly ? 1 : 0, UInt32(configuration.gridHashBucketCount), hasRigidBodies ? 1 : 0,
+                             configuration.captureSubsteps ? 1 : 0),
+                diagnostics: SIMD4(injection == nil ? 0 : 1, configuration.assertEverySubstep ? 1 : 0, UInt32(rigidState.count),
+                                   UInt32(max(injection?.afterSubstep ?? 0, 0))),
+                injectionObject: SIMD2(injection?.objectID ?? 0, 0),
+                injectionPosition: SIMD4(injection?.position.x ?? 0, injection?.position.y ?? 0, 0, 0))
             encoder.memoryBarrier(scope: .buffers)
             encoder.setComputePipelineState(pipeline)
             encoder.setBytes(&table, length: table.count * MemoryLayout<UInt64>.stride, index: 0)
-            encoder.setBytes(&parameters, length: MemoryLayout<SIMD4<UInt32>>.stride, index: 1)
+            encoder.setBytes(&parameters, length: MemoryLayout<NativeMetalSingleGroupParameters>.stride, index: 1)
             var seen = Set<ObjectIdentifier>()
             for buffer in buffers where seen.insert(ObjectIdentifier(buffer)).inserted { encoder.useResource(buffer, usage: [.read, .write]) }
             encoder.setThreadgroupMemoryLength(NativeMetalSubstep.singleGroupMemoryLength, index: 0)
@@ -973,11 +982,15 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
                 if first { try encodeInputs(stepsCommand) }
                 try beginCompute(stepsCommand, label: "native.substeps")
                 if first { encodeStepPrefix() }
-                if rebuild { if path == .singleDispatch { encodeBroadphaseSingleGroup() } else { encodeBroadphase() } }
-                NativeMetalSubstepLoop.encode(encoder, pipelines: pipelines, state: state, forces: forceBuffers, rigid: rigidState, count: count,
-                                              capture: configuration.captureSubsteps, substeps: substeps, initialForces: rebuild,
-                                              diagnostics: NativeMetalSubstepDiagnostics(injection: configuration.injectedSubstepState,
-                                                  assertEverySubstep: configuration.assertEverySubstep, bodyCount: rigidState.count))
+                if path == .singleDispatch {
+                    encodeSubstepLoopSingleGroup()
+                } else {
+                    if rebuild { encodeBroadphase() }
+                    NativeMetalSubstepLoop.encode(encoder, pipelines: pipelines, state: state, forces: forceBuffers, rigid: rigidState, count: count,
+                                                  capture: configuration.captureSubsteps, substeps: substeps, initialForces: rebuild,
+                                                  diagnostics: NativeMetalSubstepDiagnostics(injection: configuration.injectedSubstepState,
+                                                      assertEverySubstep: configuration.assertEverySubstep, bodyCount: rigidState.count))
+                }
                 encoder.endEncoding()
                 let endCommand = try makeCommand("native.frame.step.\(scenarioStep).end.\(pair)")
                 try beginCompute(endCommand, label: "native.end")
@@ -990,7 +1003,7 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
                 return (stepsCommand, endCommand)
             })
         // Szerokość grupy jądra pętli podkroków: 0 w ścieżce wielu dyspozycji (A11 może dać mniej niż Mac).
-        let singleGroupWidth = loop.executionPath == .singleDispatch ? Self.singleGroupWidth(pipelines["nativeBroadphaseSingleGroup"]!) : 0
+        let singleGroupWidth = loop.executionPath == .singleDispatch ? Self.singleGroupWidth(pipelines["nativeSubstepLoopSingleGroup"]!) : 0
         let timing = NativeMetalCommandTiming(gpuMilliseconds: loop.substepGPUMilliseconds + loop.endGPUMilliseconds)
         previousFrameSubstepCount = Int(state.substepControl.contents().load(as: NativeMetalSubstepControl.self).counts.y)
         let waitingEnd = DispatchTime.now().uptimeNanoseconds
@@ -1324,7 +1337,7 @@ enum NativeMetalPipelineCache {
         "nativeAddScanBlockOffsets", "nativeFinishScan", "nativeScanSingleGroup", "nativeClearAdjacency", "nativeEmitAdjacency", "nativeBuildAdjacency",
         "nativeContactForces", "nativeContactImpulses", "nativeAccelerationWithoutContacts", "nativeBroadphaseMargin",
         "nativeReduceSubstep", "nativeIntegrateSubstep", "nativeAssertContacts", "nativeInjectSubstepState", "nativePrepareEndGates", "nativeBeginStep",
-        "nativeEmitCandidateAdjacency", "nativeEmitRigidAdjacency", "nativeBubbleBodyContacts", "nativeBroadphaseSingleGroup",
+        "nativeEmitCandidateAdjacency", "nativeEmitRigidAdjacency", "nativeBubbleBodyContacts", "nativeSubstepLoopSingleGroup",
         "nativeCheckFinite",
         "nativeAccumulateContactPressure", "nativeSeedStructuralContours", "nativeGenerateContours", "nativeGenerateContoursFused", "nativePrepareRenderData", "nativePrepareRenderDataGrouped",
         "nativeApplyPublicRegion",

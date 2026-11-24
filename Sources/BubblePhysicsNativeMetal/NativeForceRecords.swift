@@ -56,6 +56,15 @@ struct NativeMetalSubstepDiagnostics {
     var bodyCount = 0
 }
 
+/// Stałe jądra `nativeSubstepLoopSingleGroup` (lustro `NativeSingleGroupParameters`): zapas tylko r / 4, liczba kubełków siatki, bryły jako kandydaci,
+/// zapis podkroków; wstrzyknięcie stanu, asercja po podkroku, liczba brył asercji i podkrok wstrzyknięcia; obiekt i położenie wstrzyknięcia.
+struct NativeMetalSingleGroupParameters: Equatable, Sendable {
+    var flags: SIMD4<UInt32>
+    var diagnostics: SIMD4<UInt32>
+    var injectionObject: SIMD2<UInt64>
+    var injectionPosition: SIMD4<Float>
+}
+
 /// Stałe jąder sił poza rekordami: siła globalna i liczby rekordów w buforach `NativeMetalForceBuffers`.
 struct NativeMetalForceControl: Equatable, Sendable {
     var global = SIMD4<Float>.zero // siła globalna.xy, reserved

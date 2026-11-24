@@ -860,12 +860,10 @@ bool nativeClaimViolation(device atomic_uint &claim, uint kind) {
 // 3. Strona jednostronnej krawędzi (krawędź statycznego wielokąta): środek, który na początku kroku leżał po stronie zewnętrznej prostej
 //    krawędzi, nie leży po wewnętrznej, a droga środka od początku kroku do dziś przecina krawędź w jej zasięgu. Przejście obok końca krawędzi
 //    (prosta przecięta poza odcinkiem) nie jest naruszeniem. `position.zw` to środek z początku kroku, a zawinięcie regionu przesuwa oba końce.
-kernel void nativeAssertContacts(device NativeBubble *bubbles [[buffer(0)]], device NativeSegment *segments [[buffer(1)]],
-    constant NativeControl &control [[buffer(2)]], device NativeRigidBody *bodies [[buffer(3)]], device float2 *vertices [[buffer(4)]],
-    device uint4 *triangles [[buffer(5)]], device NativeSubstepControl &substep [[buffer(6)]],
-    device NativeContactAssertion &record [[buffer(7)]], device atomic_uint &claim [[buffer(8)]], constant uint4 &counts [[buffer(9)]],
-    uint index [[thread_position_in_grid]]) {
-    if (index >= control.counts.x) return;
+void nativeAssertContactsOf(uint index, device NativeBubble *bubbles, device NativeSegment *segments,
+    constant NativeControl &control, device NativeRigidBody *bodies, device float2 *vertices,
+    device uint4 *triangles, device NativeSubstepControl &substep,
+    device NativeContactAssertion &record, device atomic_uint &claim, uint bodyCount) {
     NativeBubble bubble = bubbles[index];
     float2 center = bubble.position.xy, start = bubble.position.zw;
     if (!all(isfinite(center)) || bubble.publicFlags.w == 1) return;
@@ -887,7 +885,7 @@ kernel void nativeAssertContacts(device NativeBubble *bubbles [[buffer(0)]], dev
     }
     if (!movable) return;
     float fraction = nativeStepFraction(substep);
-    for (uint b = 0; b < counts.x; ++b) {
+    for (uint b = 0; b < bodyCount; ++b) {
         NativeRigidBody body = bodies[b];
         if (!nativeRigidImmovable(body) || !nativeFilterAccepts(bubble.filter, body.filter)) continue;
         if (nativeRigidInside(center, nativeBodyAtFraction(body, fraction), vertices, triangles)) {
@@ -917,6 +915,15 @@ kernel void nativeAssertContacts(device NativeBubble *bubbles [[buffer(0)]], dev
     }
 }
 
+kernel void nativeAssertContacts(device NativeBubble *bubbles [[buffer(0)]], device NativeSegment *segments [[buffer(1)]],
+    constant NativeControl &control [[buffer(2)]], device NativeRigidBody *bodies [[buffer(3)]], device float2 *vertices [[buffer(4)]],
+    device uint4 *triangles [[buffer(5)]], device NativeSubstepControl &substep [[buffer(6)]],
+    device NativeContactAssertion &record [[buffer(7)]], device atomic_uint &claim [[buffer(8)]], constant uint4 &counts [[buffer(9)]],
+    uint index [[thread_position_in_grid]]) {
+    if (index >= control.counts.x) return;
+    nativeAssertContactsOf(index, bubbles, segments, control, bodies, vertices, triangles, substep, record, claim, counts.x);
+}
+
 // Stan wstrzykiwany diagnostycznie (przełącznik pakietowy injectedSubstepState): po podkroku `selection.y` klatki (liczonym od zera) środek
 // bańki `selection.x` przechodzi na `position`. `counts.y` to liczba wykonanych podkroków klatki, więc warunek `selection.y + 1` zachodzi
 // po tym podkroku i po następnych podkrokach pustych, w których powtórzenie niczego nie zmienia. Początek kroku (`position.zw`) zostaje.
@@ -927,7 +934,7 @@ kernel void nativeInjectSubstepState(device NativeBubble *bubbles [[buffer(0)]],
     if (ulong(bubbles[index].identity.x) == selection.x) bubbles[index].position.xy = position;
 }
 
-// MARK: Broadphase w jednej grupie (CD-D-27, P-B-44, P-B-46)
+// MARK: Pętla podkroków w jednej grupie (CD-D-27, P-B-41, P-B-42, P-B-44, P-B-46)
 //
 // Te same funkcje urządzenia co jądra ścieżki wielu dyspozycji, ale jedna grupa wątków robi całą budowę: a₀, zapas, siatka haszowana
 // w pamięci grupy (zliczanie w kubełkach, suma prefiksowa, rozpisanie), kandydaci, skan, kompaktowanie i sąsiedztwo. Fazy rozdziela
@@ -967,6 +974,16 @@ struct NativeBroadphaseBuffers {
     device atomic_uint *statistics;
     device uint4 *adjacency;
     device atomic_uint *degrees;
+    // Tylko pętla podkroków: przyspieszenie, siły kontaktu, historia h, argumenty dyspozycji pośredniej (zapisuje redukcja, jądro ich nie czyta),
+    // geometria brył, zapis podkroków i rekord asercji kontaktu.
+    device float2 *acceleration;
+    device float2 *contactForces;
+    device float *stepHistory;
+    device uint *dispatchArguments;
+    device float2 *rigidVertices;
+    device uint4 *rigidTriangles;
+    device float4 *capture;
+    device NativeContactAssertion *assertion;
 };
 
 // Rozmieszczenie pamięci grupy (słowa 32-bitowe): kubełki siatki [0, 2048), częściowe sumy i redukcja szerokości komórki [2048, 3072);
@@ -1112,8 +1129,100 @@ void nativeBroadphaseInGroup(constant NativeBroadphaseBuffers &b, uint4 paramete
     NATIVE_GROUP_BARRIER;
 }
 
-kernel void nativeBroadphaseSingleGroup(constant NativeBroadphaseBuffers &buffers [[buffer(0)]], constant uint4 &parameters [[buffer(1)]],
+// Stałe jądra pętli: `flags` to zapas tylko r / 4 (1 = tak), liczba kubełków siatki, liczba brył (0 = bez kandydatów bańka–bryła) i zapis
+// podkroków (1 = tak); `diagnostics` to wstrzyknięcie stanu (1 = tak), asercja po podkroku (1 = tak), liczba brył asercji i podkrok wstrzyknięcia
+// liczony od zera (jak w `nativeInjectSubstepState`); `injectionObject.x` i `injectionPosition.xy` mówią, kogo i dokąd.
+struct NativeSingleGroupParameters {
+    uint4 flags;
+    uint4 diagnostics;
+    ulong2 injectionObject;
+    float4 injectionPosition;
+};
+
+// Siły kontaktu z sąsiedztwa w bieżących położeniach: zapis do `contactForces`, bez dodawania (jak `nativeContactForces`).
+void nativeSingleGroupContactForces(constant NativeBroadphaseBuffers &b, uint lane, uint width) {
+    uint count = b.control->counts.x, limit = b.contacts->cache.w;
+    float fraction = nativeStepFraction(*b.substep);
+    for (uint i = lane; i < count; i += width)
+        b.contactForces[i] = nativeBubbleContactForce(i, b.bubbles, b.segments, limit, b.adjacency, (device uint *)b.degrees, b.bodies,
+                                                      b.rigidVertices, b.rigidTriangles, fraction);
+}
+
+void nativeSingleGroupIntegrate(constant NativeBroadphaseBuffers &b, uint phase, uint capture, uint lane, uint width) {
+    uint count = b.control->counts.x;
+    for (uint i = lane; i < count; i += width)
+        nativeIntegratePhase(i, phase, capture, b.bubbles, *b.control, *b.forces, b.fields, b.fieldVertices, b.fieldObjectIDs, b.acceleration,
+                             b.nonContactAcceleration, b.contactForces, *b.substep, b.capture, b.bands, b.motors);
+}
+
+// Siły pełne po budowie siatki i przyspieszenie początkowe (faza 2): to samo, co para buforów ścieżki wielu dyspozycji robi po broadphase.
+void nativeSingleGroupInitialForces(constant NativeBroadphaseBuffers &b, uint lane, uint width) {
+    nativeSingleGroupContactForces(b, lane, width);
+    NATIVE_GROUP_BARRIER;
+    nativeSingleGroupIntegrate(b, 2, 0, lane, width);
+    NATIVE_GROUP_BARRIER;
+}
+
+// Cały krok baniek w jednej dyspozycji jednej grupy wątków (CD-D-27): broadphase, siły początkowe i pętla podkroków z przebudową siatki w jądrze.
+// Podkrok to te same funkcje urządzenia co w ścieżce wielu dyspozycji: redukcja h, ½ impulsu z ruchem, siły z nowego stanu, ½ impulsu. Fazy
+// rozdziela `threadgroup_barrier(mem_flags::mem_device | mem_flags::mem_threadgroup)`. Pętla kończy się, gdy czas kroku minął albo ustawiono
+// znacznik limitu 1024 podkroków; znacznik przebudowy (zapas obwiedni wyczerpany) daje przebudowę z czasu pozostałego w kroku, a nie kolejną parę
+// buforów. Liczniki dla hosta leżą w `overflow`: [2] to największy licznik odrzuconych kandydatów z jednej budowy siatki (każda budowa liczy
+// od zera, jak kolejne pary buforów), [3] to liczba przebudów wymuszonych zapasem. Wszystkie wątki czytają stan sterujący do rejestrów, zanim
+// wątek 0 go zmieni, bo decyzja musi być jednakowa w całej grupie.
+kernel void nativeSubstepLoopSingleGroup(constant NativeBroadphaseBuffers &b [[buffer(0)]], constant NativeSingleGroupParameters &p [[buffer(1)]],
     threadgroup uint *shared [[threadgroup(0)]], uint lane [[thread_position_in_threadgroup]],
     uint width [[threads_per_threadgroup]]) {
-    nativeBroadphaseInGroup(buffers, parameters, shared, lane, width);
+    device NativeSubstepControl &substep = *b.substep;
+    uint count = b.control->counts.x;
+    nativeBroadphaseInGroup(b, p.flags, shared, lane, width);
+    nativeSingleGroupInitialForces(b, lane, width);
+    threadgroup float *values = (threadgroup float *)shared;
+    threadgroup uint *owners = shared + nativeSubstepFrameLimit;
+    // Każda iteracja to podkrok albo przebudowa, a po przebudowie następuje podkrok, więc 2 · limit + 2 iteracji wystarcza; reszta to straż przed zawieszeniem.
+    for (uint iteration = 0; iteration < 2 * nativeSubstepFrameLimit + 2; ++iteration) {
+        nativeReduceSubstepInGroup(b.bubbles, b.segments, *b.control, *b.contacts, b.adjacency, (device uint *)b.degrees, b.acceleration,
+                                   substep, b.dispatchArguments, b.stepHistory, b.margins, b.references, *b.forces, b.bands, b.bodies,
+                                   b.rigidVertices, b.rigidTriangles, values, owners, lane, width);
+        NATIVE_GROUP_BARRIER;
+        float h = substep.time.z;
+        bool limited = substep.counts.w != 0, finished = !(substep.time.x - substep.time.y > 0), rebuild = substep.counts.z != 0;
+        if (!(h > 0)) {
+            if (limited || finished || !rebuild) break;
+            NATIVE_GROUP_BARRIER;
+            if (lane == 0) {
+                substep.counts.x = 0;
+                substep.counts.z = 0;
+                b.contacts->counts = uint4(0);
+                atomic_fetch_max_explicit(b.overflow + 2, atomic_load_explicit(b.overflow, memory_order_relaxed), memory_order_relaxed);
+                atomic_store_explicit(b.overflow, 0u, memory_order_relaxed);
+                atomic_fetch_add_explicit(b.overflow + 3, 1u, memory_order_relaxed);
+            }
+            NATIVE_GROUP_BARRIER;
+            nativeBroadphaseInGroup(b, p.flags, shared, lane, width);
+            nativeSingleGroupInitialForces(b, lane, width);
+            continue;
+        }
+        nativeSingleGroupIntegrate(b, 0, p.flags.w, lane, width);
+        NATIVE_GROUP_BARRIER;
+        nativeSingleGroupContactForces(b, lane, width);
+        NATIVE_GROUP_BARRIER;
+        nativeSingleGroupIntegrate(b, 1, p.flags.w, lane, width);
+        NATIVE_GROUP_BARRIER;
+        if (p.diagnostics.x != 0) {
+            for (uint i = lane; i < count; i += width)
+                if (substep.counts.y == p.diagnostics.w + 1 && ulong(b.bubbles[i].identity.x) == p.injectionObject.x)
+                    b.bubbles[i].position.xy = p.injectionPosition.xy;
+            NATIVE_GROUP_BARRIER;
+        }
+        if (p.diagnostics.y != 0) {
+            device atomic_uint &claim = *(device atomic_uint *)b.assertion;
+            for (uint i = lane; i < count; i += width)
+                nativeAssertContactsOf(i, b.bubbles, b.segments, *b.control, b.bodies, b.rigidVertices, b.rigidTriangles, substep,
+                                       *b.assertion, claim, p.diagnostics.z);
+            NATIVE_GROUP_BARRIER;
+        }
+    }
+    // Ostatnia budowa siatki: jej odrzuceni kandydaci wchodzą do maksimum klatki.
+    if (lane == 0) atomic_fetch_max_explicit(b.overflow + 2, atomic_load_explicit(b.overflow, memory_order_relaxed), memory_order_relaxed);
 }

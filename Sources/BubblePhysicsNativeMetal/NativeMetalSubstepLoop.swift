@@ -156,6 +156,7 @@ extension NativeMetalSubstepLoop {
     /// i woła `invalidatePreviousContours` swojego uchwytu przed pierwszym commitem; `ścieżka` mówi, czy przebudowę koduje jądro jednej grupy.
     /// `przebudowa` jest prawdą w parze 0 i po znaczniku;
     /// tylko wtedy para koduje broadphase i siły początkowe, a `prepareContinuation` zeruje liczniki kontaktów i kandydatów.
+    /// Ścieżka jednej dyspozycji ma jedną parę: jądro `nativeSubstepLoopSingleGroup` robi całą pętlę i przebudowy, bez podwajania.
     static func run(state: NativeMetalPersistentState, previousFrameSubsteps: Int, bubbleCount: Int, forceMultipleDispatches: Bool,
                     executor: any NativeMetalCommandExecuting, prepareContinuation: () -> Void,
                     encodePair: (_ pair: Int, _ substeps: Int, _ rebuild: Bool, _ path: NativeMetalExecutionPath) throws
@@ -191,12 +192,20 @@ extension NativeMetalSubstepLoop {
             result.pairCount += 1
             // Licznik odrzuconych kandydatów zbiera się w jednej budowie siatki; kolejna para zaczyna od zera (maksimum na obiekt zostaje).
             let overflow = state.candidateOverflow.contents().load(as: SIMD4<UInt32>.self)
-            result.candidateOverflowCount = max(result.candidateOverflowCount, Int(overflow.x))
+            if path == .singleDispatch {
+                // Jądro pętli samo zbiera maksimum po budowach siatki (`overflow.z`) i liczy przebudowy wymuszone zapasem (`overflow.w`).
+                result.candidateOverflowCount = Int(overflow.z)
+                result.rebuildCount = Int(overflow.w)
+            } else {
+                result.candidateOverflowCount = max(result.candidateOverflowCount, Int(overflow.x))
+            }
             result.substepGPUMilliseconds += max(0, stepsCommand.gpuEndTime - stepsCommand.gpuStartTime) * 1_000
             result.endGPUMilliseconds += end.gpuMilliseconds
             let control = state.substepControl.contents().load(as: NativeMetalSubstepControl.self)
             let finished = control.counts.w == 0 && !(control.time.x - control.time.y > 0)
             if finished || control.counts.w != 0 { return result }
+            // Jądro jednej grupy kończy całą pętlę w jednej dyspozycji; krok niedokończony bez znacznika limitu to błąd jądra.
+            guard path == .multipleDispatches else { throw NativeMetalSolverError.commandFailed("jądro pętli podkroków nie skończyło kroku") }
             state.candidateOverflow.contents().storeBytes(of: UInt32(0), as: UInt32.self)
             let used = Int(control.counts.y)
             guard used > done else { throw NativeMetalSolverError.commandFailed("pętla podkroków nie postępuje") }

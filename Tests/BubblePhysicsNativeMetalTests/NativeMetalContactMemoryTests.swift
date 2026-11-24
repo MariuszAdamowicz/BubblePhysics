@@ -120,7 +120,9 @@ final class NativeMetalContactMemoryTests: XCTestCase {
         let kicked = try bubble(1000, [955 - 5 - 8, 500], radius: 5)
         var moving = kicked
         moving.velocity = [1000, 0]
-        let multi = try await step(NativePublicWorld(device: device), squeezedCluster() + [moving, box(2000, [1005, 500], half: 50)])
+        var forced = NativeMetalConfiguration.default
+        forced.forceMultipleDispatches = true // kilka par buforów to ścieżka wielu dyspozycji (CD-D-27)
+        let multi = try await step(NativePublicWorld(device: device, configuration: forced), squeezedCluster() + [moving, box(2000, [1005, 500], half: 50)])
         XCTAssertGreaterThan(multi.profile.commandBufferCount, 2, "uderzenie w pierwszej klatce ma dać kilka par buforów")
         XCTAssertEqual(multi.contactCandidateOverflowCount, single.contactCandidateOverflowCount)
     }
