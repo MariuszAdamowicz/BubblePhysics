@@ -2,7 +2,7 @@
 
 **Date:** 2026-11-23
 **Artifact:** change-design
-**Status:** Draft (rewizja 2026-11-24 po pomiarze na iPhonie X; pierwsza wersja zatwierdzona @e62d4c5)
+**Status:** Approved (rewizja 2026-11-24 po pomiarze na iPhonie X zatwierdzona; pierwsza wersja zatwierdzona @e62d4c5)
 **Template version:** default/0.3.2
 **References:** specyfikacja autora `2KBubbles-iOS/docs/benchmarks/stage-0/v4.0.0-engine-spec.md` (zatwierdzona 2026-11-23, dalej „specyfikacja”); punkt wyjścia tag `v3.0.2` (`74c3503`); pomiar `docs/benchmarks/v4.0.0-iphone-x.md` (kod `8ef9d87`)
 
