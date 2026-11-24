@@ -934,18 +934,19 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         let encodingEnd = DispatchTime.now().uptimeNanoseconds
         let loop = try await NativeMetalSubstepLoop.run(state: state, previousFrameSubsteps: previousFrameSubstepCount,
             executor: commandExecutor, prepareContinuation: {
-                // Kolejna para zaczyna od zera liczników kontaktów i kandydatów, jak pierwsza; czasy i liczniki klatki zostają.
+                // Przebudowa siatki w kolejnej parze zaczyna od zera liczników kontaktów i kandydatów, jak pierwsza para; czasy i liczniki
+                // klatki zostają. Kontynuacja bez przebudowy ich nie rusza: czyta sąsiedztwo z poprzedniej pary.
                 state.contactControl.contents().storeBytes(of: contactParameters, as: NativeMetalContactControl.self)
             },
-            encodePair: { pair, substeps in
+            encodePair: { pair, substeps, rebuild in
                 let first = pair == 0
                 let stepsCommand = try makeCommand("native.frame.step.\(scenarioStep).substeps.\(pair)")
                 if first { try encodeInputs(stepsCommand) }
                 try beginCompute(stepsCommand, label: "native.substeps")
                 if first { encodeStepPrefix() }
-                encodeBroadphase()
+                if rebuild { encodeBroadphase() }
                 NativeMetalSubstepLoop.encode(encoder, pipelines: pipelines, state: state, forces: forceBuffers, rigid: rigidState, count: count,
-                                              capture: configuration.captureSubsteps, substeps: substeps,
+                                              capture: configuration.captureSubsteps, substeps: substeps, initialForces: rebuild,
                                               diagnostics: NativeMetalSubstepDiagnostics(injection: configuration.injectedSubstepState,
                                                   assertEverySubstep: configuration.assertEverySubstep, bodyCount: rigidState.count))
                 encoder.endEncoding()

@@ -87,16 +87,20 @@ enum NativeMetalSubstepLoop {
         }
     }
 
-    /// Siły pełne (z kontaktami) w położeniach początku kroku i przyspieszenie początku kroku, potem `substeps` podkroków.
-    /// Zakłada zbudowane sąsiedztwo (`adjacency`, `adjacencyCounts`) i `substepControl` z czasem kroku.
+    /// Siły pełne (z kontaktami) w położeniach z budowy siatki i przyspieszenie początkowe, potem `substeps` podkroków.
+    /// Zakłada zbudowane sąsiedztwo (`adjacency`, `adjacencyCounts`) i `substepControl` z czasem kroku. `initialForces: false` to kontynuacja
+    /// poprzedniej pary bez przebudowy: siły i przyspieszenie z ostatniego podkroku poprzedniej pary są aktualne, a przyspieszenie początkowe
+    /// (z a₀ z początku kroku) by je zastąpiło, więc pętla zaczyna od razu od podkroków.
     static func encode(_ encoder: MTLComputeCommandEncoder, pipelines: [String: MTLComputePipelineState],
                        state: NativeMetalPersistentState, forces: NativeMetalForceBuffers, rigid: NativeRigidPolygonState, count: Int,
-                       capture: Bool, substeps: Int,
+                       capture: Bool, substeps: Int, initialForces: Bool = true,
                        diagnostics: NativeMetalSubstepDiagnostics = NativeMetalSubstepDiagnostics()) {
         guard count > 0 else { return }
-        contactForces(encoder, pipelines: pipelines, state: state, rigid: rigid, count: count, indirect: false)
-        integrate(encoder, pipelines: pipelines, state: state, forces: forces, phase: .initialAcceleration, capture: capture,
-                  count: count, indirect: false)
+        if initialForces {
+            contactForces(encoder, pipelines: pipelines, state: state, rigid: rigid, count: count, indirect: false)
+            integrate(encoder, pipelines: pipelines, state: state, forces: forces, phase: .initialAcceleration, capture: capture,
+                      count: count, indirect: false)
+        }
         let reduction = pipelines["nativeReduceSubstep"]!
         let width = NativeMetalSubstep.reductionWidth(reduction)
         for _ in 0..<substeps {
@@ -134,32 +138,37 @@ extension NativeMetalSubstepLoop {
     private static func waitForCompletion(_ command: MTLCommandBuffer) { command.waitUntilCompleted() }
 
     /// Pary buforów klatki (CD-D-18): bufor podkroków i bufor końca kroku commitują się jeden po drugim bez czekania, a CPU czeka
-    /// na bufor końca kroku i czyta licznik. Pierwsza para ma 2 × podkroków poprzedniej klatki (najmniej 2), każda kolejna 2 × więcej;
-    /// kolejna para zaczyna od przebudowy siatki (`encodePair` koduje cały początek pary). Pętla kończy się, gdy czas kroku minął
-    /// albo ustawiono znacznik limitu (`NativeMetalSubstep.frameLimit`); bufor końca kroku ma jądra z efektem ubocznym za bramkami,
-    /// więc przed końcem kroku nie zmienia stanu świata.
+    /// na bufor końca kroku i czyta licznik. Pierwsza para ma 2 × podkroków poprzedniej klatki (najmniej 2), każda kolejna 2 × więcej.
+    /// Kolejna para zaczyna od przebudowy siatki tylko po znaczniku przebudowy (`substepControl.counts.z`, zapas obwiedni wyczerpany);
+    /// inaczej kontynuuje na sąsiedztwie poprzedniej pary (CD-D-29). Pętla kończy się, gdy czas kroku minął albo ustawiono znacznik
+    /// limitu (`NativeMetalSubstep.frameLimit`); bufor końca kroku pary niekońcowej ma na GPU tylko `nativePrepareEndGates`, więc
+    /// nie zmienia stanu świata ani sąsiedztwa czytanego przez kontynuację.
     ///
-    /// `encodePair(indeks, podkroki)` zwraca parę niezatwierdzonych buforów (podkroków, końca kroku) w tej kolejności i woła
-    /// `invalidatePreviousContours` swojego uchwytu przed pierwszym commitem.
+    /// `encodePair(indeks, podkroki, przebudowa)` zwraca parę niezatwierdzonych buforów (podkroków, końca kroku) w tej kolejności
+    /// i woła `invalidatePreviousContours` swojego uchwytu przed pierwszym commitem. `przebudowa` jest prawdą w parze 0 i po znaczniku;
+    /// tylko wtedy para koduje broadphase i siły początkowe, a `prepareContinuation` zeruje liczniki kontaktów i kandydatów.
     static func run(state: NativeMetalPersistentState, previousFrameSubsteps: Int, executor: any NativeMetalCommandExecuting,
                     prepareContinuation: () -> Void,
-                    encodePair: (_ pair: Int, _ substeps: Int) throws -> (MTLCommandBuffer, MTLCommandBuffer)) async throws -> NativeMetalSubstepRun {
+                    encodePair: (_ pair: Int, _ substeps: Int, _ rebuild: Bool) throws -> (MTLCommandBuffer, MTLCommandBuffer))
+                    async throws -> NativeMetalSubstepRun {
         var result = NativeMetalSubstepRun()
         var pairSize = max(2, 2 * previousFrameSubsteps)
         var done = 0
+        var rebuild = true
         while true {
             if result.pairCount > 0 {
                 // Czasy i liczniki klatki zostają; licznik podkroków pary i znacznik przebudowy zaczynają od zera.
                 var control = state.substepControl.contents().load(as: NativeMetalSubstepControl.self)
-                if control.counts.z != 0 { result.rebuildCount += 1 }
+                rebuild = control.counts.z != 0
+                if rebuild { result.rebuildCount += 1 }
                 control.counts.x = 0
                 control.counts.z = 0
                 state.substepControl.contents().storeBytes(of: control, as: NativeMetalSubstepControl.self)
-                prepareContinuation()
+                if rebuild { prepareContinuation() }
             }
             // Jeden podkrok ponad limit, żeby `nativeReduceSubstep` ustawił znacznik limitu, gdy krok jeszcze trwa.
             let substeps = min(pairSize, NativeMetalSubstep.frameLimit + 1 - done)
-            let (stepsCommand, endCommand) = try encodePair(result.pairCount, substeps)
+            let (stepsCommand, endCommand) = try encodePair(result.pairCount, substeps, rebuild)
             stepsCommand.commit()
             let end = try await executor.complete(endCommand)
             // Kolejka wykonuje bufory w kolejności commitu, więc bufor podkroków już się skończył.

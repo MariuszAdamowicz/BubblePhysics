@@ -219,6 +219,28 @@ final class NativeMetalSubstepPairsTests: XCTestCase {
         XCTAssertGreaterThan(checked, 0, "uderzenie 10³ j/s ma dać klatkę z wieloma parami")
     }
 
+    // MARK: kontynuacja pary bez przebudowy (P-B-43)
+
+    /// Para k > 0 bez znacznika przebudowy nie buduje siatki od nowa, więc x₀ (położenia, od których liczy się zapas obwiedni) zostaje z
+    /// początku kroku, a nie z początku ostatniej pary. Klatka z ≥ 2 parami, bez przebudowy z zapasu: lot ku ścianie z 1000 j/s.
+    func testContinuationPairWithoutAMarkerKeepsTheGridBuiltAtTheStartOfTheStep() async throws {
+        var configuration = NativeMetalConfiguration.default
+        configuration.forceMultipleDispatches = true
+        let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()), configuration: configuration)
+        var frame = try await step(world, [bubble(1, at: [wallX - 24 - 100, 0], velocity: [1000, 0]), wall()])
+        var checked = 0
+        for index in 0..<30 {
+            let start = try XCTUnwrap(frame.objects[ObjectID(rawValue: 1)]).position
+            frame = try await step(world, Array(frame.objects.values))
+            guard frame.profile.commandBufferCount > 2, world.publishedTelemetry?.gridRebuildCount == 0 else { continue }
+            let state = try XCTUnwrap(world.persistentState)
+            let reference = state.referencePositions.contents().load(as: SIMD2<Float>.self)
+            XCTAssertEqual(reference.x, start.x, accuracy: 1e-3, "klatka \(index): x₀ z początku kroku, nie z początku ostatniej pary")
+            checked += 1
+        }
+        XCTAssertGreaterThan(checked, 0, "lot ku ścianie ma dać klatkę z wieloma parami i bez przebudowy z zapasu")
+    }
+
     // MARK: render po końcu kroku (P-B-39)
 
     /// Hak renderu dostaje uchwyt ze stanem końca kroku: w chwili wywołania kontury roboczego uchwytu są już policzone i równe
