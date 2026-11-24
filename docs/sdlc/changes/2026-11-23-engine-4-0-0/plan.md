@@ -13,6 +13,7 @@
 
 **Plugin version:** 0.7.11
 **Agent Sessions:** claude-code: ca9caf94-f667-4817-9350-6d22399ebca1, 16e9c99f-b156-404d-bed6-ef59c058ff89, dc45740c-21ae-481c-991f-1c346cfdbf2e, b9859b36-3130-4774-a0fb-198eedd4318d
+**Agent Sessions:** claude-code: 0b82330b-fb83-4b04-aefe-26c383e182b0
 
 ---
 
