@@ -36,6 +36,12 @@ public struct PublicWorldStressReport: Sendable {
     public internal(set) var substepHistogram: [Int: Int] = [:]
     /// Największa liczba przebudów siatki w jednej klatce mierzonej (`NativeMetalFrameTelemetry.gridRebuildCount`).
     public internal(set) var gridRebuildMax = 0
+    /// Największa liczba par buforów podkroków w jednej klatce mierzonej (`NativeMetalFrameTelemetry.substepBufferCount`); 1 w jednej dyspozycji.
+    public internal(set) var substepBuffersMax = 0
+    /// Ścieżka wykonania z telemetrii klatek (`singleDispatch` albo `multipleDispatches`); `none`, gdy klatki nie miały telemetrii.
+    public internal(set) var executionPath = "none"
+    /// Szerokość grupy jądra pętli podkroków (`NativeMetalFrameTelemetry.singleGroupWidth`); 0 w ścieżce wielu dyspozycji.
+    public internal(set) var singleGroupWidth = 0
     /// Najdłuższa klatka mierzona serii z renderem w milisekundach (ta sama liczba co `max_ms`, pod nazwą z G8-AC2).
     public internal(set) var longestFrameMilliseconds = 0.0
     /// Czas GPU fizyki z telemetrii klatek serii z renderem: suma buforów podkroków, p95. Osobno od `gpuPhysicsP95Milliseconds`
@@ -121,6 +127,7 @@ public struct PublicWorldStressReport: Sendable {
         host_encoding_p95_ms=\(String(format: "%.4f", hostEncodingP95Milliseconds)); host_waiting_p95_ms=\(String(format: "%.4f", hostWaitingP95Milliseconds))
         gpu_physics_p95_ms=\(String(format: "%.4f", gpuPhysicsP95Milliseconds)); gpu_render_estimate_ms=\(String(format: "%.4f", gpuRenderEstimateMilliseconds))
         substep_p95=\(substepP95); substep_max=\(substepMax); grid_rebuild_max=\(gridRebuildMax)
+        substep_buffers_max=\(substepBuffersMax); execution_path=\(executionPath); single_group_width=\(singleGroupWidth)
         substep_histogram=\(Self.substepHistogramText(substepHistogram))
         longest_frame_ms=\(String(format: "%.4f", longestFrameMilliseconds)); host_render_wait_p95_ms=\(String(format: "%.4f", hostRenderWaitP95Milliseconds))
         telemetry_physics_gpu_p95_ms=\(String(format: "%.4f", telemetryPhysicsGPUP95Milliseconds)); telemetry_contour_gpu_p95_ms=\(String(format: "%.4f", telemetryContourGPUP95Milliseconds))

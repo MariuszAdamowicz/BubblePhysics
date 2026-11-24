@@ -10,6 +10,15 @@ public struct NativeMetalConfiguration: Equatable, Sendable {
     package var assertEverySubstep = false
     /// Stan wstrzykiwany po wskazanym podkroku, by sprawdzić asercję kontaktu (G6-AC2).
     package var injectedSubstepState: NativeMetalInjectedSubstepState?
+    /// Wymusza ścieżkę wielu dyspozycji (pary buforów) w każdym świecie, także do 1024 baniek (G8-AC4). Bez przełącznika ścieżkę wybiera próg.
+    package var forceMultipleDispatches = false
+    /// Mniejszy limit kandydatów na obiekt, 1...128 (G8-AC4). Skraca tylko wiersz kandydatów; pojemność buforów zostaje na 128.
+    package var candidateLimitPerObject = NativeMetalSolver.candidateLimitPerObject
+    /// Liczba kubełków siatki haszowanej w grupie, domyślnie 2048; 1 wymusza kolizję każdej komórki (P-B-46).
+    package var gridHashBucketCount = NativeMetalConfiguration.defaultGridHashBucketCount
+
+    /// Domyślna liczba kubełków siatki haszowanej jądra jednej grupy.
+    package static let defaultGridHashBucketCount = 2048
 
     public init() {}
 
@@ -18,6 +27,8 @@ public struct NativeMetalConfiguration: Equatable, Sendable {
     public var sanitized: NativeMetalConfiguration {
         var value = self
         value.substepSplitMultiplier = max(1, substepSplitMultiplier)
+        value.candidateLimitPerObject = min(max(1, candidateLimitPerObject), NativeMetalSolver.candidateLimitPerObject)
+        value.gridHashBucketCount = max(1, gridHashBucketCount)
         return value
     }
 }
@@ -52,6 +63,12 @@ public enum NativeMetalFrameBackend: String, Equatable, Sendable {
     case nativeMetal = "native-metal"
 }
 
+/// Którą ścieżką wykonania liczono krok (CD-D-27): jedna dyspozycja jednej grupy do 1024 baniek albo pary buforów.
+public enum NativeMetalExecutionPath: String, Equatable, Sendable {
+    case singleDispatch
+    case multipleDispatches
+}
+
 public struct NativeMetalFrameTelemetry: Equatable, Sendable {
     public let backend: NativeMetalFrameBackend
     public let commandBufferCount: Int
@@ -67,6 +84,12 @@ public struct NativeMetalFrameTelemetry: Equatable, Sendable {
     /// Przebudowy siatki wymuszone zapasem obwiedni (człon `h_zapasu`, CD-D-23), bez par, które skończyły się samym wyczerpaniem podkroków.
     /// Pole pakietowe: testy G5-AC3 sprawdzają nim, że klatka wybicia przebudowała siatkę z powodu zapasu.
     package var marginRebuildCount = 0
+    /// Liczba par buforów podkroków w klatce (G8-AC1): 1 w ścieżce jednej dyspozycji.
+    public let substepBufferCount: Int
+    /// Ścieżka wykonania kroku (G8-AC4).
+    public let executionPath: NativeMetalExecutionPath
+    /// Szerokość grupy wątków jądra pętli podkroków; 0 w ścieżce wielu dyspozycji (A11 może dać mniej niż Mac).
+    public let singleGroupWidth: Int
     /// Czas GPU fizyki: suma buforów podkroków. Osobno od konturu (G8-AC1).
     public let physicsGPUMilliseconds: Double
     /// Czas GPU konturu: bufor końca kroku (G8-AC1).
@@ -77,7 +100,8 @@ public struct NativeMetalFrameTelemetry: Equatable, Sendable {
                 contactCount: Int = 0, didEncounterNonFinite: Bool = false,
                 fallbackReason: String? = nil, gpuMilliseconds: Double = 0,
                 substepCount: Int = 0, gridRebuildCount: Int = 0, physicsGPUMilliseconds: Double = 0,
-                contourGPUMilliseconds: Double = 0) {
+                contourGPUMilliseconds: Double = 0, substepBufferCount: Int = 0,
+                executionPath: NativeMetalExecutionPath = .multipleDispatches, singleGroupWidth: Int = 0) {
         self.backend = backend
         self.commandBufferCount = commandBufferCount
         self.encoderCount = encoderCount
@@ -89,5 +113,8 @@ public struct NativeMetalFrameTelemetry: Equatable, Sendable {
         self.gridRebuildCount = gridRebuildCount
         self.physicsGPUMilliseconds = physicsGPUMilliseconds
         self.contourGPUMilliseconds = contourGPUMilliseconds
+        self.substepBufferCount = substepBufferCount
+        self.executionPath = executionPath
+        self.singleGroupWidth = singleGroupWidth
     }
 }
