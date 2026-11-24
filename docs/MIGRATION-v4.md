@@ -63,6 +63,7 @@ Siła potrzebna do ugięcia bańki o ε to F = K_c · ε / (1 − ε)². Dla ma�
 - **Wartość K gumki jest ograniczona.** Gumka w podkrokach wymaga ω_band · dt ≤ 0,25, czyli K ≤ m / (16 · dt²), około 225 · m przy dt = 1/60. Większe K odrzuca transakcja z `valueOutOfRange("drive.bandStiffness")` (po dodaniu, zamianie, scaleniu i podziale bańki).
 - **Bańka z bryłą dynamiczną to błąd.** Bańka spotyka się tylko z bryłami statycznymi i kinematycznymi. Transakcja, po której świat zawierałby bańkę i bryłę dynamiczną (`.dynamic`, `.motorDriven`, `.playerDriven` albo `.pathDriven`), jest odrzucana z `TransactionRejectionReason.unsupportedBubbleWithDynamicRigidBody`. Świat z samymi bańkami i świat z samymi bryłami dynamicznymi działają.
 - **Bryła nad bańką jest odrzucana.** `add`, `replace` i `replaceRigidBodies` bryły, której wnętrze (z brzegiem) obejmuje środek bańki kolidującej z nią według filtrów, daje `invalidPlacement(id, .insideRigidBody)` z ID bańki.
+- **Krok liczy się jedną dyspozycją albo parami buforów.** Świat do 1024 baniek liczy cały krok w jednej dyspozycji GPU jednej grupy wątków: pętla podkroków, w tym przebudowa siatki i kandydatów, biegnie w jądrze, więc klatka ma jedną parę buforów (bufor podkroków i bufor końca kroku). Świat z więcej niż 1024 baniek liczy krok parami buforów z podwajaniem liczby podkroków, a siatkę przebudowuje tylko po wyczerpaniu zapasu obwiedni. Próg 1024 baniek dotyczy liczby baniek kroku po transakcjach tej klatki, więc transakcja, która przekroczy go w dowolną stronę, zmienia ścieżkę od następnego kroku. Wynik obu ścieżek jest ten sam z dokładnością do zaokrągleń. Ścieżkę wybiera silnik; publiczne API jej nie wybiera, a przełącznik `forceMultipleDispatches` (wymuszenie ścieżki wielu dyspozycji) jest tylko pakietowy, dla testów.
 - **Bryły ruchome zostają poza podkrokami.** Solver brył działa raz na krok, jak w 3.x. Bryła kinematyczna działa na bańki tym samym prawem kontaktu, z pozą interpolowaną w podkroku.
 
 ### Dwa nowe stany „zawiódł”
@@ -80,8 +81,8 @@ Silnik kończy świat błędem tylko wtedy, gdy sam się pomylił, a nie gdy sce
 
 - `substepCount`: liczba podkroków ostatniej klatki.
 - `gridRebuildCount`: liczba przebudów siatki broadphase wymuszonych zapasem obwiedni w ostatniej klatce. Zapas listy kandydatów kurczy się z prędkością, więc szybka bańka wymusza przebudowę w tej samej klatce. Pary buforów, które skończyły się tylko wyczerpaniem podkroków, nie są przebudowami.
-- `substepBufferCount`: liczba par buforów podkroków w ostatniej klatce (jedna para to bufor podkroków i bufor końca kroku).
-- `executionPath`: ścieżka wykonania kroku, `singleDispatch` albo `multipleDispatches`.
+- `substepBufferCount`: liczba par buforów podkroków w ostatniej klatce (jedna para to bufor podkroków i bufor końca kroku). W ścieżce jednej dyspozycji zawsze 1, także w klatce z przebudową siatki.
+- `executionPath`: ścieżka wykonania kroku, `singleDispatch` (jedna dyspozycja, do 1024 baniek) albo `multipleDispatches` (pary buforów, powyżej 1024 baniek albo z wymuszeniem w testach).
 - `singleGroupWidth`: szerokość grupy wątków jądra pętli podkroków; 0 w ścieżce wielu dyspozycji.
 - `physicsGPUMilliseconds`: czas GPU fizyki (podkroki).
 - `contourGPUMilliseconds`: czas GPU konturu i końca kroku.

@@ -165,4 +165,25 @@ final class MigrationGuideTests: XCTestCase {
             XCTAssertTrue(migration.contains(needle), "MIGRATION-v4.md nie wspomina o \(needle)")
         }
     }
+
+    /// G8-AC4 (P-B-40..45, zadanie 38): przewodnik, migracja, README i CHANGELOG opisują dwie ścieżki wykonania kroku
+    /// (jedna dyspozycja do 1024 baniek, pary buforów powyżej), a migracja podaje próg i pakietowy przełącznik testów.
+    func testDocsDescribeTheExecutionPathsAndNoLongerClaimOneCommandBufferPerStep() throws {
+        for path in ["docs/integration-guide.md", "docs/MIGRATION-v4.md", "README.md", "CHANGELOG.md"] {
+            XCTAssertTrue(try read(path).contains("jednej dyspozycji"), "\(path) nie opisuje ścieżki jednej dyspozycji")
+        }
+        let migration = try read("docs/MIGRATION-v4.md")
+        XCTAssertTrue(migration.contains("1024 baniek"), "MIGRATION-v4.md nie podaje progu 1024 baniek")
+        XCTAssertTrue(migration.contains("forceMultipleDispatches"), "MIGRATION-v4.md nie wspomina o forceMultipleDispatches")
+        let readme = try read("README.md")
+        for stale in ["jednym command bufferze", "najwyżej jeden krok na command buffer"] {
+            XCTAssertFalse(readme.contains(stale), "README zawiera nieaktualne sformułowanie: \(stale)")
+        }
+    }
+
+    /// Zadanie 38: opis w widoku benchmarku iOS nie twierdzi, że fizyka i render dzielą command buffer.
+    func testStressViewDoesNotClaimASharedCommandBuffer() throws {
+        let view = try read("Benchmarks/iOS/BubblePhysicsBench/App/PublicWorldStressView.swift")
+        XCTAssertFalse(view.contains("ten sam command buffer"), "widok benchmarku opisuje stary wspólny command buffer")
+    }
 }

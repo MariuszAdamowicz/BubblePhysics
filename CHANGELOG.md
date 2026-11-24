@@ -16,6 +16,7 @@ Przejście z 3.x opisuje [docs/MIGRATION-v4.md](docs/MIGRATION-v4.md): tabelę u
 
 ### Dodane
 
+- Świat do 1024 baniek liczy krok w jednej dyspozycji GPU jednej grupy wątków, z przebudową siatki w jądrze (jeden bufor podkroków w klatce); większy świat liczy krok parami buforów, które przebudowują siatkę tylko po wyczerpaniu zapasu i kontynuują sąsiedztwo poprzedniej pary. Telemetria klatki podaje `substepBufferCount`, `executionPath` i `singleGroupWidth`, a raport stress `substep_buffers_max`, `execution_path` i `single_group_width`.
 - Dwa nowe stany „zawiódł”: `contactViolation` (naruszenie geometrii kontaktu to błąd silnika) i `substepLimitExceeded`, ze szczegółami w `diagnostics.failureDetail` (`WorldFailureDetail`).
 - Raport benchmarku stress ma histogram podkroków, najdłuższą klatkę, czas GPU fizyki osobno od konturu i czekanie CPU na bufor renderu (`substep_histogram`, `longest_frame_ms`, `telemetry_physics_gpu_p95_ms`, `telemetry_contour_gpu_p95_ms`, `host_render_wait_p95_ms`) oraz cztery sceny po 150 baniek: tłum w spoczynku, gumka do ściany, czołowe zderzenie baniek 128 i bańka „2” wystrzelona w tłum.
 
