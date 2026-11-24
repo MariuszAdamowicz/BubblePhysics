@@ -2,51 +2,51 @@
   "device" : "Apple M1 Pro",
   "scenes" : {
     "acceptance" : {
-      "note" : "scena acceptance po etapie 9 (łańcuch fizyki krótszy, pula buforów areny renderera); 5 przebiegów po 30+300 klatek, maszyna bezczynna",
-      "p95Milliseconds" : 2.459042,
-      "recordedAt" : "2026-11-11T00:15:00Z",
+      "note" : "silnik 4.0.0 (feature\/engine-4-0-0, zadanie 22): acceptance, 5 przebiegów po 30+300 klatek; Mac M1 Pro, load average 3-7 (nie bezczynny)",
+      "p95Milliseconds" : 15.706917,
+      "recordedAt" : "2026-11-24T07:19:45Z",
       "runs" : [
-        2.477833,
-        2.441584,
-        2.444125,
-        2.459042,
-        2.473958
+        15.444042,
+        16.047541,
+        15.695,
+        15.706917,
+        15.849125
       ]
     },
     "decals" : {
-      "note" : "scena decals po etapie 9 (łańcuch fizyki krótszy, pula buforów areny renderera); 5 przebiegów po 30+300 klatek, maszyna bezczynna",
-      "p95Milliseconds" : 2.177,
-      "recordedAt" : "2026-11-11T00:14:44Z",
+      "note" : "silnik 4.0.0 (feature\/engine-4-0-0, zadanie 22): decals, 5 przebiegów po 30+300 klatek; Mac M1 Pro, load average 3-7 (nie bezczynny)",
+      "p95Milliseconds" : 15.672916,
+      "recordedAt" : "2026-11-24T07:18:50Z",
       "runs" : [
-        2.142625,
-        2.205,
-        2.176625,
-        2.177,
-        2.197959
+        15.672916,
+        15.784458,
+        15.597917,
+        15.906292,
+        15.352084
       ]
     },
     "mixed" : {
-      "note" : "scena mixed po etapie 9 (łańcuch fizyki krótszy, pula buforów areny renderera); 5 przebiegów po 30+300 klatek, maszyna bezczynna",
-      "p95Milliseconds" : 3.794209,
-      "recordedAt" : "2026-11-11T00:14:37Z",
+      "note" : "silnik 4.0.0 (feature\/engine-4-0-0, zadanie 22): mixed, 5 przebiegów po 30+300 klatek; Mac M1 Pro, load average 3-7 (nie bezczynny)",
+      "p95Milliseconds" : 2.318875,
+      "recordedAt" : "2026-11-24T07:18:22Z",
       "runs" : [
-        3.862333,
-        3.836375,
-        3.776458,
-        3.794209,
-        3.748625
+        2.276208,
+        2.318875,
+        3.975416,
+        3.805833,
+        2.3035
       ]
     },
     "stress-300" : {
-      "note" : "scena stress-300 po etapie 9 (łańcuch fizyki krótszy, pula buforów areny renderera); 5 przebiegów po 30+300 klatek, maszyna bezczynna",
-      "p95Milliseconds" : 1.963417,
-      "recordedAt" : "2026-11-11T00:14:25Z",
+      "note" : "silnik 4.0.0 (feature\/engine-4-0-0, zadanie 22): stress-300, 5 przebiegów po 30+300 klatek; Mac M1 Pro, load average 3-7 (nie bezczynny)",
+      "p95Milliseconds" : 15.188875,
+      "recordedAt" : "2026-11-24T07:18:15Z",
       "runs" : [
-        1.957208,
-        1.965583,
-        1.999292,
-        1.963417,
-        1.955208
+        15.182583,
+        15.385333,
+        15.188666,
+        15.378917,
+        15.188875
       ]
     }
   }
