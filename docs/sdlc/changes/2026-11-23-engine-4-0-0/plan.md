@@ -455,7 +455,7 @@ Zadania 18–22 wykonuje agent. Zadania 23–25 wymagają człowieka albo wychod
 | ID | Type | Status | Design updated? | Note |
 |----|------|--------|-----------------|------|
 | [G4-AC6](change-design.md#g4-ac6) | change | approved | yes, §G4-AC6 edited 2026-11-23 | Kryterium wymaga bańki `.kinematic` „jak w `v3.0.2`”, ale `v3.0.2` odrzuca bańkę `.kinematic` błędem `unsupportedMotionRole` (`RT/TransactionStager.swift:515-517`, test `KinematicStagingTests.testKinematicBubbleIsRejectedOnAddReplaceAndSetMotion`), a [CD-D-9](change-design.md#cd-d-9) mówi „bez zmian w API ról ruchu”. Plan sprawdza bańkę `.pathDriven` i zostawia odrzucenie `.kinematic`. Autor zatwierdził, a brzmienie G4-AC6 w projekcie jest poprawione. |
-| [CD-D-18](change-design.md#cd-d-18) | change | pending | no | Klatka czeka na CPU dwa razy (bufor końca kroku i bufor renderu), a nie raz jak w `v3.0.2`. Wynika to z kontraktu `BubbleWorld.advance`: publikacja po renderze, a błąd renderu jest błędem świata (odchylenie implementacji nr 15, zatwierdzone). Koszt drugiego czekania mierzy wycinek 2 na iPhonie X. |
+| [CD-D-18](change-design.md#cd-d-18) | change | approved | yes, §Decisions CD-D-18 (Consequences) edited 2026-11-24 | Klatka czeka na CPU dwa razy (bufor końca kroku i bufor renderu), a nie raz jak w `v3.0.2`. Wynika to z kontraktu `BubbleWorld.advance`: publikacja po renderze, a błąd renderu jest błędem świata (odchylenie implementacji nr 15, zatwierdzone). Koszt drugiego czekania mierzy wycinek 2 na iPhonie X. |
 
 ## Replan log
 
