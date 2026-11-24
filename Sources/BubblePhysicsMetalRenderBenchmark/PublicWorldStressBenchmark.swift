@@ -375,8 +375,7 @@ public enum PublicWorldStressBenchmark {
         -> PublicWorldStressReport {
         let height = spec.regionHeight
         let (pixelWidth, pixelHeight) = try pixelSize(renderSize ?? spec.renderSize, regionHeight: height)
-        let world = try BubbleWorld.makeBenchmarkWorld(configuration: try spec.configuration(),
-            device: device)
+        let world = try spec.makeWorld(device: device)
         guard let assets = world.assets else { throw StressBenchmarkError.metalUnavailable }
         let renderer = try BubblePhysicsMetalRender(device: device, assets: assets)
         world.submit(try spec.initialTransaction(assets: assets))
@@ -535,8 +534,7 @@ public enum PublicWorldStressBenchmark {
     }
     /// Świeży świat tej samej sceny z transakcją początkową, dla serii na identycznej fizyce.
     private static func freshWorld(_ spec: BenchmarkSceneSpec, device: MTLDevice) throws -> BubbleWorld {
-        let world = try BubbleWorld.makeBenchmarkWorld(configuration: try spec.configuration(),
-            device: device)
+        let world = try spec.makeWorld(device: device)
         guard let assets = world.assets else { throw StressBenchmarkError.metalUnavailable }
         world.submit(try spec.initialTransaction(assets: assets))
         return world
@@ -1104,6 +1102,9 @@ package struct BenchmarkSceneSpec {
     private let kind: Kind
     /// Transakcje kroków podstawiane przez test za transakcję sceny, gdy zwrócą wartość (szew testowy, np. usunięcie bańki).
     private var extraStepTransaction: ((Int) -> WorldTransaction?)?
+    /// Fabryka światów serii podstawiana przez test (szew testowy, np. świat z przełącznikami natywnymi); bez niej
+    /// `BubbleWorld.makeBenchmarkWorld` z konfiguracją natywną domyślną.
+    private var worldFactory: (@MainActor (WorldConfiguration, MTLDevice) throws -> BubbleWorld)?
 
     package init(_ scene: PublicWorldStressBenchmark.Scene) { kind = .scene(scene) }
 
@@ -1121,6 +1122,21 @@ package struct BenchmarkSceneSpec {
         var copy = self
         copy.extraStepTransaction = hook
         return copy
+    }
+
+    /// Specyfikacja, której światy serii (w kolejności serii) buduje `factory` z konfiguracji sceny (szew testowy).
+    package func makingWorlds(_ factory: @escaping @MainActor (WorldConfiguration, MTLDevice) throws -> BubbleWorld)
+        -> BenchmarkSceneSpec {
+        var copy = self
+        copy.worldFactory = factory
+        return copy
+    }
+
+    /// Świat jednej serii z konfiguracji sceny, bez transakcji początkowej.
+    @MainActor package func makeWorld(device: MTLDevice) throws -> BubbleWorld {
+        let configuration = try configuration()
+        if let worldFactory { return try worldFactory(configuration, device) }
+        return try BubbleWorld.makeBenchmarkWorld(configuration: configuration, device: device)
     }
 
     package var name: String {

@@ -60,7 +60,7 @@ let package = Package(
         .testTarget(name: "BubblePhysicsAssetsTests", dependencies: ["BubblePhysicsAssets"]),
         .testTarget(name: "BubblePhysicsPerfGuardTests", dependencies: ["BubblePhysicsPerfGuard", "BubblePhysicsMetalRenderBenchmark"]),
         .testTarget(name: "BubblePhysicsMetalRenderTests", dependencies: ["BubblePhysics", "BubblePhysicsMetalRender", "BubblePhysicsAssets",
-                                                                           "BubblePhysicsMetalRenderBenchmark"]),
+                                                                           "BubblePhysicsMetalRenderBenchmark", "BubblePhysicsNativeMetal"]),
         .testTarget(name: "BubblePhysicsRuntimeTests", dependencies: ["BubblePhysics", "BubblePhysicsRuntime"]),
         .testTarget(name: "BubblePhysicsTests", dependencies: ["BubblePhysicsLegacy"]),
         .testTarget(name: "BubblePhysicsCoreTests", dependencies: ["BubblePhysicsCore"]),

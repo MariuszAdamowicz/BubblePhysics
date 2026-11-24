@@ -1,6 +1,7 @@
 import BubblePhysics
 import BubblePhysicsMetalRender
 import BubblePhysicsMetalRenderBenchmark
+import BubblePhysicsNativeMetal
 import Metal
 import XCTest
 
@@ -205,5 +206,45 @@ final class StressSubstepReportTests: XCTestCase {
         XCTAssertNil(report.failureReason)
         XCTAssertEqual(try value(of: "failure_reason", in: report.text), "unknown")
         XCTAssertNil(report.text.range(of: "failure_detail="), "bez powodu raport nie ma szczegółów")
+    }
+
+    /// Bugfix iPhone X (BF-D-4, review): prawdziwy upadek świata. Świat `number` (licząc od 0 w kolejności serii: z renderem, bez
+    /// renderu) dostaje wstrzyknięty środek bańki `object` w dolnej ścianie (10 003) po podkroku 0 z asercją po każdym podkroku,
+    /// więc pada z `contactViolation`; pozostałe światy są zdrowe.
+    private func specFailing(worlds failing: [Int: UInt64]) -> BenchmarkSceneSpec {
+        var created = 0
+        return BenchmarkSceneSpec(PublicWorldStressBenchmark.Scene.stress300).makingWorlds { configuration, device in
+            defer { created += 1 }
+            var native = NativeMetalConfiguration.default
+            if let object = failing[created] {
+                native.assertEverySubstep = true
+                native.injectedSubstepState = NativeMetalInjectedSubstepState(afterSubstep: 0, objectID: object, position: [187.5, 0.5])
+            }
+            return try BubbleWorld.makeBenchmarkWorld(configuration: configuration, device: device, native: native)
+        }
+    }
+
+    private func runFailing(worlds failing: [Int: UInt64]) async throws -> PublicWorldStressReport {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("brak urządzenia Metal") }
+        return try await PublicWorldStressBenchmark.run(device: device, spec: specFailing(worlds: failing),
+            warmupFrames: 2, measuredFrames: 5, progress: { _, _ in })
+    }
+
+    /// `runSeries` kopiuje powód i szczegóły upadku świata przy przerwaniu serii, a raport bierze je z serii, która padła, także
+    /// gdy seria z renderem jest zdrowa.
+    func testWorldFailureInTheSeriesWithoutRenderLandsInTheReport() async throws {
+        let report = try await runFailing(worlds: [1: 1])
+        XCTAssertGreaterThan(report.failedFrames, 0)
+        XCTAssertEqual(report.failureReason, .contactViolation)
+        XCTAssertEqual(Set(try XCTUnwrap(report.failureDetail).objects.map(\.rawValue)), [1, 10_003])
+        XCTAssertEqual(try value(of: "failure_reason", in: report.text), "contactViolation")
+        XCTAssertTrue(try value(of: "failure_detail", in: report.text).hasPrefix("objects:"), report.text)
+    }
+
+    /// Gdy padają obie serie, raport bierze powód i szczegóły z pierwszej przerwanej serii (z renderem): bańka 1, a nie 2.
+    func testReportTakesTheFailureOfTheFirstFailedSeries() async throws {
+        let report = try await runFailing(worlds: [0: 1, 1: 2])
+        XCTAssertEqual(report.failureReason, .contactViolation)
+        XCTAssertEqual(Set(try XCTUnwrap(report.failureDetail).objects.map(\.rawValue)), [1, 10_003])
     }
 }
