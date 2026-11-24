@@ -256,6 +256,8 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
     private let device: MTLDevice
     private let queue: MTLCommandQueue
     private let pipelines: [String: MTLComputePipelineState]
+    /// Czy pamięć grupy urządzenia mieści jądro jednej grupy; bez tego świat poniżej progu idzie wieloma dyspozycjami (BF-D-3).
+    private let supportsSingleDispatch: Bool
     package let configuration: NativeMetalConfiguration
     /// Podkroki ostatniego kroku w kolejności, gdy `configuration.captureSubsteps`; w przeciwnym razie pusta (szew testów 4.0.0).
     package private(set) var capturedSubsteps: [NativeMetalSubstepSample] = []
@@ -303,6 +305,12 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
     /// Szerokość grupy jądra jednej grupy: min(`maxTotalThreadsPerThreadgroup` potoku, 1024); A11 może dać mniej niż Mac (CD-D-27).
     static func singleGroupWidth(_ pipeline: MTLComputePipelineState) -> Int { min(pipeline.maxTotalThreadsPerThreadgroup, 1024) }
 
+    /// Jądro jednej grupy nie używa buforów argumentów, więc jedynym jego warunkiem zależnym od sprzętu jest pamięć grupy: tablica
+    /// współdzielona `singleGroupMemoryLength` plus pamięć statyczna potoku (bugfix iPhone X, BF-D-3).
+    static func supportsSingleDispatch(device: MTLDevice, pipeline: MTLComputePipelineState) -> Bool {
+        device.maxThreadgroupMemoryLength >= NativeMetalSubstep.singleGroupMemoryLength + pipeline.staticThreadgroupMemoryLength
+    }
+
     /// Szczegóły naruszenia asercji kontaktu z rekordu GPU: obiekty (bańka i drugi koniec), odległość i dla zmiany strony krawędzi numer krawędzi
     /// w wielokącie właściciela (kolejność identyfikatorów jego odcinków; krawędzie współliniowe są scalone).
     static func violationDetail(_ record: NativeMetalContactAssertion, kind: NativeMetalContactAssertion.Kind,
@@ -342,6 +350,7 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         self.queue = queue
         let compiled = try NativeMetalPipelineCache.pipelines(for: device)
         pipelines = compiled.stages
+        supportsSingleDispatch = Self.supportsSingleDispatch(device: device, pipeline: compiled.stages["nativeSubstepLoopSingleGroup"]!)
     }
 
     /// Rdzeń kroku: neutralne wejście, neutralny wynik. Poprzednia klatka pochodzi z trwałego stanu solvera.
@@ -944,7 +953,7 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         }
         let encodingEnd = DispatchTime.now().uptimeNanoseconds
         let loop = try await NativeMetalSubstepLoop.run(state: state, previousFrameSubsteps: previousFrameSubstepCount,
-            bubbleCount: count, forceMultipleDispatches: configuration.forceMultipleDispatches,
+            bubbleCount: count, forceMultipleDispatches: configuration.forceMultipleDispatches, supportsSingleDispatch: supportsSingleDispatch,
             executor: commandExecutor, prepareContinuation: {
                 // Przebudowa siatki w kolejnej parze zaczyna od zera liczników kontaktów i kandydatów, jak pierwsza para; czasy i liczniki
                 // klatki zostają. Kontynuacja bez przebudowy ich nie rusza: czyta sąsiedztwo z poprzedniej pary.

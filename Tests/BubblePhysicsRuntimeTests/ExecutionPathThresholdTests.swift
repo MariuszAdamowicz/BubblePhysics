@@ -1,5 +1,5 @@
 @testable import BubblePhysics
-import BubblePhysicsNativeMetal
+@testable import BubblePhysicsNativeMetal
 import XCTest
 import simd
 
@@ -44,5 +44,14 @@ final class ExecutionPathThresholdTests: XCTestCase {
         }
         PathScene.assertNeverBeyond(run, { $0.x >= PathScene.wallX }, "usunięcie bańki")
         XCTAssertLessThan(try XCTUnwrap(run.recorded.last?.velocity(1)).x, 0, "„2” ma odbić się od ściany")
+    }
+
+    /// Urządzenie, którego pamięć grupy nie mieści jądra jednej grupy, liczy świat poniżej progu wieloma dyspozycjami zamiast upadku świata
+    /// (bugfix iPhone X, BF-D-3).
+    func testDeviceWithoutSingleGroupMemoryUsesMultipleDispatches() {
+        XCTAssertEqual(NativeMetalSubstepLoop.executionPath(bubbleCount: 300, forceMultipleDispatches: false, supportsSingleDispatch: false),
+                       .multipleDispatches)
+        XCTAssertEqual(NativeMetalSubstepLoop.executionPath(bubbleCount: 300, forceMultipleDispatches: false, supportsSingleDispatch: true),
+                       .singleDispatch)
     }
 }

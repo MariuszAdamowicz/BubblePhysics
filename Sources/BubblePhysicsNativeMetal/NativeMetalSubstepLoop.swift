@@ -190,9 +190,11 @@ struct NativeMetalSubstepRun {
 
 extension NativeMetalSubstepLoop {
     /// Wybór ścieżki na każdy krok z liczby baniek po transakcjach: do progu jedna grupa wątków buduje siatkę w jądrze, większy świat
-    /// i przełącznik testowy `forceMultipleDispatches` dają broadphase wieloma dyspozycjami (CD-D-27, G8-AC4).
-    static func executionPath(bubbleCount: Int, forceMultipleDispatches: Bool) -> NativeMetalExecutionPath {
-        bubbleCount <= NativeMetalSubstep.singleDispatchBubbleLimit && !forceMultipleDispatches ? .singleDispatch : .multipleDispatches
+    /// i przełącznik testowy `forceMultipleDispatches` dają broadphase wieloma dyspozycjami (CD-D-27, G8-AC4). Urządzenie bez pamięci
+    /// grupy na jądro jednej grupy (`supportsSingleDispatch` fałszywe) też idzie wieloma dyspozycjami zamiast upadku świata (BF-D-3).
+    static func executionPath(bubbleCount: Int, forceMultipleDispatches: Bool, supportsSingleDispatch: Bool) -> NativeMetalExecutionPath {
+        bubbleCount <= NativeMetalSubstep.singleDispatchBubbleLimit && !forceMultipleDispatches && supportsSingleDispatch
+            ? .singleDispatch : .multipleDispatches
     }
 
     /// Bufor podkroków kończy się przed buforem końca kroku (kolejność commitu), więc to wywołanie wraca od razu; handler po commicie
@@ -212,11 +214,13 @@ extension NativeMetalSubstepLoop {
     /// tylko wtedy para koduje broadphase i siły początkowe, a `prepareContinuation` zeruje liczniki kontaktów i kandydatów.
     /// Ścieżka jednej dyspozycji ma jedną parę: jądro `nativeSubstepLoopSingleGroup` robi całą pętlę i przebudowy, bez podwajania.
     static func run(state: NativeMetalPersistentState, previousFrameSubsteps: Int, bubbleCount: Int, forceMultipleDispatches: Bool,
+                    supportsSingleDispatch: Bool,
                     executor: any NativeMetalCommandExecuting, prepareContinuation: () -> Void,
                     encodePair: (_ pair: Int, _ substeps: Int, _ rebuild: Bool, _ path: NativeMetalExecutionPath) throws
                         -> (MTLCommandBuffer, MTLCommandBuffer)) async throws -> NativeMetalSubstepRun {
         var result = NativeMetalSubstepRun()
-        let path = executionPath(bubbleCount: bubbleCount, forceMultipleDispatches: forceMultipleDispatches)
+        let path = executionPath(bubbleCount: bubbleCount, forceMultipleDispatches: forceMultipleDispatches,
+                                 supportsSingleDispatch: supportsSingleDispatch)
         result.executionPath = path
         var pairSize = max(2, 2 * previousFrameSubsteps)
         var done = 0
