@@ -126,7 +126,7 @@ final class BudgetSceneTests: XCTestCase {
                                                      progress: { _, _ in })
         }
         let resting = try await report(.restingCrowd)
-        XCTAssertGreaterThanOrEqual(resting.substepMax, 1, "tłum w spoczynku ma telemetrię podkroków")
+        XCTAssertEqual(resting.substepMax, 1, "G5-AC1: tłum w spoczynku liczy dokładnie 1 podkrok na krok")
         for scene in [Scene.headOn128, .shotIntoCrowd] {
             let impact = try await report(scene)
             let frames = impact.substepHistogram.values.reduce(0, +)
@@ -136,6 +136,46 @@ final class BudgetSceneTests: XCTestCase {
                                         "\(scene.name): klatek z > 1 podkrokiem \(multi) z \(frames), histogram \(impact.substepHistogram)")
             XCTAssertGreaterThanOrEqual(impact.substepMax, 3 * resting.substepMax,
                                         "\(scene.name): substep_max \(impact.substepMax) wobec \(resting.substepMax) w tłumie")
+        }
+    }
+
+    private func measuredSamples(of scene: Scene, warmup: Int = 30, measured: Int = 120) async throws -> [PublicWorldStressFrameSample] {
+        let device = try device()
+        var samples: [PublicWorldStressFrameSample] = []
+        _ = try await PublicWorldStressBenchmark.run(device: device, scene: scene, frameObserver: { samples.append($0) },
+            warmupFrames: warmup, measuredFrames: measured, progress: { _, _ in })
+        let frames = samples.filter { $0.series == .full && $0.index >= warmup }.sorted { $0.index < $1.index }
+        XCTAssertEqual(frames.count, measured, scene.name)
+        return frames
+    }
+
+    /// G8-AC2: „gumka w pełnym naciągnięciu do ściany”. W każdej klatce mierzonej „2” stoi dociśnięta do pionowej ściany (x = 330)
+    /// siłą napiętej gumki, więc środek leży bliżej ściany niż promień 24, a statyczny docisk liczy co najmniej 2 podkroki (G5-AC2).
+    /// Scena, w której „2” dopiero rozpędza się i odbija od ściany, ma klatki bez kontaktu i z 1 podkrokiem.
+    func testBandToWallPressesTheTwoAgainstTheWallInEveryMeasuredFrame() async throws {
+        let wallSurface: Float = 330, radius: Float = 24
+        for sample in try await measuredSamples(of: .bandToWall) {
+            let state = try XCTUnwrap(sample.frame.objects[ObjectID(rawValue: 150)], "klatka \(sample.index): brak „2”")
+            let distance = wallSurface - state.position.x
+            XCTAssertLessThan(distance, radius, "klatka \(sample.index): „2” bez kontaktu ze ścianą, środek \(state.position.x)")
+            XCTAssertGreaterThan(distance, 0, "klatka \(sample.index): „2” za ścianą, środek \(state.position.x)")
+            XCTAssertGreaterThanOrEqual(try XCTUnwrap(sample.substepCount), 2, "klatka \(sample.index): docisk bez podkroków")
+        }
+    }
+
+    /// Uderzenia sceny `.replace` co 20 klatek; odrzucona transakcja po cichu wyłączyłaby uderzenia.
+    func testImpactScenesNeverRejectTheReplaceTransaction() async throws {
+        for scene in [Scene.headOn128, .shotIntoCrowd] {
+            var replaced = 0
+            for sample in try await measuredSamples(of: scene, warmup: 30, measured: 60) {
+                for event in sample.frame.events {
+                    if case .transactionRejected(_, let rejection) = event {
+                        XCTFail("\(scene.name) klatka \(sample.index): transakcja odrzucona: \(rejection)")
+                    }
+                }
+                replaced += sample.frame.transactionReceipts.count
+            }
+            XCTAssertGreaterThan(replaced, 0, "\(scene.name): w klatkach mierzonych są przyjęte transakcje uderzenia")
         }
     }
 }
