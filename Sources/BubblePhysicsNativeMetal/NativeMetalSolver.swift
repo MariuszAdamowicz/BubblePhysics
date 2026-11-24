@@ -308,7 +308,13 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
     /// Jądro jednej grupy nie używa buforów argumentów, więc jedynym jego warunkiem zależnym od sprzętu jest pamięć grupy: tablica
     /// współdzielona `singleGroupMemoryLength` plus pamięć statyczna potoku (bugfix iPhone X, BF-D-3).
     static func supportsSingleDispatch(device: MTLDevice, pipeline: MTLComputePipelineState) -> Bool {
-        device.maxThreadgroupMemoryLength >= NativeMetalSubstep.singleGroupMemoryLength + pipeline.staticThreadgroupMemoryLength
+        supportsSingleDispatch(maxThreadgroupMemoryLength: device.maxThreadgroupMemoryLength,
+                               staticThreadgroupMemoryLength: pipeline.staticThreadgroupMemoryLength)
+    }
+
+    /// Warunek `supportsSingleDispatch(device:pipeline:)` na samych liczbach: pamięć grupy urządzenia i pamięć statyczna potoku w bajtach.
+    nonisolated static func supportsSingleDispatch(maxThreadgroupMemoryLength: Int, staticThreadgroupMemoryLength: Int) -> Bool {
+        maxThreadgroupMemoryLength >= NativeMetalSubstep.singleGroupMemoryLength + staticThreadgroupMemoryLength
     }
 
     /// Szczegóły naruszenia asercji kontaktu z rekordu GPU: obiekty (bańka i drugi koniec), odległość i dla zmiany strony krawędzi numer krawędzi
