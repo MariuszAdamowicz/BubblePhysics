@@ -79,9 +79,12 @@ enum NativeMetalSubstep {
     static let singleDispatchBubbleLimit = 1024
     /// Pamięć grupy jądra jednej grupy w bajtach: jedna tablica współdzielona przez fazy (kubełki siatki 8 KB, sumy częściowe i skan nad nią).
     static let singleGroupMemoryLength = 16_384
+    /// Liczba adresów GPU w tablicy `nativeSubstepLoopSingleGroup`: pola `NativeBroadphaseBuffers`, osiem bajtów każde (sonda ABI).
+    static let broadphaseBufferCount = 38
     /// Szerokość grupy jąder podkroku; `nativeReduceSubstep` zapisuje liczbę grup dla tej szerokości.
     static let groupWidth = 64
-    /// Szerokość grupy `nativeReduceSubstep` (jedna grupa na świat): największa potęga dwójki, którą pipeline pomieści, do 1024.
+    /// Szerokość grupy `nativeReduceSubstep` (jedna grupa na świat) w ścieżce wielu dyspozycji: największa potęga dwójki, którą pipeline pomieści, do 1024.
+    /// Jądro jednej grupy bierze `NativeMetalSolver.singleGroupWidth` (bez wymogu potęgi dwójki); redukcja jest poprawna dla każdej szerokości do 1024.
     static func reductionWidth(_ pipeline: MTLComputePipelineState) -> Int {
         var width = 1
         while width * 2 <= min(pipeline.maxTotalThreadsPerThreadgroup, 1024) { width *= 2 }

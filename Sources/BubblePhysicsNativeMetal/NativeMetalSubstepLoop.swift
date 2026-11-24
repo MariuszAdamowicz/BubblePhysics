@@ -119,6 +119,46 @@ enum NativeMetalSubstepLoop {
     }
 }
 
+extension NativeMetalSubstepLoop {
+    /// Ścieżka jednej dyspozycji (CD-D-27): cały krok baniek (broadphase, siły początkowe, pętla podkroków z przebudową siatki) w jądrze
+    /// `nativeSubstepLoopSingleGroup`, jedną grupą wątków i jedną dyspozycją. Wskaźniki idą jedną strukturą (bufor argumentów), bo jądro ma
+    /// ponad 31 buforów; adresy GPU w kolejności pól struktury `NativeBroadphaseBuffers`, a `useResource` udostępnia każdy bufor.
+    /// Bryły są kandydatami tylko przy `hasRigidBodies`.
+    static func encodeSingleDispatch(_ encoder: MTLComputeCommandEncoder, pipelines: [String: MTLComputePipelineState],
+                                     state: NativeMetalPersistentState, forces: NativeMetalForceBuffers, rigid: NativeRigidPolygonState,
+                                     joints: NativeJointState, configuration: NativeMetalConfiguration, hasRigidBodies: Bool, count: Int) {
+        guard count > 0 else { return }
+        let pipeline = pipelines["nativeSubstepLoopSingleGroup"]!
+        let buffers: [MTLBuffer] = [state.workingBubbles, state.control, state.contactControl, state.grid, state.workingSegments,
+            state.candidateRows, state.candidateRowCounts, state.candidateOverflow, joints.ranges, joints.exclusions,
+            state.broadphaseMargin, state.referencePositions, state.nonContactAcceleration, forces.control!, forces.fields!,
+            forces.fieldVertices!, forces.fieldObjectIDs!, forces.bands!, forces.motors!, state.substepControl,
+            rigid.bodies, rigid.bubbleControl, rigid.bubbleCandidates, rigid.bubbleRowCounts, state.scanValues,
+            state.scanOffsets, state.candidates, state.dispatchStatistics, state.adjacency, state.adjacencyCounts,
+            state.acceleration, state.contactForces, state.substepSteps, state.substepDispatch, rigid.vertices, rigid.triangles,
+            state.substepCapture ?? state.acceleration, state.contactAssertion]
+        precondition(buffers.count == NativeMetalSubstep.broadphaseBufferCount, "tablica adresów jądra jednej grupy to układ NativeBroadphaseBuffers")
+        var table = buffers.map(\.gpuAddress)
+        let injection = configuration.injectedSubstepState
+        var parameters = NativeMetalSingleGroupParameters(
+            flags: SIMD4(configuration.minimumMarginOnly ? 1 : 0, UInt32(configuration.gridHashBucketCount), hasRigidBodies ? 1 : 0,
+                         configuration.captureSubsteps ? 1 : 0),
+            diagnostics: SIMD4(injection == nil ? 0 : 1, configuration.assertEverySubstep ? 1 : 0, UInt32(rigid.count),
+                               UInt32(max(injection?.afterSubstep ?? 0, 0))),
+            injectionObject: SIMD2(injection?.objectID ?? 0, 0),
+            injectionPosition: SIMD4(injection?.position.x ?? 0, injection?.position.y ?? 0, 0, 0))
+        encoder.memoryBarrier(scope: .buffers)
+        encoder.setComputePipelineState(pipeline)
+        encoder.setBytes(&table, length: table.count * MemoryLayout<UInt64>.stride, index: 0)
+        encoder.setBytes(&parameters, length: MemoryLayout<NativeMetalSingleGroupParameters>.stride, index: 1)
+        var seen = Set<ObjectIdentifier>()
+        for buffer in buffers where seen.insert(ObjectIdentifier(buffer)).inserted { encoder.useResource(buffer, usage: [.read, .write]) }
+        encoder.setThreadgroupMemoryLength(NativeMetalSubstep.singleGroupMemoryLength, index: 0)
+        let width = NativeMetalSolver.singleGroupWidth(pipeline)
+        encoder.dispatchThreadgroups(.init(width: 1, height: 1, depth: 1), threadsPerThreadgroup: .init(width: width, height: 1, depth: 1))
+    }
+}
+
 /// Wynik `NativeMetalSubstepLoop.run`: liczba par buforów klatki i czasy GPU osobno dla buforów podkroków (fizyka) i końca kroku (kontur).
 struct NativeMetalSubstepRun {
     /// Ścieżka wybrana na początku kroku (CD-D-27).

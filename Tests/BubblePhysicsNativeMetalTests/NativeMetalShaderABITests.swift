@@ -278,6 +278,26 @@ final class NativeMetalShaderABITests: XCTestCase {
         XCTAssertEqual(MemoryLayout<NativeMetalContactAssertion>.stride, 48)
     }
 
+    /// Jądro `nativeSubstepLoopSingleGroup` czyta bufory ze struktury wskaźników (`NativeBroadphaseBuffers`) i stałe ze struktury
+    /// `NativeSingleGroupParameters`: oba układy muszą zgadzać się z tym, co koduje `NativeMetalSubstepLoop.encodeSingleDispatch`.
+    func testSingleGroupKernelStructsMatchShaderLayouts() throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let sources = try NativeMetalShaderSource.solverFiles.map(source)
+        let probes: [Probe] = [
+            Probe(name: "singleGroupParameters", mslSize: "NativeSingleGroupParameters",
+                  swiftSize: MemoryLayout<NativeMetalSingleGroupParameters>.stride, fields: [
+                ("flags", MemoryLayout<NativeMetalSingleGroupParameters>.offset(of: \.flags)),
+                ("diagnostics", MemoryLayout<NativeMetalSingleGroupParameters>.offset(of: \.diagnostics)),
+                ("injectionObject", MemoryLayout<NativeMetalSingleGroupParameters>.offset(of: \.injectionObject)),
+                ("injectionPosition", MemoryLayout<NativeMetalSingleGroupParameters>.offset(of: \.injectionPosition))]),
+            // Wskaźniki GPU mają po 8 bajtów, więc rozmiar struktury to liczba wpisów tablicy adresów razy osiem.
+            Probe(name: "broadphaseBuffers", mslSize: "NativeBroadphaseBuffers",
+                  swiftSize: NativeMetalSubstep.broadphaseBufferCount * MemoryLayout<UInt64>.stride, fields: [])
+        ]
+        assertMatches(probes, try measure(probes, sources: sources, device: device))
+        XCTAssertEqual(MemoryLayout<NativeMetalSingleGroupParameters>.stride, 64)
+    }
+
     func testLayerEncodingKeepsSignedOrderAndRoundTrips() {
         let layers: [Int32] = [.min, -70_000, -2, -1, 0, 1, 2, 70_000, .max - 1, .max]
         let encoded = layers.map(NativeMetalFilter.encodeLayer)

@@ -49,6 +49,8 @@ final class NativeMetalSubstepKernelTests: XCTestCase {
         let limit = NativeMetalSolver.candidateLimitPerObject
         /// Zapas tylko r / 4 w `nativeBroadphaseMargin` (przełącznik `minimumMarginOnly`).
         var minimumMarginOnly = false
+        /// Szerokość grupy redukcji; domyślnie największa potęga dwójki, którą pipeline pomieści.
+        var reductionWidthOverride: Int?
 
         init(bodies: [Body], segments: [NativeSolverSegment] = [], rows: [[(neighbor: UInt32, kind: UInt32)]] = [],
              forces input: NativeForceInput = NativeForceInput(), step: Float = 1.0 / 60, capture: Bool = false) throws {
@@ -147,7 +149,8 @@ final class NativeMetalSubstepKernelTests: XCTestCase {
                         encoder.setBuffer(buffer, offset: 0, index: index)
                     }
                     encoder.dispatchThreadgroups(.init(width: 1, height: 1, depth: 1),
-                        threadsPerThreadgroup: .init(width: NativeMetalSubstep.reductionWidth(pipeline), height: 1, depth: 1))
+                        threadsPerThreadgroup: .init(width: reductionWidthOverride ?? NativeMetalSubstep.reductionWidth(pipeline),
+                                                     height: 1, depth: 1))
                 case .contactForces:
                     bindContactForces(encoder)
                     threads(encoder)
@@ -506,6 +509,29 @@ final class NativeMetalSubstepKernelTests: XCTestCase {
             XCTAssertEqual(control.limiter.y, NativeMetalSubstep.Term.stiffness.rawValue)
             XCTAssertEqual(control.limiter.x, 7, "obiekt: bańka o największym ω")
             XCTAssertLessThan(control.time.z, 1.0 / 60)
+        }
+    }
+
+    /// Jądro jednej grupy biegnie szerokością min(maxTotalThreadsPerThreadgroup, 1024), niekoniecznie potęgą dwójki (A11 może dać mniej niż Mac),
+    /// więc drzewo redukcji musi składać każdego wątku od 1 do width − 1 do wątku 0 przy dowolnej szerokości: zwycięzca na dowolnym indeksie
+    /// (też w ogonie za największą potęgą dwójki) wyznacza ten sam h i ten sam obiekt.
+    func testReductionFindsTheWinnerAtAnyIndexForAnyGroupWidth() throws {
+        let count = 130
+        let k = wallStiffness(distance: 2, radius: 12, stiffness: 229)
+        let expected = 1 / (k / 0.36).squareRoot()
+        // Szerokość nie może przekroczyć `maxTotalThreadsPerThreadgroup` potoku redukcji (na Macu poniżej 1024); sama ta granica też się liczy.
+        let limit = try Rig(bodies: [Body(id: 1, center: .zero)]).pipelines["nativeReduceSubstep"]!.maxTotalThreadsPerThreadgroup
+        let widths = Set([1, 3, 33, 96, 100, 127, 129, 130, 513, 1000, 1024].filter { $0 <= limit } + [limit])
+        for width in widths.sorted() {
+            for winner in [0, 1, 2, 31, 32, 64, 95, 96, 99, 100, 126, 127, 128, 129] {
+                let bodies = (0..<count).map { Body(id: $0 + 1, center: [100, -2], mass: $0 == winner ? 0.36 : 38) }
+                let rig = try Rig(bodies: bodies, segments: wallSegments(), rows: Array(repeating: wallRow, count: count))
+                rig.reductionWidthOverride = width
+                try rig.submit([.reduce])
+                let control = rig.substep
+                XCTAssertEqual(control.limiter.x, UInt64(winner + 1), "szerokość \(width), zwycięzca \(winner)")
+                XCTAssertLessThanOrEqual(relative(Double(control.time.z), expected), 1e-3, "szerokość \(width), zwycięzca \(winner)")
+            }
         }
     }
 

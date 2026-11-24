@@ -613,7 +613,9 @@ float nativeBubbleMarginBound(uint index, device NativeBubble *bubbles, device f
     return denominator > 0 ? 2 * left / denominator : INFINITY;
 }
 
-// Redukcja h dla całego świata: jedna grupa, każdy wątek obsługuje co width-ty obiekt (width: potęga dwójki, najwyżej 1024). Trzy przebiegi,
+// Redukcja h dla całego świata: jedna grupa, każdy wątek obsługuje co width-ty obiekt (width najwyżej 1024, niekoniecznie potęga dwójki:
+// w jądrze jednej grupy to min(maxTotalThreadsPerThreadgroup, 1024); drzewo ze strides 512, 256, …, 1 i warunkiem local + stride < width składa
+// każdego wątku j > 0 do wątku j − 2^⌊log₂ j⌋ przed stride równym najwyższemu bitowi j, więc działa dla dowolnej szerokości). Trzy przebiegi,
 // bo wyjątek kandydata oddalającego się potrzebuje h_max = min(czas pozostały, 1/ω_max): najpierw maksimum ω², potem minimum członu d / 4,
 // na końcu minimum h_zapasu.
 // h = min(t_poz, 1/ω_max, d / 4-warunek, h_zapasu); człon i bańka wyznaczająca trafiają do `limiter` (diagnostyka limitu podkroków).
