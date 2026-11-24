@@ -14,6 +14,7 @@
 **Plugin version:** 0.7.11
 **Agent Sessions:** claude-code: ca9caf94-f667-4817-9350-6d22399ebca1, 16e9c99f-b156-404d-bed6-ef59c058ff89, dc45740c-21ae-481c-991f-1c346cfdbf2e, b9859b36-3130-4774-a0fb-198eedd4318d
 **Agent Sessions:** claude-code: 0b82330b-fb83-4b04-aefe-26c383e182b0
+**Agent Sessions:** claude-code: 81244e7e-69bb-4886-914d-f4a1c198298f
 
 ---
 
@@ -23,7 +24,7 @@
 
 ### R0 — Headline
 
-Bańka przestaje przenikać ściany i inne bańki, bo siła kontaktu rośnie bez granic, zanim środek dojdzie do przeszkody. Ruch liczą same siły, w podkrokach dobranych do prędkości i sztywności. Znikają łaty 3.0.x: XPBD, CCD, strażniki i tłumienie kontaktu. Materiał bańki to tylko sztywność i opór.
+Bańka nie przenika ścian ani baniek, bo siła kontaktu rośnie bez granic przed przeszkodą. Ruch liczą same siły w podkrokach. Znikają łaty 3.0.x: pozycyjny solver (XPBD), ciągłe wykrywanie zderzeń (CCD) i strażniki. Materiał bańki to sztywność i opór. Świat do 1024 baniek liczy krok jedną dyspozycją GPU ([CD-D-27](change-design.md#cd-d-27)).
 
 ### R1 — The whole flow
 
@@ -47,10 +48,16 @@ flowchart LR
     RB["solver brył raz na krok<br/>8 iteracji, bez gałęzi baniek"]:::changed
     BP["broadphase baniek i kandydaci bańka–bryła<br/>zapas obwiedni, bez krawędzi wejścia i cache λ"]:::changed
     SUB["NEW pętla podkroków leapfrog<br/>siły, półimpulsy, ruch, redukcja h,<br/>przebudowa siatki, limit 1024"]:::added
+    PATH{"NEW ≤ 1024 baniek<br/>i bez wymuszenia?"}:::added
+    ONE["NEW jedna dyspozycja jednej grupy:<br/>budowa i przebudowa siatki w jądrze,<br/>cała pętla (slice 3)"]:::added
+    MANY["pary buforów z podwajaniem;<br/>przebudowa tylko po znaczniku,<br/>bramka końca kroku (slice 3)"]:::changed
     END["region → NEW asercje kontaktu<br/>→ kontur cięciwą ε → zdarzenia"]:::changed
     OLD["predykcja, XPBD Jacobi, warm start,<br/>CCD, strażniki, zawarcie, dashpot ζ_c"]:::removed
 
-    W --> ST --> MC --> NPW --> RB --> BP --> SUB --> END
+    W --> ST --> MC --> NPW --> RB --> PATH
+    PATH -- tak --> ONE --> SUB
+    PATH -- nie --> BP --> MANY --> SUB
+    SUB --> END
     BP -.-> OLD
 
     classDef same fill:#f6f8fa,stroke:#8c959f,stroke-width:1px,color:#24292f
@@ -61,7 +68,7 @@ flowchart LR
 
 ### R2 — Seams — where the change attaches to existing code
 
-**Pliki.** Rdzeń zmiany siedzi w `NM/` i w shaderach. Model i Runtime zmieniają kształt danych i walidację. Wszystko poza wierszami oznaczonymi `(slice 2)` buduje wycinek 1.
+**Pliki.** Rdzeń zmiany siedzi w `NM/` i w shaderach. Model i Runtime zmieniają kształt danych i walidację. Wszystko poza wierszami oznaczonymi `(slice 2)` i `(slice 3)` buduje wycinek 1.
 
 ```diff
   Package.swift                                   # + zasób NativeForceKernels, NativeXPBDKernels → NativeContactKernels
@@ -82,31 +89,31 @@ flowchart LR
 +   NativeCompleteStepper.swift # validate(change): bańka + bryła dynamiczna; przekazuje gumkę, siłę globalną, pola, motor, pozy brył; - walidacja deformability
   Sources/BubblePhysicsNativeMetal/
 +   NativePublicWorld.swift  # rekord bańki (K_c, γ, m), rekordy sił i pozy brył; przeguby bez baniek
-+   NativeForceRecords.swift # NEW lustra Swift: NativeMetalBandDrive, NativeMetalForceField, NativeMetalMotor, NativeMetalKinematicPose, NativeMetalSubstepControl
++   NativeForceRecords.swift # NEW lustra Swift: NativeMetalBandDrive, NativeMetalForceField, NativeMetalMotor, NativeMetalKinematicPose, NativeMetalSubstepControl; NativeMetalSubstep.singleDispatchBubbleLimit = 1024, EndArgument (slice 3)
 +   NativeSolverInput.swift  # - pola XPBD/tolerancji, - bit centerCrossing; + przyczyny contactViolation, substepLimit
-+   NativeMetalBackend.swift # NativeMetalConfiguration bez pól publicznych, przełączniki pakietowe; telemetria podkroków
-+   NativeMetalSolver.swift  # nowy potok kroku; stała rigidSolverIterationCount = 8; - XPBD, CCD, strażniki, cache λ, teleport
-+   NativeMetalSubstepLoop.swift # NEW pary buforów (podkroki + koniec kroku), podwajanie, odczyt licznika, przebudowa, limit
++   NativeMetalBackend.swift # NativeMetalConfiguration bez pól publicznych, przełączniki pakietowe; telemetria podkroków; + forceMultipleDispatches, candidateLimitPerObject; telemetria + substepBufferCount, executionPath (enum NativeMetalExecutionPath: .singleDispatch, .multipleDispatches), gridRebuildCount = przebudowy wymuszone zapasem, - marginRebuildCount (slice 3)
++   NativeMetalSolver.swift  # nowy potok kroku; stała rigidSolverIterationCount = 8; - XPBD, CCD, strażniki, cache λ, teleport; wybór ścieżki; bramka całego końca kroku, osobne sloty argumentów końca kroku; prepareContinuation bez zerowania liczników (slice 3)
++   NativeMetalSubstepLoop.swift # NEW pary buforów (podkroki + koniec kroku), podwajanie, odczyt licznika, przebudowa, limit; NEW encodeSingleDispatch, para zaczyna od broadphase tylko po znaczniku (slice 3)
 +   NativeMetalChainKernels.swift # NativeMetalRigidCandidates: kandydaci bańka–bryła z zapasem w broadphase
 +   NativeMetalBufferLayout.swift # NativeMetalBubble w nowym układzie; NativeMetalControl bez XPBD
 +   NativeJointState.swift, NativeRigidPolygonState.swift # przeguby i kontakty tylko bryła–bryła; iteracje ze stałej
     NativeStaticPolygonEdges.swift # bez zmian: krawędzie jednostronne i wierzchołki
   Sources/BubblePhysicsNativeMetal/Shaders/
-+   NativeGeometryKernels.metal-source  # NativeBubble w nowym układzie; - nativePredict; nativeBuildContacts bez krawędzi wejścia i cache; obwiednie z zapasem
-+   NativeContactKernels.metal-source   # dawne NativeXPBDKernels: zostają skan, kompaktowanie, sąsiedztwo, bryła–bryła; - XPBD, cache λ, gałęzie baniek
-+   NativeForceKernels.metal-source     # NEW prawo kontaktu, siły, półimpulsy, ruch, redukcja h, asercje
++   NativeGeometryKernels.metal-source  # NativeBubble w nowym układzie; - nativePredict; nativeBuildContacts bez krawędzi wejścia i cache; obwiednie z zapasem; treść nativeEmitCandidates i nativeRigidEmitCandidates jako funkcje urządzenia (slice 3)
++   NativeContactKernels.metal-source   # dawne NativeXPBDKernels: zostają skan, kompaktowanie, sąsiedztwo, bryła–bryła; - XPBD, cache λ, gałęzie baniek; nativeBuildAdjacency i skan jednej grupy jako funkcje urządzenia (slice 3)
++   NativeForceKernels.metal-source     # NEW prawo kontaktu, siły, półimpulsy, ruch, redukcja h, asercje; NEW nativeSubstepLoopSingleGroup i siatka haszowana w grupie, fazy jąder podkroku jako funkcje urządzenia; nativePrepareEndGates zeruje też argumenty końca kroku (slice 3)
 +   NativePostSolveKernels.metal-source # - CCD, strażniki, zawarcie, nacisk z λ; cięciwa r·(1 − ε)
 + Sources/BubblePhysicsNativeMetalDiagnostics/    # runnery i adapter na nowym NativeSolverInput i telemetrii
 + Benchmarks/macOS/BubblePhysicsReferenceBench/   # kompiluje się z nowym modułem diagnostycznym
-+ Sources/BubblePhysicsMetalRenderBenchmark/PublicWorldStressBenchmark.swift # K_c, bez brył dynamicznych z bańkami; PublicWorldStressReport z histogramem podkroków, najdłuższą klatką i czasem GPU fizyki osobno od konturu, nowe przypadki Scene: cztery sceny G8-AC2 po 150 baniek, .restingCrowd, .bandToWall, .headOn128, .shotIntoCrowd o nazwach raportu resting-crowd, band-to-wall, head-on-128, shot-into-crowd; uderzenia powtarzane co 20 klatek przez stepTransaction (slice 2)
++ Sources/BubblePhysicsMetalRenderBenchmark/PublicWorldStressBenchmark.swift # K_c, bez brył dynamicznych z bańkami; PublicWorldStressReport z histogramem podkroków, najdłuższą klatką i czasem GPU fizyki osobno od konturu, nowe przypadki Scene: cztery sceny G8-AC2 po 150 baniek, .restingCrowd, .bandToWall, .headOn128, .shotIntoCrowd o nazwach raportu resting-crowd, band-to-wall, head-on-128, shot-into-crowd; uderzenia powtarzane co 20 klatek przez stepTransaction (slice 2); + klucze substep_buffers_max i execution_path, grid_rebuild_max z przebudów wymuszonych zapasem (slice 3)
 + Benchmarks/macOS/BubblePhysicsPerfGuard/        # działa na K_c; bazy w docs/benchmarks/perf-guard.json odświeżone przez --record (slice 2)
-+ Benchmarks/iOS/BubblePhysicsBench/App/PublicWorldStressView.swift # kompiluje się; cztery sceny G8-AC2 w przełączniku scen (slice 2)
++ Benchmarks/iOS/BubblePhysicsBench/App/PublicWorldStressView.swift # kompiluje się; cztery sceny G8-AC2 w przełączniku scen (slice 2); opis ścieżki bez „ten sam command buffer” (slice 3)
 + Examples/BubblePhysicsShowcase/App/BubbleScene.swift # contactStiffness zamiast deformability
-+ docs/integration-guide.md  # bloki kodu zgodne ze Showcase; proza na K_c i γ, tytuł 4.0 (slice 2)
-+ docs/MIGRATION-v4.md       # NEW tabela symboli, zmiany zachowania i znane ograniczenia; przeguby z bańkami i sztywne K_c (slice 2)
++ docs/integration-guide.md  # bloki kodu zgodne ze Showcase; proza na K_c i γ, tytuł 4.0 (slice 2); wiersz 17: jedna dyspozycja do 1024 baniek, pary buforów powyżej (slice 3)
++ docs/MIGRATION-v4.md       # NEW tabela symboli, zmiany zachowania i znane ograniczenia; przeguby z bańkami i sztywne K_c (slice 2); pola telemetrii :81–84 i ścieżki wykonania (slice 3)
 + docs/benchmarks/           # NEW raporty v4.0.0: Mac naprzemiennie z v3.0.2, iPhone X, bramka gry (slice 2)
-+ CHANGELOG.md, README.md    # wydanie 4.0.0, README bez XPBD w opisie produktu (slice 2)
-+ Tests/                     # audyt według spec. 4, w tym BubblePhysicsMetalRenderTests (sceny z materiałem bańki); MigrationGuideTests na 4.0.0 (slice 2)
++ CHANGELOG.md, README.md    # wydanie 4.0.0, README bez XPBD w opisie produktu (slice 2); README :49, :62 i CHANGELOG o ścieżkach wykonania (slice 3)
++ Tests/                     # audyt według spec. 4, w tym BubblePhysicsMetalRenderTests (sceny z materiałem bańki); MigrationGuideTests na 4.0.0 (slice 2); próba barier, testy ścieżek i bliźniak ścieżek (slice 3)
 ```
 
 Promień z przejścia (`bubbleRadius`) host ustala raz na krok w `MotionControllers.prepare`, przed broadphase. Siatka, kandydaci i zapas widzą więc już nowy promień, a w trakcie kroku promień się nie zmienia, więc zapas nie musi pokrywać jego przyrostu. Przyrost zwiększa tylko wgniecenie przy tej samej odległości d > 0, a większe ω daje więcej podkroków ([P-B-21](#p-b-21)).
@@ -129,33 +136,89 @@ Stan przejściowy wewnątrz wycinka 1: od zadania 2 do zadania 7 `NativePublicWo
 -             │       nativeSolveJoints, nativeApplyJointBodies, nativeApplyJointBubbles, nativeRigidGuardWalls, nativeRigidApplyBubbles
 +             ├── for rigidSolverIterationCount (8, dzisiejsza wartość domyślna): nativeRigidContacts (bryła–bryła),
 +             │       nativeRigidApplyBodies, nativeSolveJoints, nativeApplyJointBodies, nativeRigidGuardWalls
-+             ├── nativeAccelerationWithoutContacts     # a₀: gumka, siła globalna, pola, motor
-+             ├── nativeBroadphaseMargin                # zapas max(1,05·(|v|·t + ½|a₀|·t²), r/4), x₀ ← x
-              ├── nativePrepareGrid … nativeCompactCandidates   # bańka–bańka i bańka–krawędź, obwiednie z zapasem
-              ├── NativeMetalRigidCandidates.encode     # przeniesione z fazy XPBD: bańka–bryła (koło, kapsuła, kinematyczna + droga w kroku)
-              ├── nativeBuildContacts                   # - krawędź wejścia, - odczyt cache
 -             ├── nativeMatchContactCache, nativeRetainContactCache, nativeCompactContactCache
 -             ├── nativePrepareSolverContacts, nativeApplyWarmStart, for: nativeUpdateContactMultipliers, nativeSolveJacobi, nativeMeasureResidual
-+             ├── nativeContactForces                   # siły pełne z kontaktami → a (początek kroku)
 +             └── NativeMetalSubstepLoop.run            # para k: bufor podkroków + bufor końca kroku, oba commit bez czekania między nimi
-+                 ├── bufor podkroków: 2 × poprzednia klatka (min. 2), każda kolejna para tej klatki 2 × więcej
-+                 │   └── for substep:
++                 ├── bufor podkroków (stan zbudowany w wycinku 1, odchylenia nr 11 i 13):
++                 │   ├── para 0: blit wejść, nativeBeginStep, bryły raz na krok (encodeStepPrefix, NM/NativeMetalSolver.swift:698)
++                 │   ├── encodeBroadphase (:731), dziś w każdej parze:
++                 │   │   ├── nativeAccelerationWithoutContacts, nativeBroadphaseMargin   # a₀; zapas max(1,05·(|v|·t + ½|a₀|·t²), r/4), x₀ ← x
++                 │   │   ├── nativePrepareGrid, nativeBuildGrid, NativeMetalGridSort     # posortowana tablica komórek, obwiednie z zapasem
++                 │   │   ├── nativeEmitCandidates, nativePrepareCandidateCounts, skan trybu 0, nativePrepareIndirectArguments, nativeCompactCandidates
++                 │   │   ├── nativeClearAdjacency, nativeEmitCandidateAdjacency
++                 │   │   ├── NativeMetalRigidCandidates.encode(.bubbles), nativeEmitRigidAdjacency   # bańka–koło, kapsuła, kinematyczna + droga w kroku
++                 │   │   └── nativeBuildAdjacency                # wiersze posortowane po (rodzaj, sąsiad)
++                 │   ├── nativeContactForces, nativeIntegrateSubstep(.initialAcceleration)   # siły pełne → a
++                 │   └── for substep (2 × poprzednia klatka, min. 2; każda kolejna para 2 × więcej):
 +                 │       ├── nativeReduceSubstep        # h = min(t_poz, 1/ω_max, d/(4v), h_zapasu); człon i obiekt; limit 1024; znacznik przebudowy
-+                 │       └── nativeIntegrateSubstep     # ½ impulsu → ruch (+ poza kinematyczna) → nativeContactForces → ½ impulsu; znacznik strony krawędzi
-+                 ├── bufor końca kroku: dyspozycje pośrednie, zero grup, dopóki czas kroku nie minął
++                 │       ├── nativeIntegrateSubstep(.kickAndMove)    # ½ impulsu → ruch (+ poza kinematyczna)
++                 │       ├── nativeContactForces
++                 │       ├── nativeIntegrateSubstep(.forcesAndKick)  # ½ impulsu
++                 │       └── nativeInjectSubstepState, nativeAssertContacts   # tylko z przełącznikiem diagnostycznym
++                 ├── bufor końca kroku (encodeEndOfStep, :766):
 -                 │   (dziś: nativeFindFastCandidates, nativeResolveCCD, nativeApplyCenterGuards, nativeValidateBubbleContainment,
 -                 │    nativeFinalizeSolverContacts, nativeUpdateVelocities, nativeDampContactNormalMotion, nativeInvalidateSafetyCache)
-                  │   ├── nativeCheckFinite
-                  │   ├── nativeApplyPublicRegion          # przeniesione przed asercje
-+                 │   ├── nativeAssertContacts             # d > 0 w parach według filtrów, środek poza bryłą, znacznik strony
-                  │   ├── nativeAccumulateContactPressure  # cięciwa r·(1 − ε), - nacisk z λ
-                  │   ├── nativeGenerateContoursFused, nativePrepareRenderDataGrouped
-                  │   └── nativeCompactMergeEvents, sensory, nativeRigidFinish, nativeHitTest
-+                 ├── await bufora końca kroku → odczyt licznika: następna para (od przebudowy siatki) albo koniec
++                 │   ├── nativePrepareEndGates            # bramki: zero grup, dopóki czas kroku nie minął
++                 │   ├── nativeApplyPublicRegion          # bramka; przed rekordami kontaktów i asercją
++                 │   ├── nativeBubbleBodyContacts, nativeBuildContacts, nativePrepareContactFlags, skan trybu 1,
++                 │   │   nativePrepareIndirectArguments, nativeCompactActiveContacts, nativePrepareIndirectArguments
++                 │   ├── nativeClearAdjacency, nativeEmitAdjacency, nativeBuildAdjacency, nativeContactImpulses
++                 │   ├── nativeCompactMergeEvents (bramka), nativeCheckFinite
++                 │   ├── nativeAssertContacts             # bramka; d > 0 w parach według filtrów, środek poza bryłą, znacznik strony
++                 │   ├── nativeAccumulateContactPressure  # cięciwa r·(1 − ε), - nacisk z λ
++                 │   ├── nativeGenerateContoursFused, nativePrepareRenderDataGrouped
++                 │   └── sensory, nativeRigidFinish (bramki), nativeHitTest
++                 ├── await bufora końca kroku → odczyt licznika: następna para (dziś zawsze od przebudowy siatki) albo koniec
 +                 └── bufor wywołującego: tylko render przez beforeCommit, po końcu kroku
 ```
 
 Typowa klatka ma jedną parę buforów ([CD-D-18](change-design.md#cd-d-18)) i dwa czekania CPU: na bufor końca kroku i na bufor renderu wywołującego, bo `BubbleWorld.advance` publikuje stan po renderze (odchylenie implementacji nr 15). Czas GPU fizyki to suma `gpuEndTime − gpuStartTime` buforów podkroków, a czas konturu to ten sam pomiar bufora końca kroku. Nie trzeba więc próbkowania liczników. Dziś fizyka koduje się w buforze wywołującego (`NM/NativeMetalSolver.swift:572`). Po zmianie ten bufor dostaje tylko render, z końcowego stanu kroku ([P-B-39](#p-b-39)).
+
+**Ścieżki wykonania (slice 3, [CD-D-27](change-design.md#cd-d-27), [CD-D-29](change-design.md#cd-d-29)).** Od `encodeStepPrefix` (`NM/NativeMetalSolver.swift:698`, bryły raz na krok bez zmian) krok rozchodzi się na dwie ścieżki. Wybór pada na każdy krok w `NativeMetalSubstepLoop.run` z `count = snapshot.sourceBubbles.count` (`:357`, po transakcjach):
+
+```diff
+  NativeMetalSubstepLoop.run
++ ├── count ≤ NativeMetalSubstep.singleDispatchBubbleLimit (1024) i !forceMultipleDispatches → executionPath .singleDispatch
++ │   ├── bufor podkroków: jedna dyspozycja nativeSubstepLoopSingleGroup, 1 grupa, szerokość min(maxTotalThreadsPerThreadgroup, 1024)
++ │   │   ├── nativeBroadphaseInGroup        # funkcja urządzenia: a₀, zapas, x₀ ← x; siatka haszowana: zliczanie atomikami
++ │   │   │                                  # w 2048 kubełkach, suma prefiksowa, rozpisanie; kandydaci: bańka–bańka, krawędź, koło,
++ │   │   │                                  # kapsuła, kinematyczna; skan i kompaktowanie; slot 0 indirectArguments;
++ │   │   │                                  # bubbleCandidates/bubbleRowCounts; adjacency posortowane
++ │   │   ├── siły pełne → a
++ │   │   └── while czas kroku trwa i counts.y < 1024:
++ │   │       ├── redukcja h (ta sama funkcja co nativeReduceSubstep) ─ barrier
++ │   │       ├── znacznik przebudowy → nativeBroadphaseInGroup z dt_pozostałe, gridRebuildCount += 1, max przepełnienia
++ │   │       ├── ½ impulsu + ruch ─ barrier ─ siły ─ barrier ─ ½ impulsu ─ barrier
++ │   │       └── zapis, asercja i wstrzyknięcie diagnostyczne, gdy przełącznik
++ │   ├── bufor końca kroku: ten sam co dziś, zawsze końcowy
++ │   └── substepBufferCount = 1, bez podwajania
+  └── wpp. → executionPath .multipleDispatches (dotychczasowe pary buforów)
++     ├── para k > 0 zaczyna od encodeBroadphase tylko po znaczniku przebudowy (counts.z); inaczej kontynuuje na sąsiedztwie z poprzedniej pary
+-     ├── prepareContinuation zeruje contactControl przed każdą parą
++     ├── prepareContinuation tylko przed przebudową
++     ├── bufor końca kroku pary niekońcowej: na GPU tylko nativePrepareEndGates, które zeruje bramki i sloty EndArgument
++     │   wszystkich dyspozycji końca kroku; dyspozycje bezpośrednie (oba nativePrepareIndirectArguments, skan trybu 1,
++     │   nativeClearAdjacency, nativeBuildAdjacency, nativeBubbleBodyContacts, nacisk, kontur, render, hit test) przechodzą na bramkowane
++     └── gridRebuildCount = liczba znaczników przebudowy, substepBufferCount = liczba par
+```
+
+Fazy jądra jednej grupy wołają te same funkcje urządzenia co jądra ścieżki wielu dyspozycji. Wydzielenie tych funkcji z jąder idzie przed jądrem pętli, a jądra ścieżki wielu dyspozycji stają się nakładkami:
+
+| Funkcja urządzenia | Wydzielona z jądra |
+|---|---|
+| `nativeBubbleContactForce` | `nativeContactForces` |
+| `nativeIntegratePhase` | `nativeIntegrateSubstep` (trzy fazy) |
+| `nativeReduceSubstepInGroup` | `nativeReduceSubstep` (trzy przejścia redukcji i ogon jednego wątku) |
+| `nativeBubbleMargin` | `nativeBroadphaseMargin` |
+| `nativeEmitBubbleCandidates` | `nativeEmitCandidates` (wiersz jednej bańki, `nativeInsertCandidate` bez zmian) |
+| `nativeEmitBodyCandidates` | `nativeRigidEmitCandidates` (wiersz jednej bryły, pętla po bańkach z krokiem szerokości grupy) |
+| `nativeCandidateRowCount`, `nativeCompactCandidateRow` | `nativePrepareCandidateCounts`, `nativeCompactCandidates` |
+| `nativeScanInGroup` | `nativeScanSingleGroup` z `nativeFinishScan` |
+| `nativeIndirectArguments` | `nativePrepareIndirectArguments` |
+| `nativeEmitCandidateEdges`, `nativeEmitBodyEdges` | `nativeEmitCandidateAdjacency`, `nativeEmitRigidAdjacency` (`nativeAppendAdjacency` bez zmian) |
+| `nativeBuildAdjacencyRow` | `nativeBuildAdjacency` |
+
+Broadphase w grupie (`nativeBroadphaseInGroup`) to funkcja urządzenia. Do zadania 37 woła ją osobne jądro `nativeBroadphaseSingleGroup`, a ścieżka jednej dyspozycji koduje jeszcze pary buforów. Potem woła ją tylko `nativeSubstepLoopSingleGroup`, a `nativeBroadphaseSingleGroup` znika z kodu i ze `stageNames`. Fazy rozdziela `threadgroup_barrier(mem_flags::mem_device | mem_flags::mem_threadgroup)`, a tej bariery repozytorium jeszcze nie używa, stąd próba na początku wycinka. Pamięć grupy jest jedną tablicą współdzieloną przez fazy (redukcja h 8 KB, kubełki siatki 8 KB, skan) i ma najwyżej 16 KB. A11 i Mac M1 Pro dają 32 KB. Siatka ścieżki wielu dyspozycji zostaje posortowaną tablicą (sortowanie bitoniczne i wyszukiwanie binarne), więc szukanie sąsiadów ma dwie implementacje, a ich zgodność chroni bliźniak ([P-B-44](#p-b-44)). Limit kandydatów `candidateLimitPerObject` w ścieżce testowej zmniejsza tylko długość wiersza (`contactParameters.cache.w`, `NM/NativeMetalSolver.swift:454`, oraz `NM/NativeRigidPolygonState.swift:199, 361`), a pojemność buforów zostaje na 128.
 
 **Transakcja.** `TransactionStager.stageBatch` (`RT/TransactionStager.swift:178`), dziś i po zmianie:
 
@@ -176,7 +239,9 @@ Typowa klatka ma jedną parę buforów ([CD-D-18](change-design.md#cd-d-18)) i d
 - `substepSplitMultiplier`: wymusza drobniejszy podział ([G4-AC3](change-design.md#g4-ac3));
 - `minimumMarginOnly`: zapas tylko r / 4 ([G5-AC3](change-design.md#g5-ac3));
 - `captureSubsteps`: zapis x, v i h po każdym podkroku, rozwinięcie `nativeCapturePositions`;
-- `assertEverySubstep` i `injectedSubstepState`: asercja po podkroku i wstrzyknięcie stanu ([G6-AC2](change-design.md#g6-ac2)).
+- `assertEverySubstep` i `injectedSubstepState`: asercja po podkroku i wstrzyknięcie stanu ([G6-AC2](change-design.md#g6-ac2));
+- `forceMultipleDispatches`: wymusza ścieżkę wielu dyspozycji w każdym świecie ([G8-AC4](change-design.md#g8-ac4), slice 3);
+- `candidateLimitPerObject`: mniejszy limit kandydatów na obiekt, najwyżej 128 ([G8-AC4](change-design.md#g8-ac4), slice 3).
 
 **Para różnych materiałów.** Newton ma stałe 12 kroków ([CD-D-16](change-design.md#cd-d-16)). Rachunek w Double przy zbieżności 1e-4 dał najwyżej 10 kroków dla K_b / K_a do 1000, przy r 24–148 i q od 10⁻⁴ do 10⁶.
 
@@ -219,6 +284,12 @@ Sceny i progi są w kryteriach projektu. Tabela podaje sytuację i wynik w skró
 | <a id="p-b-33"></a>P-B-33 | bramka przeciskania na gałęzi gry | 15/15, 40 łączeń w każdym przebiegu, przenikanie i ucieczki 0, zero `worldFailed` | [G9-AC3](change-design.md#g9-ac3) |
 | <a id="p-b-34"></a>P-B-34 | wydanie | `CHANGELOG.md`, `README.md` i `MigrationGuideTests` na 4.0.0; `MIGRATION-v4.md` opisuje zachowanie i ograniczenia | [G9-AC4](change-design.md#g9-ac4) |
 | <a id="p-b-39"></a>P-B-39 | `advance(by:commandBuffer:encodeRender:)` w klatce z jedną i z kilkoma parami buforów | render w buforze wywołującego pokazuje stan końca kroku; testy przekazania renderu (`NativeMetalRenderHandoffTests`, `RenderHookTests`) przechodzą | [G9-AC1](change-design.md#g9-ac1) |
+| <a id="p-b-40"></a>P-B-40 | `NativeMetalFrameTelemetry` i raport stress po rewizji | osobno: podkroki, przebudowy wymuszone zapasem (`gridRebuildCount`), bufory podkroków (`substepBufferCount`), ścieżka (`executionPath`), czas GPU fizyki i konturu; raport ma `grid_rebuild_max` z przebudów wymuszonych zapasem, `substep_buffers_max` i `execution_path` | [G8-AC1](change-design.md#g8-ac1) |
+| <a id="p-b-41"></a>P-B-41 | świat ≤ 1024 baniek; „2” w ścianę z 3 · 10³ j/s po klatce z 1 podkrokiem, tłum 150 baniek w spoczynku z dala od toru | ścieżka `.singleDispatch`; jest klatka z ≥ 20 podkrokami bez przebudowy (bez niej test nie przechodzi), a w każdej takiej klatce 1 bufor podkroków | [G8-AC4](change-design.md#g8-ac4) |
+| <a id="p-b-42"></a>P-B-42 | sceny ścieżki jednej dyspozycji, w tym [G5-AC3](change-design.md#g5-ac3) z klatką z ≥ 2 przebudowami (w razie potrzeby `minimumMarginOnly`); ta sama scena z limitem kandydatów, który przepełnia budowę przed przebudową, ale nie po niej | zawsze 1 bufor podkroków, także z przebudowami; telemetria podaje przebudowy; przepełnienie klatki to maksimum po budowach, a nie zero, w obu ścieżkach | [G8-AC4](change-design.md#g8-ac4) |
+| <a id="p-b-43"></a>P-B-43 | wymuszona ścieżka wielu dyspozycji, klatka z ≥ 2 parami bez przebudowy, przeszkoda jest kandydatem, ale nie aktywnym kontaktem na końcu pierwszej pary (warunek testu): ściana i statyczne koło | środek „2” po każdym podkroku poza przeszkodą i po stronie startowej; zgodność z jedną dyspozycją sprawdza [P-B-44](#p-b-44) | [G8-AC4](change-design.md#g8-ac4) |
+| <a id="p-b-44"></a>P-B-44 | bliźniak: cztery sceny [G4-AC3](change-design.md#g4-ac3), uderzenie „2” w ścianę 3 · 10³ j/s, [G5-AC3](change-design.md#g5-ac3) z przebudową, trzy sceny z przebudową przy bryle (kinematyczna z [G3-AC3](change-design.md#g3-ac3), statyczne koło i kapsuła 10³ j/s) przy `minimumMarginOnly`, w każdej co najmniej jedna przebudowa w klatce kontaktu (warunek testu), sceny [P-B-43](#p-b-43); obie ścieżki, bez zmniejszonego limitu kandydatów | ten sam wynik (`worldFailed` z tą samą przyczyną albo brak); podkroki i przebudowy ±1 na klatkę, suma przebudów ±2; po 1 s pozycje do 1 j, prędkości do 2 % największej; [G6-AC5](change-design.md#g6-ac5): ta sama klatka błędu, ten sam obiekt wyznaczający h, pozycje do 1 j w ostatniej klatce przed błędem | [G8-AC4](change-design.md#g8-ac4) |
+| <a id="p-b-45"></a>P-B-45 | uderzenie z [P-B-41](#p-b-41) z 1024 i z 1025 bańkami; transakcja usuwa bańkę ze świata 1025 baniek | 1024 → `.singleDispatch`, 1025 → `.multipleDispatches`, przełączenie od następnego kroku; środek „2” po każdym podkroku poza ścianą i po stronie startowej, bez `worldFailed` | [G8-AC4](change-design.md#g8-ac4) |
 
 **Wynik końca kroku.** Liście to zachowania [P-B-22](#p-b-22) do [P-B-25](#p-b-25): <a id="p-b-22"></a><a id="p-b-23"></a><a id="p-b-24"></a><a id="p-b-25"></a>limit podkroków sprawdza się najpierw, potem skończoność, potem region, a asercja kontaktu biegnie po regionie i nie odrzuca kroku. Dowodzą [G6-AC2](change-design.md#g6-ac2), [G6-AC3](change-design.md#g6-ac3), [G6-AC4](change-design.md#g6-ac4) i [G6-AC5](change-design.md#g6-ac5).
 
@@ -263,9 +334,10 @@ Zachowania kodu zastępowanego, które muszą przetrwać:
 | świat na GPU (szew `makeBenchmarkWorld(configuration:device:native:)`, porównanie z odniesieniem w Double z testu) | prawo kontaktu, brak przejścia, całkowanie, podkroki, asercje, telemetria, render | [P-B-4](#p-b-4)–[P-B-27](#p-b-27), [P-B-39](#p-b-39) |
 | kontrola statyczna i build Xcode | graf symboli bez usuniętych nazw; pełny pakiet zielony; Showcase i benchmark iOS się budują | [P-B-2](#p-b-2), [P-B-31](#p-b-31), [P-B-32](#p-b-32) |
 | raport benchmarku (bez urządzenia docelowego, slice 2) | raport stress ma histogram podkroków, najdłuższą klatkę i czasy GPU fizyki i konturu; cztery sceny [G8-AC2](change-design.md#g8-ac2) budują się ze 150 bańkami i liczą bez `worldFailed` | [P-B-28](#p-b-28), [P-B-29](#p-b-29) (sceny) |
-| pomiar (slice 2) | perf guard i stress na Macu naprzemiennie z `v3.0.2`; iPhone X | [P-B-29](#p-b-29), [P-B-30](#p-b-30) |
+| pomiar (slice 4) | perf guard i stress na Macu naprzemiennie z `v3.0.2`; iPhone X | [P-B-29](#p-b-29), [P-B-30](#p-b-30) |
 | dokumentacja (slice 2) | wersja i przewodnik migracji | [P-B-34](#p-b-34) |
-| bramka gry (poza repozytorium, ręcznie, slice 2) | przyjęcie w realnym tłumie | [P-B-33](#p-b-33) |
+| bramka gry (poza repozytorium, ręcznie, slice 4) | przyjęcie w realnym tłumie | [P-B-33](#p-b-33) |
+| ścieżki wykonania na GPU (slice 3; szew `makeBenchmarkWorld(configuration:device:native:)` z `forceMultipleDispatches` i `candidateLimitPerObject`) | jedna dyspozycja do 1024 baniek z przebudową w jądrze, poprawna kontynuacja par buforów, zgodność obu ścieżek, granica progu, telemetria i klucze raportu | [P-B-40](#p-b-40)–[P-B-45](#p-b-45) |
 
 **Where:**
 - testy modelu: `Tests/BubblePhysicsPublicTests/`, nowa klasa `BubbleMaterialTests`;
@@ -274,7 +346,8 @@ Zachowania kodu zastępowanego, które muszą przetrwać:
 - odniesienie w Double: `Tests/BubblePhysicsRuntimeTests/ContactLawReference.swift`, obok `CrowdSceneSupport.swift`;
 - testy natywne i ABI rekordów: `Tests/BubblePhysicsNativeMetalTests/` (`NativeMetalShaderABITests`, `NativeMetalRenderHandoffTests`);
 - testy raportu benchmarku: `Tests/BubblePhysicsMetalRenderTests/`, nowe klasy `StressSubstepReportTests` ([P-B-28](#p-b-28)) i `BudgetSceneTests` ([P-B-29](#p-b-29), sceny); perf guard: `swift run -c release BubblePhysicsPerfGuard`, testy `Tests/BubblePhysicsPerfGuardTests/`;
-- testy dokumentacji: `Tests/BubblePhysicsPublicTests/MigrationGuideTests.swift`, `IntegrationGuideTests.swift` ([P-B-34](#p-b-34)).
+- testy dokumentacji: `Tests/BubblePhysicsPublicTests/MigrationGuideTests.swift`, `IntegrationGuideTests.swift` ([P-B-34](#p-b-34));
+- testy ścieżek wykonania (slice 3): `Tests/BubblePhysicsNativeMetalTests/NativeMetalSingleGroupBarrierTests.swift` (próba barier i pamięci grupy); w `Tests/BubblePhysicsRuntimeTests/`, na `ForceSceneSupport.swift` i `CrowdSceneSupport.swift`, nowe klasy `SingleDispatchLoopTests` ([P-B-41](#p-b-41), [P-B-42](#p-b-42)), `MultiDispatchContinuationTests` ([P-B-43](#p-b-43)), `ExecutionPathTwinTests` ([P-B-44](#p-b-44); sceny z `SubstepForceTests`, `NoCrossingTests`, `GridRebuildTests`, `RigidContactTests`, `ContactAssertionTests`), `ExecutionPathThresholdTests` ([P-B-45](#p-b-45)); [P-B-40](#p-b-40) w `SubstepTelemetryTests`, `NativeMetalSubstepSurfaceTests`, `SubstepSeamTests` (przełączniki `forceMultipleDispatches` i `candidateLimitPerObject`) i `StressSubstepReportTests`.
 
 Testy GPU pomijają się (`XCTSkip`) bez urządzenia Metal, więc liczą się tylko przebiegi na Macu z GPU. Repozytorium nie ma lintera ani CI.
 
@@ -285,9 +358,11 @@ Testy GPU pomijają się (`XCTSkip`) bez urządzenia Metal, więc liczą się ty
 | Slice | Name | Delivers | Seams | Behaviours | Status |
 |-------|------|----------|-------|------------|--------|
 | 1 | Silnik 4.0.0 w pakiecie | Gra może zbudować się na gałęzi silnika: nowy materiał, prawo kontaktu, podkroki, asercje, walidacja transakcji, telemetria; Showcase i benchmark iOS się budują ([G1](change-design.md#g1-ac1)–[G7](change-design.md#g7-ac4), [G8-AC1](change-design.md#g8-ac1) w części silnika, [G9-AC1](change-design.md#g9-ac1), [G9-AC2](change-design.md#g9-ac2)) | Model, Runtime, `NM/`, shadery, moduł diagnostyczny, `BubblePhysicsReferenceBench`, stress i perf guard na K_c, Showcase, bloki kodu przewodnika, tabela symboli `docs/MIGRATION-v4.md` | [P-B-1](#p-b-1)–[P-B-27](#p-b-27), [P-B-31](#p-b-31), [P-B-32](#p-b-32), [P-B-35](#p-b-35)–[P-B-39](#p-b-39) | done |
-| 2 | Wydanie 4.0.0 | Pomiar na iPhonie X, nowe bazy, dokumentacja wydania, bramka gry i tag ([G8-AC1](change-design.md#g8-ac1) w części benchmarku, [G8-AC2](change-design.md#g8-ac2), [G8-AC3](change-design.md#g8-ac3), [G9-AC3](change-design.md#g9-ac3), [G9-AC4](change-design.md#g9-ac4)) | `PublicWorldStressBenchmark` (raport z histogramem, cztery sceny [G8-AC2](change-design.md#g8-ac2)), przełącznik scen benchmarku iOS, bazy perf guard, raporty w `docs/benchmarks/`, `CHANGELOG.md`, `README.md`, `MigrationGuideTests`, `docs/MIGRATION-v4.md` (uzupełnienie), proza `docs/integration-guide.md` | [P-B-28](#p-b-28)–[P-B-30](#p-b-30), [P-B-33](#p-b-33), [P-B-34](#p-b-34) | wip |
+| 2 | Raport, sceny i dokumentacja 4.0.0 | Raport stress z histogramem podkroków, cztery sceny [G8-AC2](change-design.md#g8-ac2) w module benchmarku i w przełączniku iOS, bazy perf guard i raport A/B z Maca, dokumentacja wydania; pierwszy pomiar na iPhonie X (niezaliczony) jako wejście rewizji ([G8-AC1](change-design.md#g8-ac1) w części benchmarku, [G9-AC4](change-design.md#g9-ac4)) | `PublicWorldStressBenchmark` (raport z histogramem, cztery sceny), przełącznik scen benchmarku iOS, bazy perf guard, raport A/B w `docs/benchmarks/`, `CHANGELOG.md`, `README.md`, `MigrationGuideTests`, `docs/MIGRATION-v4.md` (uzupełnienie), proza `docs/integration-guide.md` | [P-B-28](#p-b-28), [P-B-34](#p-b-34) | done |
+| 3 | Pętla podkroków w jednej dyspozycji | Gra i benchmark iOS liczą świat do 1024 baniek jedną dyspozycją na krok, z przebudową siatki w jądrze; większe światy liczą się poprawnymi parami buforów; bliźniak ścieżek i telemetria ścieżki ([G8-AC1](change-design.md#g8-ac1) po rewizji, [G8-AC4](change-design.md#g8-ac4), [CD-D-27](change-design.md#cd-d-27), [CD-D-29](change-design.md#cd-d-29)) | `NM/NativeMetalSubstepLoop.swift`, `NM/NativeMetalSolver.swift`, `NM/NativeMetalBackend.swift`, `NM/NativeForceRecords.swift`, shadery Force, Geometry, Contact, klucze raportu stress, opis w `PublicWorldStressView`, wiersze przewodnika, `MIGRATION-v4.md`, `README.md`, `CHANGELOG.md` | [P-B-40](#p-b-40)–[P-B-45](#p-b-45) | unplanned |
+| 4 | Wydanie 4.0.0 | Ponowny pomiar na iPhonie X, nowe bazy z Maca, bramka gry, PR i tag ([G8-AC2](change-design.md#g8-ac2), [G8-AC3](change-design.md#g8-ac3), [G9-AC3](change-design.md#g9-ac3)) | raport `docs/benchmarks/v4.0.0-iphone-x.md` (powtórka), bazy `docs/benchmarks/perf-guard.json`, raport A/B, raport bramki gry, PR i tag | [P-B-29](#p-b-29), [P-B-30](#p-b-30), [P-B-33](#p-b-33) | unplanned |
 
-Wycinek 1 ma sens sam: cały pakiet, Showcase i benchmark iOS działają na nowym silniku z zielonym `swift test`, a autor może od razu podpiąć gałąź gry i stroić. Brakuje w nim dowodu wydajności na iPhonie X, nowych baz, dokumentacji wydania i bramki gry. Bez nich nie ma tagu. Wycinek 2 domyka wydanie i może zmienić się po pomiarze: przekroczenie budżetu wraca do autora jako decyzja o lokalnym h.
+Wycinek 1 ma sens sam: cały pakiet, Showcase i benchmark iOS działają na nowym silniku z zielonym `swift test`, a autor może od razu podpiąć gałąź gry i stroić. Brakuje w nim dowodu wydajności na iPhonie X, nowych baz, dokumentacji wydania i bramki gry. Bez nich nie ma tagu. Wycinek 2 dał raport, sceny, bazy i dokumentację wydania. Jego pomiar na iPhonie X przekroczył budżet, co uruchomiło rewizję projektu. Wycinek 3 ma sens sam, bo usuwa narzut kolejnych dyspozycji podkroku, który ten pomiar pokazał, i naprawia kontynuację par buforów. Gra i Showcase dostają szybszą klatkę uderzenia bez zmiany API. Brakuje w nim dowodu na iPhonie X. Wycinek 4 mierzy ponownie, odświeża bazy z Maca (bazy z wycinka 2 pochodzą ze starego kodowania), uruchamia bramkę gry i tag. Przy dalszym przekroczeniu budżetu decyzja wraca do autora ([CD-D-28](change-design.md#cd-d-28)). Wycinek 3 kończy się szkicem PR do `main`, więc przegląd kodu silnika nie czeka na urządzenie. Scalenie czeka na bramkę [G8-AC2](change-design.md#g8-ac2), bo to bramka tagu. Wycinek 4 nie ma kodu z założenia. To wydanie z krokami człowieka, jak wcześniej wycinek 2, a jego pomiar może wymagać zbudowanego wycinka 3.
 
 ## Slice 1: Silnik 4.0.0 w pakiecie
 
@@ -436,9 +511,9 @@ Każde zadanie zostawia pakiet z kompilującymi się testami (`swift build --bui
     exit=0
     ```
 
-## Slice 2: Wydanie 4.0.0
+## Slice 2: Raport, sceny i dokumentacja 4.0.0
 
-**Delivers:** tag `v4.0.0` na `main` z dowodem wydajności na iPhonie X, nowymi bazami z Maca, zaliczoną bramką gry i dokumentacją wydania.
+**Delivers:** raport stress z podkrokami i czterema scenami budżetu, nowe bazy z Maca i dokumentacja wydania 4.0.0. Pierwotnie także tag; zadania 23–25 przeszły do wycinka 4 przy replanie 2026-11-24.
 
 Zadania 18–22 wykonuje agent. Zadania 23–25 wymagają człowieka albo wychodzą poza tę maszynę. Pomiary na Macu biegną na bezczynnej maszynie (load average ≤ 2 w `uptime`, README).
 
@@ -492,7 +567,7 @@ Zadania 18–22 wykonuje agent. Zadania 23–25 wymagają człowieka albo wychod
     exit=1 — NIEZALICZONE (@6ce1cd8); zob. odchylenie nr 31
     ```
 
-23. **Człowiek:** pomiar na iPhonie X w Release (podpis z własnego `Signing.local.xcconfig`, fizyczne urządzenie), cztery sceny [G8-AC2](change-design.md#g8-ac2), raporty z jednego przebiegu na jednym commicie w jednym pliku `docs/benchmarks/v4.0.0-iphone-x.md` (powtórka nadpisuje plik, historia zostaje w git), z mierzonym commitem i z oboma czekaniami CPU (`host_waiting_p95_ms`, `host_render_wait_p95_ms`), co mierzy koszt odstępstwa od [CD-D-18](change-design.md#cd-d-18); p95 klatki powyżej 16,67 ms w którejkolwiek scenie wstrzymuje tag i wraca do autora jako decyzja o lokalnym h, covering [P-B-29](#p-b-29) · verify: `F=docs/benchmarks/v4.0.0-iphone-x.md && for n in resting-crowd band-to-wall head-on-128 shot-into-crowd; do grep -q "scene=$n" $F || exit 1; done && test "$(grep -o 'p95_gate=pass' $F | wc -l)" -eq 4 && ! grep -q 'p95_gate=fail' $F`
+23. **Przeniesione do wycinka 4 (pierwszy pomiar wykonany, niezaliczony, wejście rewizji projektu).** **Człowiek:** pomiar na iPhonie X w Release (podpis z własnego `Signing.local.xcconfig`, fizyczne urządzenie), cztery sceny [G8-AC2](change-design.md#g8-ac2), raporty z jednego przebiegu na jednym commicie w jednym pliku `docs/benchmarks/v4.0.0-iphone-x.md` (powtórka nadpisuje plik, historia zostaje w git), z mierzonym commitem i z oboma czekaniami CPU (`host_waiting_p95_ms`, `host_render_wait_p95_ms`), co mierzy koszt odstępstwa od [CD-D-18](change-design.md#cd-d-18); p95 klatki powyżej 16,67 ms w którejkolwiek scenie wstrzymuje tag i wraca do autora jako decyzja o lokalnym h, covering [P-B-29](#p-b-29) · verify: `F=docs/benchmarks/v4.0.0-iphone-x.md && for n in resting-crowd band-to-wall head-on-128 shot-into-crowd; do grep -q "scene=$n" $F || exit 1; done && test "$(grep -o 'p95_gate=pass' $F | wc -l)" -eq 4 && ! grep -q 'p95_gate=fail' $F`
 
     ```text
     $ F=docs/benchmarks/v4.0.0-iphone-x.md && for n in resting-crowd band-to-wall head-on-128 shot-into-crowd; do grep -q "scene=$n" $F || exit 1; done && test "$(grep -o 'p95_gate=pass' $F | wc -l)" -eq 4 && ! grep -q 'p95_gate=fail' $F
@@ -504,8 +579,8 @@ Zadania 18–22 wykonuje agent. Zadania 23–25 wymagają człowieka albo wychod
     exit=1 — NIEZALICZONE: dwie sceny ponad 16,67 ms; tag wstrzymany, decyzja autora o lokalnym h
     ```
 
-24. **Człowiek, poza repozytorium:** bramka przeciskania na gałęzi gry wskazującej na `feature/engine-4-0-0` (warunek wejścia: gra zmigrowana do 4.0.0), raport w `docs/benchmarks/v4.0.0-game-gate.md` ze stałymi kluczami `runs=15/15`, `joins_all=yes` (40 łączeń w każdym przebiegu), `penetration=0`, `escapes=0`, `worldFailed=0` i z wersjami `PhysicsGate.json` i `PhysicsTuning.json` oraz rozbieżnościami względem specyfikacji, covering [P-B-33](#p-b-33) · verify: `F=docs/benchmarks/v4.0.0-game-gate.md && for k in 'runs=15/15' 'joins_all=yes' 'penetration=0' 'escapes=0' 'worldFailed=0'; do grep -qx "$k" $F || exit 1; done`
-25. **Człowiek:** PR gałęzi do `main` (opis zmieniany przez `gh api PATCH`), scalenie po zaliczeniu zadań 23 i 24, anotowany tag `v4.0.0` („BubblePhysics 4.0.0”) na commicie scalającym · verify: `git ls-remote --tags origin v4.0.0 | grep -q v4.0.0`
+24. **Przeniesione do wycinka 4, niewykonane.** **Człowiek, poza repozytorium:** bramka przeciskania na gałęzi gry wskazującej na `feature/engine-4-0-0` (warunek wejścia: gra zmigrowana do 4.0.0), raport w `docs/benchmarks/v4.0.0-game-gate.md` ze stałymi kluczami `runs=15/15`, `joins_all=yes` (40 łączeń w każdym przebiegu), `penetration=0`, `escapes=0`, `worldFailed=0` i z wersjami `PhysicsGate.json` i `PhysicsTuning.json` oraz rozbieżnościami względem specyfikacji, covering [P-B-33](#p-b-33) · verify: `F=docs/benchmarks/v4.0.0-game-gate.md && for k in 'runs=15/15' 'joins_all=yes' 'penetration=0' 'escapes=0' 'worldFailed=0'; do grep -qx "$k" $F || exit 1; done`
+25. **Przeniesione do wycinka 4, niewykonane.** **Człowiek:** PR gałęzi do `main` (opis zmieniany przez `gh api PATCH`), scalenie po zaliczeniu zadań 23 i 24, anotowany tag `v4.0.0` („BubblePhysics 4.0.0”) na commicie scalającym · verify: `git ls-remote --tags origin v4.0.0 | grep -q v4.0.0`
 
     ```text
     Zadania 23–25 (człowiek) jeszcze niewykonane @6ce1cd8: verify każdego exit=1 (brak docs/benchmarks/v4.0.0-iphone-x.md, docs/benchmarks/v4.0.0-game-gate.md, tagu v4.0.0)
@@ -513,6 +588,28 @@ Zadania 18–22 wykonuje agent. Zadania 23–25 wymagają człowieka albo wychod
     Executed 1562 tests, with 1 test skipped and 0 failures (0 unexpected) in 802.560 seconds
     exit=0
     ```
+
+## Slice 3: Pętla podkroków w jednej dyspozycji
+
+**Delivers:** świat do 1024 baniek liczy krok jedną dyspozycją jednej grupy wątków z przebudową siatki w jądrze, większe światy poprawnymi parami buforów, a obie ścieżki dają ten sam wynik.
+
+Zadania są małe, bo w wycinku 1 pojedyncze zadanie zajmowało workerowi 150–200 tys. tokenów kontekstu. Niezaliczona próba z zadania 26 wstrzymuje wycinek i wraca do autora. Do zadania 36 ścieżka jednej dyspozycji nadal koduje pary buforów, a zadanie 37 zastępuje je jądrem pętli. Ten stan przejściowy nie trafia do `main`. Zadania 26–39 wykonuje agent, a zadanie 40 człowiek.
+
+26. Próba `NativeMetalSingleGroupBarrierTests`: jedna grupa o największej szerokości potoku przez 1000 rund pisze do bufora urządzenia, wywołuje `threadgroup_barrier(mem_flags::mem_device | mem_flags::mem_threadgroup)` i czyta zapis sąsiedniego wątku, przy `maxThreadgroupMemoryLength` ≥ 32 768 · verify: `test -f Tests/BubblePhysicsNativeMetalTests/NativeMetalSingleGroupBarrierTests.swift && swift test --filter NativeMetalSingleGroupBarrierTests`
+27. Powierzchnia bez działania: przełączniki `forceMultipleDispatches` i `candidateLimitPerObject`, `NativeMetalExecutionPath`, pola telemetrii `substepBufferCount` i `executionPath` oraz klucze raportu `substep_buffers_max` i `execution_path` z zerami · verify: `swift build --build-tests && grep -q forceMultipleDispatches Sources/BubblePhysicsNativeMetal/NativeMetalBackend.swift && grep -q substep_buffers_max Sources/BubblePhysicsMetalRenderBenchmark/PublicWorldStressBenchmark.swift`
+28. Czerwone testy telemetrii i raportu w `SubstepTelemetryTests`, `NativeMetalSubstepSurfaceTests`, `SubstepSeamTests` i `StressSubstepReportTests`, covering [P-B-40](#p-b-40) · verify: `swift build --build-tests && ! swift test --filter "SubstepTelemetryTests|NativeMetalSubstepSurfaceTests|SubstepSeamTests|StressSubstepReportTests"`
+29. Czerwone klasy `SingleDispatchLoopTests`, `MultiDispatchContinuationTests`, `ExecutionPathTwinTests` i `ExecutionPathThresholdTests` ze scenami z R3 i z warunkami samych testów jako asercjami (klatka z ≥ 20 podkrokami, ≥ 2 przebudowy, przebudowa w klatce kontaktu z bryłą, ≥ 2 pary bez przebudowy, przeszkoda jako kandydat bez aktywnego kontaktu), covering [P-B-41](#p-b-41)–[P-B-45](#p-b-45) · verify: `swift build --build-tests && ! swift test --filter "SingleDispatchLoopTests|MultiDispatchContinuationTests|ExecutionPathTwinTests|ExecutionPathThresholdTests"`
+30. `gridRebuildCount` liczy znaczniki przebudowy w miejsce usuniętego `marginRebuildCount` (także w `GridRebuildTests`), a `substepBufferCount` liczy pary buforów, covering [P-B-40](#p-b-40) · verify: `swift test --filter "SubstepTelemetryTests|NativeMetalSubstepSurfaceTests|GridRebuildTests" && ! grep -rq marginRebuildCount Sources Tests`
+31. Przełącznik `candidateLimitPerObject` skraca wiersz kandydatów w `contactParameters.cache.w` i w wierszach brył (`NM/NativeRigidPolygonState.swift:199, 361`) przy pojemności buforów 128, covering [P-B-40](#p-b-40) · verify: `swift test --filter "SubstepSeamTests|NativeMetalBroadPhaseTests|ContactCandidateMarginTests"`
+32. Klucze `grid_rebuild_max`, `substep_buffers_max` i `execution_path` z nowych pól `PublicWorldStressFrameSample` oraz wiersze telemetrii w `docs/MIGRATION-v4.md` :81–84, covering [P-B-40](#p-b-40) · verify: `swift test --filter "StressSubstepReportTests|BudgetSceneTests|MigrationGuideTests" && grep -q substepBufferCount docs/MIGRATION-v4.md`
+33. Bufor końca kroku pary niekońcowej ma na GPU tylko `nativePrepareEndGates`, które zeruje bramki i nowe sloty `EndArgument`, a dyspozycje bezpośrednie z listy R2 (z oboma `nativePrepareIndirectArguments`) przechodzą na bramkowane ([CD-D-29](change-design.md#cd-d-29)) · verify: `grep -q EndArgument Sources/BubblePhysicsNativeMetal/NativeForceRecords.swift && swift test --filter "NativeMetalSubstepPairsTests|ContactAssertionTests|NativeMetalRenderHandoffTests|RenderHookTests|AcceptanceSceneTests|SubstepTelemetryTests"`
+34. Para k > 0 ścieżki wielu dyspozycji zaczyna od `encodeBroadphase` i `prepareContinuation` tylko po znaczniku przebudowy, a inaczej kontynuuje na sąsiedztwie poprzedniej pary, covering [P-B-43](#p-b-43) · verify: `swift test --filter "MultiDispatchContinuationTests|NativeMetalSubstepPairsTests|GridRebuildTests|NoCrossingTests|ContactAssertionTests"`
+35. Wydzielenie funkcji urządzenia z tabeli R2 bez zmiany zachowania, z jądrami ścieżki wielu dyspozycji jako nakładkami · verify: `for f in nativeBubbleContactForce nativeIntegratePhase nativeReduceSubstepInGroup nativeBubbleMargin nativeEmitBubbleCandidates nativeEmitBodyCandidates nativeCandidateRowCount nativeCompactCandidateRow nativeScanInGroup nativeIndirectArguments nativeEmitCandidateEdges nativeEmitBodyEdges nativeBuildAdjacencyRow; do grep -rq "$f(" Sources/BubblePhysicsNativeMetal/Shaders || exit 1; done && swift test --filter "NativeMetalSubstepKernelTests|NativeMetalShaderABITests|NativeMetalContactLawTests|NativeMetalBroadPhaseTests|SubstepForceTests|NoCrossingTests|RigidContactTests"`
+36. Funkcja `nativeBroadphaseInGroup` w jądrze `nativeBroadphaseSingleGroup` zastępuje `encodeBroadphase` w ścieżce jednej dyspozycji, wybieranej progiem 1024 i przełącznikiem z polem `executionPath`, covering [P-B-44](#p-b-44), [P-B-45](#p-b-45) · verify: `swift test --filter "ExecutionPathThresholdTests|ExecutionPathTwinTests|MultiDispatchContinuationTests|NoCrossingTests|GridRebuildTests|RigidContactTests|NativeMetalBroadPhaseTests"`
+37. Jądro `nativeSubstepLoopSingleGroup` liczy siły początkowe i całą pętlę z przebudową przez `nativeBroadphaseInGroup`, limitem 1024 i przełącznikami diagnostycznymi w jednej parze bez podwajania, a `nativeBroadphaseSingleGroup` znika, z testem pamięci grupy ≤ 16 KB w `NativeMetalSubstepPipelineTests`, covering [P-B-41](#p-b-41), [P-B-42](#p-b-42) · verify: `! grep -rq nativeBroadphaseSingleGroup Sources && swift test --filter "SingleDispatchLoopTests|ExecutionPathTwinTests|ExecutionPathThresholdTests|SubstepCountTests|ContactAssertionTests|SubstepTelemetryTests|NativeMetalSubstepPipelineTests"`
+38. Opis ścieżek wykonania w `docs/integration-guide.md` wiersz 17, `docs/MIGRATION-v4.md` (próg 1024, `forceMultipleDispatches` tylko pakietowy), `README.md` :49 i :62, `CHANGELOG.md` i `PublicWorldStressView.swift:37` · verify: `swift test --filter "MigrationGuideTests|IntegrationGuideTests" && for f in docs/integration-guide.md docs/MIGRATION-v4.md README.md CHANGELOG.md; do grep -q 'jednej dyspozycji' $f || exit 1; done && grep -q '1024 baniek' docs/MIGRATION-v4.md && grep -q forceMultipleDispatches docs/MIGRATION-v4.md && ! grep -qE 'jednym command bufferze|najwyżej jeden krok na command buffer' README.md && ! grep -q 'ten sam command buffer' Benchmarks/iOS/BubblePhysicsBench/App/PublicWorldStressView.swift`
+39. Kontrola wycinka: pełne `swift test` i build Showcase oraz benchmarku iOS w Release, z informacyjnymi p95, `substep_buffers_max` i `execution_path` czterech scen budżetu na Macu w dowodzie · verify: `swift test && xcodebuild -project Examples/BubblePhysicsShowcase/BubblePhysicsShowcase.xcodeproj -scheme BubblePhysicsShowcase -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build && xcodebuild -project Benchmarks/iOS/BubblePhysicsBench/BubblePhysicsBench.xcodeproj -scheme BubblePhysicsBench -configuration Release -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build`
+40. **Człowiek (push z własnego konta):** szkic PR gałęzi `feature/engine-4-0-0` do `main` do przeglądu wycinków 1–3, scalany dopiero w wycinku 4 · verify: `gh pr list --head feature/engine-4-0-0 --state open --json number | grep -q number`
 
 ## Deviations from Design
 
@@ -536,6 +633,17 @@ Zadania 18–22 wykonuje agent. Zadania 23–25 wymagają człowieka albo wychod
 | 2 | Uwagi autora do planu wycinka 2 | Sceny uderzeń kończyłyby się w rozgrzewce albo ginęły poniżej p95; czekanie na render nie ma źródła w profilu klatki (`BubbleWorld.swift:390`); verify bramki gry sprawdza 1 z 4 warunków; wzorzec pliku z iPhone'a łapie powtórki; kalibracja prognozy iPhone'a X pochodzi ze starego silnika | zadania 18–20 i 22–24 poprawione; `BubbleWorld.benchmarkRenderWaitMilliseconds` w R2 | 2026-11-24 |
 | 2 | Druga runda uwag autora | Wyjęcie czekania na render z publikacji łamało `AcceptanceSceneTests` i prognozę iPhone'a X; nazwy scen w raporcie mają myślniki (`Scene.name`); klucze bramki gry bez kotwicy końca; `.replace` mógł trafić w tłum | render jako część publikacji, verify zadania 19 z `AcceptanceSceneTests`; nazwy scen ustalone; `grep -qx`; wolny tor startu uczestników | 2026-11-24 |
 | 2 | Wydanie kończy tag | Tag idzie na commit scalający PR na `main`; gałąź nie ma jeszcze PR | zadanie 25 dla człowieka | 2026-11-24 |
+| 3 | Wycinek 2 kończy wydanie tagiem po pomiarze na iPhonie X | Pomiar niezaliczony: head-on-128 p95 21,5 ms, shot-into-crowd 58,8 ms (raport @ec27333, kod 8ef9d87) | wycinek 2 zamknięty na zadaniach 18–22 jako `done`; zadania 23–25 przeniesione do nowego wycinka 4; [P-B-29](#p-b-29), [P-B-30](#p-b-30) i [P-B-33](#p-b-33) należą do wycinka 4 (sceny budżetu i `BudgetSceneTests` z wycinka 2 to dla niego gotowe wejście) | 2026-11-24 |
+| 3 | Jedna ścieżka kodowania pętli podkroków | Rewizja projektu @6e5d971…a327825: [CD-D-27](change-design.md#cd-d-27), [CD-D-28](change-design.md#cd-d-28), [CD-D-29](change-design.md#cd-d-29), nowe [G8-AC4](change-design.md#g8-ac4), zmienione [G8-AC1](change-design.md#g8-ac1), [G8-AC2](change-design.md#g8-ac2), [CD-D-7](change-design.md#cd-d-7), [CD-D-18](change-design.md#cd-d-18) | nowy wycinek 3; R0, R1, R2 (ścieżki wykonania), R3 [P-B-40](#p-b-40)–[P-B-45](#p-b-45), strategia testów | 2026-11-24 |
+| 3 | (projekt) przebudowa w jądrze: zliczanie w komórkach, suma prefiksowa, rozpisanie | Siatka ścieżki wielu dyspozycji to posortowana tablica (`nativeBuildGrid`, `nativeSortGrid*`, wyszukiwanie binarne w `nativeEmitCandidates`, `NativeGeometryKernels:179–317`) | w jądrze siatka haszowana z 2048 kubełkami w pamięci grupy (wybór pamięci projekt zostawia planowi); dwie implementacje chroni [P-B-44](#p-b-44) | 2026-11-24 |
+| 3 | Bariery między fazami w grupie | Repozytorium nie używa `mem_flags::mem_device`; widoczność daje `memoryBarrier` enkodera | zadanie 26 (próba) | 2026-11-24 |
+| 3 | Pakietowo zmniejszony limit kandydatów ([G8-AC4](change-design.md#g8-ac4)) | `candidateLimitPerObject = 128` to stała statyczna (`NM/NativeMetalSolver.swift:289`) | przełącznik `candidateLimitPerObject` skraca tylko wiersz; zadanie 29 | 2026-11-24 |
+| 3 | Telemetria przebudów | `gridRebuildCount` = pary − 1 (`NM/NativeMetalSubstepLoop.swift:122`), przebudowy z zapasu w osobnym `marginRebuildCount`; `grid_rebuild_max` liczy pary | `gridRebuildCount` = przebudowy wymuszone zapasem, `marginRebuildCount` usunięte, nowe `substepBufferCount` i `executionPath`; klucze raportu; zadania 27, 29 | 2026-11-24 |
+| 3 | Kolejna para zaczyna od przebudowy | `encodePair` zawsze koduje `encodeBroadphase`; `prepareContinuation` (`NM/NativeMetalSolver.swift:885`) zeruje `contactControl`; koniec kroku ma dyspozycje bez bramki (`:775–865`) | zadanie 30 | 2026-11-24 |
+| 3 | Dokumentacja wydania gotowa po zadaniu 21 | Pary buforów opisują `docs/integration-guide.md:17`, `docs/MIGRATION-v4.md:82–84`, `README.md:49, :62`, `PublicWorldStressView.swift:37`; nagłówek raportu „same command buffer” czyta `PerfGuardTests` (odchylenie nr 29) | zadania 29 i 34; nagłówek raportu bez zmian | 2026-11-24 |
+| 3 | Bazy perf guard z zadania 22 obowiązują wydanie | Zapisane na starym kodowaniu i pod obciążeniem (odchylenie nr 31) | ponowny `--record` i A/B w wycinku 4 | 2026-11-24 |
+| 3 | PR poprzedniego wycinka z uwagami | Gałąź nie ma PR (lista PR dla gałęzi pusta) | zadanie 40: szkic PR do `main` dla przeglądu wycinków 1–3, scalenie w wycinku 4 | 2026-11-24 |
+| 3 | Zadania wielkości wycinka 1 | Workerom zajmowały 150–200 tys. tokenów kontekstu; zadania 7, 14, 15 dzielone na porcje | wycinek 3 w piętnastu zadaniach po jednym zdaniu, wydzielenie funkcji osobno od jądra pętli | 2026-11-24 |
 
 ## Implementation deviations
 
