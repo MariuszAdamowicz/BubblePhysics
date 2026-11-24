@@ -442,13 +442,61 @@ Każde zadanie zostawia pakiet z kompilującymi się testami (`swift build --bui
 Zadania 18–22 wykonuje agent. Zadania 23–25 wymagają człowieka albo wychodzą poza tę maszynę. Pomiary na Macu biegną na bezczynnej maszynie (load average ≤ 2 w `uptime`, README).
 
 18. Powierzchnia bez działania i czerwone testy: cztery nowe przypadki `PublicWorldStressBenchmark.Scene` (na razie pusty świat) i nowe klucze raportu z zerami, a do tego klasy `StressSubstepReportTests` (klucze z telemetrii klatek), `BudgetSceneTests` (każda scena ma 150 baniek i liczy bez `worldFailed`; w `.headOn128` i `.shotIntoCrowd` co najmniej 10 % mierzonych klatek ma więcej niż 1 podkrok, a `substep_max` jest co najmniej 3 × większe niż w `.restingCrowd`) i `MigrationGuideTests` (README „Wersja 4.0.0” z linkiem do `MIGRATION-v4.md`, `## 4.0.0` w `CHANGELOG.md`, w `MIGRATION-v4.md` nazwy `substepLimitExceeded`, `unsupportedJointBody`, `unsupportedBubbleWithDynamicRigidBody` i ograniczenie sztywnego `contactStiffness`), covering [P-B-28](#p-b-28), [P-B-29](#p-b-29), [P-B-34](#p-b-34) · verify: `swift build --build-tests && ! swift test --filter "StressSubstepReportTests|BudgetSceneTests|MigrationGuideTests"`
+
+    ```text
+    $ swift build --build-tests && ! swift test --filter "StressSubstepReportTests|BudgetSceneTests|MigrationGuideTests"
+    @8e309a1 (faza czerwona, raport porcji): testy czerwone → verify exit 0
+    @6ce1cd8 (po wycinku): Executed 23 tests, with 0 failures (0 unexpected)
+    exit=1 — oczekiwane: negacja dowodziła czerwonej fazy; testy są teraz zielone
+    ```
+
 19. Nowe klucze `PublicWorldStressReport` z `benchmarkTelemetry` każdej mierzonej klatki: `substep_p95`, `substep_max`, `substep_histogram`, `grid_rebuild_max`, `longest_frame_ms`, `telemetry_physics_gpu_p95_ms`, `telemetry_contour_gpu_p95_ms` oraz `host_render_wait_p95_ms` z nowego pakietowego `BubbleWorld.benchmarkRenderWaitMilliseconds`, mierzonego wokół `commitAndWait` (`PUB/BubbleWorld.swift:390`). To część `host_publication_p95_ms` („w tym”), a nie osobny odcinek: publikacja, suma odcinków klatki i prognoza iPhone'a X (`DevicePrediction.swift:210`) zostają bez zmian. `host_waiting_p95_ms` dalej mierzy czekanie na bufor końca kroku (`NM/NativeMetalSolver.swift:926`). Dotychczasowy `gpu_physics_p95_ms` z serii samej fizyki zostaje bez zmian, bo czyta go prognoza iPhone'a X w perf guardzie (`DevicePrediction.swift:115`), covering [P-B-28](#p-b-28) · verify: `swift test --filter "StressSubstepReportTests|PerfGuardTests|AcceptanceSceneTests"`
+
+    ```text
+    $ swift test --filter "StressSubstepReportTests|PerfGuardTests|AcceptanceSceneTests"
+    Executed 73 tests, with 0 failures (0 unexpected)
+    exit=0
+    ```
+
 20. Cztery sceny [G8-AC2](change-design.md#g8-ac2) w przypadkach `Scene` (tłum w spoczynku; gumka w pełnym naciągnięciu do ściany; dwie bańki 128 czołowo po 10³ j/s; „2” wystrzelona 3 · 10³ j/s w tłum). Nazwy scen w raporcie (`Scene.name`) mają myślniki jak `stress-300`: `resting-crowd`, `band-to-wall`, `head-on-128`, `shot-into-crowd`. Uczestnicy uderzeń startują z toru, którego tłum nie zajmie: tłum jest w ramce ścian z otworem, „2” startuje poza ramką i wlatuje przez otwór, a para 128 ma osobny pas oddzielony statyczną krawędzią. W obu scenach uderzenia `stepTransaction` co 20 klatek, także w części mierzonej, nadaje od nowa pozycje i prędkości uczestników (`.replace`), żeby uderzenia nie skończyły się w rozgrzewce i nie zniknęły poniżej p95. Sceny mają próg `p95_gate` 16,67 ms, i w liście `scenes` w `PublicWorldStressView`, covering [P-B-29](#p-b-29) · verify: `swift test --filter BudgetSceneTests && test "$(grep -cE '\.(restingCrowd|bandToWall|headOn128|shotIntoCrowd)' Benchmarks/iOS/BubblePhysicsBench/App/PublicWorldStressView.swift)" -eq 4 && xcodebuild -project Benchmarks/iOS/BubblePhysicsBench/BubblePhysicsBench.xcodeproj -scheme BubblePhysicsBench -configuration Release -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build`
+
+    ```text
+    $ swift test --filter BudgetSceneTests && test "$(grep -cE …PublicWorldStressView.swift)" -eq 4 && xcodebuild … BubblePhysicsBench -configuration Release …
+    Executed 9 tests, with 0 failures (0 unexpected)
+    ** BUILD SUCCEEDED **
+    exit=0
+    ```
+
 21. `MIGRATION-v4.md` uzupełniony o odrzucanie przegubów z bańkami i o sztywne K_c jako znane ograniczenie. Proza `docs/integration-guide.md` przepisana na 4.0.0: tytuł, wiersz 17 (fizyka we własnych buforach, render w buforze gry), 93–101, 119–122 (opór i gumka liczone na GPU w podkrokach, zakres K_band ≤ m / (16 · dt²), [CD-D-20](change-design.md#cd-d-20)), 128–130 i 246. `README.md`: wersja w wierszu 5 z linkiem do `MIGRATION-v4.md` i opis w wierszu 17. Sekcja `## 4.0.0` w `CHANGELOG.md` i link do `MIGRATION-v4.md` we wstępie, covering [P-B-34](#p-b-34) · verify: `swift test --filter "MigrationGuideTests|IntegrationGuideTests" && grep -q '^# Przewodnik integracji BubblePhysics 4.0' docs/integration-guide.md && ! grep -nE 'contactCompliance|contactDampingRatio|BubbleContactCompliance|XPBD|3600 · m|jednym buforze poleceń na klatkę' docs/integration-guide.md README.md`
+
+    ```text
+    $ swift test --filter "MigrationGuideTests|IntegrationGuideTests" && grep -q '^# Przewodnik integracji BubblePhysics 4.0' … && ! grep -nE '…' docs/integration-guide.md README.md
+    Executed 12 tests, with 0 failures (0 unexpected)
+    exit=0
+    ```
+
 22. Nowe bazy perf guard (`--record` dla każdej sceny) i raport `docs/benchmarks/v4.0.0-mac-ab-<data>.md`: perf guard i stress z worktree tagu `v3.0.2` i z tej gałęzi na zmianę, na tym samym Macu. Raport mówi, że scena stress-300 w 4.0.0 jest inna (trójkąt po torze, 287 baniek), i że kalibracja prognozy iPhone'a X (`docs/benchmarks/iphone-x-calibration.json`) pochodzi ze starego silnika, więc `--check-prediction` jest do czasu nowej kalibracji mylące, covering [P-B-30](#p-b-30) · verify: `! git diff --quiet main -- docs/benchmarks/perf-guard.json && swift run -c release BubblePhysicsPerfGuard && grep -q 'v3.0.2' docs/benchmarks/v4.0.0-mac-ab-*.md && grep -q 'iphone-x-calibration' docs/benchmarks/v4.0.0-mac-ab-*.md`
+
+    ```text
+    $ ! git diff --quiet main -- docs/benchmarks/perf-guard.json && swift run -c release BubblePhysicsPerfGuard && grep -q 'v3.0.2' … && grep -q 'iphone-x-calibration' …
+    PASS stress-300: p95 15.5872 ms, punkt odniesienia 15.1889 ms, limit 16.7078 ms (+2.6%)
+    FAIL mixed: p95 2.9209 ms, punkt odniesienia 2.3189 ms, limit 2.5508 ms (+26.0%)
+    PASS decals: p95 15.6633 ms, punkt odniesienia 15.6729 ms, limit 17.2402 ms (-0.1%)
+    PASS acceptance: p95 16.0980 ms, punkt odniesienia 15.7069 ms, limit 17.2776 ms (+2.5%)
+    load averages: 5,51 6,51 6,18 (plan: ≤ 2)
+    exit=1 — NIEZALICZONE (@6ce1cd8); zob. odchylenie nr 31
+    ```
+
 23. **Człowiek:** pomiar na iPhonie X w Release (podpis z własnego `Signing.local.xcconfig`, fizyczne urządzenie), cztery sceny [G8-AC2](change-design.md#g8-ac2), raporty z jednego przebiegu na jednym commicie w jednym pliku `docs/benchmarks/v4.0.0-iphone-x.md` (powtórka nadpisuje plik, historia zostaje w git), z mierzonym commitem i z oboma czekaniami CPU (`host_waiting_p95_ms`, `host_render_wait_p95_ms`), co mierzy koszt odstępstwa od [CD-D-18](change-design.md#cd-d-18); p95 klatki powyżej 16,67 ms w którejkolwiek scenie wstrzymuje tag i wraca do autora jako decyzja o lokalnym h, covering [P-B-29](#p-b-29) · verify: `F=docs/benchmarks/v4.0.0-iphone-x.md && for n in resting-crowd band-to-wall head-on-128 shot-into-crowd; do grep -q "scene=$n" $F || exit 1; done && test "$(grep -o 'p95_gate=pass' $F | wc -l)" -eq 4 && ! grep -q 'p95_gate=fail' $F`
 24. **Człowiek, poza repozytorium:** bramka przeciskania na gałęzi gry wskazującej na `feature/engine-4-0-0` (warunek wejścia: gra zmigrowana do 4.0.0), raport w `docs/benchmarks/v4.0.0-game-gate.md` ze stałymi kluczami `runs=15/15`, `joins_all=yes` (40 łączeń w każdym przebiegu), `penetration=0`, `escapes=0`, `worldFailed=0` i z wersjami `PhysicsGate.json` i `PhysicsTuning.json` oraz rozbieżnościami względem specyfikacji, covering [P-B-33](#p-b-33) · verify: `F=docs/benchmarks/v4.0.0-game-gate.md && for k in 'runs=15/15' 'joins_all=yes' 'penetration=0' 'escapes=0' 'worldFailed=0'; do grep -qx "$k" $F || exit 1; done`
 25. **Człowiek:** PR gałęzi do `main` (opis zmieniany przez `gh api PATCH`), scalenie po zaliczeniu zadań 23 i 24, anotowany tag `v4.0.0` („BubblePhysics 4.0.0”) na commicie scalającym · verify: `git ls-remote --tags origin v4.0.0 | grep -q v4.0.0`
+
+    ```text
+    Zadania 23–25 (człowiek) jeszcze niewykonane @6ce1cd8: verify każdego exit=1 (brak docs/benchmarks/v4.0.0-iphone-x.md, docs/benchmarks/v4.0.0-game-gate.md, tagu v4.0.0)
+    $ swift test   # komenda testów planu, @6ce1cd8
+    Executed 1562 tests, with 1 test skipped and 0 failures (0 unexpected) in 802.560 seconds
+    exit=0
+    ```
 
 ## Deviations from Design
 
@@ -503,3 +551,9 @@ Zadania 18–22 wykonuje agent. Zadania 23–25 wymagają człowieka albo wychod
 | 24 | 1 | przegląd | change | Poprawki po przeglądzie końcowym (e03ccb2): zdarzenia łączenia, sensory i `nativeRigidFinish` idą przez bramki końca kroku (wcześniej dublowały się przy kilku parach), więc łączenie wykrywa się tylko z kontaktów końca kroku; `contactCandidateOverflowCount` to maksimum po parach z jednego budowania siatki; nowe pole telemetrii `marginRebuildCount` (przebudowy wymuszone zapasem); usunięty martwy `NativeMetalKinematicPose`. | approved | 2026-11-24 |
 | 25 | 1 | 16 | gap | Proza `docs/integration-guide.md` (linie 96, 99, 246) dalej opisuje `contactCompliance`, `contactDampingRatio` i `BubbleResult.contactCompliance`; `IntegrationGuideTests` sprawdza tylko bloki kodu. Do przepisania w wycinku 2. | approved | 2026-11-24 |
 | 26 | 1 | 15 | gap | Obserwacje bez zmian w silniku: przy sztywnym K_c (10⁵) dojazd kandydata bez członu 1/ω w h pozwala leapfrogowi wnieść energię (odbicie ok. 4× szybsze); tłum 150 baniek przy B = 2,5 i K_c ≈ 5·10⁵ kończy się `substepLimitExceeded`. Poza zakresem gry (K_c ≈ 229), ważne przy twardszych materiałach. | approved | 2026-11-24 |
+| 27 | 2 | 19, przegląd | change | Czekanie na render nie mierzy się wokół `commitAndWait` (`PUB/BubbleWorld.swift:390`), bo w klatce z solverem bufor wywołującego kończy `NativeMetalSolver`; pomiar wokół `commandExecutor.complete` w solverze, nowe pole `NativeMetalFrameProfile.renderWaitMilliseconds` (`package`, po przeglądzie; wcześniej `public`), `BubbleWorld.benchmarkRenderWaitMilliseconds` = to pole + `commitAndWait`; nowe `NativePublicWorld.discardPublishedRenderWait()` zeruje je w kroku bez ciał. Część `host_publication_p95_ms`, odcinki klatki bez zmian. | pending | 2026-11-24 |
+| 28 | 2 | 19 | change | `PublicWorldStressFrameSample` ma pola prymitywne (`substepCount`, `gridRebuildCount`, `physicsGPUMilliseconds`, `contourGPUMilliseconds`, `renderWaitMilliseconds`) zamiast `NativeMetalFrameTelemetry?`, żeby moduł benchmarku nie zależał od `BubblePhysicsNativeMetal`. `substep_histogram` w tekście raportu ma przedziały potęg dwójki (`1:…,2:…,3-4:…`), dokładne liczby są w polu `substepHistogram`. | pending | 2026-11-24 |
+| 29 | 2 | 20, przegląd | change | Parametry scen [G8-AC2](change-design.md#g8-ac2) wybrane w implementacji: tłum r 12 / m 0,36 / nakładanie 0,5 j / γ = 1, „2” r 24 / m 1, gumka K_band 22 do celu 900 j. `band-to-wall` po przeglądzie: „2” startuje w spoczynku w równowadze d* przy ścianie (wcześniej rozpędzała się i odbijała, 132/300 klatek bez kontaktu); teraz 2 podkroki w każdej klatce. `BudgetScenes` zawężone do `fileprivate`. Nagłówek raportu `path=… same command buffer` (`PublicWorldStressBenchmark.swift:179`) zostaje nieaktualny, bo czytają go `PerfGuardTests` i parser kalibracji iPhone'a. | pending | 2026-11-24 |
+| 30 | 2 | 21, przegląd | change | Poza wierszami z zadania 21: komentarz regionu `mtkview-loop` w `Examples/BubblePhysicsShowcase/App/MetalHostView.swift` (i blok w przewodniku); podsekcja „Wystrzał z zawartej pary miękkiej” zastąpiona opisem sztywnego materiału i limitu podkroków, nagłówek „Tłok baniek, sztywność kontaktu i zły punkt”; po przeglądzie przewodnik :121 (bez `maximumLinearSpeed`, v ≈ K·s/(m·γ)) i :126 (gumka w podkrokach); `README.md` także zdanie o kernelach zawierania, :63 (przyczyny `contactViolation`, `substepLimitExceeded`), :79 (osobne bufory fizyki) i tabela scen (287 baniek, `mixed` bez brył dynamicznych, cztery sceny G8-AC2). | pending | 2026-11-24 |
+| 31 | 2 | 22 | gap | **Do decyzji:** pomiar A/B i bazy `perf-guard.json` zapisane przy load average 3–7 (plan: ≤ 2; Spotlight, Docker, inne sesje). v3.0.2 skakało o ok. 40 % między rundami, `mixed` jest dwumodalne (2,3 / 3,9 ms). Verify zadania 22 w weryfikacji końcowej (load ok. 6) nie przeszło: `mixed` +26 % ponad bazę 2,32 ms; pozostałe trzy sceny PASS. Do wyboru: ponowny `--record` i A/B na bezczynnej maszynie albo przyjęcie baz jak są. | pending | 2026-11-24 |
+| 32 | 2 | 22 | gap | **Do decyzji (ustalenie pomiaru):** gęste sceny na Macu ok. 4× wolniejsze niż w v3.0.2: p95 `stress-300` 3,4 → 15,3 ms, `decals` 3,7 → 15,5, `acceptance` 4,9 → 15,7; `gpu_physics` w `acceptance` ok. 1,1 → 12,7 ms. Przyczyna: `substep_p95=49`, `substep_max=69` (9–64 podkroków na klatkę). Sceny G8-AC2 na Macu (informacyjnie): `shot-into-crowd` p95 10,2 ms przy 53 podkrokach. Wpływa na ocenę na iPhonie X (zadanie 23) i decyzję o lokalnym h. Prognoza iPhone'a X ze starej kalibracji (113,6 ms) jest bez znaczenia. | pending | 2026-11-24 |
