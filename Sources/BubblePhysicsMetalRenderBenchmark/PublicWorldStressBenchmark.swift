@@ -769,21 +769,137 @@ package enum Stress300Scene {
     }
 }
 
-/// Cztery sceny G8-AC2 (150 baniek każda). Na razie świat pusty: zadanie 20 planu wypełnia sceny.
+/// Cztery sceny G8-AC2, po 150 baniek, wszystkie w regionie 375 × 700 z jednym materiałem baniek (K_c gry, γ = 1) i bryłami tylko
+/// statycznymi. Tłum to bańki r 12 (m 0,36) na siatce z nakładaniem 0,5 j (ściśnięty tłum, który leży w spoczynku).
+/// - `restingCrowd`: 150 baniek tłumu w ramie ścian.
+/// - `bandToWall`: 149 baniek tłumu nad poziomą ścianą i bańka „2” (r 24, m 1) w pasie pod nią, ciągnięta gumką gry (K_band 22) do celu
+///   o 900 j za pionową ścianą, więc po rozpędzie stoi dociśnięta siłą ok. 1,3 · 10⁴.
+/// - `headOn128`: 148 baniek tłumu pod poziomą ścianą i dwie bańki 128 (r 64) w osobnym pasie nad nią, lecące na siebie po 10³ j/s.
+/// - `shotIntoCrowd`: 149 baniek tłumu w ramie ścian z otworem w lewej ścianie i bańka „2” startująca poza ramą (w pasie przy lewej
+///   ścianie regionu), wystrzelona 3 · 10³ j/s przez otwór w tłum.
+/// Sceny uderzeń (`headOn128`, `shotIntoCrowd`) powtarzają uderzenie co 20 klatek transakcją `.replace` uczestników z pozycją i
+/// prędkością początkową, więc uderzenia są też w części mierzonej, a nie tylko w rozgrzewce.
 package enum BudgetScenes {
     package static let bubbleCount = 150
     package static let regionHeight: Float = 700
+    /// Co ile klatek sceny uderzeń wznawiają uderzenie.
+    package static let impactInterval = 20
+    package static let headOnSpeed: Float = 1_000
+    package static let shotSpeed: Float = 3_000
+
+    private static let width: Float = 375
+    private static let bubbleMaterial = PhysicsMaterialID(rawValue: 1)
+    private static let rigidMaterial = PhysicsMaterialID(rawValue: 2)
+    private static let style = RenderMaterialID(rawValue: 1)
+    private static let crowdRadius: Float = 12
+    private static let crowdMass: Float = 0.36
+    private static let crowdSpacing: Float = 23.5
+    private static let bandStiffness: Float = 22
+    /// Masa gry m = (n / 2)^(1 / 2,25): „2” ma 1, 128 ma ok. 6,35.
+    private static let mass128: Float = pow(64, 1 / 2.25)
 
     package static func configuration() throws -> WorldConfiguration {
-        try WorldConfiguration(simulationRegion: WorldRectangle(min: [0, 0], max: [375, regionHeight]), fixedTimeStep: 1.0 / 60)
+        try WorldConfiguration(simulationRegion: WorldRectangle(min: [0, 0], max: [width, regionHeight]), fixedTimeStep: 1.0 / 60)
+    }
+
+    /// Bańka spoza tłumu: „2” albo 128, z prędkością początkową i polityką gumki (tylko `bandToWall`).
+    private struct Participant {
+        let id: ObjectID
+        let position: WorldPoint
+        let velocity: WorldPoint
+        let radius: Float
+        let mass: Float
+        var drivePolicy: BubbleDrivePolicy?
+
+        func object() throws -> WorldObject {
+            .bubble(try BubbleDescriptor(id: id, position: position, velocity: velocity, targetRadius: radius, mass: mass,
+                                         physicsMaterialID: BudgetScenes.bubbleMaterial, renderMaterialID: BudgetScenes.style,
+                                         drivePolicy: drivePolicy))
+        }
+    }
+
+    private static func participants(_ scene: PublicWorldStressBenchmark.Scene) throws -> [Participant] {
+        switch scene {
+        case .bandToWall:
+            return [Participant(id: ObjectID(rawValue: 150), position: [60, 100], velocity: .zero, radius: 24, mass: 1,
+                                drivePolicy: try BubbleDrivePolicy(bandStiffness: bandStiffness))]
+        case .headOn128:
+            return [Participant(id: ObjectID(rawValue: 149), position: [80, 585], velocity: [headOnSpeed, 0], radius: 64, mass: mass128),
+                    Participant(id: ObjectID(rawValue: 150), position: [295, 585], velocity: [-headOnSpeed, 0], radius: 64, mass: mass128)]
+        case .shotIntoCrowd:
+            return [Participant(id: ObjectID(rawValue: 150), position: [30, 365], velocity: [shotSpeed, 0], radius: 24, mass: 1)]
+        default:
+            return []
+        }
+    }
+
+    /// Cel gumki `bandToWall`: 900 j za pionową ścianą, w osi pasu.
+    private static let bandTarget: WorldPoint = [900, 100]
+
+    /// `count` miejsc siatki o kroku `crowdSpacing` w pasie x ∈ [minX, maxX], wyśrodkowanej w poziomie i w pionie względem `centerY`.
+    private static func crowdPositions(count: Int, minX: Float, maxX: Float, centerY: Float) -> [WorldPoint] {
+        let columns = Int((maxX - minX) / crowdSpacing)
+        let rows = (count + columns - 1) / columns
+        let x0 = minX + (maxX - minX - Float(columns) * crowdSpacing) / 2 + crowdSpacing / 2
+        let y0 = centerY - Float(rows - 1) * crowdSpacing / 2
+        return (0..<count).map { [x0 + Float($0 % columns) * crowdSpacing, y0 + Float($0 / columns) * crowdSpacing] }
+    }
+
+    private static func crowd(_ scene: PublicWorldStressBenchmark.Scene, count: Int) -> [WorldPoint] {
+        switch scene {
+        case .bandToWall: return crowdPositions(count: count, minX: 1, maxX: 374, centerY: 450)
+        case .headOn128: return crowdPositions(count: count, minX: 1, maxX: 374, centerY: 235)
+        case .shotIntoCrowd: return crowdPositions(count: count, minX: 61, maxX: 374, centerY: 365)
+        default: return crowdPositions(count: count, minX: 1, maxX: 374, centerY: 350)
+        }
+    }
+
+    private static func rectangle(_ id: UInt64, _ low: WorldPoint, _ high: WorldPoint) throws -> WorldObject {
+        .rigidBody(try RigidBodyDescriptor(id: ObjectID(rawValue: id),
+            vertices: [low, [high.x, low.y], high, [low.x, high.y]],
+            physicsMaterialID: rigidMaterial, renderMaterialID: style))
+    }
+
+    /// Cztery ściany regionu i ściany wewnętrzne sceny (poziome przegrody, ściana oporowa, rama z otworem).
+    private static func walls(_ scene: PublicWorldStressBenchmark.Scene) throws -> [WorldObject] {
+        var walls = [try rectangle(10_001, [0, 0], [1, regionHeight]), try rectangle(10_002, [374, 0], [375, regionHeight]),
+                     try rectangle(10_003, [0, 0], [375, 1]), try rectangle(10_004, [0, regionHeight - 1], [375, regionHeight])]
+        switch scene {
+        case .bandToWall:
+            walls += [try rectangle(10_005, [1, 200], [374, 201]), try rectangle(10_006, [330, 1], [331, 200])]
+        case .headOn128:
+            walls += [try rectangle(10_005, [1, 470], [374, 471])]
+        case .shotIntoCrowd:
+            // Rama tłumu: lewa ściana na x = 60 z otworem y ∈ [330, 400] (średnica „2” 48, otwór 70).
+            walls += [try rectangle(10_005, [60, 1], [61, 330]), try rectangle(10_006, [60, 400], [61, regionHeight - 1])]
+        default:
+            break
+        }
+        return walls
     }
 
     package static func initialTransaction(_ scene: PublicWorldStressBenchmark.Scene) throws -> WorldTransaction {
-        WorldTransaction()
+        var transaction = try WorldTransaction()
+            .updatePhysicsMaterial(bubbleMaterial, material: PhysicsMaterial(kind: .bubble, contactStiffness: Stress300Scene.bubbleContactStiffness, damping: 1))
+            .updatePhysicsMaterial(rigidMaterial, material: PhysicsMaterial(kind: .rigid))
+            .updateRenderMaterial(style, material: RenderMaterial())
+        let extra = try participants(scene)
+        for (index, position) in crowd(scene, count: bubbleCount - extra.count).enumerated() {
+            transaction = transaction.add(.bubble(try BubbleDescriptor(id: ObjectID(rawValue: UInt64(index + 1)), position: position,
+                targetRadius: crowdRadius, mass: crowdMass, physicsMaterialID: bubbleMaterial, renderMaterialID: style)))
+        }
+        for participant in extra { transaction = transaction.add(try participant.object()) }
+        for wall in try walls(scene) { transaction = transaction.add(wall) }
+        if scene == .bandToWall, let band = extra.first { transaction = transaction.beginPlayerDrive(band.id, target: bandTarget) }
+        return transaction
     }
 
+    /// Co `impactInterval` klatek (od drugiej serii, bo krok 0 ma jeszcze stan początkowy) `.replace` uczestników uderzenia.
     package static func stepTransaction(_ scene: PublicWorldStressBenchmark.Scene, step: Int) throws -> WorldTransaction? {
-        nil
+        guard scene == .headOn128 || scene == .shotIntoCrowd, step > 0, step % impactInterval == 0 else { return nil }
+        var transaction = WorldTransaction()
+        for participant in try participants(scene) { transaction = transaction.replace(participant.id, with: try participant.object()) }
+        return transaction
     }
 }
 

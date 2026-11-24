@@ -14,6 +14,10 @@ struct PublicWorldStressView: View {
         ("mixed", .mixed),
         ("decals", .decals),
         ("acceptance", .acceptance),
+        ("resting-crowd", .restingCrowd),
+        ("band-to-wall", .bandToWall),
+        ("head-on-128", .headOn128),
+        ("shot-into-crowd", .shotIntoCrowd),
         ("capacity", nil)
     ]
 
