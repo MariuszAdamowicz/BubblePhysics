@@ -91,12 +91,13 @@ final class NativeMetalSubstepSurfaceTests: XCTestCase {
         XCTAssertEqual(NativeMetalExecutionPath.multipleDispatches.rawValue, "multipleDispatches")
     }
 
-    // P-B-40: `gridRebuildCount` to przebudowy wymuszone zapasem; osobny licznik `marginRebuildCount` znika (zadanie 30), więc telemetria
-    // ma jedno pole przebudów i osobne `substepBufferCount` dla par buforów.
+    // P-B-40: `gridRebuildCount` to przebudowy wymuszone zapasem, a pary buforów liczy osobne `substepBufferCount`; osobnego licznika przebudów
+    // zapasu nie ma (zadanie 30), więc telemetria ma dokładnie te pola.
     func testTelemetryHasOneRebuildFieldAndNoSeparateMarginCounter() {
         let labels = Set(Mirror(reflecting: NativeMetalFrameTelemetry()).children.compactMap(\.label))
-        XCTAssertFalse(labels.contains("marginRebuildCount"), "gridRebuildCount liczy przebudowy z zapasu, osobny licznik jest zbędny")
-        XCTAssertTrue(labels.isSuperset(of: ["gridRebuildCount", "substepBufferCount", "executionPath", "singleGroupWidth"]))
+        XCTAssertEqual(labels, ["backend", "commandBufferCount", "encoderCount", "contactCount", "didEncounterNonFinite", "fallbackReason",
+                                "gpuMilliseconds", "substepCount", "gridRebuildCount", "substepBufferCount", "executionPath",
+                                "singleGroupWidth", "physicsGPUMilliseconds", "contourGPUMilliseconds"])
     }
 
     // G6-AC2, G6-AC5: awaria silnika niesie obiekty, krawędź, odległość i człon h.

@@ -58,7 +58,7 @@ final class GridRebuildTests: XCTestCase {
         XCTAssertGreaterThan(checked, 0, "\(context): zapis podkroków jest pusty")
         // Przebudowa wymuszona zapasem obwiedni (znacznik `h_zapasu`), nie każda para po pierwszej: para, która tylko wyczerpała swoje podkroki,
         // też zaczyna od przebudowy, ale nie dowodzi, że zapas działa. Klatka wybicia ma ją mieć sama, bez okna ±1 klatki.
-        let margin = recorded.map { $0.telemetry?.marginRebuildCount ?? 0 }
+        let margin = recorded.map { $0.telemetry?.gridRebuildCount ?? 0 }
         guard ForceScene.check(plan.frame < margin.count, "\(context): zapisano tylko \(margin.count) klatek") else { return }
         XCTAssertGreaterThanOrEqual(margin[plan.frame], 1, "\(context): klatka wybicia ma dać przebudowę z powodu zapasu, przebudowy z zapasu \(margin)")
     }

@@ -79,11 +79,9 @@ public struct NativeMetalFrameTelemetry: Equatable, Sendable {
     public let gpuMilliseconds: Double
     /// Liczba podkroków fizyki w klatce (G8-AC1).
     public let substepCount: Int
-    /// Liczba przebudów siatki w klatce (G8-AC1).
+    /// Liczba przebudów siatki wymuszonych zapasem obwiedni w klatce (człon `h_zapasu`, CD-D-23; G8-AC1), bez par buforów, które skończyły się
+    /// samym wyczerpaniem podkroków. Pary liczy `substepBufferCount`.
     public let gridRebuildCount: Int
-    /// Przebudowy siatki wymuszone zapasem obwiedni (człon `h_zapasu`, CD-D-23), bez par, które skończyły się samym wyczerpaniem podkroków.
-    /// Pole pakietowe: testy G5-AC3 sprawdzają nim, że klatka wybicia przebudowała siatkę z powodu zapasu.
-    package var marginRebuildCount = 0
     /// Liczba par buforów podkroków w klatce (G8-AC1): 1 w ścieżce jednej dyspozycji.
     public let substepBufferCount: Int
     /// Ścieżka wykonania kroku (G8-AC4).

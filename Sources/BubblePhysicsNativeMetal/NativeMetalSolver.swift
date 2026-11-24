@@ -931,8 +931,8 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
             contactCount: Int(contactResult.counts.y), didEncounterNonFinite: safetyResult.counts.w & 1 != 0,
             gpuMilliseconds: timing.gpuMilliseconds, substepCount: Int(substepResult.counts.y),
             gridRebuildCount: loop.rebuildCount, physicsGPUMilliseconds: loop.substepGPUMilliseconds,
-            contourGPUMilliseconds: loop.endGPUMilliseconds)
-        diagnostics.marginRebuildCount = loop.marginRebuildCount
+            contourGPUMilliseconds: loop.endGPUMilliseconds, substepBufferCount: loop.pairCount,
+            executionPath: .multipleDispatches)
         func rejectSafety(_ reason: NativeMetalWorldError, guardCause: NativeMetalGuardCause? = nil,
                           detail: NativeMetalFailureDetail? = nil) -> NativeMetalSafetyFailure {
             .init(reason: reason, telemetry: diagnostics, profile: profile, guardCause: guardCause, detail: detail)
@@ -1029,14 +1029,11 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
             candidatePairCount: Int(contactResult.counts.x), generatedContactCount: contacts.count,
             totalMilliseconds: milliseconds(waitingEnd - encodingStart), hasNonFiniteState: false)
         var frame = NativeSolverFrame(bubbles: bubbles, contacts: contacts, report: report,
-            telemetry: {
-                var telemetry = NativeMetalFrameTelemetry(backend: .nativeMetal, commandBufferCount: 2 * loop.pairCount,
-                    encoderCount: 2 * loop.pairCount, contactCount: contacts.count, gpuMilliseconds: timing.gpuMilliseconds,
-                    substepCount: Int(substepResult.counts.y), gridRebuildCount: loop.rebuildCount,
-                    physicsGPUMilliseconds: loop.substepGPUMilliseconds, contourGPUMilliseconds: loop.endGPUMilliseconds)
-                telemetry.marginRebuildCount = loop.marginRebuildCount
-                return telemetry
-            }(),
+            telemetry: NativeMetalFrameTelemetry(backend: .nativeMetal, commandBufferCount: 2 * loop.pairCount,
+                encoderCount: 2 * loop.pairCount, contactCount: contacts.count, gpuMilliseconds: timing.gpuMilliseconds,
+                substepCount: Int(substepResult.counts.y), gridRebuildCount: loop.rebuildCount,
+                physicsGPUMilliseconds: loop.substepGPUMilliseconds, contourGPUMilliseconds: loop.endGPUMilliseconds,
+                substepBufferCount: loop.pairCount, executionPath: .multipleDispatches),
             profile: profile, contours: contours, renderData: renderData,
             bubbleEffectiveRadii: effectiveRadii, bubbleBoundsRecords: bubbleBounds, isComplete: true)
         if !snapshot.hitTests.isEmpty {

@@ -118,11 +118,9 @@ enum NativeMetalSubstepLoop {
 /// Wynik `NativeMetalSubstepLoop.run`: liczba par buforów klatki i czasy GPU osobno dla buforów podkroków (fizyka) i końca kroku (kontur).
 struct NativeMetalSubstepRun {
     var pairCount = 0
-    /// Przebudowy siatki w klatce: każda para po pierwszej zaczyna od przebudowy siatki i kandydatów (zapas wyczerpany albo para za krótka).
-    var rebuildCount: Int { max(0, pairCount - 1) }
-    /// Przebudowy wymuszone znacznikiem zapasu obwiedni (`h_zapasu` wyznaczył h albo zapas się wyczerpał, `substepControl.counts.z`),
-    /// bez par, które skończyły się tylko dlatego, że wyczerpały swoje podkroki (CD-D-23).
-    var marginRebuildCount = 0
+    /// Przebudowy siatki wymuszone znacznikiem zapasu obwiedni (`h_zapasu` wyznaczył h albo zapas się wyczerpał, `substepControl.counts.z`),
+    /// bez par, które skończyły się tylko dlatego, że wyczerpały swoje podkroki (CD-D-23). To `gridRebuildCount` telemetrii; pary liczy `pairCount`.
+    var rebuildCount = 0
     /// Odrzuceni kandydaci kontaktu w klatce: największy licznik z jednej budowy siatki (każda para zaczyna od zera), bo ta sama odrzucona
     /// para wraca przy każdej przebudowie i suma po parach liczyłaby ją wielokrotnie (CD-D-26).
     var candidateOverflowCount = 0
@@ -153,7 +151,7 @@ extension NativeMetalSubstepLoop {
             if result.pairCount > 0 {
                 // Czasy i liczniki klatki zostają; licznik podkroków pary i znacznik przebudowy zaczynają od zera.
                 var control = state.substepControl.contents().load(as: NativeMetalSubstepControl.self)
-                if control.counts.z != 0 { result.marginRebuildCount += 1 }
+                if control.counts.z != 0 { result.rebuildCount += 1 }
                 control.counts.x = 0
                 control.counts.z = 0
                 state.substepControl.contents().storeBytes(of: control, as: NativeMetalSubstepControl.self)
