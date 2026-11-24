@@ -16,6 +16,7 @@
 **Agent Sessions:** claude-code: 0b82330b-fb83-4b04-aefe-26c383e182b0
 **Agent Sessions:** claude-code: 81244e7e-69bb-4886-914d-f4a1c198298f
 **Agent Sessions:** claude-code: 3d26ea7e-2d4f-475f-a99e-1d3bc836ca00
+**Agent Sessions:** claude-code: b1361b89-9f3e-4255-9fd2-710307dcb8d9
 
 ---
 
@@ -69,7 +70,7 @@ flowchart LR
 
 ### R2 — Seams — where the change attaches to existing code
 
-**Pliki.** Rdzeń zmiany siedzi w `NM/` i w shaderach. Model i Runtime zmieniają kształt danych i walidację. Wszystko poza wierszami oznaczonymi `(slice 2)` i `(slice 3)` buduje wycinek 1.
+**Pliki.** Rdzeń zmiany siedzi w `NM/` i w shaderach. Model i Runtime zmieniają kształt danych i walidację. Wszystko poza wierszami oznaczonymi `(slice 2)`, `(slice 3)` i `(slice 4)` buduje wycinek 1.
 
 ```diff
   Package.swift                                   # + zasób NativeForceKernels, NativeXPBDKernels → NativeContactKernels
@@ -107,12 +108,12 @@ flowchart LR
 + Sources/BubblePhysicsNativeMetalDiagnostics/    # runnery i adapter na nowym NativeSolverInput i telemetrii
 + Benchmarks/macOS/BubblePhysicsReferenceBench/   # kompiluje się z nowym modułem diagnostycznym
 + Sources/BubblePhysicsMetalRenderBenchmark/PublicWorldStressBenchmark.swift # K_c, bez brył dynamicznych z bańkami; PublicWorldStressReport z histogramem podkroków, najdłuższą klatką i czasem GPU fizyki osobno od konturu, nowe przypadki Scene: cztery sceny G8-AC2 po 150 baniek, .restingCrowd, .bandToWall, .headOn128, .shotIntoCrowd o nazwach raportu resting-crowd, band-to-wall, head-on-128, shot-into-crowd; uderzenia powtarzane co 20 klatek przez stepTransaction (slice 2); + klucze substep_buffers_max i execution_path, grid_rebuild_max z przebudów wymuszonych zapasem (slice 3)
-+ Benchmarks/macOS/BubblePhysicsPerfGuard/        # działa na K_c; bazy w docs/benchmarks/perf-guard.json odświeżone przez --record (slice 2)
++ Benchmarks/macOS/BubblePhysicsPerfGuard/        # działa na K_c; bazy w docs/benchmarks/perf-guard.json odświeżone przez --record (slice 2, ponownie na kodzie wycinka 3: slice 4)
 + Benchmarks/iOS/BubblePhysicsBench/App/PublicWorldStressView.swift # kompiluje się; cztery sceny G8-AC2 w przełączniku scen (slice 2); opis ścieżki bez „ten sam command buffer” (slice 3)
 + Examples/BubblePhysicsShowcase/App/BubbleScene.swift # contactStiffness zamiast deformability
 + docs/integration-guide.md  # bloki kodu zgodne ze Showcase; proza na K_c i γ, tytuł 4.0 (slice 2); wiersz 17: jedna dyspozycja do 1024 baniek, pary buforów powyżej (slice 3)
 + docs/MIGRATION-v4.md       # NEW tabela symboli, zmiany zachowania i znane ograniczenia; przeguby z bańkami i sztywne K_c (slice 2); pola telemetrii :81–84 i ścieżki wykonania (slice 3)
-+ docs/benchmarks/           # NEW raporty v4.0.0: Mac naprzemiennie z v3.0.2, iPhone X, bramka gry (slice 2)
++ docs/benchmarks/           # NEW raporty v4.0.0: pierwszy A/B z Maca i pierwszy, niezaliczony pomiar iPhone X (slice 2); powtórka v4.0.0-iphone-x.md, v4.0.0-mac-ab-release.md, v4.0.0-game-gate.md (slice 4)
 + CHANGELOG.md, README.md    # wydanie 4.0.0, README bez XPBD w opisie produktu (slice 2); README :49, :62 i CHANGELOG o ścieżkach wykonania (slice 3)
 + Tests/                     # audyt według spec. 4, w tym BubblePhysicsMetalRenderTests (sceny z materiałem bańki); MigrationGuideTests na 4.0.0 (slice 2); próba barier, testy ścieżek i bliźniak ścieżek (slice 3)
 ```
@@ -713,6 +714,17 @@ Zadania są małe, bo w wycinku 1 pojedyncze zadanie zajmowało workerowi 150–
     exit=0 — szkic PR https://github.com/MariuszAdamowicz/BubblePhysics/pull/11 (push wykonał właściciel)
     ```
 
+## Slice 4: Wydanie 4.0.0
+
+**Delivers:** tag `v4.0.0` na `main` po zaliczonym budżecie klatki na iPhonie X, z nowymi bazami z Maca i zaliczoną bramką gry.
+
+Wycinek nie ma kodu. Zadania 41, 43 i 44 wykonuje człowiek, a zadanie 42 agent. Kolejność wynika z ryzyka: pomiar na iPhonie X idzie pierwszy, bo jego porażka zmienia kod i unieważnia bazy z Maca. Niezaliczone zadanie 41 zatrzymuje wycinek. Decyzja wraca wtedy do autora przez change-design, z trzema kandydatkami [CD-D-28](change-design.md#cd-d-28): stały koszt klatki (dwa czekania CPU), koszt bufora końca kroku albo zmiana kryterium [G8-AC2](change-design.md#g8-ac2). Push z sesji agenta blokuje strażnik worktree, więc push robi człowiek.
+
+41. **Człowiek:** push gałęzi i pomiar czterech scen [G8-AC2](change-design.md#g8-ac2) na iPhonie X w Release (fizyczne urządzenie, podpis z `Signing.local.xcconfig`) na commicie z wycinkiem 3, z raportami jednego przebiegu nadpisującymi `docs/benchmarks/v4.0.0-iphone-x.md` razem z linią „Mierzony kod: \`<pełny sha>\`”, oboma czekaniami CPU i `single_group_width` A11 (odchylenie implementacji nr 45), covering [P-B-29](#p-b-29) · verify: `F=docs/benchmarks/v4.0.0-iphone-x.md && S=$(grep -oE 'Mierzony kod: .[0-9a-f]{40}' $F | grep -oE '[0-9a-f]{40}') && git merge-base --is-ancestor f88baeb "$S" && for n in resting-crowd band-to-wall head-on-128 shot-into-crowd; do grep -qx "scene=$n" $F || exit 1; done && for k in p95_gate=pass execution_path=singleDispatch failed_frames=0 non_finite_frames=0 safety=pass; do test "$(grep -oE "(^|; )$k(;|$)" $F | wc -l)" -eq 4 || exit 1; done && ! grep -q 'p95_gate=fail' $F`
+42. Nowe bazy perf guard (`--record` dla każdej sceny) i nowy raport `docs/benchmarks/v4.0.0-mac-ab-release.md` z perf guarda i stress mierzonych na zmianę z worktree tagu `v3.0.2` i z tej gałęzi na tym samym Macu, z linią `measured_commit=<pełny sha>` i jedną linią `load=<średnia 1-min z uptime>` na rundę, przy czym obciążenie powyżej 2 (README) zatrzymuje zadanie przed nagraniem baz i wraca do autora, covering [P-B-30](#p-b-30) · verify: `R=docs/benchmarks/v4.0.0-mac-ab-release.md && ! git cat-file -e f88baeb:$R 2>/dev/null && grep -q 'v3.0.2' $R && git merge-base --is-ancestor f88baeb "$(sed -n 's/^measured_commit=\([0-9a-f]\{40\}\)$/\1/p' $R)" && test "$(grep -c '^load=' $R)" -ge 3 && awk -F= '/^load=/{gsub(",",".",$2); if ($2+0 > 2) bad=1} END{exit bad}' $R && ! git diff --quiet f88baeb -- docs/benchmarks/perf-guard.json && swift run -c release BubblePhysicsPerfGuard`
+43. **Człowiek, poza repozytorium:** bramka przeciskania na gałęzi gry zmigrowanej do 4.0.0 i wskazującej na `feature/engine-4-0-0`, z raportem `docs/benchmarks/v4.0.0-game-gate.md` zawierającym stałe klucze w osobnych liniach (`runs=15/15`, `joins_all=yes` dla 40 łączeń w każdym przebiegu, `penetration=0`, `escapes=0`, `worldFailed=0`), wersje `PhysicsGate.json` i `PhysicsTuning.json` oraz rozbieżności względem specyfikacji, covering [P-B-33](#p-b-33) · verify: `F=docs/benchmarks/v4.0.0-game-gate.md && for k in 'runs=15/15' 'joins_all=yes' 'penetration=0' 'escapes=0' 'worldFailed=0'; do grep -qx "$k" $F || exit 1; done`
+44. **Człowiek:** push, PR #11 ze szkicu do przeglądu (opis zmieniany przez `gh api PATCH`), scalenie do `main` po zaliczeniu zadań 41–43, anotowany tag `v4.0.0` („BubblePhysics 4.0.0”) na commicie scalającym · verify: `git fetch origin --tags && git merge-base --is-ancestor v4.0.0 origin/main && test "$(git cat-file -t v4.0.0)" = tag`
+
 ## Deviations from Design
 
 | ID | Type | Status | Design updated? | Note |
@@ -748,6 +760,11 @@ Zadania są małe, bo w wycinku 1 pojedyncze zadanie zajmowało workerowi 150–
 | 3 | Siatka haszowana w grupie z 2048 kubełkami (pierwsza wersja replanu) | Przegląd autora: dwie z 9 komórek wokół bańki mogą trafić do jednego kubełka, para trafiłaby do wiersza dwa razy, a bliźniak złapie to tylko przypadkiem | R2: wpis kubełka przechowuje komórkę i jest filtrowany; przełącznik `gridHashBucketCount`, [P-B-46](#p-b-46), `InGroupGridCollisionTests`; zadania 27, 29, 36 | 2026-11-24 |
 | 3 | Drobne uwagi przeglądu autora | Próba barier biegnie tylko na Macu (A11 to inna rodzina GPU); verify zadania 35 przepuszczało samo wywołanie; szerokość grupy na A11 może być 256–384 | cel wycinka 4: `execution_path=singleDispatch` i zero błędnych klatek na iPhonie X; verify zadania 35 wymaga definicji i wywołania; `singleGroupWidth` w telemetrii i `single_group_width` w raporcie | 2026-11-24 |
 | 3 | Zadania wielkości wycinka 1 | Workerom zajmowały 150–200 tys. tokenów kontekstu; zadania 7, 14, 15 dzielone na porcje | wycinek 3 w piętnastu zadaniach po jednym zdaniu, wydzielenie funkcji osobno od jądra pętli | 2026-11-24 |
+| 4 | Przekroczenie budżetu na iPhonie X wraca do autora jako decyzja o lokalnym h (przeniesione zadanie 23) | Rewizja projektu (`a327825`): lokalne h wypada; kandydatki to stały koszt klatki, koszt bufora końca kroku i zmiana kryterium ([CD-D-28](change-design.md#cd-d-28), [G8-AC2](change-design.md#g8-ac2)) | zadanie 41 przy porażce zatrzymuje wycinek i odsyła do change-design z tymi kandydatkami | 2026-11-24 |
+| 4 | Verify pomiaru sprawdza nazwy scen i `p95_gate` | Cel wycinka wymaga `execution_path=singleDispatch`, `failed_frames=0`, `non_finite_frames=0`, `safety=pass` (klucze w `PublicWorldStressBenchmark.swift:131–141`); stary raport z kodu `8ef9d87` przeszedłby sprawdzenie nazw | verify zadania 41 sprawdza wszystkie klucze ×4 i to, że mierzony commit zawiera `f88baeb` | 2026-11-24 |
+| 4 | Verify baz i A/B z zadania 22 (`! git diff --quiet main`, glob `v4.0.0-mac-ab-*.md`) | Oba warunki spełniają już stare pliki wycinka 2 (odchylenie implementacji nr 31) | zadanie 42 porównuje bazy z `f88baeb` i wymaga nowego pliku raportu z commitem i obciążeniem | 2026-11-24 |
+| 4 | Kolejność iPhone X → bramka gry → tag, bazy zapisane wcześniej | Porażka na iPhonie X zmienia kod i unieważnia bazy | kolejność: iPhone X (41) → bazy i A/B (42) → bramka gry (43) → PR i tag (44) | 2026-11-24 |
+| 4 | Gałąź wypchnięta | `feature/engine-4-0-0` wyprzedza `origin` o `f88baeb`; push z sesji agenta blokuje strażnik worktree | push w zadaniach 41 i 44 (człowiek) | 2026-11-24 |
 
 ## Implementation deviations
 
