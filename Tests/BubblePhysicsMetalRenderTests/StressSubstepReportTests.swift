@@ -64,6 +64,21 @@ final class StressSubstepReportTests: XCTestCase {
         XCTAssertEqual(try value(of: "single_group_width", in: text), String(report.singleGroupWidth))
     }
 
+    /// P-B-40: klucze ścieżki raportu to agregaty z pól klatek (`PublicWorldStressFrameSample`): maksimum buforów podkroków i szerokości
+    /// grupy oraz wspólna ścieżka klatek. Test liczy je z klatek sam, więc nie zależy od tego, którą ścieżkę wybrał silnik.
+    func testExecutionPathKeysAreAggregatedFromTheFrameSamples() async throws {
+        let run = try await run(measured: 20)
+        let buffers = try run.measured.map { try XCTUnwrap($0.substepBufferCount, "klatka \($0.index) bez liczby buforów podkroków") }
+        let paths = Set(try run.measured.map { try XCTUnwrap($0.executionPath, "klatka \($0.index) bez ścieżki") })
+        let widths = try run.measured.map { try XCTUnwrap($0.singleGroupWidth, "klatka \($0.index) bez szerokości grupy") }
+        XCTAssertGreaterThanOrEqual(buffers.min() ?? 0, 1, "każda klatka ma co najmniej jeden bufor podkroków")
+        XCTAssertEqual(run.report.substepBuffersMax, buffers.max())
+        XCTAssertEqual(paths.count, 1, "scena stress-300 liczy się jedną ścieżką w każdej klatce: \(paths)")
+        XCTAssertEqual(run.report.executionPath, paths.first)
+        XCTAssertEqual(run.report.singleGroupWidth, widths.max())
+        XCTAssertEqual(try value(of: "execution_path", in: run.report.text), paths.first)
+    }
+
     /// P-B-40: `grid_rebuild_max` liczy przebudowy wymuszone zapasem, a nie pary buforów; jedna dyspozycja nie może mieć ich więcej
     /// niż podkroków w klatce.
     func testGridRebuildMaxCountsMarginRebuildsOnly() async throws {

@@ -79,7 +79,10 @@ Silnik kończy świat błędem tylko wtedy, gdy sam się pomylił, a nie gdy sce
 `NativeMetalFrameTelemetry` ma nowe pola:
 
 - `substepCount`: liczba podkroków ostatniej klatki.
-- `gridRebuildCount`: liczba przebudów siatki broadphase w ostatniej klatce. Zapas listy kandydatów kurczy się z prędkością, więc szybka bańka wymusza przebudowę w tej samej klatce.
+- `gridRebuildCount`: liczba przebudów siatki broadphase wymuszonych zapasem obwiedni w ostatniej klatce. Zapas listy kandydatów kurczy się z prędkością, więc szybka bańka wymusza przebudowę w tej samej klatce. Pary buforów, które skończyły się tylko wyczerpaniem podkroków, nie są przebudowami.
+- `substepBufferCount`: liczba par buforów podkroków w ostatniej klatce (jedna para to bufor podkroków i bufor końca kroku).
+- `executionPath`: ścieżka wykonania kroku, `singleDispatch` albo `multipleDispatches`.
+- `singleGroupWidth`: szerokość grupy wątków jądra pętli podkroków; 0 w ścieżce wielu dyspozycji.
 - `physicsGPUMilliseconds`: czas GPU fizyki (podkroki).
 - `contourGPUMilliseconds`: czas GPU konturu i końca kroku.
 

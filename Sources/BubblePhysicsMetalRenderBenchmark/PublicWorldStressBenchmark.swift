@@ -34,13 +34,14 @@ public struct PublicWorldStressReport: Sendable {
     public internal(set) var substepMax = 0
     /// Histogram podkroków: liczba podkroków w klatce → liczba klatek mierzonych, które tyle miały.
     public internal(set) var substepHistogram: [Int: Int] = [:]
-    /// Największa liczba przebudów siatki w jednej klatce mierzonej (`NativeMetalFrameTelemetry.gridRebuildCount`).
+    /// Największa liczba przebudów siatki wymuszonych zapasem w jednej klatce mierzonej (`NativeMetalFrameTelemetry.gridRebuildCount`).
     public internal(set) var gridRebuildMax = 0
     /// Największa liczba par buforów podkroków w jednej klatce mierzonej (`NativeMetalFrameTelemetry.substepBufferCount`); 1 w jednej dyspozycji.
     public internal(set) var substepBuffersMax = 0
-    /// Ścieżka wykonania z telemetrii klatek (`singleDispatch` albo `multipleDispatches`); `none`, gdy klatki nie miały telemetrii.
+    /// Ścieżka wykonania z telemetrii klatek (`singleDispatch` albo `multipleDispatches`; `mixed`, gdy klatki serii różniły się ścieżką);
+    /// `none`, gdy klatki nie miały telemetrii.
     public internal(set) var executionPath = "none"
-    /// Szerokość grupy jądra pętli podkroków (`NativeMetalFrameTelemetry.singleGroupWidth`); 0 w ścieżce wielu dyspozycji.
+    /// Szerokość grupy jądra pętli podkroków (`NativeMetalFrameTelemetry.singleGroupWidth`, największa z klatek); 0 w ścieżce wielu dyspozycji.
     public internal(set) var singleGroupWidth = 0
     /// Najdłuższa klatka mierzona serii z renderem w milisekundach (ta sama liczba co `max_ms`, pod nazwą z G8-AC2).
     public internal(set) var longestFrameMilliseconds = 0.0
@@ -161,6 +162,10 @@ package struct PublicWorldStressFrameSample {
     /// (`BubbleWorld.benchmarkRenderWaitMilliseconds`).
     package let substepCount: Int?
     package let gridRebuildCount: Int?
+    /// Pary buforów podkroków klatki, ścieżka wykonania (`singleDispatch` albo `multipleDispatches`) i szerokość grupy jądra pętli (G8-AC1, G8-AC4).
+    package let substepBufferCount: Int?
+    package let executionPath: String?
+    package let singleGroupWidth: Int?
     package let physicsGPUMilliseconds: Double?
     package let contourGPUMilliseconds: Double?
     package let renderWaitMilliseconds: Double
@@ -443,6 +448,11 @@ public enum PublicWorldStressBenchmark {
         report.substepP95 = substeps.isEmpty ? 0 : Int(p95(substeps.map(Double.init)))
         report.substepHistogram = Dictionary(full.substepCounts.map { ($0, 1) }, uniquingKeysWith: +)
         report.gridRebuildMax = full.gridRebuildCounts.max() ?? 0
+        report.substepBuffersMax = full.substepBufferCounts.max() ?? 0
+        // Ścieżka z klatek: wspólna wartość, a gdy klatki się różnią (świat przekroczył próg w trakcie serii), `mixed`.
+        let paths = Set(full.executionPaths)
+        report.executionPath = paths.count == 1 ? paths.first! : (paths.isEmpty ? "none" : "mixed")
+        report.singleGroupWidth = full.singleGroupWidths.max() ?? 0
         report.longestFrameMilliseconds = measured.last ?? 0
         report.telemetryPhysicsGPUP95Milliseconds = full.physicsGPUMilliseconds.isEmpty ? 0 : p95(full.physicsGPUMilliseconds)
         report.telemetryContourGPUP95Milliseconds = full.contourGPUMilliseconds.isEmpty ? 0 : p95(full.contourGPUMilliseconds)
@@ -525,6 +535,9 @@ public enum PublicWorldStressBenchmark {
         /// telemetrii liczy się już jako nieudana, więc tu jej nie ma.
         var substepCounts: [Int] = []
         var gridRebuildCounts: [Int] = []
+        var substepBufferCounts: [Int] = []
+        var executionPaths: [String] = []
+        var singleGroupWidths: [Int] = []
         var physicsGPUMilliseconds: [Double] = []
         var contourGPUMilliseconds: [Double] = []
         var renderWaitMilliseconds: [Double] = []
@@ -598,6 +611,9 @@ public enum PublicWorldStressBenchmark {
                 if let telemetry {
                     result.substepCounts.append(telemetry.substepCount)
                     result.gridRebuildCounts.append(telemetry.gridRebuildCount)
+                    result.substepBufferCounts.append(telemetry.substepBufferCount)
+                    result.executionPaths.append(telemetry.executionPath.rawValue)
+                    result.singleGroupWidths.append(telemetry.singleGroupWidth)
                     result.physicsGPUMilliseconds.append(telemetry.physicsGPUMilliseconds)
                     result.contourGPUMilliseconds.append(telemetry.contourGPUMilliseconds)
                 }
@@ -609,6 +625,8 @@ public enum PublicWorldStressBenchmark {
                 preparationMilliseconds: preparation, encodingMilliseconds: encoding, waitingMilliseconds: waiting,
                 publicationMilliseconds: publication, gpuMilliseconds: gpuMilliseconds, renderEncoded: renderEncoded,
                 substepCount: telemetry?.substepCount, gridRebuildCount: telemetry?.gridRebuildCount,
+                substepBufferCount: telemetry?.substepBufferCount, executionPath: telemetry?.executionPath.rawValue,
+                singleGroupWidth: telemetry?.singleGroupWidth,
                 physicsGPUMilliseconds: telemetry?.physicsGPUMilliseconds, contourGPUMilliseconds: telemetry?.contourGPUMilliseconds,
                 renderWaitMilliseconds: world.benchmarkRenderWaitMilliseconds,
                 startNanoseconds: start, encodingStartNanoseconds: encodingStartMark,

@@ -159,7 +159,8 @@ final class MigrationGuideTests: XCTestCase {
     func testMigrationV4NamesTheAddedSymbolsAndTheKnownLimits() throws {
         let migration = try read("docs/MIGRATION-v4.md")
         for needle in ["contactStiffness", "PhysicsParameter.contactStiffness", "WorldFailureDetail", "contactViolation",
-                       "substepCount", "gridRebuildCount", "physicsGPUMilliseconds", "contourGPUMilliseconds",
+                       "substepCount", "gridRebuildCount", "substepBufferCount", "executionPath", "singleGroupWidth",
+                       "physicsGPUMilliseconds", "contourGPUMilliseconds",
                        "rigidRotationBudget", "candidateLimitPerObject", "contactCandidateOverflow"] {
             XCTAssertTrue(migration.contains(needle), "MIGRATION-v4.md nie wspomina o \(needle)")
         }
