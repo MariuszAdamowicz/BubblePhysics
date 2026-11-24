@@ -88,7 +88,14 @@ public final class BubbleWorld {
         (stepper as? NativeCompleteStepper)?.publishedTelemetry
     }
     /// Czekanie CPU na bufor renderu wywołującego w ostatnim `advance`, w milisekundach; część publikacji kroku (po końcu kroku).
-    package var benchmarkRenderWaitMilliseconds: Double { 0 }
+    /// Krok ze solverem czeka w `NativeMetalSolver` (`NativeMetalFrameProfile.renderWaitMilliseconds`), a klatka bez kroku i świat
+    /// bez ciał przez `commitAndWait`. Zero, gdy `advance` nic nie czekał (bez bufora wywołującego).
+    package var benchmarkRenderWaitMilliseconds: Double {
+        let solver = stepsInLastAdvance > 0 ? (stepper as? NativeCompleteStepper)?.publishedFrameProfile?.renderWaitMilliseconds ?? 0 : 0
+        return lastCommitAndWaitMilliseconds + solver
+    }
+    /// Czas `commitAndWait` w ostatnim `advance`; zerowany na jego początku.
+    private var lastCommitAndWaitMilliseconds = 0.0
     package var benchmarkFrameProfile: NativeMetalFrameProfile? {
         (stepper as? NativeCompleteStepper)?.publishedFrameProfile
     }
@@ -282,6 +289,7 @@ public final class BubbleWorld {
             return lastFrame
         }
         stepsInLastAdvance = 0
+        lastCommitAndWaitMilliseconds = 0
         lastAdvanceIssue = nil
         didRenderLastAdvance = false
         // Stan końcowy wygrywa z pauzą i z krokiem.
@@ -390,6 +398,8 @@ public final class BubbleWorld {
 
     /// Zatwierdza bufor gry i czeka na jego ukończenie; status inny niż `completed` to błąd wykonania (stan „zawiódł”).
     private func commitAndWait(_ commandBuffer: MTLCommandBuffer) async throws {
+        let start = DispatchTime.now().uptimeNanoseconds
+        defer { lastCommitAndWaitMilliseconds += Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000 }
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             commandBuffer.addCompletedHandler { completed in
                 if completed.status == .completed { continuation.resume() }

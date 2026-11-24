@@ -1086,7 +1086,12 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
                 bodies: rigidState.count > 0 ? rigidState.bodies : nil, bodyIDs: rigidState.workingIDs)
             try beforeCommit(working)
         }
-        if let commandBuffer { _ = try await commandExecutor.complete(commandBuffer) }
+        if let commandBuffer {
+            // Drugie czekanie CPU w klatce (CD-D-18): na bufor renderu wywołującego. Leży po `waitingEnd`, więc jest częścią publikacji.
+            let renderWaitStart = DispatchTime.now().uptimeNanoseconds
+            _ = try await commandExecutor.complete(commandBuffer)
+            frame.profile.renderWaitMilliseconds = milliseconds(DispatchTime.now().uptimeNanoseconds - renderWaitStart)
+        }
         // Synchroniczna publikacja dopiero po pomyślnym wykonaniu i readbacku.
         rigidState.publish(rigidResult.objects)
         publishedPolygons = rigidResult.objects

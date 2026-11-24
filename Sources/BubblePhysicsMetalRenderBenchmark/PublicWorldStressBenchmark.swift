@@ -96,7 +96,16 @@ public struct PublicWorldStressReport: Sendable {
     /// Histogram podkroków jako `przedział:klatki` oddzielone przecinkami, tylko niepuste przedziały rosnąco. Przedziały to potęgi
     /// dwójki: `1`, `2`, `3-4`, `5-8`, `9-16`, …
     package static func substepHistogramText(_ histogram: [Int: Int]) -> String {
-        ""
+        var buckets: [Int: Int] = [:]
+        for (substeps, frames) in histogram where frames > 0 {
+            var upper = 1
+            while upper < substeps { upper *= 2 }
+            buckets[upper, default: 0] += frames
+        }
+        return buckets.keys.sorted().map { upper in
+            let label = upper == 1 ? "1" : upper == 2 ? "2" : "\(upper / 2 + 1)-\(upper)"
+            return "\(label):\(buckets[upper] ?? 0)"
+        }.joined(separator: ",")
     }
 
     public var text: String {
@@ -421,6 +430,16 @@ public enum PublicWorldStressBenchmark {
             contactCandidateOverflow: ([world, physicsWorld] + splitWorlds).reduce(0) { $0 + $1.diagnostics.contactCandidateOverflow },
             maximumCandidatesPerObject: allSeries.map(\.maximumCandidates).max() ?? 0,
             candidateLimit: BubbleWorld.contactCandidateLimit, gateMilliseconds: spec.gateMilliseconds)
+        // Klucze G8-AC1/G8-AC2 z telemetrii klatek mierzonych serii z renderem.
+        let substeps = full.substepCounts.sorted()
+        report.substepMax = substeps.last ?? 0
+        report.substepP95 = substeps.isEmpty ? 0 : substeps[min(substeps.count - 1, Int(ceil(Double(substeps.count) * 0.95)) - 1)]
+        report.substepHistogram = Dictionary(full.substepCounts.map { ($0, 1) }, uniquingKeysWith: +)
+        report.gridRebuildMax = full.gridRebuildCounts.max() ?? 0
+        report.longestFrameMilliseconds = measured.last ?? 0
+        report.telemetryPhysicsGPUP95Milliseconds = full.physicsGPUMilliseconds.isEmpty ? 0 : p95(full.physicsGPUMilliseconds)
+        report.telemetryContourGPUP95Milliseconds = full.contourGPUMilliseconds.isEmpty ? 0 : p95(full.contourGPUMilliseconds)
+        report.hostRenderWaitP95Milliseconds = full.renderWaitMilliseconds.isEmpty ? 0 : p95(full.renderWaitMilliseconds)
         report.bubbleCountMismatchFrames = allSeries.reduce(0) { $0 + $1.bubbleCountMismatchFrames }
         report.allSeriesComplete = allSeries.allSatisfy { $0.frameMilliseconds.count == measuredFrames }
         report.worstThermalState = allSeries.map(\.worstThermalState).max { $0.rawValue < $1.rawValue } ?? .nominal
@@ -495,6 +514,13 @@ public enum PublicWorldStressBenchmark {
         var encodingMilliseconds: [Double] = []
         var waitingMilliseconds: [Double] = []
         var publicationMilliseconds: [Double] = []
+        /// Telemetria klatek mierzonych (`benchmarkTelemetry`): podkroki, przebudowy siatki i czasy GPU fizyki i konturu; klatka bez
+        /// telemetrii liczy się już jako nieudana, więc tu jej nie ma.
+        var substepCounts: [Int] = []
+        var gridRebuildCounts: [Int] = []
+        var physicsGPUMilliseconds: [Double] = []
+        var contourGPUMilliseconds: [Double] = []
+        var renderWaitMilliseconds: [Double] = []
         var nonFiniteFrames = 0
         var fallbackFrames = 0
         var failedFrames = 0
@@ -534,7 +560,8 @@ public enum PublicWorldStressBenchmark {
                 || world.diagnostics.lastAdvanceIssue != nil { result.failedFrames += 1 }
             var gpuMilliseconds = 0.0, preparation = 0.0, encoding = 0.0, waiting = 0.0, publication = 0.0
             var encodingStartMark: UInt64 = 0, waitingEndMark: UInt64 = 0
-            if let telemetry = world.benchmarkTelemetry {
+            let telemetry = world.benchmarkTelemetry
+            if let telemetry {
                 if telemetry.didEncounterNonFinite { result.nonFiniteFrames += 1 }
                 if telemetry.fallbackReason != nil { result.fallbackFrames += 1 }
                 gpuMilliseconds = telemetry.gpuMilliseconds
@@ -561,15 +588,21 @@ public enum PublicWorldStressBenchmark {
                 result.encodingMilliseconds.append(encoding)
                 result.waitingMilliseconds.append(waiting)
                 result.publicationMilliseconds.append(publication)
+                if let telemetry {
+                    result.substepCounts.append(telemetry.substepCount)
+                    result.gridRebuildCounts.append(telemetry.gridRebuildCount)
+                    result.physicsGPUMilliseconds.append(telemetry.physicsGPUMilliseconds)
+                    result.contourGPUMilliseconds.append(telemetry.contourGPUMilliseconds)
+                }
+                result.renderWaitMilliseconds.append(world.benchmarkRenderWaitMilliseconds)
                 result.frameMilliseconds.append(elapsed)
             }
             result.maximumCandidates = max(result.maximumCandidates, world.diagnostics.maximumContactCandidatesPerObject)
             observer?(PublicWorldStressFrameSample(series: kind, index: index, frame: frame, elapsedMilliseconds: elapsed,
                 preparationMilliseconds: preparation, encodingMilliseconds: encoding, waitingMilliseconds: waiting,
                 publicationMilliseconds: publication, gpuMilliseconds: gpuMilliseconds, renderEncoded: renderEncoded,
-                substepCount: world.benchmarkTelemetry?.substepCount, gridRebuildCount: world.benchmarkTelemetry?.gridRebuildCount,
-                physicsGPUMilliseconds: world.benchmarkTelemetry?.physicsGPUMilliseconds,
-                contourGPUMilliseconds: world.benchmarkTelemetry?.contourGPUMilliseconds,
+                substepCount: telemetry?.substepCount, gridRebuildCount: telemetry?.gridRebuildCount,
+                physicsGPUMilliseconds: telemetry?.physicsGPUMilliseconds, contourGPUMilliseconds: telemetry?.contourGPUMilliseconds,
                 renderWaitMilliseconds: world.benchmarkRenderWaitMilliseconds,
                 startNanoseconds: start, encodingStartNanoseconds: encodingStartMark,
                 waitingEndNanoseconds: waitingEndMark, endNanoseconds: end))

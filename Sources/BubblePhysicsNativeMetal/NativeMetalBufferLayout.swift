@@ -300,6 +300,9 @@ public struct NativeMetalFrameProfile: Equatable, Sendable {
     public var rigidGeometryUploadCount = 0
     public var hostEncodingMilliseconds: Double = 0
     public var hostWaitingMilliseconds: Double = 0
+    /// Czekanie CPU na bufor renderu wywołującego (commit, wykonanie, uzupełnienie), po buforze końca kroku. Wchodzi w odcinek publikacji
+    /// (od `waitingEndNanoseconds` do powrotu z `advance`), nie w `hostWaitingMilliseconds`. Zero bez bufora wywołującego.
+    public var renderWaitMilliseconds: Double = 0
     /// Początek kodowania kroku w zegarze `DispatchTime.uptimeNanoseconds`, jak czas klatki w benchmarku;
     /// różnica względem początku `advance` to przygotowanie wejścia po stronie CPU.
     public var encodingStartNanoseconds: UInt64 = 0
