@@ -466,13 +466,13 @@ private struct StagingContext {
         guard jointBodiesAreSupported(joint) else { throw TransactionRejectionReason.unsupportedJointBody(joint.id) }
         state.joints[joint.id] = joint
     }
-    /// Więz wymaga ciała ruchomego (dynamic, motorDriven, playerDriven), nie dopuszcza `pathDriven`,
-    /// a bańka może być tylko w więzie dystansowym. Drugim końcem może być ciało nieruchome albo świat.
+    /// Więz wymaga ciała ruchomego (dynamic, motorDriven, playerDriven), nie dopuszcza `pathDriven`, a bańka w więzie nie jest
+    /// obsługiwana (silnik 4.0.0 nie ma przegubów z bańkami, CD-D-2). Drugim końcem może być ciało nieruchome albo świat.
     func jointBodiesAreSupported(_ joint: Joint) -> Bool {
         var movable = false
         for bodyID in [joint.bodyA] + (joint.bodyB.map { [$0] } ?? []) {
             guard let body = state.objects[bodyID] else { return false }
-            if case .bubble = body.descriptor, !joint.isDistance { return false }
+            if case .bubble = body.descriptor { return false }
             switch body.motionRole {
             case .pathDriven: return false
             case .dynamic, .motorDriven, .playerDriven: movable = true

@@ -13,7 +13,6 @@ public struct PublicWorldStressReport: Sendable {
     public let deviceName: String
     public let warmupFrames: Int
     public let measuredFrames: Int
-    public let solverIterationLimit: Int
     public let p95Milliseconds: Double
     /// Czas GPU całego command buffera: solver, kontury i bezpośredni renderer.
     public let gpuP95Milliseconds: Double
@@ -44,7 +43,6 @@ public struct PublicWorldStressReport: Sendable {
     /// Najgorszy stan termiczny urządzenia z klatek mierzonych wszystkich serii.
     public internal(set) var worstThermalState: ProcessInfo.ThermalState = .nominal
     public let maximumMilliseconds: Double
-    public let guardCorrections: Int
     public let nonFiniteFrames: Int
     public let fallbackFrames: Int
     public let failedFrames: Int
@@ -80,7 +78,7 @@ public struct PublicWorldStressReport: Sendable {
         """
         \(PublicWorldStressBenchmark.reportPathHeader)
         device=\(deviceName)
-        scene=\(scene); solver_iteration_limit=\(solverIterationLimit)
+        scene=\(scene)
         render_px=\(renderWidth)x\(renderHeight)
         warmup=\(warmupFrames); measured=\(measuredFrames)
         p95_ms=\(String(format: "%.4f", p95Milliseconds)); max_ms=\(String(format: "%.4f", maximumMilliseconds))
@@ -88,7 +86,7 @@ public struct PublicWorldStressReport: Sendable {
         host_preparation_p95_ms=\(String(format: "%.4f", hostPreparationP95Milliseconds)); host_publication_p95_ms=\(String(format: "%.4f", hostPublicationP95Milliseconds))
         host_encoding_p95_ms=\(String(format: "%.4f", hostEncodingP95Milliseconds)); host_waiting_p95_ms=\(String(format: "%.4f", hostWaitingP95Milliseconds))
         gpu_physics_p95_ms=\(String(format: "%.4f", gpuPhysicsP95Milliseconds)); gpu_render_estimate_ms=\(String(format: "%.4f", gpuRenderEstimateMilliseconds))
-        \(renderSplitLine)guard_corrections=\(guardCorrections); non_finite_frames=\(nonFiniteFrames)
+        \(renderSplitLine)non_finite_frames=\(nonFiniteFrames)
         fallback_frames=\(fallbackFrames); failed_frames=\(failedFrames)
         contour_cpu_readbacks=\(contourCPUReadbacks)
         contact_candidate_overflow=\(contactCandidateOverflow); max_candidates_per_object=\(maximumCandidatesPerObject); candidate_limit=\(candidateLimit)
@@ -124,7 +122,7 @@ package struct PublicWorldStressFrameSample {
 
 @MainActor
 public enum PublicWorldStressBenchmark {
-    /// Jedyne źródło progu akceptacji `stress-300` na iPhonie X (p95 pełnej klatki, limit solvera 4).
+    /// Jedyne źródło progu akceptacji `stress-300` na iPhonie X (p95 pełnej klatki).
     /// Roboczy budżet to 10 ms; właściciel zaakceptował odchylenie 4,6% zmierzone 2026-10-14
     /// (docs/benchmarks/native-metal-bubble-solver-2026-10-14.md).
     public nonisolated static let p95GateMilliseconds = 10.4568
@@ -226,9 +224,8 @@ public enum PublicWorldStressBenchmark {
         /// Transakcja przed krokiem `step` (numer od 0) albo `nil`, gdy scena nic wtedy nie zmienia.
         package func stepTransaction(step: Int) throws -> WorldTransaction? {
             switch self {
-            case .stress, .decals: return step > 0 ? try Stress300Scene.triangleReplacement(step: step) : nil
-            // Trójkąt jedzie sam według `KinematicDrive` z transakcji początkowej.
-            case .acceptance: return nil
+            // Trójkąt jedzie sam według `KinematicDrive` z transakcji początkowej (bryła nie przeskakuje nad bańkami).
+            case .stress, .decals, .acceptance: return nil
             case .mixed: return try MixedScene.stepTransaction(step: step)
             }
         }
@@ -352,14 +349,14 @@ public enum PublicWorldStressBenchmark {
         let extra = [clear, withoutDecals].compactMap { $0 }
         let allSeries = [full, physics] + extra
         var report = PublicWorldStressReport(scene: spec.name, deviceName: device.name, warmupFrames: warmupFrames,
-            measuredFrames: measured.count, solverIterationLimit: 4, p95Milliseconds: frameP95,
+            measuredFrames: measured.count, p95Milliseconds: frameP95,
             gpuP95Milliseconds: p95(full.gpuMilliseconds), hostNonGPUP95Milliseconds: p95(full.hostNonGPUMilliseconds),
             hostEncodingP95Milliseconds: p95(full.encodingMilliseconds),
             hostWaitingP95Milliseconds: p95(full.waitingMilliseconds),
             hostPreparationP95Milliseconds: p95(full.preparationMilliseconds),
             hostPublicationP95Milliseconds: p95(full.publicationMilliseconds),
             gpuPhysicsP95Milliseconds: p95(physics.gpuMilliseconds),
-            maximumMilliseconds: measured.last ?? .infinity, guardCorrections: full.guardCorrections,
+            maximumMilliseconds: measured.last ?? .infinity,
             nonFiniteFrames: allSeries.reduce(0) { $0 + $1.nonFiniteFrames },
             fallbackFrames: allSeries.reduce(0) { $0 + $1.fallbackFrames },
             failedFrames: allSeries.reduce(0) { $0 + $1.failedFrames },
@@ -442,7 +439,6 @@ public enum PublicWorldStressBenchmark {
         var encodingMilliseconds: [Double] = []
         var waitingMilliseconds: [Double] = []
         var publicationMilliseconds: [Double] = []
-        var guardCorrections = 0
         var nonFiniteFrames = 0
         var fallbackFrames = 0
         var failedFrames = 0
@@ -528,11 +524,15 @@ public enum PublicWorldStressBenchmark {
     }
 }
 
-/// Scena stress-300: 300 baniek, 4 ściany i kinematyczny trójkąt. Wspólna dla benchmarku, strażnika i testów.
+/// Scena stress-300: 300 baniek, 4 ściany i kinematyczny trójkąt z torem (`PathDrive`). Wspólna dla benchmarku, strażnika i testów.
 /// `bubbleCount` skaluje scenę przy stałej gęstości (15 kolumn, region rośnie wzdłuż osi y), np. 600 dla skalowania.
+/// Bańki leżą na siatce, a trójkąt startuje w jej środku: w 4.0.0 bryła nie może stanąć nad środkiem bańki (G7-AC1), więc
+/// miejsca siatki w obrysie startowym trójkąta (z zapasem na promień bańki) zostają puste, a pozostałe bańki leżą jak dotąd.
 package enum Stress300Scene {
     package static let defaultBubbleCount = 300
     private static let columns = 15
+    /// K_c baniek sceny: start gry (229), czyli prawo kontaktu z granicą na promieniu w skali, którą zobaczy gracz.
+    package static let bubbleContactStiffness: Float = 229
 
     /// Wysokość regionu: 700 dla 300 baniek (20 wierszy po 33,5 i 15 marginesu z obu stron).
     package static func regionHeight(bubbleCount: Int) -> Float {
@@ -549,11 +549,41 @@ package enum Stress300Scene {
     struct Decorations {
         let texture: TextureID
         let font: FontID
-        /// Scena akceptacyjna: materiały alfa, połowa baniek na warstwie 1 i trójkąt kinematyczny z `KinematicDrive`.
+        /// Scena akceptacyjna: materiały alfa i połowa baniek na warstwie 1.
         var acceptance = false
     }
 
-    /// Materiały, 300 baniek, ściany i trójkąt w pozycji początkowej.
+    /// Jedno miejsce siatki: numer bańki (od 0), środek i promień po losowaniu z jednego ciągu (ten sam co przy pełnej siatce).
+    private struct Slot {
+        let index: Int
+        let position: WorldPoint
+        let radius: Float
+    }
+
+    private static func slots(bubbleCount: Int) -> [Slot] {
+        var random = StressLCG(seed: 0x2B_60_F5)
+        let horizontalSpacing: Float = 345 / 15
+        let verticalSpacing: Float = 33.5
+        let baseRadius = min(horizontalSpacing, verticalSpacing) * 0.54
+        let start = triangleWaypoints(regionHeight: regionHeight(bubbleCount: bubbleCount))[0]
+        return (0..<bubbleCount).compactMap { index in
+            let column = index % columns, row = index / columns
+            let jitterX = (random.nextUnit() - 0.5) * horizontalSpacing * 0.12
+            let jitterY = (random.nextUnit() - 0.5) * verticalSpacing * 0.12
+            let radius = baseRadius * (0.78 + random.nextUnit() * 0.44)
+            let position: WorldPoint = [15 + (Float(column) + 0.5) * horizontalSpacing + jitterX,
+                                        15 + (Float(row) + 0.5) * verticalSpacing + jitterY]
+            // Zapas to największy możliwy promień bańki sceny (baseRadius · 1,22) z odstępem.
+            return distanceToTriangle(position, center: start) > baseRadius * 1.22 + 1 ? Slot(index: index, position: position, radius: radius) : nil
+        }
+    }
+
+    /// Liczba baniek, które scena naprawdę tworzy: miejsca siatki poza obrysem startowym trójkąta.
+    package static func placedBubbleCount(bubbleCount: Int = defaultBubbleCount) -> Int {
+        slots(bubbleCount: bubbleCount).count
+    }
+
+    /// Materiały, 300 baniek (bez miejsc w obrysie trójkąta), ściany i trójkąt w pozycji początkowej z torem.
     package static func initialTransaction(bubbleCount: Int = defaultBubbleCount) throws -> WorldTransaction {
         try initialTransaction(bubbleCount: bubbleCount, decorations: nil)
     }
@@ -568,7 +598,7 @@ package enum Stress300Scene {
         let styleID = RenderMaterialID(rawValue: 1)
         let upperStyleID = RenderMaterialID(rawValue: 2)
         var transaction = WorldTransaction()
-            .updatePhysicsMaterial(materialID, material: try PhysicsMaterial(kind: .bubble, contactStiffness: 1e9))
+            .updatePhysicsMaterial(materialID, material: try PhysicsMaterial(kind: .bubble, contactStiffness: bubbleContactStiffness))
             .updatePhysicsMaterial(polygonMaterialID, material: try PhysicsMaterial(kind: .rigid))
             .updateRenderMaterial(styleID, material: try RenderMaterial(texture: decorations?.texture,
                 color: acceptance ? RGBA(1, 1, 1, 0.9) : .white,
@@ -578,24 +608,14 @@ package enum Stress300Scene {
                 material: try RenderMaterial(texture: decorations?.texture, color: RGBA(0.8, 0.9, 1, 0.7), blend: .alpha,
                                              bubbleMapping: .attached))
         }
-        var random = StressLCG(seed: 0x2B_60_F5)
-        let horizontalSpacing: Float = 345 / 15
-        let verticalSpacing: Float = 33.5
-        let baseRadius = min(horizontalSpacing, verticalSpacing) * 0.54
-        for index in 0..<bubbleCount {
-            let column = index % columns, row = index / columns
-            let jitterX = (random.nextUnit() - 0.5) * horizontalSpacing * 0.12
-            let jitterY = (random.nextUnit() - 0.5) * verticalSpacing * 0.12
-            let radius = baseRadius * (0.78 + random.nextUnit() * 0.44)
-            let upper = acceptance && index % 2 == 1
+        for slot in slots(bubbleCount: bubbleCount) {
+            let upper = acceptance && slot.index % 2 == 1
             transaction = transaction.add(.bubble(try BubbleDescriptor(
-                id: ObjectID(rawValue: UInt64(index + 1)),
-                position: [15 + (Float(column) + 0.5) * horizontalSpacing + jitterX,
-                           15 + (Float(row) + 0.5) * verticalSpacing + jitterY],
-                targetRadius: radius, mass: max(1, radius * radius * 0.02),
+                id: ObjectID(rawValue: UInt64(slot.index + 1)), position: slot.position,
+                targetRadius: slot.radius, mass: max(1, slot.radius * slot.radius * 0.02),
                 physicsMaterialID: materialID, renderMaterialID: upper ? upperStyleID : styleID,
                 layer: upper ? 1 : 0,
-                decal: try decorations.map { try Decal.text(String(index % 100), source: .font($0.font)) })))
+                decal: try decorations.map { try Decal.text(String(slot.index % 100), source: .font($0.font)) })))
         }
         let walls: [[WorldPoint]] = [
             [[0,0], [1,0], [1,height], [0,height]],
@@ -608,61 +628,59 @@ package enum Stress300Scene {
                 id: ObjectID(rawValue: UInt64(10_001 + index)), vertices: vertices,
                 physicsMaterialID: polygonMaterialID, renderMaterialID: styleID)))
         }
-        // Tor sceny akceptacyjnej jest odwzorowany w osi y na wysokość regionu (poziomy pojemności); inne sceny zostają przy 700.
-        let triangleRegionHeight = acceptance ? height : referenceRegionHeight
-        transaction = transaction.add(.rigidBody(try triangle(step: 0, kinematic: acceptance, regionHeight: triangleRegionHeight)))
-        if acceptance {
-            transaction = transaction.setKinematicDrive(triangleID, drive: .path(try trianglePath(regionHeight: triangleRegionHeight)))
-        }
+        // Tor trójkąta jest odwzorowany w osi y na wysokość regionu (poziomy pojemności); dla 300 baniek to punkty bez zmian.
+        transaction = transaction.add(.rigidBody(try triangle(regionHeight: height)))
+        transaction = transaction.setKinematicDrive(triangleID, drive: .path(try trianglePath(regionHeight: height)))
         return transaction
     }
 
-    /// Zastępuje trójkąt jego pozycją na kroku `step` (tor po pięciu punktach, 40 kroków na odcinek).
-    package static func triangleReplacement(step: Int) throws -> WorldTransaction {
-        WorldTransaction().replace(triangleID, with: .rigidBody(try triangle(step: step)))
-    }
-
     private static let triangleID = ObjectID(rawValue: 10_000)
-    private static let triangleWaypoints: [WorldPoint] = [[187.5,350], [65,105], [310,595], [310,105], [65,595]]
-    /// Wysokość regionu sceny 300 baniek, dla której podano `triangleWaypoints`.
+    private static let waypoints700: [WorldPoint] = [[187.5,350], [65,105], [310,595], [310,105], [65,595]]
+    /// Wysokość regionu sceny 300 baniek, dla której podano `waypoints700`.
     private static let referenceRegionHeight: Float = 700
+    private static let triangleVertices: [WorldPoint] = [[-46,34], [46,34], [0,-52]]
 
     /// Punkty toru odwzorowane afinicznie w osi y na region o wysokości `regionHeight`:
     /// y′ = 105 + (y − 105)·(H − 210)/490, więc obwiednia trójkąta ma na całym torze te same odstępy od dolnej (53)
     /// i górnej (71) krawędzi co przy H = 700, gdzie punkty zostają bez zmian.
-    private static func waypoints(regionHeight: Float) -> [WorldPoint] {
-        guard regionHeight != referenceRegionHeight else { return triangleWaypoints }
+    private static func triangleWaypoints(regionHeight: Float) -> [WorldPoint] {
+        guard regionHeight != referenceRegionHeight else { return waypoints700 }
         let scale = (regionHeight - 210) / 490
-        return triangleWaypoints.map { WorldPoint($0.x, 105 + ($0.y - 105) * scale) }
+        return waypoints700.map { WorldPoint($0.x, 105 + ($0.y - 105) * scale) }
     }
 
-    /// Tor kinematycznego trójkąta sceny akceptacyjnej: te same punkty co w stress-300, dwa okrążenia, 200 jednostek na sekundę.
-    private static func trianglePath(regionHeight: Float = referenceRegionHeight) throws -> PathDrive {
-        let points = waypoints(regionHeight: regionHeight)
+    /// Tor kinematycznego trójkąta: te same punkty co w stress-300, dwa okrążenia, 200 jednostek na sekundę.
+    private static func trianglePath(regionHeight: Float) throws -> PathDrive {
+        let points = triangleWaypoints(regionHeight: regionHeight)
         let lap = Array(points.dropFirst()) + [points[0]]
         return try PathDrive(points: lap + lap, speed: 200)
     }
 
-    private static func triangle(step: Int, kinematic: Bool = false,
-                                 regionHeight: Float = referenceRegionHeight) throws -> RigidBodyDescriptor {
-        let polygonMaterialID = PhysicsMaterialID(rawValue: 2)
-        let styleID = RenderMaterialID(rawValue: 1)
-        let triangleVertices: [WorldPoint] = [[-46,34], [46,34], [0,-52]]
-        let waypoints = waypoints(regionHeight: regionHeight)
-        let leg = (step / 40) % waypoints.count
-        let next = (leg + 1) % waypoints.count
-        let t = Float(step % 40) / 40
-        let center = WorldPoint(
-            waypoints[leg].x + (waypoints[next].x - waypoints[leg].x) * t,
-            waypoints[leg].y + (waypoints[next].y - waypoints[leg].y) * t)
-        return try RigidBodyDescriptor(id: triangleID, vertices: triangleVertices,
-            position: center, motionRole: kinematic ? .kinematic : .static, physicsMaterialID: polygonMaterialID, renderMaterialID: styleID)
+    private static func triangle(regionHeight: Float) throws -> RigidBodyDescriptor {
+        try RigidBodyDescriptor(id: triangleID, vertices: triangleVertices,
+            position: triangleWaypoints(regionHeight: regionHeight)[0], motionRole: .kinematic,
+            physicsMaterialID: PhysicsMaterialID(rawValue: 2), renderMaterialID: RenderMaterialID(rawValue: 1))
+    }
+
+    /// Odległość punktu od trójkąta o środku `center` (0 w środku): obrys startowy bryły.
+    private static func distanceToTriangle(_ point: WorldPoint, center: WorldPoint) -> Float {
+        let corners = triangleVertices.map { $0 + center }
+        func cross(_ a: WorldPoint, _ b: WorldPoint) -> Float { a.x * b.y - a.y * b.x }
+        let signs = (0..<3).map { cross(corners[($0 + 1) % 3] - corners[$0], point - corners[$0]) }
+        if signs.allSatisfy({ $0 >= 0 }) || signs.allSatisfy({ $0 <= 0 }) { return 0 }
+        return (0..<3).map { edge -> Float in
+            let a = corners[edge], b = corners[(edge + 1) % 3]
+            let t = max(0, min(1, simd_dot(point - a, b - a) / simd_dot(b - a, b - a)))
+            return simd_distance(point, a + (b - a) * t)
+        }.min() ?? 0
     }
 }
 
-/// Scena mieszana: 200 baniek, 60 brył (55 dynamicznych: wielokąty, koła, kapsuły i 5 kinematycznych belek),
-/// 10 więzów i 4 ściany, bez grawitacji (jak stress-300); bryły startują z losową prędkością. Wspólna dla benchmarku, strażnika i testów.
-/// Bańki leżą w dolnym pasie, dynamiczne bryły w siatce 11×5 nad belkami, belki przesuwają się poziomo.
+/// Scena mieszana: 200 baniek, 60 brył kinematycznych (55 obracających się w miejscu: wielokąty, koła, kapsuły i 5 belek
+/// przesuwających się poziomo) i 4 ściany, bez grawitacji (jak stress-300). Wspólna dla benchmarku, strażnika i testów.
+/// W 4.0.0 świat z bańkami nie ma brył dynamicznych ani przegubów z bańkami (CD-D-2), więc bryły są kinematyczne;
+/// sceny brył dynamicznych są osobne (testy brył bez baniek).
+/// Bańki leżą w dolnym pasie, obracające się bryły w siatce 11×5 nad belkami, belki przesuwają się poziomo.
 package enum MixedScene {
     package static let bubbleCount = 200
     package static let regionHeight: Float = 700
@@ -699,7 +717,7 @@ package enum MixedScene {
 
     package static func initialTransaction() throws -> WorldTransaction {
         var transaction = try WorldTransaction()
-            .updatePhysicsMaterial(bubbleMaterial, material: PhysicsMaterial(kind: .bubble, contactStiffness: 1e9))
+            .updatePhysicsMaterial(bubbleMaterial, material: PhysicsMaterial(kind: .bubble, contactStiffness: Stress300Scene.bubbleContactStiffness))
             .updatePhysicsMaterial(rigidMaterial, material: PhysicsMaterial(kind: .rigid, friction: 0.2, maximumLinearSpeed: 90, maximumAngularSpeed: 8))
             .updateRenderMaterial(style, material: try RenderMaterial())
         var random = StressLCG(seed: 0x4D_1C_5E)
@@ -710,9 +728,12 @@ package enum MixedScene {
                 physicsMaterialID: bubbleMaterial, renderMaterialID: style)))
         }
         for index in 0..<(bodyColumns * bodyRows) {
-            transaction = transaction.add(.rigidBody(try dynamicBody(index, scale: 0.8 + random.nextUnit() * 0.4,
-                velocity: [(random.nextUnit() - 0.5) * 80, (random.nextUnit() - 0.5) * 80],
-                angularVelocity: (random.nextUnit() - 0.5) * 6)))
+            let scale = 0.8 + random.nextUnit() * 0.4
+            // Dwa losowania prędkości liniowej zostają w ciągu, żeby rozmiary i obroty były te same co przy dawnej scenie.
+            _ = random.nextUnit(); _ = random.nextUnit()
+            let angularVelocity = (random.nextUnit() - 0.5) * 6
+            transaction = transaction.add(.rigidBody(try spinningBody(index, scale: scale)))
+                .setKinematicDrive(bodyID(index), drive: .velocity(linear: .zero, angular: angularVelocity))
         }
         for index in 0..<barY.count {
             transaction = transaction.add(.rigidBody(try RigidBodyDescriptor(id: barID(index),
@@ -730,64 +751,29 @@ package enum MixedScene {
             transaction = transaction.add(.rigidBody(try RigidBodyDescriptor(id: ObjectID(rawValue: UInt64(10_001 + index)),
                 vertices: vertices, physicsMaterialID: rigidMaterial, renderMaterialID: style)))
         }
-        for joint in try joints() { transaction = transaction.addJoint(joint) }
         return transaction
     }
 
     /// Cztery rodzaje brył na zmianę: prostokąt, koło, kapsuła, trójkąt. `scale` zmienia rozmiar o ±20%.
-    private static func dynamicBody(_ index: Int, scale: Float, velocity: WorldPoint,
-                                    angularVelocity: Float) throws -> RigidBodyDescriptor {
+    private static func spinningBody(_ index: Int, scale: Float) throws -> RigidBodyDescriptor {
         let id = bodyID(index), position = bodyPosition(index)
         switch index % 4 {
         case 0:
             return try RigidBodyDescriptor(id: id, vertices: [[-9, -6], [9, -6], [9, 6], [-9, 6]].map { $0 * scale },
-                position: position, velocity: velocity, angularVelocity: angularVelocity, motionRole: .dynamic,
+                position: position, motionRole: .kinematic,
                 physicsMaterialID: rigidMaterial, renderMaterialID: style)
         case 1:
             return try RigidBodyDescriptor(id: id, shape: .circle(radius: 8 * scale), position: position,
-                velocity: velocity, angularVelocity: angularVelocity, motionRole: .dynamic, physicsMaterialID: rigidMaterial, renderMaterialID: style)
+                motionRole: .kinematic, physicsMaterialID: rigidMaterial, renderMaterialID: style)
         case 2:
             return try RigidBodyDescriptor(id: id, shape: .capsule(halfLength: 6 * scale, radius: 5 * scale),
-                position: position, velocity: velocity, angularVelocity: angularVelocity, motionRole: .dynamic,
+                position: position, motionRole: .kinematic,
                 physicsMaterialID: rigidMaterial, renderMaterialID: style)
         default:
             return try RigidBodyDescriptor(id: id, vertices: [[-9, 7], [9, 7], [0, -9]].map { $0 * scale },
-                position: position, velocity: velocity, angularVelocity: angularVelocity, motionRole: .dynamic,
+                position: position, motionRole: .kinematic,
                 physicsMaterialID: rigidMaterial, renderMaterialID: style)
         }
-    }
-
-    /// 10 więzów: 3 dystansowe i 2 zawiasy (jeden z zakresem, jeden z silnikiem) oraz spaw między sąsiednimi bryłami,
-    /// 2 dystansowe bryła–świat, bańka–świat i bańka–bańka.
-    private static func joints() throws -> [Joint] {
-        var result: [Joint] = []
-        var nextID: UInt64 = 1
-        func make(_ build: (JointID) throws -> Joint) rethrows {
-            result.append(try build(JointID(rawValue: nextID)))
-            nextID += 1
-        }
-        let half = bodySpacing / 2
-        for index in [0, 13, 24] {
-            try make { try Joint(id: $0, bodyA: bodyID(index), bodyB: bodyID(index + 1),
-                kind: .distance(length: bodySpacing, softness: 0, damping: 0)) }
-        }
-        try make { try Joint(id: $0, bodyA: bodyID(3), bodyB: bodyID(4), anchorA: [half, 0], anchorB: [-half, 0],
-            kind: .hinge(limits: HingeLimits(lower: -0.8, upper: 0.8), motor: nil)) }
-        try make { try Joint(id: $0, bodyA: bodyID(36), bodyB: bodyID(37), anchorA: [half, 0], anchorB: [-half, 0],
-            kind: .hinge(limits: nil, motor: HingeMotor(targetAngularVelocity: 1, maximumTorque: 50))) }
-        try make { try Joint(id: $0, bodyA: bodyID(6), bodyB: bodyID(7), anchorA: [half, 0], anchorB: [-half, 0], kind: .weld) }
-        for index in [9, 31] {
-            let top = bodyPosition(index) + [0, 60]
-            try make { try Joint(id: $0, bodyA: bodyID(index), anchorB: top,
-                kind: .distance(length: 60, softness: 0, damping: 0)) }
-        }
-        let held = bubblePosition(100)
-        try make { try Joint(id: $0, bodyA: bubbleID(100), anchorB: held + [0, 30],
-            kind: .distance(length: 30, softness: 0, damping: 0)) }
-        let spacing = simd_distance(bubblePosition(55), bubblePosition(56))
-        try make { try Joint(id: $0, bodyA: bubbleID(55), bodyB: bubbleID(56),
-            kind: .distance(length: spacing, softness: 0, damping: 0)) }
-        return result
     }
 
     /// Belki zawracają co `barHalfPeriod` kroków; poza tym scena nie zmienia się transakcjami.
@@ -816,8 +802,8 @@ package struct BenchmarkSceneSpec {
 
     package init(_ scene: PublicWorldStressBenchmark.Scene) { kind = .scene(scene) }
 
-    /// Poziom pojemności: obszar 375 × H, H = ⌈n/15⌉·33,5 + 30, ten sam generator baniek (pierwsze n baniek jak na każdym
-    /// poziomie), teksturą i naklejką tekstową na każdej bańce, dwiema warstwami z materiałem alfa i kinematycznym trójkątem
+    /// Poziom pojemności: obszar 375 × H, H = ⌈n/15⌉·33,5 + 30, ten sam generator baniek (pierwsze n miejsc siatki jak na każdym
+    /// poziomie, bez miejsc w obrysie startowym trójkąta), teksturą i naklejką tekstową na każdej bańce, dwiema warstwami z materiałem alfa i kinematycznym trójkątem
     /// z torem odwzorowanym w osi y. Poziom 300 daje te same operacje co `Scene.acceptance`.
     package static func capacity(bubbleCount: Int) -> BenchmarkSceneSpec {
         BenchmarkSceneSpec(kind: .capacity(bubbleCount: bubbleCount))
@@ -870,7 +856,7 @@ package struct BenchmarkSceneSpec {
 
     /// Liczba baniek, którą świat ma mieć w każdej klatce, albo `nil`, gdy scena jej nie pilnuje.
     package var expectedBubbleCount: Int? {
-        if case .capacity(let count) = kind { return count }
+        if case .capacity(let count) = kind { return Stress300Scene.placedBubbleCount(bubbleCount: count) }
         return nil
     }
 

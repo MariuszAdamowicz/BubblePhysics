@@ -792,6 +792,9 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
             state.adjacencyCounts, state.candidateOverflow], argument: 3)
         dispatch("nativeBuildAdjacency", buffers: [state.control, state.contactControl,
             state.adjacency, state.adjacencyCounts, state.candidateOverflow], threads: count)
+        // Impuls siły kontaktu w rekordach końca kroku (`response.x`): zdarzenie kontaktu czyta go z rekordu.
+        dispatchContacts("nativeContactImpulses", buffers: [state.workingBubbles, state.workingSegments, state.workingCache,
+            state.control, state.contactControl], argument: 3)
         if snapshot.publicSettings != nil {
             encoder.memoryBarrier(scope: .buffers)
             let pipeline = pipelines["nativeCompactMergeEvents"]!
@@ -1270,7 +1273,7 @@ enum NativeMetalPipelineCache {
         "nativePrepareContactFlags", "nativeCompactActiveContacts",
         "nativeScanBlocks", "nativePrepareIndirectArguments",
         "nativeAddScanBlockOffsets", "nativeFinishScan", "nativeScanSingleGroup", "nativeClearAdjacency", "nativeEmitAdjacency", "nativeBuildAdjacency",
-        "nativeContactForces", "nativeAccelerationWithoutContacts", "nativeBroadphaseMargin",
+        "nativeContactForces", "nativeContactImpulses", "nativeAccelerationWithoutContacts", "nativeBroadphaseMargin",
         "nativeReduceSubstep", "nativeIntegrateSubstep", "nativeAssertContacts", "nativeInjectSubstepState", "nativePrepareEndGates", "nativeBeginStep",
         "nativeEmitCandidateAdjacency", "nativeEmitRigidAdjacency", "nativeBubbleBodyContacts",
         "nativeCheckFinite",

@@ -22,23 +22,8 @@ final class NativeMetalRigidPolygonTests: XCTestCase {
     }
     private func step(_ world: NativePublicWorld, _ objects: [NativePublicObject], dt: Double = 1.0/60) async throws -> NativePublicFrame {
         try await world.step(objects: objects,
-            materials: [.init(rawValue: 1): PhysicsMaterial(kind: .bubble, contactStiffness: 1e9), .init(rawValue: 2): PhysicsMaterial(kind: .rigid)],
+            materials: [.init(rawValue: 1): PhysicsMaterial(kind: .bubble, contactStiffness: 1e4), .init(rawValue: 2): PhysicsMaterial(kind: .rigid)],
             region: WorldRectangle(min: [-100,-100], max: [100,100]), duration: dt)
-    }
-
-    // Brak reakcji drugiego ciała lub momentu kontaktowego musi złamać ten test.
-    func testDynamicPolygonReceivesTranslationAndRotationFromBubbleImpact() async throws {
-        let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
-        var frame = try await step(world, [polygon(), bubble()])
-        for _ in 0..<12 { frame = try await step(world, Array(frame.objects.values)) }
-        let body = try XCTUnwrap(frame.objects[polygonID])
-        let ball = try XCTUnwrap(frame.objects[bubbleID])
-        XCTAssertGreaterThan(body.position.x, 0.05)
-        XCTAssertLessThan(body.rotation, -0.02)
-        XCTAssertGreaterThan(body.velocity.x, 0.1)
-        XCTAssertLessThan(body.angularVelocity, -0.1)
-        XCTAssertLessThan(ball.velocity.x, 5.9)
-        XCTAssertEqual(frame.profile.commandBufferCount, 1)
     }
 
     func testStaticPolygonDoesNotMoveUnderSameImpact() async throws {
@@ -49,17 +34,20 @@ final class NativeMetalRigidPolygonTests: XCTestCase {
         XCTAssertEqual(frame.objects[polygonID]?.rotation, 0)
     }
 
-    // Wypełnienie wklęsłości convex hullem wypchnęłoby bańkę z pustej wnęki.
+    // Wypełnienie wklęsłości convex hullem wypchnęłoby bańkę z pustej wnęki. Wielokąt jest statyczny: w 4.0.0 bańka nie ma kontaktu
+    // z bryłą dynamiczną (CD-D-2), a kontakt ze statyczną używa wewnętrznych wypukłych części wielokąta wklęsłego.
     func testConcavePolygonUsesInternalConvexPiecesWithoutPublicDecomposition() async throws {
         let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
-        let object = try polygon(vertices: [[0,0],[3,0],[3,1],[1,1],[1,3],[0,3]])
+        let object = try polygon(role: .static, vertices: [[0,0],[3,0],[3,1],[1,1],[1,3],[0,3]])
         var frame = try await step(world, [object, bubble(position: [2,2], velocity: .zero)])
         for _ in 0..<5 { frame = try await step(world, Array(frame.objects.values)) }
-        XCTAssertEqual(frame.objects[bubbleID]?.position, WorldPoint(2,2))
+        XCTAssertEqual(try XCTUnwrap(frame.objects[bubbleID]).position.x, 2, accuracy: 1e-4)
+        XCTAssertEqual(try XCTUnwrap(frame.objects[bubbleID]).position.y, 2, accuracy: 1e-4)
         XCTAssertEqual(frame.objects[polygonID]?.position, .zero)
         frame = try await step(world, [object, bubble(position: [3.4,0.7], velocity: [-6,0])])
         for _ in 0..<5 { frame = try await step(world, Array(frame.objects.values)) }
-        XCTAssertLessThan(try XCTUnwrap(frame.objects[polygonID]).velocity.x, -0.1)
+        XCTAssertGreaterThan(try XCTUnwrap(frame.objects[bubbleID]).velocity.x, 0, "bańka odbija się od prawej ściany wnęki")
+        XCTAssertGreaterThan(try XCTUnwrap(frame.objects[bubbleID]).position.x, 3.5 - 0.5, "środek bańki zostaje po zewnętrznej stronie")
     }
 
     func testPolygonContactPreservesFiniteStateAndDoesNotMoveThroughStaticWall() async throws {
@@ -84,39 +72,12 @@ final class NativeMetalRigidPolygonTests: XCTestCase {
         XCTAssertEqual(body.rotation, 0.25, accuracy: 0.0001)
     }
 
-    func testCentralImpactConservesLinearMomentumAndDoesNotGenerateSpin() async throws {
+    func testFastBubbleCannotTunnelThroughThinStaticPolygon() async throws {
         let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
-        var frame = try await step(world, [polygon(), bubble(position: [-1.6,0])])
-        for _ in 0..<8 { frame = try await step(world, Array(frame.objects.values)) }
-        let body = try XCTUnwrap(frame.objects[polygonID]), ball = try XCTUnwrap(frame.objects[bubbleID])
-        XCTAssertEqual(2 * body.velocity.x + ball.velocity.x, 6, accuracy: 0.001)
-        XCTAssertEqual(body.angularVelocity, 0, accuracy: 0.001)
-        XCTAssertGreaterThan(body.velocity.x, 1)
-        XCTAssertEqual(frame.profile.rigidBodyUploadCount, 0)
-        XCTAssertEqual(frame.profile.rigidGeometryUploadCount, 0)
-    }
-
-    func testFastBubbleCannotTunnelThroughThinDynamicPolygon() async throws {
-        let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
-        let frame = try await step(world, [polygon(vertices: [[-0.1,-2],[0.1,-2],[0.1,2],[-0.1,2]]),
+        let frame = try await step(world, [polygon(role: .static, vertices: [[-0.1,-2],[0.1,-2],[0.1,2],[-0.1,2]]),
             bubble(position: [-3,0], velocity: [360,0])])
         let body = try XCTUnwrap(frame.objects[polygonID]), ball = try XCTUnwrap(frame.objects[bubbleID])
-        XCTAssertLessThan(ball.position.x, body.position.x)
-        XCTAssertGreaterThan(body.velocity.x, 1)
-    }
-
-    func testBubbleCannotPushPolygonThroughStaticWall() async throws {
-        let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
-        let wall = NativePublicObject(descriptor: .rigidBody(try RigidBodyDescriptor(id: .init(rawValue: 3),
-            vertices: [[1,-10],[1.1,-10],[1.1,10],[1,10]],
-            physicsMaterialID: .init(rawValue: 2), renderMaterialID: .init(rawValue: 1))))
-        var frame = try await step(world, [polygon(), bubble(position: [-1.6,0], velocity: [60,0]), wall])
-        for _ in 0..<30 {
-            frame = try await step(world, Array(frame.objects.values))
-            let body = try XCTUnwrap(frame.objects[polygonID])
-            let extent = abs(cos(body.rotation)) + abs(sin(body.rotation))
-            XCTAssertLessThanOrEqual(body.position.x + extent, 1.01)
-        }
+        XCTAssertLessThan(ball.position.x, body.position.x - 0.1, "środek bańki zostaje po stronie startowej")
     }
 
     func testRemovingEarlierPolygonPreservesRemainingGPUVelocity() async throws {
@@ -128,32 +89,6 @@ final class NativeMetalRigidPolygonTests: XCTestCase {
         frame = try await step(world, [XCTUnwrap(frame.objects[polygonID])], dt: 0.25)
         XCTAssertEqual(try XCTUnwrap(frame.objects[polygonID]).position.x, 1, accuracy: 0.0001)
         XCTAssertEqual(try XCTUnwrap(frame.objects[polygonID]).velocity.x, 2, accuracy: 0.0001)
-    }
-
-    func testFailedGeometryChangeCannotCorruptPublishedCollisionShape() async throws {
-        let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
-        let first = try await step(world, [polygon()])
-        do {
-            _ = try await step(world, [polygon(angular: 1000, vertices: [[-0.1,-2],[0.1,-2],[0.1,2],[-0.1,2]])])
-            XCTFail("Przekroczenie budżetu sweep musi odrzucić całą klatkę")
-        } catch { }
-        let frame = try await step(world, [XCTUnwrap(first.objects[polygonID]), bubble(position: [-1.4,0], velocity: .zero)])
-        XCTAssertLessThan(try XCTUnwrap(frame.objects[bubbleID]).position.x, -1.41)
-        XCTAssertGreaterThan(try XCTUnwrap(frame.objects[polygonID]).position.x, 0.01)
-    }
-
-    // Pełny obrót wraca do tej samej pozy, ale jego końce przecinają po drodze nieruchomą bańkę.
-    func testRotatingThinPolygonCannotTunnelThroughStationaryBubble() async throws {
-        let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
-        let rod = try polygon(angular: 2 * .pi * 60,
-            vertices: [[-2,-0.1],[2,-0.1],[2,0.1],[-2,0.1]])
-        do {
-            let frame = try await step(world, [rod, bubble(position: [0,1.5], velocity: .zero, radius: 0.25)])
-            let ball = try XCTUnwrap(frame.objects[bubbleID])
-            XCTAssertGreaterThan(abs(ball.position.y - 1.5) + abs(ball.velocity.y), 0.01)
-        } catch let failure as NativeMetalSafetyFailure {
-            XCTAssertEqual(failure.reason, .guardFailure)
-        }
     }
 
     // P-B-27: dwie bryły mogą minąć się między końcami kroku bez overlapu końcowych AABB. CCD bryła–bryła ma je zatrzymać

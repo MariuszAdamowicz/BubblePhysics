@@ -254,6 +254,31 @@ kernel void nativeContactForces(device NativeBubble *bubbles [[buffer(0)]],
     forces[index] = total;
 }
 
+// Impuls siły kontaktu w rekordach końca kroku (zdarzenie `contactBegan` czyta go z `response.x`): F z prawa kontaktu dla geometrii końca
+// kroku, czyli z wnikania zapisanego w rekordzie (`response.y`: r − d dla ściany, r_a + r_b − d dla pary), razy Δt². Host dzieli rekord przez
+// krok, więc zdarzenie dostaje impuls F · Δt (mnożnik jak dawne λ, tak samo jak w `nativeBubbleBodyContacts`). Rekordy poza obszarem krawędzi
+// wielokąta odpadły już w kompaktowaniu.
+kernel void nativeContactImpulses(device NativeBubble *bubbles [[buffer(0)]], device NativeSegment *segments [[buffer(1)]],
+    device NativeContactCache *contacts [[buffer(2)]], constant NativeControl &control [[buffer(3)]],
+    device NativeContactControl &contactControl [[buffer(4)]], uint index [[thread_position_in_grid]]) {
+    if (index >= contactControl.counts.z) return;
+    NativeContactCache record = contacts[index];
+    uint first = nativeFindBubble(bubbles, control.counts.x, record.participants.x);
+    if (first >= control.counts.x) return;
+    NativeBubble a = bubbles[first];
+    float force = 0;
+    if (record.metadata.x == 0) {
+        uint second = nativeFindBubble(bubbles, control.counts.x, record.participants.y);
+        if (second >= control.counts.x) return;
+        NativeBubble b = bubbles[second];
+        float distanceValue = a.physical.z + b.physical.z - record.response.y;
+        force = nativePairContactLaw(a.contact.y, a.physical.z, b.contact.y, b.physical.z, distanceValue).force;
+    } else {
+        force = nativeWallContactLaw(a.contact.y, a.physical.z, a.physical.z - record.response.y).force;
+    }
+    contacts[index].response.x = force * control.physics.x * control.physics.x;
+}
+
 // Początek kroku (dawny prolog nativePredict bez ruchu): `position.zw` to środek z początku kroku (zapas, kontur i interpolacja liczą od
 // niego), wynik regionu z poprzedniego kroku się czyści, a bańka statyczna dostaje zerową prędkość liniową i kątową. Ruch liczy pętla
 // podkroków; limitów prędkości bańki nie ma (materiał bańki to tylko K_c i γ).
@@ -315,7 +340,7 @@ kernel void nativeBubbleBodyContacts(device NativeBubble *bubbles [[buffer(0)]],
             NativeContactLaw law = nativeWallContactLaw(bubble.contact.y, radius, obstacle.distanceValue);
             float2 point = bubble.position.xy - obstacle.normal * obstacle.distanceValue;
             first = float4(-obstacle.normal, point);
-            second = float4(law.force * control.physics.x, obstacle.distanceValue, 0, 0);
+            second = float4(law.force * control.physics.x * control.physics.x, obstacle.distanceValue, 0, 0);
         }
     }
     records[2 * index] = first;

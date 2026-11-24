@@ -20,9 +20,9 @@ final class NativeMetalContactMemoryTests: XCTestCase {
         }
     }
 
-    private func bubble(_ id: UInt64, _ position: WorldPoint, radius: Float) throws -> NativePublicObject {
+    private func bubble(_ id: UInt64, _ position: WorldPoint, radius: Float, role: MotionRole = .dynamic) throws -> NativePublicObject {
         NativePublicObject(descriptor: .bubble(try BubbleDescriptor(id: ObjectID(rawValue: id), position: position,
-            targetRadius: radius, physicsMaterialID: bubbleMaterial, renderMaterialID: style)))
+            targetRadius: radius, motionRole: role, physicsMaterialID: bubbleMaterial, renderMaterialID: style)))
     }
 
     private func box(_ id: UInt64, _ center: WorldPoint, half: Float) throws -> NativePublicObject {
@@ -47,7 +47,7 @@ final class NativeMetalContactMemoryTests: XCTestCase {
 
     private func step(_ world: NativePublicWorld, _ objects: [NativePublicObject]) async throws -> NativePublicFrame {
         try await world.step(objects: objects,
-            materials: [bubbleMaterial: try PhysicsMaterial(kind: .bubble, contactStiffness: 1e9), polygonMaterial: try PhysicsMaterial(kind: .rigid)],
+            materials: [bubbleMaterial: try PhysicsMaterial(kind: .bubble, contactStiffness: 1e4), polygonMaterial: try PhysicsMaterial(kind: .rigid)],
             region: WorldRectangle(min: [0, 0], max: [1400, 1100]), duration: 1.0 / 60)
     }
 
@@ -82,11 +82,14 @@ final class NativeMetalContactMemoryTests: XCTestCase {
         XCTAssertLessThanOrEqual(frame.maximumContactCandidatesPerObject, limit)
     }
 
-    // P-B-21: 300 baniek ściśniętych w kwadracie 6×6 daje każdej z pierwszych baniek ponad k sąsiadów.
+    // P-B-21: 300 baniek ściśniętych w kwadracie 6×6 daje każdej z pierwszych baniek ponad k sąsiadów. Bańki są statyczne: nakładające się
+    // dynamiczne bańki o ε bliskim 1 wystrzeliłyby poza region (siła bez granic), a ten test sprawdza pamięć i licznik, nie dynamikę.
     func testForcedOverflowRaisesCounterPublishesFrameAndStaysFinite() async throws {
         let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         var random = LCG()
-        let squeezed = try (0..<300).map { try bubble(UInt64($0 + 1), [100 + random.next() * 6, 100 + random.next() * 6], radius: 2) }
+        let squeezed = try (0..<300).map {
+            try bubble(UInt64($0 + 1), [100 + random.next() * 6, 100 + random.next() * 6], radius: 2, role: .static)
+        }
         var frame = try await step(world, squeezed)
         XCTAssertGreaterThan(frame.contactCandidateOverflowCount, 0, "przepełnienie k = \(limit) musi zwiększyć licznik")
         XCTAssertGreaterThanOrEqual(frame.maximumContactCandidatesPerObject, limit)

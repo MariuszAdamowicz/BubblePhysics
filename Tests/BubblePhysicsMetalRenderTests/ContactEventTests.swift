@@ -18,6 +18,10 @@ final class ContactEventTests: XCTestCase {
 
     private func floor() throws -> WorldObject { try B.box(floorID, at: [300, 5], half: [300, 5]) }
 
+    /// Materiał baniek miękki (K_c = 2000) z oporem γ = 10: bańka opada na podłogę o ugięciu większym niż amplituda drgań po pierwszym
+    /// uderzeniu (K_c = 1e4 odbijałaby ją od podłogi bez końca, a to dawałoby kolejne początki kontaktu).
+    private func base() throws -> WorldTransaction { try B.baseTransaction(bubbleStiffness: 2000, bubbleDamping: 10) }
+
     /// Dokładnie jeden początek pary (x, y), z poprawnym punktem, normalną i impulsem, bez końca i bez powtórzeń.
     private func assertSingleBegan(_ events: [WorldEvent], _ frame: WorldFrame, pair x: UInt64, _ y: UInt64,
                                    normalHint: WorldPoint? = nil, file: StaticString = #filePath, line: UInt = #line) throws {
@@ -41,7 +45,7 @@ final class ContactEventTests: XCTestCase {
 
     func testBeganBubbleAndStaticPolygon() async throws {
         let world = try world()
-        world.submit(try B.baseTransaction().add(floor())
+        world.submit(try base().add(floor())
             .add(B.bubble(1, at: [150, 18.3], interest: .contact)))
         let result = await B.advance(world, steps: 90)
         try assertSingleBegan(result.events, result.frame, pair: 1, floorID, normalHint: [0, -1])
@@ -49,7 +53,7 @@ final class ContactEventTests: XCTestCase {
 
     func testBeganBubbleAndBubble() async throws {
         let world = try world()
-        world.submit(try B.baseTransaction().add(floor())
+        world.submit(try base().add(floor())
             .add(B.bubble(2, at: [150, 18.3]))
             .add(B.bubble(1, at: [150, 34.6], interest: .contact)))
         let result = await B.advance(world, steps: 90)
@@ -58,18 +62,9 @@ final class ContactEventTests: XCTestCase {
             "para bańka–podłoga bez zainteresowania nie daje zdarzeń")
     }
 
-    func testBeganBubbleAndDynamicPolygon() async throws {
-        let world = try world()
-        world.submit(try B.baseTransaction().add(floor())
-            .add(B.box(2, at: [150, 15.3], half: [20, 5], role: .dynamic))
-            .add(B.bubble(1, at: [150, 28.6], interest: .contact)))
-        let result = await B.advance(world, steps: 90)
-        try assertSingleBegan(result.events, result.frame, pair: 1, 2)
-    }
-
     func testBeganDynamicPolygonAndStaticPolygon() async throws {
         let world = try world()
-        world.submit(try B.baseTransaction().add(floor())
+        world.submit(try base().add(floor())
             .add(B.box(1, at: [150, 15.15], half: [15, 5], role: .dynamic, interest: .contact)))
         let result = await B.advance(world, steps: 90)
         try assertSingleBegan(result.events, result.frame, pair: 1, floorID, normalHint: [0, -1])
@@ -77,7 +72,7 @@ final class ContactEventTests: XCTestCase {
 
     func testBeganDynamicPolygonAndDynamicPolygon() async throws {
         let world = try world()
-        world.submit(try B.baseTransaction().add(floor())
+        world.submit(try base().add(floor())
             .add(B.box(2, at: [150, 15.3], half: [20, 5], role: .dynamic))
             .add(B.box(1, at: [150, 25.6], half: [10, 5], role: .dynamic, interest: .contact)))
         let result = await B.advance(world, steps: 90)
@@ -86,7 +81,7 @@ final class ContactEventTests: XCTestCase {
 
     func testBeganKinematicPolygonAndDynamicPolygon() async throws {
         let world = try world()
-        world.submit(try B.baseTransaction()
+        world.submit(try base()
             .add(B.box(2, at: [150, 50], half: [40, 4], role: .kinematic))
             .add(B.box(1, at: [150, 59.3], half: [8, 5], role: .dynamic, interest: .contact)))
         let result = await B.advance(world, steps: 90)
@@ -95,7 +90,7 @@ final class ContactEventTests: XCTestCase {
 
     func testBeganKinematicPolygonAndBubble() async throws {
         let world = try world()
-        world.submit(try B.baseTransaction()
+        world.submit(try base()
             .add(B.box(2, at: [150, 50], half: [40, 4], role: .kinematic))
             .add(B.bubble(1, at: [150, 62.3], interest: .contact)))
         let result = await B.advance(world, steps: 90)
@@ -120,7 +115,7 @@ final class ContactEventTests: XCTestCase {
     // P-B-12: contactBegan przychodzi dokładnie w pierwszym kroku styku: nie później (zgubiony przejście) i nie wcześniej.
     func testBeganArrivesInTheFirstStepOfContactForBubbleAndStaticPolygon() async throws {
         let world = try world()
-        world.submit(try B.baseTransaction().add(floor()).add(B.bubble(1, at: [150, 40], interest: .contact)))
+        world.submit(try base().add(floor()).add(B.bubble(1, at: [150, 40], interest: .contact)))
         let steps = await firstSteps(world, steps: 40, pair: 1, floorID) { frame in
             (frame.objects[ObjectID(rawValue: 1)]?.bounds.min.y ?? .infinity) <= 10.05
         }
@@ -130,7 +125,7 @@ final class ContactEventTests: XCTestCase {
 
     func testBeganArrivesInTheFirstStepOfContactForBubbleAndBubble() async throws {
         let world = try world()
-        world.submit(try B.baseTransaction().add(floor())
+        world.submit(try base().add(floor())
             .add(B.bubble(2, at: [150, 18.3]))
             .add(B.bubble(1, at: [150, 60], interest: .contact)))
         let steps = await firstSteps(world, steps: 60, pair: 1, 2) { frame in
@@ -143,7 +138,7 @@ final class ContactEventTests: XCTestCase {
 
     func testBeganArrivesInTheFirstStepOfContactForDynamicPolygonAndStaticPolygon() async throws {
         let world = try world()
-        world.submit(try B.baseTransaction().add(floor())
+        world.submit(try base().add(floor())
             .add(B.box(1, at: [150, 40], half: [15, 5], role: .dynamic, interest: .contact)))
         let steps = await firstSteps(world, steps: 40, pair: 1, floorID) { frame in
             (frame.objects[ObjectID(rawValue: 1)]?.bounds.min.y ?? .infinity) <= 10.05
@@ -159,7 +154,7 @@ final class ContactEventTests: XCTestCase {
     // zatrzymać jej nad podłogą (wtedy kontakt znika na krok i wraca, gdy bryła dopada resztę szczeliny).
     func testBeganOnceWhenDynamicPolygonSettlesOntoStaticPolygonFromHeight() async throws {
         let world = try world()
-        world.submit(try B.baseTransaction().add(floor())
+        world.submit(try base().add(floor())
             .add(B.box(1, at: [150, 60], half: [15, 5], role: .dynamic, interest: .contact)))
         var events: [WorldEvent] = []
         var timeline: [String] = []
@@ -172,33 +167,28 @@ final class ContactEventTests: XCTestCase {
         XCTAssertTrue(B.ended(events).filter { B.isPair($0.0, $0.1, 1, floorID) }.isEmpty, "kolejność zdarzeń: \(timeline)")
     }
 
-    func testBeganOnceWhenBubbleSettlesOntoDynamicPolygonFromHeight() async throws {
+    // P-B-12: impuls zdarzenia to F · Δt z prawa kontaktu dla geometrii końca kroku (wnikanie w opublikowanej klatce): siła ściany
+    // F = K_c · (r − d) · r / d², d to odległość środka od powierzchni podłogi.
+    func testBeganImpulseIsContactForceOfTheStepEndTimesTheTimeStep() async throws {
         let world = try world()
-        world.submit(try B.baseTransaction().add(floor())
-            .add(B.box(2, at: [150, 15.3], half: [20, 5], role: .dynamic))
-            .add(B.bubble(1, at: [150, 80], interest: .contact)))
-        let result = await B.advance(world, steps: 150)
-        try assertSingleBegan(result.events, result.frame, pair: 1, 2)
-    }
-
-    // P-B-12: impuls to Σλ / Δt. Dla bańki spadającej na podłogę leży między 0,3 a 1,2 prędkości zbliżania:
-    // bez dzielenia przez krok byłby ok. 60 razy mniejszy, a dzielony przez krok drugi raz ok. 60 razy większy.
-    func testBeganImpulseIsAccumulatedMultiplierDividedByTimeStep() async throws {
-        let world = try world()
-        world.submit(try B.baseTransaction().add(floor()).add(B.bubble(1, at: [150, 40], interest: .contact)))
-        let steps = await firstSteps(world, steps: 40, pair: 1, floorID) { _ in false }
-        let began = try XCTUnwrap(steps.began)
-        let impulse = try XCTUnwrap(steps.impulse)
-        let approach = steps.speeds[began - 1]
-        XCTAssertGreaterThan(approach, 50, "bańka spada z widoczną prędkością")
-        XCTAssertGreaterThanOrEqual(impulse, 0.3 * approach)
-        XCTAssertLessThanOrEqual(impulse, 1.2 * approach)
+        world.submit(try base().add(floor()).add(B.bubble(1, at: [150, 40], interest: .contact)))
+        var impulse: Float?, distance: Float?
+        _ = await B.advance(world, steps: 40) { _, frame in
+            guard impulse == nil, let event = B.began(frame.events).first(where: { B.isPair($0.a, $0.b, 1, floorID) }),
+                  let bubble = frame.objects[ObjectID(rawValue: 1)] else { return }
+            impulse = event.impulse; distance = bubble.position.y - 10
+        }
+        let measured = try XCTUnwrap(impulse, "brak contactBegan"), d = Double(try XCTUnwrap(distance))
+        let epsilon = 1 - d / 8
+        let expected = 2000 * epsilon / ((1 - epsilon) * (1 - epsilon)) / 60
+        XCTAssertGreaterThan(epsilon, 0, "bańka w kontakcie")
+        XCTAssertEqual(Double(measured), expected, accuracy: 0.02 * expected + 1e-4, "impuls \(measured), F · Δt = \(expected)")
     }
 
     // P-B-12: para w szczelinie w granicach separationTolerance siedzi w cache kontaktów, ale to jeszcze nie styk.
     func testNoBeganForBubblesSeparatedByGapWithinSeparationTolerance() async throws {
         let world = try B.makeWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
-        world.submit(try B.baseTransaction()
+        world.submit(try base()
             .add(B.bubble(1, at: [100, 100], interest: .contact))
             .add(B.bubble(2, at: [116.001, 100])))
         let result = await B.advance(world, steps: 6)
@@ -215,7 +205,7 @@ final class ContactEventTests: XCTestCase {
                 vertices: [[0, 0], [100, 0], [100, 10], [10, 10], [10, 60], [0, 60]], position: [100, 100],
                 mass: 1, momentOfInertia: 1000, motionRole: .static, physicsMaterialID: B.polygonMaterial,
                 renderMaterialID: B.style))
-            world.submit(try B.baseTransaction().add(corner).add(B.bubble(1, at: position, interest: .contact)))
+            world.submit(try base().add(corner).add(B.bubble(1, at: position, interest: .contact)))
             let result = await B.advance(world, steps: 2)
             let began = B.began(result.events).filter { B.isPair($0.a, $0.b, 1, floorID) }
             XCTAssertEqual(began.count, 1)
@@ -235,7 +225,7 @@ final class ContactEventTests: XCTestCase {
     func testMergeContactIsPrecededByContactBeganForTheSamePair() async throws {
         let world = try B.makeWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         let group = MergeGroupSet(rawValue: 1 << 3)
-        world.submit(try B.baseTransaction()
+        world.submit(try base()
             .add(B.bubble(1, at: [100, 100], interest: [.contact, .mergeContact], mergeGroups: group))
             .add(B.bubble(2, at: [115, 100], interest: [.contact, .mergeContact], mergeGroups: group)))
         var stepsWithEvents: [(index: Int, events: [WorldEvent])] = []
@@ -255,7 +245,7 @@ final class ContactEventTests: XCTestCase {
     // P-B-14: koniec kontaktu w pierwszym kroku po rozłączeniu, liczony od kroku, w którym bańka faktycznie odjechała.
     func testEndedArrivesInFirstStepAfterSeparation() async throws {
         let world = try world()
-        world.submit(try B.baseTransaction().add(floor())
+        world.submit(try base().add(floor())
             .add(B.bubble(1, at: [150, 18.3], interest: .contact)))
         _ = await B.advance(world, steps: 30)
         world.submit(WorldTransaction().applyImpulse(to: ObjectID(rawValue: 1), impulse: [0, 300]))
@@ -275,7 +265,7 @@ final class ContactEventTests: XCTestCase {
     // P-B-14: obiekt usunięty w kroku daje koniec kontaktu pozostałemu partnerowi.
     func testEndedGoesToRemainingPartnerWhenOtherObjectIsRemoved() async throws {
         let world = try world()
-        world.submit(try B.baseTransaction().add(floor())
+        world.submit(try base().add(floor())
             .add(B.bubble(1, at: [150, 18.3], interest: .contact)))
         let settled = await B.advance(world, steps: 30)
         XCTAssertEqual(B.began(settled.events).count, 1)
@@ -292,7 +282,7 @@ final class ContactEventTests: XCTestCase {
     // jedynie znikają z historii (`testContactBetweenTwoRemovedObjectsProducesNoEventAndLeavesHistory`).
     func testEndedGoesToStaticPartnerWhenTheOnlyBubbleIsRemoved() async throws {
         let world = try world()
-        world.submit(try B.baseTransaction()
+        world.submit(try base()
             .add(B.box(floorID, at: [300, 5], half: [300, 5], interest: .contact))
             .add(B.bubble(1, at: [150, 18.3])))
         let settled = await B.advance(world, steps: 30)
@@ -308,7 +298,7 @@ final class ContactEventTests: XCTestCase {
     // ponownie dodana para o tych samych ID dostaje początek, a po rozłączeniu koniec.
     func testReAddedPairAfterRemovingEveryMassiveBodyGetsBeganAgain() async throws {
         let world = try world()
-        world.submit(try B.baseTransaction().add(floor())
+        world.submit(try base().add(floor())
             .add(B.bubble(1, at: [150, 18.3], interest: .contact)))
         let settled = await B.advance(world, steps: 30)
         XCTAssertEqual(B.began(settled.events).count, 1)
@@ -327,7 +317,7 @@ final class ContactEventTests: XCTestCase {
     // P-B-14: scalenie bańki, która stykała się z trzecią, kończy ten kontakt w kroku scalenia.
     func testEndedGoesToThirdBubbleWhenItsPartnerIsMerged() async throws {
         let world = try world()
-        world.submit(try B.baseTransaction().add(floor())
+        world.submit(try base().add(floor())
             .add(B.bubble(1, at: [150, 18.3]))
             .add(B.bubble(2, at: [166.3, 18.3]))
             .add(B.bubble(3, at: [150, 34.6], interest: .contact)))
@@ -344,7 +334,7 @@ final class ContactEventTests: XCTestCase {
     // P-B-15: mały bufor zdarzeń i wiele styków; przepełnienie jest raportowane, a koniec nigdy nie bez początku.
     func testEventOverflowIsReportedAndNoEndComesWithoutBegin() async throws {
         let world = try world(capacity: 6)
-        var transaction = try B.baseTransaction().add(floor())
+        var transaction = try base().add(floor())
         for index in 0..<40 {
             transaction = transaction.add(try B.bubble(UInt64(index + 1), at: [20 + 12 * Float(index), 14.3], radius: 4, interest: .contact))
         }

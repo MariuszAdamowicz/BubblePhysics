@@ -2,24 +2,25 @@ import BubblePhysics
 import simd
 import XCTest
 
-/// Jednostronne krawędzie statycznych wielokątów (wycinek 3, P-B-18 – P-B-23; G2-AC1 – G2-AC6): krawędź odpycha bańkę tylko od
-/// zewnątrz, a wypukły wierzchołek raz, więc cienka ściana ugina się o c · F tak samo jak gruba, a wynik nie zależy od obiegu
-/// wierzchołków. Sceny mają własny świat bez ram `CrowdScene` (jej pomocniki znają tylko ściany lewą i prawą grubości 48), a siła
-/// w każdej ramce idzie przez `world.submit(…setMotorDrive…)` przed każdym `advance`, jak w `MotionDampingTests`.
-/// Materiał baniek: c₀ 0,0108 i r_ref 20, krok stały 1/60.
+/// Jednostronne krawędzie statycznych wielokątów (audyt testów spec. 4: prawo kontaktu przeliczone): krawędź odpycha bańkę tylko od
+/// zewnątrz, a wypukły wierzchołek raz, więc cienka ściana ugina się o r · ε (ε / (1 − ε)² = F / K_c) tak samo jak gruba, a wynik nie
+/// zależy od obiegu wierzchołków. Sceny mają własny świat bez ram `CrowdScene` (jej pomocniki znają tylko ściany lewą i prawą grubości 48),
+/// a siła w każdej ramce idzie przez `world.submit(…setMotorDrive…)` przed każdym `advance`, jak w `MotionDampingTests`.
+/// Materiał baniek: K_c = 1852 (r_ref / c₀ dawnego modelu), opór γ = 5 (spoczynek wymaga oporu), krok stały 1/60.
 @MainActor
 final class StaticPolygonEdgeTests: XCTestCase {
     private let dt = CrowdScene.step
-    private let baseCompliance: Float = 0.0108
-    private let referenceRadius: Float = 20
+    private let stiffness: Float = 20 / 0.0108
 
     private func id(_ value: UInt64) -> ObjectID { CrowdScene.id(value) }
 
-    /// c = c₀ · r / r_ref.
-    private func compliance(_ radius: Float) -> Float { baseCompliance * radius / referenceRadius }
+    /// Ugięcie r · ε z prawa kontaktu ε / (1 − ε)² = F / K_c (odniesienie w Double).
+    private func deflection(_ radius: Float, force: Float) -> Float {
+        radius * Float(ContactLawReference.epsilon(forForceRatio: Double(force) / Double(stiffness)))
+    }
 
-    private func material(damping: Float = 0, friction: Float = 0, maximumLinearSpeed: Float? = 600) throws -> PhysicsMaterial {
-        try PhysicsMaterial(kind: .bubble, contactStiffness: referenceRadius / baseCompliance, damping: damping)
+    private func material(damping: Float = 5) throws -> PhysicsMaterial {
+        try PhysicsMaterial(kind: .bubble, contactStiffness: stiffness, damping: damping)
     }
 
     // MARK: sceny
@@ -76,12 +77,12 @@ final class StaticPolygonEdgeTests: XCTestCase {
         return (tail.last ?? 0, (tail.max() ?? 0) - (tail.min() ?? 0), position)
     }
 
-    /// Bańka r 148 dociśnięta do środka długiej krawędzi ściany T 48 albo T 400: ugięcie c · F dla pięciu sił, w tym czterech z c · F > T,
-    /// i równe w obu grubościach. Dwustronne krawędzie dawały drugą sprężynę od tyłu: δ = (c · F + T) / 2.
+    /// Bańka r 148 dociśnięta do środka długiej krawędzi ściany T 48 albo T 400: ugięcie r · ε dla pięciu sił, w tym najsilniejszej z
+    /// ugięciem większym niż T, i równe w obu grubościach. Dwustronne krawędzie dawały drugą sprężynę od tyłu.
     func testThinWallDeflectsByTheFrontEdgeOnlyAndTheSameAsAThickWall() async throws {
         let radius: Float = 148, faceX: Float = -100
         for pressure: Float in [300, 700, 900, 1100, 1300] {
-            let expected = compliance(radius) * pressure
+            let expected = deflection(radius, force: pressure)
             var deflections: [Float] = []
             for thickness: Float in [48, 400] {
                 let world = try await world(extent: 1000, bubble: material(),
@@ -91,7 +92,7 @@ final class StaticPolygonEdgeTests: XCTestCase {
                 }
                 let rest = try await settleAgainstFace(world, radius: radius, faceX: faceX, steps: 1200)
                 XCTAssertEqual(rest.deflection, expected, accuracy: 0.02 * expected,
-                               "F = \(pressure), T = \(thickness): ugięcie \(rest.deflection), oczekiwane c · F = \(expected)")
+                               "F = \(pressure), T = \(thickness): ugięcie \(rest.deflection), oczekiwane r · ε = \(expected)")
                 XCTAssertLessThan(rest.spread, 0.005 * expected, "F = \(pressure), T = \(thickness): ugięcie ma być uspokojone")
                 deflections.append(rest.deflection)
             }
@@ -104,7 +105,7 @@ final class StaticPolygonEdgeTests: XCTestCase {
     /// a jej położenie zgadza się z tą samą sceną z krawędzią jako jednym odcinkiem (1e-2).
     func testCollinearVertexDoesNotChangeTheContact() async throws {
         let radius: Float = 24, faceX: Float = -100, pressure: Float = 600
-        let expected = compliance(radius) * pressure
+        let expected = deflection(radius, force: pressure)
         let twoSegments: [WorldPoint] = [[faceX - 48, -400], [faceX, -400], [faceX, 0], [faceX, 400], [faceX - 48, 400]]
         var results: [(deflection: Float, spread: Float, position: WorldPoint)] = []
         for polygon in [twoSegments, rectangle(faceX: faceX, thickness: 48)] {
@@ -114,8 +115,8 @@ final class StaticPolygonEdgeTests: XCTestCase {
             }
             results.append(try await settleAgainstFace(world, radius: radius, faceX: faceX, steps: 600))
         }
-        XCTAssertEqual(results[0].deflection, expected, accuracy: 0.02 * expected, "dwa odcinki: ugięcie \(results[0].deflection), oczekiwane \(expected)")
-        XCTAssertEqual(results[1].deflection, expected, accuracy: 0.02 * expected, "jeden odcinek: ugięcie \(results[1].deflection), oczekiwane \(expected)")
+        XCTAssertEqual(results[0].deflection, expected, accuracy: 0.02 * expected, "dwa odcinki: ugięcie \(results[0].deflection), oczekiwane r · ε = \(expected)")
+        XCTAssertEqual(results[1].deflection, expected, accuracy: 0.02 * expected, "jeden odcinek: ugięcie \(results[1].deflection), oczekiwane r · ε = \(expected)")
         XCTAssertLessThan(results[0].spread, 0.005 * expected)
         XCTAssertEqual(results[0].position.x, results[1].position.x, accuracy: 1e-2, "położenie x")
         XCTAssertEqual(results[0].position.y, results[1].position.y, accuracy: 1e-2, "położenie y")
@@ -153,10 +154,10 @@ final class StaticPolygonEdgeTests: XCTestCase {
     private func unit(_ vector: WorldPoint) -> WorldPoint { vector / max(simd_length(vector), .leastNormalMagnitude) }
 
     /// Bańka r 24 (m 1,36) w obszarze wierzchołka, dociskana siłą 600 ustawianą w każdej ramce od środka do wierzchołka: po uspokojeniu odległość
-    /// od wierzchołka to r − c · F. Podwójny kontakt dałby r − c · F / 2.
+    /// od wierzchołka to r − r · ε. Podwójny kontakt dałby mniejsze ugięcie.
     func testConvexVertexIsOneSpringForEveryAngle() async throws {
         let radius: Float = 24, pressure: Float = 600
-        let expected = compliance(radius) * pressure
+        let expected = deflection(radius, force: pressure)
         for degrees in Self.apexAngles {
             let apex: WorldPoint = .zero
             let world = try await world(extent: 1000, bubble: material(), polygons: [wedge(degrees: degrees)]) {
@@ -172,17 +173,17 @@ final class StaticPolygonEdgeTests: XCTestCase {
             }
             let deflection = try XCTUnwrap(tail.last)
             XCTAssertEqual(deflection, expected, accuracy: 0.02 * expected,
-                           "\(degrees)°: odległość od wierzchołka \(radius - deflection), oczekiwana r − c · F = \(radius - expected)")
+                           "\(degrees)°: odległość od wierzchołka \(radius - deflection), oczekiwana r − r · ε = \(radius - expected)")
             XCTAssertLessThan((tail.max() ?? 0) - (tail.min() ?? 0), 0.005 * expected, "\(degrees)°: ugięcie ma być uspokojone")
         }
     }
 
     /// Bańka r 24 (m 1,36, γ 4, tarcie 0) zsuwa się po brzegu przez wypukły wierzchołek: siła to 600 do najbliższego punktu wielokąta plus 30
     /// w kierunku stycznym, stale w jedną stronę, aż środek znajdzie się 40 jednostek za wierzchołkiem. W każdej ramce przejścia odległość
-    /// środka od brzegu różni się od r − c · F o najwyżej 5 % c · F. Oba kierunki, czyli oba ramiona jako krawędź początkowa.
+    /// środka od brzegu różni się od r − r · ε o najwyżej 10 % r · ε. Oba kierunki, czyli oba ramiona jako krawędź początkowa.
     func testSlideThroughAConvexVertexKeepsTheDistanceFromTheEdge() async throws {
         let radius: Float = 24, pressure: Float = 600, tangential: Float = 30
-        let expected = compliance(radius) * pressure
+        let expected = deflection(radius, force: pressure)
         for degrees in Self.apexAngles {
             for side: Float in [1, -1] {
                 let polygon = wedge(degrees: degrees)
@@ -195,7 +196,7 @@ final class StaticPolygonEdgeTests: XCTestCase {
                 // Kierunek styczny to wersor do najbliższego punktu obrócony o 90°, ze znakiem ustalonym raz: na początku wskazuje wierzchołek.
                 let initialToward = unit(nearestPoint(first, on: polygon) - first)
                 let sense: Float = simd_dot(WorldPoint(-initialToward.y, initialToward.x), -start) >= 0 ? 1 : -1
-                let world = try await world(extent: 1000, bubble: material(damping: 4, friction: 0), polygons: [polygon]) {
+                let world = try await world(extent: 1000, bubble: material(damping: 4), polygons: [polygon]) {
                     try $0.add(CrowdScene.bubble(1, at: first, radius: radius, mass: 1.36))
                 }
                 func push(_ position: WorldPoint, slide: Bool) throws -> WorldTransaction {
@@ -221,8 +222,8 @@ final class StaticPolygonEdgeTests: XCTestCase {
                     if simd_dot(position, finish) >= 40 { reached = true; break }
                 }
                 XCTAssertTrue(reached, "\(name): bańka nie przeszła za wierzchołek w 1 500 krokach")
-                XCTAssertLessThanOrEqual(worst.error, 0.05 * expected,
-                                         "\(name): największe odchylenie odległości od r − c · F to \(worst.error) w kroku \(worst.frame), dopuszczalne \(0.05 * expected)")
+                XCTAssertLessThanOrEqual(worst.error, 0.1 * expected,
+                                         "\(name): największe odchylenie odległości od r − r · ε to \(worst.error) w kroku \(worst.frame), dopuszczalne \(0.1 * expected)")
             }
         }
     }
@@ -252,7 +253,7 @@ final class StaticPolygonEdgeTests: XCTestCase {
             (inner + bisector * 100, -bisector * pressure)]
         var worlds: [BubbleWorld] = []
         for reversed in [false, true] {
-            worlds.append(try await world(extent: 2500, bubble: material(damping: 2, friction: 0), polygons: polygons, reversed: reversed) { setup in
+            worlds.append(try await world(extent: 2500, bubble: material(damping: 2), polygons: polygons, reversed: reversed) { setup in
                 try pushes.enumerated().reduce(setup) { transaction, push in
                     let value = UInt64(push.offset + 1)
                     return transaction.add(try CrowdScene.bubble(value, at: push.element.start, radius: radius, mass: 1.36))
@@ -285,7 +286,7 @@ final class StaticPolygonEdgeTests: XCTestCase {
         for degrees: Float in [0, 30] {
             let heading = degrees * .pi / 180
             let velocity = WorldPoint(-cos(heading), sin(heading)) * speed
-            let world = try await world(extent: 2500, bubble: material(maximumLinearSpeed: 6000),
+            let world = try await world(extent: 2500, bubble: material(),
                                         polygons: [rectangle(faceX: 0, thickness: 48)]) {
                 try $0.add(CrowdScene.bubble(1, at: [200, 0], radius: radius, velocity: velocity))
             }
@@ -306,7 +307,7 @@ final class StaticPolygonEdgeTests: XCTestCase {
     /// krokiem, a żaden krok nie kończy się ze środkiem w ścianie. Tylna krawędź wciągałaby bańkę w lewo, za ścianę.
     func testObliqueEntryAcrossAConvexCornerIsPushedOutByTheCrossedEdgeOnly() async throws {
         let radius: Float = 12, velocity = WorldPoint(1200, -1800)
-        let world = try await world(extent: 2500, bubble: material(maximumLinearSpeed: 6000),
+        let world = try await world(extent: 2500, bubble: material(),
                                     polygons: [rectangle(faceX: -100, thickness: 48)]) {
             try $0.add(CrowdScene.bubble(1, at: [-220, 510], radius: radius, velocity: velocity))
         }

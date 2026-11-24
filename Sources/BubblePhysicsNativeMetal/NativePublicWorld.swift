@@ -341,7 +341,7 @@ package final class NativePublicWorld {
     /// obiektem). Bez atomików i bez słownika w kolejności wyjścia: pary idą posortowane po kluczu, a sumy w kolejności
     /// rekordów, więc wynik jest deterministyczny. Para wchodzi do historii tylko z zainteresowaniem kontaktem.
     /// Punkt jest średnią ważoną wnikaniem, normalna znormalizowaną sumą (od mniejszego `ObjectID` do większego),
-    /// a impuls sumą mnożników podzieloną przez krok.
+    /// a impuls sumą mnożników (siła · krok², jak dawne λ) podzieloną przez krok, czyli siłą · krok.
     private func contactTransitions(bubbleContacts: [NativeSolverContact], segmentOwners: [Int: ObjectID],
                                     rigidContacts: [NativeRigidPolygonState.ContactRecord], interested: Set<ObjectID>,
                                     duration: Double) -> (events: [WorldEvent], pairs: Set<ContactPair>) {

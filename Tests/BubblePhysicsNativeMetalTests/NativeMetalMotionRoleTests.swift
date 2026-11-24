@@ -8,7 +8,7 @@ final class NativeMetalMotionRoleTests: XCTestCase {
     let ball = ObjectID(rawValue: 1), wall = ObjectID(rawValue: 2)
     func initial(role: MotionRole = .dynamic, soft: Float = 0, wallAt x: Float? = nil) throws -> RuntimeState {
         var transaction = try WorldTransaction()
-            .updatePhysicsMaterial(.init(rawValue: 1), material: PhysicsMaterial(kind: .bubble, contactStiffness: soft > 0 ? 229 : 1e9))
+            .updatePhysicsMaterial(.init(rawValue: 1), material: PhysicsMaterial(kind: .bubble, contactStiffness: soft > 0 ? 229 : 1e5))
             .updatePhysicsMaterial(.init(rawValue: 2), material: PhysicsMaterial(kind: .rigid))
             .updateRenderMaterial(.init(rawValue: 1), material: try RenderMaterial())
             .add(.bubble(BubbleDescriptor(id: ball, position: .zero, targetRadius: 1, motionRole: role,
@@ -33,7 +33,7 @@ final class NativeMetalMotionRoleTests: XCTestCase {
     func testBlockedPlayerDriveReportsAchievedPointAndBlockerWithoutTeleporting() async throws {
         let stepper = try NativeCompleteStepper(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         var complete = try await step(stepper, initial(wallAt: 2), WorldTransaction().beginPlayerDrive(ball, target: [8,0]))
-        // Gumka K = 60 dociska bańkę do ściany siłą ok. 420, więc twardy kontakt dopuszcza ułamek procenta wnikania; teleport przez ścianę by to wykrył.
+        // Gumka K = 60 dociska bańkę do ściany siłą ok. 420, więc sztywny kontakt (K_c = 1e5, ε ≈ 0,4 %) dopuszcza ułamek procenta wnikania; teleport przez ścianę by to wykrył.
         for _ in 0..<40 {
             complete = try await step(stepper, complete.state)
             XCTAssertLessThanOrEqual(try XCTUnwrap(complete.state.objects[ball]).position.x, 1.01)

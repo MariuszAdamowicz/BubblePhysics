@@ -2,16 +2,15 @@ import BubblePhysics
 import simd
 import XCTest
 
-/// Tłok i narożnik przy kontakcie twardym (P-B-13, P-B-14) i miękkim (P-B-27 – P-B-29): krok nie jest odrzucany, środki zostają
-/// w ramie ścian, a bańki nie znikają. Scena z `CrowdSceneSupport.swift`; wszystko idzie przez publiczny `BubbleWorld` na urządzeniu Metal.
+/// Tłok i narożnik w prawie kontaktu K_c (P-B-27 – P-B-29, po audycie testów spec. 4): krok nie jest odrzucany, środki zostają
+/// w ramie ścian, a bańki nie znikają. Testy kontaktu twardego (c₀ = 0) zostały usunięte razem z kontaktem twardym: K_c > 0 jest
+/// skończone, a „bardzo twarda” bańka to duże K_c. Scena z `CrowdSceneSupport.swift`; wszystko idzie przez publiczny `BubbleWorld`
+/// na urządzeniu Metal.
 @MainActor
 final class CrowdCompressionTests: XCTestCase {
-    /// Wspólne asercje G1-AC1, G1-AC2 i G2-AC5 dla przebiegu tłoku. Licznika par zawartych nie sprawdzają: przy B = 2,5 pola kół
-    /// są 2,5 raza większe od wnętrza i część par zostaje zawarta w równowadze (probe: 14 przy c₀ = 0, 7 przy materiale miękkim,
-    /// tyle samo po 600, 1800 i 3600 krokach). Spadek licznika do 0 sprawdzają przebiegi bez takiego nadmiaru pól.
+    /// Wspólne asercje dla przebiegu tłoku. Licznika par zawartych nie ma: zawarcie jest niemożliwe, a para kolidująca ma d > 0.
     /// `centerDepthBehindFrame` (w promieniach docelowych) to dopuszczalna głębokość środka za wewnętrzną krawędzią ściany; 0 wymaga
-    /// środków w ramie. Od 3.0.2 (BF-D-5) środek miękkiej bańki dociśniętej siłą F > r_ref / c₀ stoi za krawędzią w ε = c₀ · F / r_ref,
-    /// więc tłok miękki może mieć środki za krawędzią; bańka twarda (c = 0) nie.
+    /// środków w ramie (w prawie z granicą na promieniu środek nigdy nie dochodzi do krawędzi).
     private func assertCrowdKeptStepsAccepted(_ report: CrowdScene.CrowdReport, world: BubbleWorld, balance: Double,
                                               centerDepthBehindFrame: Float = 0,
                                               file: StaticString = #filePath, line: UInt = #line) {
@@ -30,13 +29,6 @@ final class CrowdCompressionTests: XCTestCase {
         }
         XCTAssertGreaterThanOrEqual(report.balance, balance, file: file, line: line)
         XCTAssertGreaterThanOrEqual(report.steps, 600, "przebieg obejmuje 600 kroków po ostatniej bańce", file: file, line: line)
-    }
-
-    // P-B-13
-    func testHardCrowdBalance2_5KeepsStepsAcceptedAndCentersInTheFrame() async throws {
-        let world = try await CrowdScene.makeWorld()
-        let report = try await CrowdScene.runCrowd(world: world, balance: 2.5, seed: 2_500, extraSteps: 600)
-        assertCrowdKeptStepsAccepted(report, world: world, balance: 2.5)
     }
 
     /// Narożnik z G1-AC4: bańka r = 20 pchana siłą 3000 po przekątnej w narożnik ramy, za nią tłok 10 baniek. Zwraca bańkę 1 z
@@ -72,16 +64,6 @@ final class CrowdCompressionTests: XCTestCase {
         return try XCTUnwrap(lastFrame?.objects[CrowdScene.id(1)])
     }
 
-    // P-B-14
-    func testHardCornerPushedByTenBubblesKeepsStepsAcceptedAndCenterInTheFrame() async throws {
-        let pressed = try await runCorner(material: CrowdScene.bubblePhysics())
-        // Napęd naprawdę dociska bańkę 1 do narożnika: jej środek leży blisko punktu (180, 320), a nie w miejscu startu (140, 280).
-        // Bańka r = 20 oparta o obie ściany ma środek w odległości r·√2 od narożnika, start jest o 40·√2 od niego.
-        let corner = CrowdScene.interiorHalfSize
-        let distance = simd_length(pressed.position - corner)
-        XCTAssertLessThan(distance, 20 * Float(2).squareRoot() + 1, "bańka 1 nie dotarła do narożnika: \(pressed.position)")
-    }
-
     // MARK: materiał miękki (wycinek 3)
 
     /// Wgniecenie bańki względem bliższej z dwóch ścian narożnika: δ = r − d, większe z dwóch (x i y).
@@ -90,28 +72,21 @@ final class CrowdCompressionTests: XCTestCase {
         return 20 - min(corner.x - state.position.x, corner.y - state.position.y)
     }
 
-    // P-B-27: tłok B = 2,5 z materiałem miękkim jak P-B-13, a materiał naprawdę działa. Od v2.3.0 (G4, CD-D-16) kontakt miękki jest
-    // sprężyną z pełną korektą prędkości, więc rozkład nakładania nie dowodzi już działania materiału: probe (c₀ = 3,85e-3, to samo
-    // ziarno) dał 670 par nakładających się na klatkę wobec 729 dla c₀ = 0, średnie nakładanie 23,3 wobec 16,7 i największe 93,3 wobec
-    // 81,2, bo sprężyny w gęstym tłoku zostawiają część par zawartych (58 po ostatnim kroku), a dawne oczekiwanie (więcej par płyciej,
-    // mniejsze maksimum) wynikało z częściowej korekty prędkości i limitu λ pary. Dowodem działania jest kontur: tylko bańka z c > 0
-    // ma wgniecenie, więc średni promień efektywny / docelowy spada poniżej 1 (probe: 0,16 wobec 1,00 przy c₀ = 0).
-    func testSoftCrowdBalance2_5KeepsStepsAcceptedAndCompressesContoursUnlikeHard() async throws {
+    // P-B-27: tłok B = 2,5 z materiałem miękkim, a materiał naprawdę działa. W prawie kontaktu środek nigdy nie dochodzi do krawędzi ściany,
+    // więc środki zostają w ramie. Dowodem działania materiału jest kontur: średni promień efektywny / docelowy w ostatniej sekundzie jest
+    // poniżej 1 i jest mniejszy niż przy bańce 100 razy sztywniejszej (to samo ziarno, ten sam przebieg).
+    func testSoftCrowdBalance2_5KeepsStepsAcceptedAndCompressesContoursMoreThanAStiffBubble() async throws {
         let softWorld = try await CrowdScene.makeWorld(bubble: CrowdScene.softCrowdPhysics())
         let soft = try await CrowdScene.runCrowd(world: softWorld, balance: 2.5, seed: 2_500, extraSteps: 600)
-        // Od 3.0.2 (BF-D-5) środek miękkiej bańki może stać za krawędzią ściany: probe (to samo ziarno) dał trzy bańki r 44–47, najgłębiej
-        // 0,18 r za krawędzią (ε ≈ 1,18). Próg 0,5 r odróżnia mocne zgniecenie od przebicia ściany grubości 48.
-        assertCrowdKeptStepsAccepted(soft, world: softWorld, balance: 2.5, centerDepthBehindFrame: 0.5)
-        let hardWorld = try await CrowdScene.makeWorld(bubble: CrowdScene.softBubblePhysics(base: 0))
-        let hard = try await CrowdScene.runCrowd(world: hardWorld, balance: 2.5, seed: 2_500, extraSteps: 600)
-        XCTAssertNil(hard.firstIssue?.issue, "przebieg odniesienia z c₀ = 0")
+        assertCrowdKeptStepsAccepted(soft, world: softWorld, balance: 2.5)
+        let stiffWorld = try await CrowdScene.makeWorld(bubble: CrowdScene.softBubblePhysics(base: 3.85e-5))
+        let stiff = try await CrowdScene.runCrowd(world: stiffWorld, balance: 2.5, seed: 2_500, extraSteps: 600)
+        XCTAssertNil(stiff.firstIssue?.issue, "przebieg odniesienia z bańką 100 razy sztywniejszą")
         XCTAssertEqual(soft.lastSecond.count, CrowdScene.lastSecondSteps)
-        XCTAssertEqual(hard.lastSecond.count, CrowdScene.lastSecondSteps)
-        let hardRatio = hard.meanEffectiveRadiusRatioInLastSecond, softRatio = soft.meanEffectiveRadiusRatioInLastSecond
-        XCTAssertEqual(hardRatio, 1, accuracy: 0.01, "c₀ = 0: bez wgniecenia konturu, średni promień efektywny / docelowy \(hardRatio)")
-        // Pomiar 0,16; próg 0,5 odrzuca materiał, którego siła spadła kilkukrotnie, a nie tylko c = 0.
-        XCTAssertLessThan(softRatio, 0.5,
-                          "średni promień efektywny / docelowy w ostatniej sekundzie: miękki \(softRatio), twardy \(hardRatio)")
+        XCTAssertEqual(stiff.lastSecond.count, CrowdScene.lastSecondSteps)
+        let stiffRatio = stiff.meanEffectiveRadiusRatioInLastSecond, softRatio = soft.meanEffectiveRadiusRatioInLastSecond
+        XCTAssertLessThan(softRatio, 1, "średni promień efektywny / docelowy w ostatniej sekundzie: miękki \(softRatio), sztywny \(stiffRatio)")
+        XCTAssertLessThan(softRatio, stiffRatio, "miększa bańka ma mocniej wgnieciony kontur: miękki \(softRatio), sztywny \(stiffRatio)")
     }
 
     // P-B-28: silniejszy nacisk (B = 2,5 wobec 1,5, to samo ziarno) mocniej ściska kontury.
@@ -129,8 +104,8 @@ final class CrowdCompressionTests: XCTestCase {
         XCTAssertLessThan(high, low, "średni promień efektywny / docelowy: B = 2,5 → \(high), B = 1,5 → \(low)")
     }
 
-    /// Sama pchana bańka w narożniku, bez tłoku: wgniecenie względem ścian da się odczytać, bo przy tłoku bańka dociera do marginesu
-    /// strażnika (δ ≈ r) także przy kontakcie twardym.
+    /// Sama pchana bańka w narożniku, bez tłoku: wgniecenie względem ścian da się odczytać, bo przy tłoku bańka dociera do ściany
+    /// (δ ≈ r) także przy sztywnym materiale.
     private func singleCornerDepth(material: PhysicsMaterial) async throws -> Float {
         let force = simd_normalize(WorldPoint(1, 1)) * 3_000
         let world = try await CrowdScene.makeWorld(bubble: material) {
@@ -143,17 +118,16 @@ final class CrowdCompressionTests: XCTestCase {
         return cornerDepth(try XCTUnwrap(frame.objects[CrowdScene.id(1)]))
     }
 
-    // P-B-29: narożnik z P-B-14 z materiałem miękkim nie odrzuca kroku i trzyma środek w ramie; wgniecenie pchanej bańki jest
-    // większe niż przy c₀ = 0. Pełna scena z tłokiem nie rozróżnia materiałów po δ: bańka 1 dochodzi tam do marginesu strażnika
-    // (δ = 19,998) także przy c₀ = 0, więc δ porównuje scena z samą pchaną bańką.
-    func testSoftCornerPushedByTenBubblesKeepsStepsAcceptedAndDentsMoreThanHard() async throws {
-        let material = try CrowdScene.softBubblePhysics(base: 3e-4)
+    // P-B-29: narożnik z materiałem miękkim nie odrzuca kroku i trzyma środek w ramie; wgniecenie pchanej bańki jest większe niż przy
+    // bańce 10 razy sztywniejszej; opór γ = 5 tłumi odbicia, bo bez oporu bańka pchana stałą siłą odbija się od narożnika bez końca.
+    // Pełna scena z tłokiem nie rozróżnia materiałów po δ, więc δ porównuje scena z samą pchaną bańką.
+    func testSoftCornerPushedByTenBubblesKeepsStepsAcceptedAndDentsMoreThanAStiffBubble() async throws {
+        let material = try CrowdScene.softBubblePhysics(base: 3e-4, damping: 5)
         let pressed = try await runCorner(material: material)
         let distance = simd_length(pressed.position - CrowdScene.interiorHalfSize)
         XCTAssertLessThan(distance, 20 * Float(2).squareRoot() + 1, "bańka 1 nie dotarła do narożnika: \(pressed.position)")
         let soft = try await singleCornerDepth(material: material)
-        let hard = try await singleCornerDepth(material: CrowdScene.softBubblePhysics(base: 0))
-        XCTAssertGreaterThan(soft, hard + 0.05, "wgniecenie δ pchanej bańki: miękka \(soft), twarda \(hard)")
+        let stiff = try await singleCornerDepth(material: CrowdScene.softBubblePhysics(base: 3e-5, damping: 5))
+        XCTAssertGreaterThan(soft, stiff + 0.05, "wgniecenie δ pchanej bańki: miękka \(soft), sztywna \(stiff)")
     }
-
 }

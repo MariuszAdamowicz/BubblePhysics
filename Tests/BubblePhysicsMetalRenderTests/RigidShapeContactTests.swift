@@ -6,6 +6,8 @@ import simd
 
 /// P-B-22 i P-B-69 (G11-AC1, G7-AC2, G2-AC1): kontakt i rozdzielenie każdej pary kształtów (bańka, wielokąt, koło,
 /// kapsuła), także statycznego koła i kapsuły wobec bańki; start z rdzeniem we wnętrzu wielokąta i z kołami o tym samym środku.
+/// W 4.0.0 bańka nie ma kontaktu z bryłą dynamiczną, a świat z bańką i bryłą dynamiczną jest odrzucany (G7-AC4), więc pary łączą
+/// bańkę z dowolnym ciałem statycznym albo bryłę dynamiczną z bryłą, ale nie bańkę z bryłą dynamiczną.
 @MainActor
 final class RigidShapeContactTests: XCTestCase {
     private typealias B = SceneBuilders
@@ -59,15 +61,20 @@ final class RigidShapeContactTests: XCTestCase {
     func testEveryShapePairCollidesAgainstStaticBody() async throws {
         for mover in Shape.allCases {
             for target in Shape.allCases {
+                // Bryła dynamiczna nie ma kontaktu z bańką (G7-AC4).
+                if mover != .bubble, target == .bubble { continue }
                 let context = "\(mover) → statyczny \(target)"
                 let world = try world()
                 let targetX: Float = 150
                 // Szczelina nie jest całkowita (przy 1 jednostce na krok styk wypadłby dokładnie na krawędzi), uderzenie jest
                 // centralne (bez obrotu), a statyczny wielokąt wyższy, żeby krawędzie obu nie leżały na jednej prostej.
                 let startX = targetX - target.halfWidth - mover.halfWidth - 12.4
-                world.submit(try B.baseTransaction()
+                // Bańka dociśnięta siłą 400 (opór γ = 10) stoi przy powierzchni; bez docisku odbiłaby się od ciała w prawie kontaktu.
+                var scene = try B.baseTransaction(bubbleDamping: 10)
                     .add(target.make(2, at: [targetX, 100], role: .static, taller: true))
-                    .add(mover.make(1, at: [startX, 100], role: .dynamic, velocity: [60, 0], interest: .contact)))
+                    .add(mover.make(1, at: [startX, 100], role: .dynamic, velocity: [60, 0], interest: .contact))
+                if mover == .bubble { scene = scene.setMotorDrive(ObjectID(rawValue: 1), drive: try MotorDrive(force: [400, 0])) }
+                world.submit(scene)
                 let result = await B.advance(world, steps: 90)
                 assertHealthy(world, context)
                 assertFinite(result.frame)
@@ -81,9 +88,9 @@ final class RigidShapeContactTests: XCTestCase {
                 }
                 let moved = try state(result.frame, 1)
                 let expected = targetX - target.halfWidth - mover.halfWidth
-                // Dwie bańki są miękkie (kontakt XPBD z deformacją), więc zanurzają się głębiej niż kontakty brył.
-                let softPair = mover == .bubble && target == .bubble
-                XCTAssertEqual(moved.position.x, expected, accuracy: softPair ? 5.0 : 2.0, "\(context): stoi przy powierzchni")
+                // Bańka ugina się pod dociskiem (prawo kontaktu), więc zanurza się głębiej niż kontakty brył.
+                let soft = mover == .bubble
+                XCTAssertEqual(moved.position.x, expected, accuracy: soft ? 5.0 : 2.0, "\(context): stoi przy powierzchni")
                 XCTAssertEqual(try state(result.frame, 2).position, [targetX, 100], "\(context): statyczne ciało stoi")
             }
         }
@@ -95,6 +102,8 @@ final class RigidShapeContactTests: XCTestCase {
         let all = Shape.allCases
         for (i, mover) in all.enumerated() {
             for target in all[i...] {
+                // Bańka i bryła dynamiczna nie współistnieją w jednym świecie (G7-AC4).
+                if (mover == .bubble) != (target == .bubble) { continue }
                 let context = "\(mover) → dynamiczny \(target)"
                 let world = try world()
                 let targetX: Float = 150

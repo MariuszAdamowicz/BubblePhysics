@@ -340,7 +340,7 @@ final class MetalRenderIntegrationTests: XCTestCase {
         let world = try BubbleWorld(configuration: WorldConfiguration(
             simulationRegion: WorldRectangle(min: [-2,-2], max: [2,2]), fixedTimeStep: 1.0 / 60), device: device)
         world.submit(WorldTransaction()
-            .updatePhysicsMaterial(.init(rawValue: 1), material: try PhysicsMaterial(kind: .bubble, contactStiffness: 1e9))
+            .updatePhysicsMaterial(.init(rawValue: 1), material: try PhysicsMaterial(kind: .bubble, contactStiffness: 1e4))
             .updateRenderMaterial(.init(rawValue: 1), material: try RenderMaterial())
             .add(.bubble(try BubbleDescriptor(id: .init(rawValue: 1), position: [3,0],
                 targetRadius: 0.5, physicsMaterialID: .init(rawValue: 1), renderMaterialID: .init(rawValue: 1)))))
@@ -365,7 +365,6 @@ final class MetalRenderIntegrationTests: XCTestCase {
                 progress.append(completed)
                 totals.insert(total)
             }
-        XCTAssertEqual(report.solverIterationLimit, 4)
         XCTAssertEqual(report.warmupFrames, 1)
         XCTAssertEqual(report.measuredFrames, 2)
         XCTAssertEqual(report.contourCPUReadbacks, 0)
@@ -385,7 +384,7 @@ final class MetalRenderIntegrationTests: XCTestCase {
             simulationRegion: WorldRectangle(min: [-10, -10], max: [10, 10]),
             fixedTimeStep: 1.0 / 60), device: device)
         world.submit(WorldTransaction()
-            .updatePhysicsMaterial(.init(rawValue: 1), material: try PhysicsMaterial(kind: .bubble, contactStiffness: 1e9))
+            .updatePhysicsMaterial(.init(rawValue: 1), material: try PhysicsMaterial(kind: .bubble, contactStiffness: 1e4))
             .updateRenderMaterial(.init(rawValue: 1), material: try RenderMaterial())
             .add(.bubble(try BubbleDescriptor(id: .init(rawValue: 1), position: .zero,
                 targetRadius: 1, physicsMaterialID: .init(rawValue: 1), renderMaterialID: .init(rawValue: 1)))))
