@@ -8,7 +8,8 @@ import simd
 
 /// Wynik kompletnej ścieżki publicznego świata i bezpośredniego renderera.
 public struct PublicWorldStressReport: Sendable {
-    /// Nazwa zmierzonej sceny: `stress-300`, `mixed`, `decals` albo `acceptance`.
+    /// Nazwa zmierzonej sceny: `stress-300`, `mixed`, `decals`, `acceptance` albo jedna z czterech scen G8-AC2
+    /// (`resting-crowd`, `band-to-wall`, `head-on-128`, `shot-into-crowd`).
     public let scene: String
     public let deviceName: String
     public let warmupFrames: Int
@@ -28,6 +29,24 @@ public struct PublicWorldStressReport: Sendable {
     public let hostPublicationP95Milliseconds: Double
     /// Czas GPU fizyki: druga seria na świeżym świecie tej samej sceny, z pustym `encodeRender`.
     public let gpuPhysicsP95Milliseconds: Double
+    /// Podkroki fizyki w klatkach mierzonych serii z renderem (`NativeMetalFrameTelemetry.substepCount`): p95 (nearest rank) i maksimum.
+    public internal(set) var substepP95 = 0
+    public internal(set) var substepMax = 0
+    /// Histogram podkroków: liczba podkroków w klatce → liczba klatek mierzonych, które tyle miały.
+    public internal(set) var substepHistogram: [Int: Int] = [:]
+    /// Największa liczba przebudów siatki w jednej klatce mierzonej (`NativeMetalFrameTelemetry.gridRebuildCount`).
+    public internal(set) var gridRebuildMax = 0
+    /// Najdłuższa klatka mierzona serii z renderem w milisekundach (ta sama liczba co `max_ms`, pod nazwą z G8-AC2).
+    public internal(set) var longestFrameMilliseconds = 0.0
+    /// Czas GPU fizyki z telemetrii klatek serii z renderem: suma buforów podkroków, p95. Osobno od `gpuPhysicsP95Milliseconds`
+    /// (druga seria bez renderu), który zasila prognozę iPhone'a X.
+    public internal(set) var telemetryPhysicsGPUP95Milliseconds = 0.0
+    /// Czas GPU konturu z telemetrii klatek serii z renderem: bufor końca kroku, p95.
+    public internal(set) var telemetryContourGPUP95Milliseconds = 0.0
+    /// Czekanie CPU na bufor renderu wywołującego (`BubbleWorld.benchmarkRenderWaitMilliseconds`), p95. To część
+    /// `hostPublicationP95Milliseconds`, a nie osobny odcinek klatki.
+    public internal(set) var hostRenderWaitP95Milliseconds = 0.0
+
     /// Szacunek kosztu renderu GPU: czas GPU klatki z renderem minus czas GPU fizyki.
     public var gpuRenderEstimateMilliseconds: Double { gpuP95Milliseconds - gpuPhysicsP95Milliseconds }
     /// Koszt samego czyszczenia celu renderu: czas GPU passa z samym czyszczeniem minus czas GPU fizyki (nie mniej niż 0).
@@ -74,6 +93,12 @@ public struct PublicWorldStressReport: Sendable {
             : ""
     }
 
+    /// Histogram podkroków jako `przedział:klatki` oddzielone przecinkami, tylko niepuste przedziały rosnąco. Przedziały to potęgi
+    /// dwójki: `1`, `2`, `3-4`, `5-8`, `9-16`, …
+    package static func substepHistogramText(_ histogram: [Int: Int]) -> String {
+        ""
+    }
+
     public var text: String {
         """
         \(PublicWorldStressBenchmark.reportPathHeader)
@@ -86,6 +111,10 @@ public struct PublicWorldStressReport: Sendable {
         host_preparation_p95_ms=\(String(format: "%.4f", hostPreparationP95Milliseconds)); host_publication_p95_ms=\(String(format: "%.4f", hostPublicationP95Milliseconds))
         host_encoding_p95_ms=\(String(format: "%.4f", hostEncodingP95Milliseconds)); host_waiting_p95_ms=\(String(format: "%.4f", hostWaitingP95Milliseconds))
         gpu_physics_p95_ms=\(String(format: "%.4f", gpuPhysicsP95Milliseconds)); gpu_render_estimate_ms=\(String(format: "%.4f", gpuRenderEstimateMilliseconds))
+        substep_p95=\(substepP95); substep_max=\(substepMax); grid_rebuild_max=\(gridRebuildMax)
+        substep_histogram=\(Self.substepHistogramText(substepHistogram))
+        longest_frame_ms=\(String(format: "%.4f", longestFrameMilliseconds)); host_render_wait_p95_ms=\(String(format: "%.4f", hostRenderWaitP95Milliseconds))
+        telemetry_physics_gpu_p95_ms=\(String(format: "%.4f", telemetryPhysicsGPUP95Milliseconds)); telemetry_contour_gpu_p95_ms=\(String(format: "%.4f", telemetryContourGPUP95Milliseconds))
         \(renderSplitLine)non_finite_frames=\(nonFiniteFrames)
         fallback_frames=\(fallbackFrames); failed_frames=\(failedFrames)
         contour_cpu_readbacks=\(contourCPUReadbacks)
@@ -112,6 +141,13 @@ package struct PublicWorldStressFrameSample {
     package let gpuMilliseconds: Double
     /// Czy klatka wywołała `BubblePhysicsMetalRender.encode`.
     package let renderEncoded: Bool
+    /// Pola telemetrii natywnej klatki (`BubbleWorld.benchmarkTelemetry`; `nil`, gdy jej nie było) i czekanie CPU na bufor renderu
+    /// (`BubbleWorld.benchmarkRenderWaitMilliseconds`).
+    package let substepCount: Int?
+    package let gridRebuildCount: Int?
+    package let physicsGPUMilliseconds: Double?
+    package let contourGPUMilliseconds: Double?
+    package let renderWaitMilliseconds: Double
     /// Znaczniki klatki w zegarze `DispatchTime.uptimeNanoseconds`: początek `advance`, początek kodowania,
     /// koniec oczekiwania na GPU i powrót z `advance`. Zera, gdy profil klatki był niedostępny.
     package let startNanoseconds: UInt64
@@ -151,6 +187,14 @@ public enum PublicWorldStressBenchmark {
         /// Scena akceptacyjna iPhone'a X: stress-300 z teksturą przyklejoną i naklejką tekstową, kinematycznym trójkątem
         /// z `KinematicDrive` i połową baniek na warstwie 1; oba materiały baniek mieszają alfą.
         case acceptance
+        /// G8-AC2: 150 baniek w spoczynku w ramie ścian.
+        case restingCrowd
+        /// G8-AC2: bańka „2” ciągnięta gumką w pełnym naciągnięciu do ściany, obok tłum w spoczynku.
+        case bandToWall
+        /// G8-AC2: dwie bańki 128 lecące na siebie po 10³ j/s w osobnym pasie, obok tłum w spoczynku.
+        case headOn128
+        /// G8-AC2: bańka „2” wystrzelona 3 · 10³ j/s przez otwór ramy w tłum.
+        case shotIntoCrowd
 
         package static let stress300 = Scene.stress(bubbleCount: Stress300Scene.defaultBubbleCount)
 
@@ -160,12 +204,20 @@ public enum PublicWorldStressBenchmark {
             case .mixed: return "mixed"
             case .decals: return "decals"
             case .acceptance: return "acceptance"
+            case .restingCrowd: return "resting-crowd"
+            case .bandToWall: return "band-to-wall"
+            case .headOn128: return "head-on-128"
+            case .shotIntoCrowd: return "shot-into-crowd"
             }
         }
 
         /// Próg p95 pełnej klatki sceny.
         package var gateMilliseconds: Double {
-            self == .acceptance ? PublicWorldStressBenchmark.acceptanceGateMilliseconds : PublicWorldStressBenchmark.p95GateMilliseconds
+            switch self {
+            case .acceptance, .restingCrowd, .bandToWall, .headOn128, .shotIntoCrowd:
+                return PublicWorldStressBenchmark.acceptanceGateMilliseconds
+            case .stress, .mixed, .decals: return PublicWorldStressBenchmark.p95GateMilliseconds
+            }
         }
 
         var regionHeight: Float {
@@ -173,6 +225,7 @@ public enum PublicWorldStressBenchmark {
             case .stress(let count): return Stress300Scene.regionHeight(bubbleCount: count)
             case .mixed: return MixedScene.regionHeight
             case .decals, .acceptance: return Stress300Scene.regionHeight(bubbleCount: Stress300Scene.defaultBubbleCount)
+            case .restingCrowd, .bandToWall, .headOn128, .shotIntoCrowd: return BudgetScenes.regionHeight
             }
         }
 
@@ -181,6 +234,7 @@ public enum PublicWorldStressBenchmark {
             case .stress(let count): return try Stress300Scene.configuration(bubbleCount: count)
             case .mixed: return try MixedScene.configuration()
             case .decals, .acceptance: return try Stress300Scene.configuration()
+            case .restingCrowd, .bandToWall, .headOn128, .shotIntoCrowd: return try BudgetScenes.configuration()
             }
         }
 
@@ -192,6 +246,7 @@ public enum PublicWorldStressBenchmark {
             case .decals, .acceptance:
                 return try Self.decoratedTransaction(assets: assets, bubbleCount: Stress300Scene.defaultBubbleCount,
                                                      acceptance: self == .acceptance)
+            case .restingCrowd, .bandToWall, .headOn128, .shotIntoCrowd: return try BudgetScenes.initialTransaction(self)
             }
         }
 
@@ -225,8 +280,9 @@ public enum PublicWorldStressBenchmark {
         package func stepTransaction(step: Int) throws -> WorldTransaction? {
             switch self {
             // Trójkąt jedzie sam według `KinematicDrive` z transakcji początkowej (bryła nie przeskakuje nad bańkami).
-            case .stress, .decals, .acceptance: return nil
+            case .stress, .decals, .acceptance, .restingCrowd, .bandToWall: return nil
             case .mixed: return try MixedScene.stepTransaction(step: step)
+            case .headOn128, .shotIntoCrowd: return try BudgetScenes.stepTransaction(self, step: step)
             }
         }
     }
@@ -511,6 +567,10 @@ public enum PublicWorldStressBenchmark {
             observer?(PublicWorldStressFrameSample(series: kind, index: index, frame: frame, elapsedMilliseconds: elapsed,
                 preparationMilliseconds: preparation, encodingMilliseconds: encoding, waitingMilliseconds: waiting,
                 publicationMilliseconds: publication, gpuMilliseconds: gpuMilliseconds, renderEncoded: renderEncoded,
+                substepCount: world.benchmarkTelemetry?.substepCount, gridRebuildCount: world.benchmarkTelemetry?.gridRebuildCount,
+                physicsGPUMilliseconds: world.benchmarkTelemetry?.physicsGPUMilliseconds,
+                contourGPUMilliseconds: world.benchmarkTelemetry?.contourGPUMilliseconds,
+                renderWaitMilliseconds: world.benchmarkRenderWaitMilliseconds,
                 startNanoseconds: start, encodingStartNanoseconds: encodingStartMark,
                 waitingEndNanoseconds: waitingEndMark, endNanoseconds: end))
             progress(index + 1, totalFrames)
@@ -673,6 +733,24 @@ package enum Stress300Scene {
             let t = max(0, min(1, simd_dot(point - a, b - a) / simd_dot(b - a, b - a)))
             return simd_distance(point, a + (b - a) * t)
         }.min() ?? 0
+    }
+}
+
+/// Cztery sceny G8-AC2 (150 baniek każda). Na razie świat pusty: zadanie 20 planu wypełnia sceny.
+package enum BudgetScenes {
+    package static let bubbleCount = 150
+    package static let regionHeight: Float = 700
+
+    package static func configuration() throws -> WorldConfiguration {
+        try WorldConfiguration(simulationRegion: WorldRectangle(min: [0, 0], max: [375, regionHeight]), fixedTimeStep: 1.0 / 60)
+    }
+
+    package static func initialTransaction(_ scene: PublicWorldStressBenchmark.Scene) throws -> WorldTransaction {
+        WorldTransaction()
+    }
+
+    package static func stepTransaction(_ scene: PublicWorldStressBenchmark.Scene, step: Int) throws -> WorldTransaction? {
+        nil
     }
 }
 

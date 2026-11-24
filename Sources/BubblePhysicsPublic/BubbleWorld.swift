@@ -87,6 +87,8 @@ public final class BubbleWorld {
     package var benchmarkTelemetry: NativeMetalFrameTelemetry? {
         (stepper as? NativeCompleteStepper)?.publishedTelemetry
     }
+    /// Czekanie CPU na bufor renderu wywołującego w ostatnim `advance`, w milisekundach; część publikacji kroku (po końcu kroku).
+    package var benchmarkRenderWaitMilliseconds: Double { 0 }
     package var benchmarkFrameProfile: NativeMetalFrameProfile? {
         (stepper as? NativeCompleteStepper)?.publishedFrameProfile
     }
