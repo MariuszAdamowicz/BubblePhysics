@@ -75,7 +75,7 @@ final class AssetWorldCreationTests: XCTestCase {
         let missingFont = FontID(rawValue: font.rawValue + 100)
         let physics = PhysicsMaterialID(rawValue: 1), look = RenderMaterialID(rawValue: 1), object = ObjectID(rawValue: 1)
         let setup = world.submit(WorldTransaction()
-            .updatePhysicsMaterial(physics, material: try PhysicsMaterial(kind: .bubble))
+            .updatePhysicsMaterial(physics, material: try PhysicsMaterial(kind: .bubble, contactStiffness: 1e9))
             .updateRenderMaterial(look, material: try RenderMaterial())
             .add(.bubble(try BubbleDescriptor(id: object, position: [50, 50], targetRadius: 5,
                                               physicsMaterialID: physics, renderMaterialID: look))))

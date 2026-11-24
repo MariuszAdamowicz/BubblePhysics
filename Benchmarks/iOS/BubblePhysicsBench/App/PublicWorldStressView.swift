@@ -14,6 +14,10 @@ struct PublicWorldStressView: View {
         ("mixed", .mixed),
         ("decals", .decals),
         ("acceptance", .acceptance),
+        ("resting-crowd", .restingCrowd),
+        ("band-to-wall", .bandToWall),
+        ("head-on-128", .headOn128),
+        ("shot-into-crowd", .shotIntoCrowd),
         ("capacity", nil)
     ]
 
@@ -30,11 +34,12 @@ struct PublicWorldStressView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 Text("Publiczny benchmark świata").font(.title2.bold())
-                Text("BubbleWorld + bezpośredni renderer, ten sam command buffer; limit 4, 30 klatek rozgrzewki i 300 mierzonych, potem druga seria tych samych klatek bez renderu (pomiar fizyki). Render poza ekranem w natywnej rozdzielczości ekranu. Wynik akceptacyjny (scena acceptance) wymaga fizycznego iPhone X. Tryb capacity przechodzi poziomy 100–400 baniek co 50: przed każdym czeka, aż stan termiczny wróci do nominal (najdłużej 10 minut), i podaje pojemność przy 60 FPS.")
+                Text("BubbleWorld + bezpośredni renderer: fizyka we własnych buforach świata (do 1024 baniek w jednej dyspozycji GPU), render w buforze gry; limit 4, 30 klatek rozgrzewki i 300 mierzonych, potem druga seria tych samych klatek bez renderu (pomiar fizyki). Render poza ekranem w natywnej rozdzielczości ekranu. Wynik akceptacyjny (scena acceptance) wymaga fizycznego iPhone X. Tryb capacity przechodzi poziomy 100–400 baniek co 50: przed każdym czeka, aż stan termiczny wróci do nominal (najdłużej 10 minut), i podaje pojemność przy 60 FPS.")
                 Picker("Scena", selection: $selectedIndex) {
                     ForEach(scenes.indices, id: \.self) { Text(scenes[$0].title).tag($0) }
                 }
-                .pickerStyle(.segmented)
+                // Menu zamiast segmentów: na 375 pt dziewięć segmentów obcinało nazwy do pierwszej litery i „…”.
+                .pickerStyle(.menu)
                 .disabled(isRunning)
                 ProgressView(value: Double(completed), total: Double(totalFrames))
                 if isRunning {

@@ -6,7 +6,7 @@ import BubblePhysicsReferenceMetal
 import BubblePhysicsNativeMetal
 import BubblePhysicsNativeMetalDiagnostics
 
-private let usage = "Użycie: BubblePhysicsReferenceBench [--scene interactive-24|stress-300] [--backend cpu|metal|native-metal] [--limits 4,8,12,16] [--warmup 30] [--measured 300] [--diagnostics]\n--diagnostics: szczegółowy profil GPU dodaje narzut hosta; nie mieszaj z pomiarem akceptacyjnym. Limit native-metal oznacza stałą liczbę iteracji XPBD/PBD."
+private let usage = "Użycie: BubblePhysicsReferenceBench [--scene interactive-24|stress-300] [--backend cpu|metal|native-metal] [--limits 4,8,12,16] [--warmup 30] [--measured 300] [--diagnostics]\n--diagnostics: szczegółowy profil GPU dodaje narzut hosta; nie mieszaj z pomiarem akceptacyjnym. Limity dotyczą tylko referencyjnych solverów; silnik native-metal 4.0.0 liczy siły w podkrokach i nie ma iteracji, więc każdy limit daje ten sam przebieg."
 
 private enum CLIError: Error, CustomStringConvertible {
     case invalidArgument(String)

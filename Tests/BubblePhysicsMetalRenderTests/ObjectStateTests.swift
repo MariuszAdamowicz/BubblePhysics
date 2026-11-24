@@ -15,12 +15,12 @@ final class ObjectStateTests: XCTestCase {
     private func makeWorld(device: MTLDevice) throws -> BubbleWorld {
         try BubbleWorld.makeBenchmarkWorld(configuration: try WorldConfiguration(
             simulationRegion: WorldRectangle(min: [0, 0], max: [200, 200]), fixedTimeStep: 1.0 / 60),
-            device: device, solverIterationLimit: 4)
+            device: device)
     }
 
     private func baseTransaction() throws -> WorldTransaction {
         try WorldTransaction()
-            .updatePhysicsMaterial(bubbleMaterial, material: PhysicsMaterial(kind: .bubble))
+            .updatePhysicsMaterial(bubbleMaterial, material: PhysicsMaterial(kind: .bubble, contactStiffness: 1e4))
             .updatePhysicsMaterial(polygonMaterial, material: PhysicsMaterial(kind: .rigid))
             .updateRenderMaterial(style, material: try RenderMaterial())
     }
@@ -45,7 +45,9 @@ final class ObjectStateTests: XCTestCase {
         world.submit(try baseTransaction()
             .add(try bubble(1, at: [60, 100], radius: 12, velocity: [20, 0]))
             .add(try bubble(2, at: [140, 60], radius: 9))
-            .add(try box(3, center: [100, 150], half: 10, velocity: [0, -5], angularVelocity: 1))
+            // Bryła obracająca się jest kinematyczna: świat z bańkami nie ma brył dynamicznych (G7-AC4).
+            .add(try box(3, center: [100, 150], half: 10, role: .kinematic))
+            .setKinematicDrive(ObjectID(rawValue: 3), drive: .velocity(linear: [0, -5], angular: 1))
             .add(try box(4, center: [100, 190], half: 8, role: .static)))
         var frame = WorldFrame(transactionReceipts: [], events: [])
         for _ in 0..<30 { frame = await world.advance(by: 1.0 / 60) }
@@ -71,21 +73,34 @@ final class ObjectStateTests: XCTestCase {
         XCTAssertEqual(wall.bounds.max.y, 198, accuracy: 1e-3)
     }
 
+    // Obwiednia zawiera kontur każdej bańki, a środek bańki, która nie ma wgniecenia (promień efektywny w granicach 2 % promienia
+    // docelowego), leży w środku ciężkości jej konturu. Bańka wgnieciona przez sąsiada, ścianę albo trójkąt ma kontur ścięty cięciwą
+    // r · (1 − ε), więc jej środek ciężkości przesuwa się o wgniecenie i nie jest tu porównywany.
     func testStress300BubbleCenterMatchesContourCentroidAndBoundsContainContour() async throws {
         let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
         let world = try BubbleWorld.makeBenchmarkWorld(configuration: try Stress300Scene.configuration(),
-            device: device, solverIterationLimit: 4)
-        world.submit(try Stress300Scene.initialTransaction())
+            device: device)
+        let initial = try Stress300Scene.initialTransaction()
+        var targetRadii: [ObjectID: Float] = [:]
+        for case .add(.bubble(let descriptor)) in initial.operations { targetRadii[descriptor.id] = descriptor.targetRadius }
+        world.submit(initial)
         var frame = WorldFrame(transactionReceipts: [], events: [])
-        for index in 0..<60 {
-            if index > 0 { world.submit(try Stress300Scene.triangleReplacement(step: index)) }
+        for _ in 0..<60 {
             frame = await world.advance(by: 1.0 / 60)
         }
         let contours = world.debugContourSnapshot()
-        XCTAssertEqual(contours.count, 300)
+        XCTAssertEqual(contours.count, Stress300Scene.placedBubbleCount(), "bańki sceny bez miejsc w obrysie startowym trójkąta")
+        var undented = 0
         for (id, contour) in contours {
             let state = try XCTUnwrap(frame.objects[id], "brak stanu bańki \(id)")
             guard case .bubble(let radius) = state.kind else { return XCTFail("\(id) nie jest bańką") }
+            for point in contour {
+                XCTAssertTrue(point.x >= state.bounds.min.x - 1e-3 && point.x <= state.bounds.max.x + 1e-3
+                    && point.y >= state.bounds.min.y - 1e-3 && point.y <= state.bounds.max.y + 1e-3,
+                    "kontur bańki \(id) wychodzi poza AABB")
+            }
+            guard let target = targetRadii[id], radius >= 0.98 * target else { continue }
+            undented += 1
             // Centroid pola wielokąta konturu.
             var area: Double = 0, cx: Double = 0, cy: Double = 0
             for index in contour.indices {
@@ -95,12 +110,8 @@ final class ObjectStateTests: XCTestCase {
             }
             let centroid = WorldPoint(Float(cx / (3 * area)), Float(cy / (3 * area)))
             XCTAssertLessThanOrEqual(simd_distance(centroid, state.position), 0.01 * radius, "bańka \(id)")
-            for point in contour {
-                XCTAssertTrue(point.x >= state.bounds.min.x - 1e-3 && point.x <= state.bounds.max.x + 1e-3
-                    && point.y >= state.bounds.min.y - 1e-3 && point.y <= state.bounds.max.y + 1e-3,
-                    "kontur bańki \(id) wychodzi poza AABB")
-            }
         }
+        XCTAssertGreaterThan(undented, 0, "scena ma bańki bez wgniecenia, więc porównanie środka ciężkości coś sprawdza")
     }
 
     func testRemovedObjectIsAbsentFromThatFramesStateAndReadingStateDoesNotReadContours() async throws {

@@ -6,7 +6,10 @@ package struct PhysicalTransitionProgress: Equatable, Sendable {
     var elapsed: Double
 }
 
-/// Kontrolery dostarczają prędkość/siłę przed krokiem; nigdy nie zapisują osiągniętej pozycji.
+/// Kontrolery dostarczają prędkość przed krokiem; nigdy nie zapisują osiągniętej pozycji. Bańki dostają od hosta tylko prędkość
+/// zadaną (`.static` zero, `.pathDriven` z toru): gumkę, siłę globalną, pola, motor i opór γ liczy GPU w każdym podkroku
+/// (CD-D-5), a host opisuje je rekordami kroku. Bryły dynamiczne są poza podkrokami (CD-D-2) i zostają przy dotychczasowych
+/// siłach hosta raz na krok, jak w `v3.0.2`; kinematyczne jadą z napędu.
 package enum MotionControllers {
     static func length(_ v: WorldPoint) -> Float { hypot(v.x, v.y) }
 
@@ -43,7 +46,14 @@ package enum MotionControllers {
                                 globalForce: WorldPoint, damping: () -> Float, duration: Double, dt: Float) throws {
         guard let mass = object.mass else { return }
         // Promień kolizji zawsze równa się docelowemu: tędy przejścia promienia docierają do fizyki (chwyt go nie zmienia).
-        if case .bubble = object.descriptor { object.collisionRadius = object.targetRadius }
+        if case .bubble = object.descriptor {
+            object.collisionRadius = object.targetRadius
+            // Bańka w roli siłowej zachowuje prędkość z poprzedniego kroku: siły i γ dodaje GPU w podkrokach.
+            switch object.motionRole {
+            case .dynamic, .motorDriven, .playerDriven: return try requireFiniteMotion(object)
+            case .static, .kinematic, .pathDriven: break
+            }
+        }
         switch object.motionRole {
         case .static: object.velocity = .zero; object.angularVelocity = 0
         case .kinematic: applyKinematicDrive(&object, duration: duration)
@@ -80,6 +90,10 @@ package enum MotionControllers {
                 object.velocity = velocity(to: path.points[object.pathIndex], from: object.position, speed: path.speed, dt: dt)
             } else { object.velocity = .zero; object.angularVelocity = 0 }
         }
+        try requireFiniteMotion(object)
+    }
+
+    private static func requireFiniteMotion(_ object: RuntimeObject) throws {
         try requireFinite(object.velocity, "motion.velocity")
         try requireFinite(object.angularVelocity, "motion.angularVelocity")
     }
@@ -208,7 +222,7 @@ package enum MotionControllers {
             case .physicsMaterial(let id, let parameter):
                 guard let material = state.physicsMaterials[id] else { continue }
                 switch parameter {
-                case .deformability: start = .scalar(material.deformability)
+                case .contactStiffness: start = .scalar(material.contactStiffness ?? 0)
                 case .damping: start = .scalar(material.damping)
                 case .friction: start = .scalar(material.friction)
                 case .restitution: start = .scalar(material.restitution)
@@ -230,12 +244,11 @@ package enum MotionControllers {
             case (.physicsMaterial(let id, let parameter), .scalar(let scalar)):
                 if let m = state.physicsMaterials[id] {
                     state.physicsMaterials[id] = try PhysicsMaterial(kind: m.kind,
-                        deformability: parameter == .deformability ? scalar : m.deformability,
+                        contactStiffness: parameter == .contactStiffness ? scalar : m.contactStiffness,
                         damping: parameter == .damping ? scalar : m.damping,
                         friction: parameter == .friction ? scalar : m.friction,
                         restitution: parameter == .restitution ? scalar : m.restitution,
-                        maximumLinearSpeed: m.maximumLinearSpeed, maximumAngularSpeed: m.maximumAngularSpeed,
-                        contactCompliance: m.contactCompliance, contactDampingRatio: m.contactDampingRatio)
+                        maximumLinearSpeed: m.maximumLinearSpeed, maximumAngularSpeed: m.maximumAngularSpeed)
                 }
             default: break
             }

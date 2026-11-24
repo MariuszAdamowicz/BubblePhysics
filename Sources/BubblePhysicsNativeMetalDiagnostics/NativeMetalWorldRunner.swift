@@ -19,7 +19,6 @@ struct NativeMetalWorldFrame {
     var eventOverflow = WorldEventOverflow()
     var contactCandidateOverflowCount = 0
     var maximumContactCandidatesPerObject = 0
-    var containedBubblePairCount = 0
 }
 
 /// Publikuje atomowo pełną klatkę GPU albo wykonuje pełny krok CPU.
@@ -109,14 +108,9 @@ public final class NativeMetalWorldRunner {
         contours = [:]
         renderData = []
         telemetry = .init(backend: .cpu, commandBufferCount: diagnostics?.commandBufferCount ?? 0,
-            encoderCount: diagnostics?.encoderCount ?? 0, cacheHitCount: diagnostics?.cacheHitCount ?? 0,
-            cacheResetCount: diagnostics?.cacheResetCount ?? 0, contactCount: world.contacts.contacts.count,
+            encoderCount: diagnostics?.encoderCount ?? 0, contactCount: world.contacts.contacts.count,
             didEncounterNonFinite: report.hasNonFiniteState || diagnostics?.didEncounterNonFinite == true || reason == "nonFinite",
-            fallbackReason: reason, gpuMilliseconds: diagnostics?.gpuMilliseconds ?? 0,
-            solverIterationCount: diagnostics?.solverIterationCount ?? 0,
-            ccdCandidateCount: diagnostics?.ccdCandidateCount ?? 0,
-            guardCorrectionCount: diagnostics?.guardCorrectionCount ?? 0,
-            cacheInvalidationCount: diagnostics?.cacheInvalidationCount ?? 0)
+            fallbackReason: reason, gpuMilliseconds: diagnostics?.gpuMilliseconds ?? 0)
         return report
     }
 }

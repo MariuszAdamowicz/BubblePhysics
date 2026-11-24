@@ -30,9 +30,9 @@ public final class BubbleWorld {
     private var pendingRenderState: BubbleWorldRenderState?
     /// Stan końcowy „zawiódł”: ustawiony raz, nigdy nie czyszczony.
     private var failureReason: WorldFailureReason?
+    private var failureDetail: WorldFailureDetail?
     private var lastRejectionReason: WorldRejectionReason?
     private var lastSolverGuardCause: SolverGuardCause?
-    private var containedBubblePairCount = 0
     private var didRenderLastAdvance = false
     /// Obiekty ostatniego opublikowanego kroku, które rysują się bez interpolacji.
     private var snappedObjects: Set<ObjectID> = []
@@ -67,20 +67,35 @@ public final class BubbleWorld {
                   lifecycle: lifecycle)
     }
 
-    /// Konstruktor wyłącznie dla diagnostycznego harnessu; limit nie jest parametrem API gry.
+    /// Szew testów silnika 4.0.0: świat z konfiguracją natywną (przełączniki pakietowe podkroków); nie jest API gry.
     package static func makeBenchmarkWorld(configuration: WorldConfiguration, device: MTLDevice,
-                                           solverIterationLimit: Int,
-                                           pairCorrectionLimit: Bool = true) throws -> BubbleWorld {
-        var solver = NativeMetalConfiguration(solverIterationCount: solverIterationLimit)
-        // Bliźniacze testy z dawnym oczekiwaniem wyłączają limit λ pary (CD-D-20).
-        solver.pairCorrectionLimit = pairCorrectionLimit
-        return try BubbleWorld(configuration: configuration, stepper: NativeCompleteStepper(device: device,
-            configuration: solver), assets: AssetRegistry(device: device))
+                                           native: NativeMetalConfiguration = .default) throws -> BubbleWorld {
+        try BubbleWorld(configuration: configuration,
+                        stepper: NativeCompleteStepper(device: device, configuration: native),
+                        assets: AssetRegistry(device: device))
     }
 
+    /// Konfiguracja natywna, z którą pracuje solver świata; szew testów przełączników.
+    package var benchmarkNativeConfiguration: NativeMetalConfiguration? {
+        (stepper as? NativeCompleteStepper)?.nativeConfiguration
+    }
+
+    /// Podkroki ostatniego kroku zapisane przy `captureSubsteps` (x, v, h po każdym); pusta bez tego przełącznika. Szew testów 4.0.0.
+    package var benchmarkCapturedSubsteps: [NativeMetalSubstepSample] {
+        (stepper as? NativeCompleteStepper)?.capturedSubsteps ?? []
+    }
     package var benchmarkTelemetry: NativeMetalFrameTelemetry? {
         (stepper as? NativeCompleteStepper)?.publishedTelemetry
     }
+    /// Czekanie CPU na bufor renderu wywołującego w ostatnim `advance`, w milisekundach; część publikacji kroku (po końcu kroku).
+    /// Krok ze solverem czeka w `NativeMetalSolver` (`NativeMetalFrameProfile.renderWaitMilliseconds`), a klatka bez kroku i świat
+    /// bez ciał przez `commitAndWait`. Zero, gdy `advance` nic nie czekał (bez bufora wywołującego).
+    package var benchmarkRenderWaitMilliseconds: Double {
+        let solver = stepsInLastAdvance > 0 ? (stepper as? NativeCompleteStepper)?.publishedFrameProfile?.renderWaitMilliseconds ?? 0 : 0
+        return lastCommitAndWaitMilliseconds + solver
+    }
+    /// Czas `commitAndWait` w ostatnim `advance`; zerowany na jego początku.
+    private var lastCommitAndWaitMilliseconds = 0.0
     package var benchmarkFrameProfile: NativeMetalFrameProfile? {
         (stepper as? NativeCompleteStepper)?.publishedFrameProfile
     }
@@ -115,8 +130,8 @@ public final class BubbleWorld {
             eventOverflow: lastFrame.eventOverflow,
             contactCandidateOverflow: contactCandidateOverflow,
             maximumContactCandidatesPerObject: maximumContactCandidatesPerObject,
-            failureReason: failureReason, lastRejectionReason: lastRejectionReason,
-            lastSolverGuardCause: lastSolverGuardCause, containedBubblePairCount: containedBubblePairCount,
+            failureReason: failureReason, failureDetail: failureDetail, lastRejectionReason: lastRejectionReason,
+            lastSolverGuardCause: lastSolverGuardCause,
             didRenderLastAdvance: didRenderLastAdvance)
     }
 
@@ -274,6 +289,7 @@ public final class BubbleWorld {
             return lastFrame
         }
         stepsInLastAdvance = 0
+        lastCommitAndWaitMilliseconds = 0
         lastAdvanceIssue = nil
         didRenderLastAdvance = false
         // Stan końcowy wygrywa z pauzą i z krokiem.
@@ -310,7 +326,6 @@ public final class BubbleWorld {
             // Punkty przekazane temu krokowi; zapytania złożone w czasie kroku czekają na następny.
             let hitTestBatch = pendingHitTests
             let batch = TransactionStager.stageBatch(pending, against: state, validate: stepper.validate,
-                baseContactCompliance: stepper.baseContactCompliance, positionTolerance: stepper.positionTolerance,
                 textureExists: { [assets] texture in assets?.contains(texture) ?? false },
                 glyphLookup: { [assets] source in assets?.glyphLookup(source) })
             // Obiekty z partii znamy przed krokiem; zawinięcia dopiero po nim, więc w klatce z krokiem ich nie ma. Zawiniętą bańkę
@@ -350,8 +365,6 @@ public final class BubbleWorld {
                 droppedEvents += complete.eventOverflow.droppedCount
                 contactCandidateOverflow += complete.contactCandidateOverflowCount
                 maximumContactCandidatesPerObject = complete.maximumContactCandidatesPerObject
-                // Przypisanie po kroku, jak maksimum kandydatów, nie suma jak przepełnienie.
-                containedBubblePairCount = complete.containedBubblePairCount
                 lastFrame = WorldFrame(stepIndex: clock.completedSteps, simulationTime: clock.simulationTime,
                     transactionReceipts: receipts, events: events,
                     eventOverflow: WorldEventOverflow(droppedCount: droppedEvents), driveFeedback: complete.driveFeedback,
@@ -385,6 +398,8 @@ public final class BubbleWorld {
 
     /// Zatwierdza bufor gry i czeka na jego ukończenie; status inny niż `completed` to błąd wykonania (stan „zawiódł”).
     private func commitAndWait(_ commandBuffer: MTLCommandBuffer) async throws {
+        let start = DispatchTime.now().uptimeNanoseconds
+        defer { lastCommitAndWaitMilliseconds += Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000 }
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             commandBuffer.addCompletedHandler { completed in
                 if completed.status == .completed { continuation.resume() }
@@ -406,8 +421,9 @@ public final class BubbleWorld {
             lastAdvanceIssue = .stepFailed
             lastRejectionReason = reason
             lastSolverGuardCause = cause
-        case .failed(let reason):
+        case .failed(let reason, let detail):
             failureReason = reason
+            failureDetail = detail
             pending.removeAll()
             dropHitTests()
             lastAdvanceIssue = .worldFailed
@@ -418,7 +434,7 @@ public final class BubbleWorld {
         case cancelled, frameRejected
         /// Przyczyna jest tylko przy `.solverGuard`.
         case stepRejected(WorldRejectionReason, SolverGuardCause?)
-        case failed(WorldFailureReason)
+        case failed(WorldFailureReason, WorldFailureDetail? = nil)
     }
 
     /// Skutek błędu kroku: tylko błąd wykonania GPU i NaN/±∞ kończą świat; błąd gry odrzuca klatkę;
@@ -428,10 +444,14 @@ public final class BubbleWorld {
         if error is GameRenderError { return .frameRejected }
         if error is WorldRenderCommandError { return .failed(.commandExecutionFailed) }
         if let failure = error as? NativeMetalSafetyFailure {
+            switch failure.reason {
+            case .contactViolation: return .failed(.contactViolation, failure.detail.map(worldFailureDetail))
+            case .substepLimitExceeded: return .failed(.substepLimitExceeded, failure.detail.map(worldFailureDetail))
+            default: break
+            }
             let outcome = outcome(of: failure.reason)
             guard case .stepRejected(.solverGuard, _) = outcome else { return outcome }
             let cause: SolverGuardCause? = switch failure.guardCause {
-            case .centerCrossing: .centerCrossing
             case .rigidRotationBudget: .rigidRotationBudget
             case nil: nil
             }
@@ -455,7 +475,21 @@ public final class BubbleWorld {
         case .invalidFrame: return .stepRejected(.invalidFrame, nil)
         case .frameInFlight: return .stepRejected(.frameInFlight, nil)
         case .unavailable: return .stepRejected(.unexpected, nil)
+        case .contactViolation: return .failed(.contactViolation)
+        case .substepLimitExceeded: return .failed(.substepLimitExceeded)
         }
+    }
+
+    private static func worldFailureDetail(_ detail: NativeMetalFailureDetail) -> WorldFailureDetail {
+        let term: WorldSubstepTerm? = switch detail.limitingTerm {
+        case .remainingTime: .remainingTime
+        case .stiffness: .stiffness
+        case .distance: .distance
+        case .margin: .margin
+        case nil: nil
+        }
+        return WorldFailureDetail(objects: detail.objectIDs.map { ObjectID(rawValue: $0) }, edgeIndex: detail.edgeIndex,
+                                  distance: detail.distance, limitingTerm: term)
     }
 }
 

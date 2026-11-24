@@ -11,7 +11,7 @@ import XCTest
 final class DecalsSceneTests: XCTestCase {
     private func makeWorld(_ scene: PublicWorldStressBenchmark.Scene) throws -> (BubbleWorld, AssetRegistry, MTLDevice) {
         let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
-        let world = try BubbleWorld.makeBenchmarkWorld(configuration: scene.configuration(), device: device, solverIterationLimit: 4)
+        let world = try BubbleWorld.makeBenchmarkWorld(configuration: scene.configuration(), device: device)
         return (world, try XCTUnwrap(world.assets), device)
     }
 
@@ -34,7 +34,7 @@ final class DecalsSceneTests: XCTestCase {
             default: break
             }
         }
-        XCTAssertEqual(bubbles, 300)
+        XCTAssertEqual(bubbles, Stress300Scene.placedBubbleCount(), "300 miejsc siatki bez miejsc w obrysie startowym trójkąta (G7-AC1)")
         let material = try XCTUnwrap(materials.first { $0.texture != nil }, "materiał z teksturą")
         XCTAssertEqual(material.bubbleMapping, .attached)
         XCTAssertTrue(try assets.contains(XCTUnwrap(material.texture)))

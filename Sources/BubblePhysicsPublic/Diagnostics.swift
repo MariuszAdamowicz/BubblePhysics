@@ -19,6 +19,40 @@ public enum WorldFailureReason: Equatable, Sendable {
     case commandExecutionFailed
     /// Stan zawiera NaN albo ±∞.
     case nonFiniteValues
+    /// Asercja kontaktu: d ≤ 0 w parze kolidującej według filtrów, środek bańki w kolidującej bryle albo zmiana strony
+    /// krawędzi. To błąd silnika, a nie sceny; szczegóły w `WorldDiagnostics.failureDetail`.
+    case contactViolation
+    /// Klatka potrzebowała ponad 1024 podkroków. Obiekt i człon, który wyznaczył h, są w `WorldDiagnostics.failureDetail`.
+    case substepLimitExceeded
+}
+
+/// Człon wzoru na h, który wyznaczył ostatni podkrok przed przekroczeniem limitu.
+public enum WorldSubstepTerm: Equatable, Sendable {
+    /// Pozostały czas kroku.
+    case remainingTime
+    /// 1 / ω_max: sztywność kontaktu, gumki i pól.
+    case stiffness
+    /// d / (4 · v): odległość do przeszkody w obu kierunkach.
+    case distance
+    /// h_zapasu: zapas obwiedni listy kandydatów.
+    case margin
+}
+
+/// Szczegóły stanu „zawiódł” z przyczyną `.contactViolation` albo `.substepLimitExceeded`.
+public struct WorldFailureDetail: Equatable, Sendable {
+    /// Obiekty, których dotyczy awaria: para albo pojedynczy obiekt (przy limicie podkroków ten, który wyznaczał h).
+    public let objects: [ObjectID]
+    /// Krawędź przeszkody, gdy awaria dotyczy krawędzi; numer w wielokącie bryły.
+    public let edgeIndex: Int?
+    /// Odległość d w chwili awarii (ujemna albo zero przy naruszeniu kontaktu).
+    public let distance: Float?
+    /// Człon h z ostatniego podkroku; tylko przy `.substepLimitExceeded`.
+    public let limitingTerm: WorldSubstepTerm?
+
+    public init(objects: [ObjectID], edgeIndex: Int? = nil, distance: Float? = nil,
+                limitingTerm: WorldSubstepTerm? = nil) {
+        self.objects = objects; self.edgeIndex = edgeIndex; self.distance = distance; self.limitingTerm = limitingTerm
+    }
 }
 
 /// Powód ostatniego odrzuconego kroku albo klatki; świat po nim żyje, a kolejka transakcji czeka.
@@ -35,11 +69,8 @@ public enum WorldRejectionReason: Equatable, Sendable {
     case unexpected
 }
 
-/// Przyczyna odrzucenia kroku przez strażnika solvera (`WorldRejectionReason.solverGuard`).
+/// Przyczyna odrzucenia kroku przez strażnika solvera brył (`WorldRejectionReason.solverGuard`).
 public enum SolverGuardCause: Equatable, Sendable {
-    /// Środek bańki w trakcie symulacji przeszedł przez ścianę albo wszedł we wnętrze bryły; także łuk obrotu bryły
-    /// pominięty przez próbkowanie, który mógł dotknąć bańki.
-    case centerCrossing
     /// Bryła sztywna obróciła się w jednym kroku o więcej, niż pozwala budżet 128 próbek obrotu.
     case rigidRotationBudget
 }
@@ -64,13 +95,13 @@ public struct WorldDiagnostics: Equatable, Sendable {
     public let maximumContactCandidatesPerObject: Int
     /// Powód stanu końcowego „zawiódł”; nil, gdy świat działa (etap 4).
     public let failureReason: WorldFailureReason?
+    /// Szczegóły stanu „zawiódł” (obiekty, krawędź, d, człon h); nil, gdy świat działa albo przyczyna ich nie niesie.
+    public let failureDetail: WorldFailureDetail?
     /// Powód ostatniego odrzuconego kroku lub klatki; zostaje do następnego odrzucenia (etap 4).
     public let lastRejectionReason: WorldRejectionReason?
     /// Przyczyna ostatniego odrzucenia przez strażnika; nil, gdy nic nie odrzucono albo ostatnie odrzucenie miało inny
     /// powód niż `.solverGuard`.
     public let lastSolverGuardCause: SolverGuardCause?
-    /// Liczba par baniek, z których mniejsza mieści się cała w kole większej, po ostatnim ukończonym kroku.
-    public let containedBubblePairCount: Int
     /// Prawda tylko wtedy, gdy ostatnie `advance` zatwierdziło bufor poleceń z renderem; gra prezentuje drawable tylko przy
     /// prawdzie. Pauza, stan „zawiódł”, odrzucona klatka i `advance` bez bufora dają fałsz (etap 6).
     public let didRenderLastAdvance: Bool

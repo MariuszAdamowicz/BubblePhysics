@@ -31,16 +31,17 @@ final class RigidContactMemoryTests: XCTestCase {
     private func measure(bodies: Int) async throws -> (rigid: Int, total: Int) {
         let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         _ = try await world.step(objects: scene(bodies: bodies),
-            materials: [bubbleMaterial: try PhysicsMaterial(kind: .bubble), polygonMaterial: try PhysicsMaterial(kind: .rigid)],
+            materials: [bubbleMaterial: try PhysicsMaterial(kind: .bubble, contactStiffness: 1e4), polygonMaterial: try PhysicsMaterial(kind: .rigid)],
             region: WorldRectangle(min: [0, 0], max: [700, 700]), duration: 1.0 / 60)
         return (world.rigidContactMemoryBytes, world.rigidContactMemoryBytes + world.contactMemoryBytes)
     }
 
-    // 30 i 120 brył przy 300 bańkach: P·n + P² daje 9 900 i 50 400 slotów po 64 B, a O(P·k) najwyżej 128 B na (bryła, slot).
+    // 30 i 120 brył przy 300 bańkach: P·n + P² daje 9 900 i 50 400 slotów po 64 B, a O(P·k) najwyżej 192 B na (bryła, slot): korekta 64 B,
+    // klucz pary 32 B oraz (silnik 4.0.0) osobny wiersz kandydatów bańka–bryła 32 B i rekord kontaktu końca kroku 32 B, plus liczniki i ściany.
     func testRigidContactMemoryIsBoundedByBodiesTimesCandidateLimit() async throws {
         for bodies in [30, 120] {
             let bytes = try await measure(bodies: bodies).rigid
-            XCTAssertLessThanOrEqual(bytes, bodies * limit * 128,
+            XCTAssertLessThanOrEqual(bytes, bodies * limit * 192,
                 "\(bodies) brył: \(bytes) B pamięci kontaktów brył przekracza budżet O(P·k)")
         }
     }
@@ -56,7 +57,8 @@ final class RigidContactMemoryTests: XCTestCase {
         XCTAssertLessThanOrEqual(total, (300 + 120) * limit * 2048)
     }
 
-    // Wiersz bryły ma stałe k: bryła pod ponad k bańkami zwiększa licznik, a klatka jest opublikowana i skończona.
+    // Wiersz bryły ma stałe k: bryła pod ponad k bańkami zwiększa licznik, a klatka jest opublikowana i skończona. Bryła jest kinematyczna:
+    // statyczny wielokąt to odcinki dla baniek, a bryła dynamiczna nie ma kontaktu z bańkami (CD-D-2), więc wiersze bryły ma tylko kinematyczna.
     func testRigidRowOverflowRaisesCounterAndKeepsFrameFinite() async throws {
         let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         var objects: [NativePublicObject] = []
@@ -70,15 +72,15 @@ final class RigidContactMemoryTests: XCTestCase {
                 physicsMaterialID: bubbleMaterial, renderMaterialID: style))))
         }
         objects.append(NativePublicObject(descriptor: .rigidBody(try RigidBodyDescriptor(id: ObjectID(rawValue: 10_000),
-            vertices: [[-20, -20], [20, -20], [20, 20], [-20, 20]], position: [100, 100], motionRole: .dynamic,
+            vertices: [[-20, -20], [20, -20], [20, 20], [-20, 20]], position: [100, 100], motionRole: .kinematic,
             physicsMaterialID: polygonMaterial, renderMaterialID: style))))
         var frame = try await world.step(objects: objects,
-            materials: [bubbleMaterial: try PhysicsMaterial(kind: .bubble), polygonMaterial: try PhysicsMaterial(kind: .rigid)],
+            materials: [bubbleMaterial: try PhysicsMaterial(kind: .bubble, contactStiffness: 1e4), polygonMaterial: try PhysicsMaterial(kind: .rigid)],
             region: WorldRectangle(min: [-200, -200], max: [400, 400]), duration: 1.0 / 60)
         XCTAssertGreaterThan(frame.contactCandidateOverflowCount, 0)
         XCTAssertGreaterThanOrEqual(frame.maximumContactCandidatesPerObject, limit)
         frame = try await world.step(objects: Array(frame.objects.values),
-            materials: [bubbleMaterial: try PhysicsMaterial(kind: .bubble), polygonMaterial: try PhysicsMaterial(kind: .rigid)],
+            materials: [bubbleMaterial: try PhysicsMaterial(kind: .bubble, contactStiffness: 1e4), polygonMaterial: try PhysicsMaterial(kind: .rigid)],
             region: WorldRectangle(min: [-200, -200], max: [400, 400]), duration: 1.0 / 60)
         XCTAssertEqual(frame.objects.count, limit + 13)
         for object in frame.objects.values {

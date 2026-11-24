@@ -174,6 +174,58 @@ final class NativeMetalChainKernelTests: XCTestCase {
         XCTAssertTrue(fused.output.allSatisfy { $0 != sentinel }, "ścieżka fused zapisała wszystkie kontury")
     }
 
+    /// Bufor bramki z jednym wpisem (liczba grup, 1, 1): to, co `nativePrepareEndGates` zapisuje w parze niekońcowej (zero) i końcowej.
+    private func gate(groups: UInt32, device: MTLDevice) throws -> NativeMetalDispatchGate {
+        NativeMetalDispatchGate(buffer: try makeBuffer([SIMD4<UInt32>(groups, 1, 1, 0)], device: device), offset: 0)
+    }
+
+    /// CD-D-29 (R2): także zapasowa ścieżka konturu (trzynaście przejść, wątek na próbkę) idzie bramką. Zero grup w parze niekońcowej nie
+    /// zapisuje niczego, a nominalna liczba grup daje wynik bit w bit jak dyspozycja bez bramki.
+    func testFallbackContourSmoothingRunsOnlyWhenItsGateHasGroups() throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let pipelines = try NativeMetalPipelineCache.pipelines(for: device).stages
+        let bubbles = 40, stride = 64
+        var generator = Generator(state: 61_029)
+        let counts = [UInt32](repeating: UInt32(stride), count: bubbles)
+        let values: [SIMD4<Float>] = (0..<bubbles * stride).map { _ in
+            SIMD4(generator.unit(), generator.unit() * 0.3, generator.unit(), generator.unit())
+        }
+        let sentinel = SIMD4<Float>(7, 7, 7, 7)
+        let countBuffer = try makeBuffer(counts, device: device)
+        let control = try makeBuffer([NativeMetalControl(counts: SIMD4(UInt32(bubbles), 0, 0, 0), physics: .zero,
+                                                         contactDamping: .zero)], device: device)
+        let contour = try makeBuffer([NativeMetalContourControl(counts: SIMD4(UInt32(stride), 0, 0, 0),
+                                                                shape: SIMD4(1, 0, 4, 0))], device: device)
+        func smooth(fused: Bool, gate: NativeMetalDispatchGate?) throws -> [SIMD4<Float>] {
+            let input = try makeBuffer(values, device: device)
+            let output = try makeBuffer([SIMD4<Float>](repeating: sentinel, count: bubbles * stride), device: device)
+            let safety = try makeBuffer([UInt32](repeating: 0, count: 8), device: device)
+            _ = try run(device: device) {
+                NativeMetalContourSmoothing.encode($0, pipelines: pipelines, input: input, output: output, counts: countBuffer,
+                    control: control, contour: contour, safety: safety, bubbleCount: bubbles, stride: stride, fused: fused, gate: gate)
+            }
+            return Array(UnsafeBufferPointer(
+                start: output.contents().bindMemory(to: SIMD4<Float>.self, capacity: bubbles * stride), count: bubbles * stride))
+        }
+        let fallback = pipelines["nativeGenerateContours"]!
+        let width = min(fallback.threadExecutionWidth, fallback.maxTotalThreadsPerThreadgroup)
+        let fallbackGroups = NativeMetalContourSmoothing.gateGroups(pipelines: pipelines, bubbleCount: bubbles, stride: stride, fused: false)
+        XCTAssertEqual(Int(fallbackGroups), (bubbles * stride + width - 1) / width, "wątek na próbkę")
+        XCTAssertEqual(NativeMetalContourSmoothing.gateGroups(pipelines: pipelines, bubbleCount: bubbles, stride: stride, fused: true),
+                       UInt32(bubbles), "bańka na grupę")
+        let ungated = try smooth(fused: false, gate: nil)
+        XCTAssertTrue(ungated.allSatisfy { $0 != sentinel }, "wzorzec bez bramki zapisał kontury")
+        for fused in [false, true] {
+            let groups = NativeMetalContourSmoothing.gateGroups(pipelines: pipelines, bubbleCount: bubbles, stride: stride, fused: fused)
+            let notFinal = try smooth(fused: fused, gate: try gate(groups: 0, device: device))
+            XCTAssertTrue(notFinal.allSatisfy { $0 == sentinel }, "fused \(fused): para niekońcowa nie liczy konturu")
+            let final = try smooth(fused: fused, gate: try gate(groups: groups, device: device))
+            XCTAssertEqual(final.flatMap { [$0.x.bitPattern, $0.y.bitPattern, $0.z.bitPattern, $0.w.bitPattern] },
+                           ungated.flatMap { [$0.x.bitPattern, $0.y.bitPattern, $0.z.bitPattern, $0.w.bitPattern] },
+                           "fused \(fused): para końcowa liczy to samo co dyspozycja bez bramki")
+        }
+    }
+
     // MARK: kandydaci brył (zadanie 94)
 
     private struct RigidCandidatesResult: Equatable {
@@ -194,12 +246,14 @@ final class NativeMetalChainKernelTests: XCTestCase {
             if index % 7 == 3 { bubble.filter = SIMD4(1, 0, 0, NativeMetalFilter.encodeLayer(0)) }
             return bubble
         }
-        let positions: [SIMD4<Float>] = bubbles.map { SIMD4($0.position.x, $0.position.y, 0, 0) }
+        // Zapas obwiedni bańki: połowa promienia, więc zasięg r + zapas = 1,5 r, jak dawny zasięg kandydatów bańka–bryła.
+        let margins: [Float] = bubbles.map { 0.5 * $0.physical.z }
         let bodies: [NativeRigidBody] = (0..<bodyCount).map { index in
             var body = NativeRigidBody(identity: SIMD2(UInt64(5000 + index), 0),
                 pose: SIMD4(3 + Float(index), 4, 0, 0), previous: SIMD4(2.5 + Float(index), 4.2, 0, 0),
                 motion: .zero, physical: SIMD4(1, 1, 2.5, 0), ranges: .zero, flags: .zero,
-                filter: NativeMetalFilter.default, shape: SIMD4(index == 1 ? 1 : 0, 1, 0, 0), limits: .zero)
+                filter: NativeMetalFilter.pack(.default, kinematic: index != 2), shape: SIMD4(index == 1 ? 1 : 0, 1, 0, 0), limits: .zero)
+            // Bryły 0 i 1 są kinematyczne (kandydaci bańka–bryła); bryła 2 to statyczny wielokąt (dla baniek odcinki, bez kandydatów).
             body.flags = SIMD4(index == 2 ? 1 : 0, 0, 0, 0)
             return body
         }
@@ -215,8 +269,8 @@ final class NativeMetalChainKernelTests: XCTestCase {
         let control = try makeBuffer([SIMD4(UInt32(bodyCount), UInt32(bubbleCount), UInt32(limit), 0)], device: device)
         let dispatches = try run(device: device) {
             NativeMetalRigidCandidates.encode($0, pipelines: pipelines, bodies: try! makeBuffer(bodies, device: device),
-                bubbles: try! makeBuffer(bubbles, device: device), positions: try! makeBuffer(positions, device: device),
-                control: control, rows: rows, rowCounts: rowCounts, overflow: overflow,
+                bubbles: try! makeBuffer(bubbles, device: device), margins: try! makeBuffer(margins, device: device),
+                control: control, rows: rows, rowCounts: rowCounts, overflow: NativeMetalBufferSlice(overflow),
                 jointRanges: try! makeBuffer(ranges, device: device), jointPartners: try! makeBuffer(partners, device: device),
                 bodyCount: bodyCount, groupWidth: groupWidth)
         }
@@ -255,7 +309,7 @@ final class NativeMetalChainKernelTests: XCTestCase {
     }
 
     private func prepareRenderData(device: MTLDevice, grouped: Bool, stride: Int, maxEdge: Float,
-                                   seed: UInt64) throws -> (RenderPreparationResult, Int) {
+                                   seed: UInt64, gateGroups: UInt32? = nil) throws -> (RenderPreparationResult, Int) {
         let pipelines = try NativeMetalPipelineCache.pipelines(for: device).stages
         var generator = Generator(state: seed)
         let bubbleCount = 12
@@ -292,11 +346,12 @@ final class NativeMetalChainKernelTests: XCTestCase {
                                                          contactDamping: .zero)], device: device)
         let contour = try makeBuffer([NativeMetalContourControl(counts: SIMD4(UInt32(stride), 0, 0, 0),
                                                                 shape: SIMD4(maxEdge, 0, 4, 0))], device: device)
+        let gate = try gateGroups.map { try self.gate(groups: $0, device: device) }
         let dispatches = try run(device: device) {
             NativeMetalRenderPreparation.encode($0, pipelines: pipelines, bubbles: bubbleBuffer,
                 deformation: deformationBuffer, counts: try! makeBuffer(counts, device: device), points: points,
                 packets: packets, control: control, contour: contour, safety: safety, bubbleCount: bubbleCount,
-                stride: stride, grouped: grouped)
+                stride: stride, grouped: grouped, gate: gate)
         }
         func bits<T>(_ buffer: MTLBuffer, _ type: T.Type, _ count: Int) -> [UInt32] {
             let words = count * MemoryLayout<T>.stride / 4
@@ -307,6 +362,34 @@ final class NativeMetalChainKernelTests: XCTestCase {
             points: bits(points, SIMD2<Float>.self, bubbleCount * stride),
             deformation: bits(deformationBuffer, SIMD4<Float>.self, bubbleCount * stride),
             safety: bits(safety, UInt32.self, 4)), dispatches)
+    }
+
+    /// CD-D-29 (R2): także zapasowa ścieżka wątek na bańkę idzie bramką: zero grup w parze niekońcowej nie zapisuje ani pakietów, ani punktów.
+    func testPerBubbleThreadRenderPreparationRunsOnlyWhenItsGateHasGroups() throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let pipelines = try NativeMetalPipelineCache.pipelines(for: device).stages
+        let stride = 64, bubbleCount = 12
+        let fallback = pipelines["nativePrepareRenderData"]!
+        let width = min(fallback.threadExecutionWidth, fallback.maxTotalThreadsPerThreadgroup)
+        let nominal = NativeMetalRenderPreparation.gateGroups(pipelines: pipelines, bubbleCount: bubbleCount, stride: stride, grouped: false)
+        XCTAssertEqual(Int(nominal), (bubbleCount + width - 1) / width, "wątek na bańkę")
+        XCTAssertEqual(NativeMetalRenderPreparation.gateGroups(pipelines: pipelines, bubbleCount: bubbleCount, stride: stride, grouped: true),
+                       UInt32(bubbleCount), "bańka na grupę")
+        for grouped in [false, true] {
+            let groups = NativeMetalRenderPreparation.gateGroups(pipelines: pipelines, bubbleCount: bubbleCount, stride: stride,
+                                                                 grouped: grouped)
+            let ungated = try prepareRenderData(device: device, grouped: grouped, stride: stride, maxEdge: 10, seed: 4242)
+            let notFinal = try prepareRenderData(device: device, grouped: grouped, stride: stride, maxEdge: 10, seed: 4242, gateGroups: 0)
+            let final = try prepareRenderData(device: device, grouped: grouped, stride: stride, maxEdge: 10, seed: 4242, gateGroups: groups)
+            XCTAssertNotEqual(ungated.0.packets, notFinal.0.packets, "grouped \(grouped): wzorzec zapisuje pakiety")
+            // Pakiet początkowy to zera tożsamości i 5,0f w geometrii i deformacji: nic innego nie może się w nim znaleźć.
+            XCTAssertTrue(notFinal.0.packets.allSatisfy { $0 == 0 || $0 == 0x40a0_0000 },
+                          "grouped \(grouped): para niekońcowa nie zapisuje pakietów")
+            XCTAssertTrue(notFinal.0.points.allSatisfy { $0 == 0x4110_0000 }, "grouped \(grouped): ani punktów konturu")
+            XCTAssertEqual(final.0.packets, ungated.0.packets, "grouped \(grouped)")
+            XCTAssertEqual(final.0.points, ungated.0.points, "grouped \(grouped)")
+            XCTAssertEqual(final.0.bubbles, ungated.0.bubbles, "grouped \(grouped)")
+        }
     }
 
     func testGroupedRenderPreparationIsBitIdenticalToThePerBubbleThread() throws {
@@ -368,12 +451,14 @@ final class NativeMetalChainKernelTests: XCTestCase {
         let indirect = try XCTUnwrap(device.makeBuffer(length: (5 + sums.count * 2) * stride, options: .storageModeShared))
         let overflow = try makeBuffer([UInt32](repeating: 0, count: 4), device: device)
         let buffers = NativeMetalScanBuffers(values: values, offsets: output, blockSums: sums, blockOffsets: offsets,
-                                             control: control, contacts: contacts, indirectArguments: indirect, overflow: overflow)
+                                             control: control, contacts: NativeMetalBufferSlice(contacts), indirectArguments: indirect,
+                                             overflow: NativeMetalBufferSlice(overflow))
         let dispatches = try run(device: device) { encoder in
             encoder.setComputePipelineState(pipelines["nativePrepareIndirectArguments"]!)
             for (index, buffer) in [control, contacts, indirect].enumerated() { encoder.setBuffer(buffer, offset: 0, index: index) }
-            var levels = UInt32(sums.count)
+            var levels = UInt32(sums.count), endMode = UInt32(0)
             encoder.setBytes(&levels, length: MemoryLayout<UInt32>.stride, index: 3)
+            encoder.setBytes(&endMode, length: MemoryLayout<UInt32>.stride, index: 4)
             encoder.dispatchThreads(.init(width: 1, height: 1, depth: 1), threadsPerThreadgroup: .init(width: 1, height: 1, depth: 1))
             return NativeMetalScan.encode(encoder, pipelines: pipelines, buffers: buffers, mode: mode,
                                           maximum: mode == 0 ? max(1, length) : capacity, singleGroup: singleGroup)
@@ -464,7 +549,9 @@ final class NativeMetalChainKernelTests: XCTestCase {
                 let buffers: [MTLBuffer] = [try! makeBuffer(bubbles, device: device), control, contacts,
                     try! makeBuffer(grid, device: device), try! makeBuffer(segments, device: device), rows, rowCounts, overflow,
                     try! makeBuffer([SIMD4<UInt32>](repeating: .zero, count: bubbleCount), device: device),
-                    try! makeBuffer([UInt64(0)], device: device)]
+                    try! makeBuffer([UInt64(0)], device: device),
+                    // Zapas obwiedni zero: zasięg jak w odniesieniu poniżej (r + r + tolerancja).
+                    try! makeBuffer([Float](repeating: 0, count: bubbleCount), device: device)]
                 for (index, buffer) in buffers.enumerated() { encoder.setBuffer(buffer, offset: 0, index: index) }
                 encoder.dispatchThreads(.init(width: bubbleCount, height: 1, depth: 1),
                     threadsPerThreadgroup: .init(width: min(pipeline.threadExecutionWidth, bubbleCount), height: 1, depth: 1))

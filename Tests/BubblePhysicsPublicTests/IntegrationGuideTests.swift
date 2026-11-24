@@ -122,4 +122,28 @@ final class IntegrationGuideTests: XCTestCase {
             XCTAssertTrue(headings.contains { $0.contains(topic) }, "brak nagłówka tematu „\(topic)”")
         }
     }
+
+    /// P-B-32 (G9-AC2): Showcase i benchmark iOS nie używają usuniętych w 4.0.0 nazw, scena baniek ma tylko bryły statyczne,
+    /// a bryły dynamiczne i przeguby są w osobnej scenie bez baniek.
+    func testShowcaseAndBenchmarkUseOnlyTheFourZeroContactSurface() throws {
+        let removed = ["deformability", "contactCompliance", "BubbleContactCompliance", "contactDampingRatio",
+                       "centerCrossing", "solverIterationCount", "solverIterationLimit", "guardCorrections"]
+        let sources = ["Examples/BubblePhysicsShowcase/App/BubbleScene.swift",
+                       "Examples/BubblePhysicsShowcase/App/RigidScene.swift",
+                       "Examples/BubblePhysicsShowcase/App/ShowcaseScene.swift",
+                       "Examples/BubblePhysicsShowcase/App/MetalHostView.swift",
+                       "Benchmarks/iOS/BubblePhysicsBench/App/PublicWorldStressView.swift",
+                       "Benchmarks/iOS/BubblePhysicsBench/App/BubblePhysicsBenchApp.swift"]
+        for path in sources {
+            let text = try read(path)
+            for name in removed { XCTAssertFalse(text.contains(name), "\(path) używa usuniętej nazwy \(name)") }
+        }
+        let bubbleScene = try read("Examples/BubblePhysicsShowcase/App/BubbleScene.swift")
+        XCTAssertTrue(bubbleScene.contains("contactStiffness"), "scena baniek ustawia K_c materiału bańki")
+        for forbidden in [".dynamic", "addJoint", ".kinematic"] {
+            XCTAssertFalse(bubbleScene.contains(forbidden), "scena baniek ma tylko bryły statyczne, znaleziono \(forbidden)")
+        }
+        let rigidScene = try read("Examples/BubblePhysicsShowcase/App/RigidScene.swift")
+        XCTAssertFalse(rigidScene.contains(".bubble("), "scena brył dynamicznych nie ma baniek")
+    }
 }

@@ -20,9 +20,9 @@ final class NativeMetalContactMemoryTests: XCTestCase {
         }
     }
 
-    private func bubble(_ id: UInt64, _ position: WorldPoint, radius: Float) throws -> NativePublicObject {
+    private func bubble(_ id: UInt64, _ position: WorldPoint, radius: Float, role: MotionRole = .dynamic) throws -> NativePublicObject {
         NativePublicObject(descriptor: .bubble(try BubbleDescriptor(id: ObjectID(rawValue: id), position: position,
-            targetRadius: radius, physicsMaterialID: bubbleMaterial, renderMaterialID: style)))
+            targetRadius: radius, motionRole: role, physicsMaterialID: bubbleMaterial, renderMaterialID: style)))
     }
 
     private func box(_ id: UInt64, _ center: WorldPoint, half: Float) throws -> NativePublicObject {
@@ -47,7 +47,7 @@ final class NativeMetalContactMemoryTests: XCTestCase {
 
     private func step(_ world: NativePublicWorld, _ objects: [NativePublicObject]) async throws -> NativePublicFrame {
         try await world.step(objects: objects,
-            materials: [bubbleMaterial: try PhysicsMaterial(kind: .bubble), polygonMaterial: try PhysicsMaterial(kind: .rigid)],
+            materials: [bubbleMaterial: try PhysicsMaterial(kind: .bubble, contactStiffness: 1e4), polygonMaterial: try PhysicsMaterial(kind: .rigid)],
             region: WorldRectangle(min: [0, 0], max: [1400, 1100]), duration: 1.0 / 60)
     }
 
@@ -82,11 +82,14 @@ final class NativeMetalContactMemoryTests: XCTestCase {
         XCTAssertLessThanOrEqual(frame.maximumContactCandidatesPerObject, limit)
     }
 
-    // P-B-21: 300 baniek ściśniętych w kwadracie 6×6 daje każdej z pierwszych baniek ponad k sąsiadów.
+    // P-B-21: 300 baniek ściśniętych w kwadracie 6×6 daje każdej z pierwszych baniek ponad k sąsiadów. Bańki są statyczne: nakładające się
+    // dynamiczne bańki o ε bliskim 1 wystrzeliłyby poza region (siła bez granic), a ten test sprawdza pamięć i licznik, nie dynamikę.
     func testForcedOverflowRaisesCounterPublishesFrameAndStaysFinite() async throws {
         let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         var random = LCG()
-        let squeezed = try (0..<300).map { try bubble(UInt64($0 + 1), [100 + random.next() * 6, 100 + random.next() * 6], radius: 2) }
+        let squeezed = try (0..<300).map {
+            try bubble(UInt64($0 + 1), [100 + random.next() * 6, 100 + random.next() * 6], radius: 2, role: .static)
+        }
         var frame = try await step(world, squeezed)
         XCTAssertGreaterThan(frame.contactCandidateOverflowCount, 0, "przepełnienie k = \(limit) musi zwiększyć licznik")
         XCTAssertGreaterThanOrEqual(frame.maximumContactCandidatesPerObject, limit)
@@ -98,5 +101,29 @@ final class NativeMetalContactMemoryTests: XCTestCase {
         }
         let sparse = try await memory(bubbles: 300, boxes: 0)
         XCTAssertEqual(world.contactMemoryBytes, sparse, "pamięć nie zależy od gęstości sceny")
+    }
+
+    private func squeezedCluster() throws -> [NativePublicObject] {
+        var random = LCG()
+        return try (0..<300).map {
+            try bubble(UInt64($0 + 1), [100 + random.next() * 6, 100 + random.next() * 6], radius: 2, role: .static)
+        }
+    }
+
+    // CD-D-26: licznik to odrzuceni kandydaci jednej budowy siatki, każdy raz, więc kilka par buforów w klatce (każda para przebudowuje siatkę)
+    // nie mnoży go. Ta sama ściśnięta gromada daje tę samą liczbę z jedną parą i w klatce z kilkoma parami (uderzenie 10³ j/s w pierwszej klatce).
+    func testOverflowCountDoesNotGrowWithTheNumberOfPairsInTheFrame() async throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let single = try await step(NativePublicWorld(device: device), squeezedCluster())
+        XCTAssertGreaterThan(single.contactCandidateOverflowCount, 0)
+        XCTAssertEqual(single.profile.commandBufferCount, 2, "gromada statycznych baniek to jedna para buforów")
+        let kicked = try bubble(1000, [955 - 5 - 8, 500], radius: 5)
+        var moving = kicked
+        moving.velocity = [1000, 0]
+        var forced = NativeMetalConfiguration.default
+        forced.forceMultipleDispatches = true // kilka par buforów to ścieżka wielu dyspozycji (CD-D-27)
+        let multi = try await step(NativePublicWorld(device: device, configuration: forced), squeezedCluster() + [moving, box(2000, [1005, 500], half: 50)])
+        XCTAssertGreaterThan(multi.profile.commandBufferCount, 2, "uderzenie w pierwszej klatce ma dać kilka par buforów")
+        XCTAssertEqual(multi.contactCandidateOverflowCount, single.contactCandidateOverflowCount)
     }
 }

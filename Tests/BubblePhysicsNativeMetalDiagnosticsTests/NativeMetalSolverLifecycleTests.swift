@@ -19,7 +19,9 @@ final class NativeMetalSolverLifecycleTests: XCTestCase {
             // Sąsiednie rekordy są łączone w jedno polecenie blit.
             XCTAssertEqual(runner.profile.bubbleUploadCommandCount, step == 0 ? 1 : 0)
             XCTAssertEqual(world.bubbles.count, 300)
-            XCTAssertEqual(runner.profile.commandBufferCount, 1)
+            // 4.0.0: pary buforów (podkroki + koniec kroku), więc co najmniej 2 i parzyście, zależnie od liczby podkroków klatki.
+            XCTAssertGreaterThanOrEqual(runner.profile.commandBufferCount, 2)
+            XCTAssertEqual(runner.profile.commandBufferCount % 2, 0)
         }
     }
 
@@ -83,7 +85,7 @@ final class NativeMetalSolverLifecycleTests: XCTestCase {
         let ping = state.bubblesPing
         let pong = state.bubblesPong
         let cache = state.cachePing
-        let scratch = state.scratch
+        let contacts = state.contacts
         let secondInput = NativeMetalSnapshot(world: try makeWorld(), previous: firstInput)
         XCTAssertTrue(secondInput.bubbleChanges.isEmpty)
         let second = try await solver.executeFrame(snapshot: secondInput, scenarioStep: 2)
@@ -91,7 +93,7 @@ final class NativeMetalSolverLifecycleTests: XCTestCase {
         XCTAssertTrue(state.bubblesPing === ping)
         XCTAssertTrue(state.bubblesPong === pong)
         XCTAssertTrue(state.cachePing === cache)
-        XCTAssertTrue(state.scratch === scratch)
+        XCTAssertTrue(state.contacts === contacts)
         XCTAssertEqual(first.bubbles[0].center.x, 0.5, accuracy: 1e-6)
         XCTAssertEqual(second.bubbles[0].center.x, 1, accuracy: 1e-6)
         XCTAssertEqual(second.bubbles[0].previousCenter.x, 0.5, accuracy: 1e-6)
@@ -112,16 +114,16 @@ final class NativeMetalSolverLifecycleTests: XCTestCase {
         let existing = try XCTUnwrap(second.bubbles.first { $0.id.rawValue == 2 })
         XCTAssertEqual(existing.center.x, 11, accuracy: 1e-6)
         XCTAssertEqual(existing.previousCenter.x, 10.5, accuracy: 1e-6)
-        XCTAssertEqual(second.profile.commandBufferCount, 1)
+        XCTAssertEqual(second.profile.commandBufferCount, 2)
     }
 
-    func testNormalFrameUsesExactlyOneCommandBuffer() async throws {
+    func testNormalFrameUsesOneCommandBufferPairForPhysicsAndContour() async throws {
         let executor = ControlledCommandExecutor()
         let solver = try NativeMetalSolver(device: XCTUnwrap(MTLCreateSystemDefaultDevice()), commandExecutor: executor)
         let frame = try await solver.executeFrame(snapshot: .init(world: try makeWorld()), scenarioStep: 7)
         XCTAssertEqual(executor.submissionStatuses, [.notEnqueued])
         XCTAssertEqual(executor.commitCount, 1)
-        XCTAssertEqual(frame.profile.commandBufferCount, 1)
+        XCTAssertEqual(frame.profile.commandBufferCount, 2)
         XCTAssertEqual(frame.profile.encoderCount, 2)
         XCTAssertGreaterThanOrEqual(frame.profile.hostEncodingMilliseconds, 0)
         XCTAssertGreaterThanOrEqual(frame.profile.hostWaitingMilliseconds, 0)
@@ -253,8 +255,6 @@ final class NativeMetalSolverLifecycleTests: XCTestCase {
         XCTAssertEqual(MemoryLayout<NativeMetalContactControl>.stride, 80)
         XCTAssertEqual(MemoryLayout<NativeMetalControl>.alignment, 16)
         XCTAssertEqual(MemoryLayout<NativeMetalControl>.stride, 64)
-        XCTAssertEqual(MemoryLayout<NativeMetalSolverControl>.alignment, 16)
-        XCTAssertEqual(MemoryLayout<NativeMetalSolverControl>.stride, 32)
         XCTAssertEqual(MemoryLayout<NativeMetalRenderPacket>.alignment, 16)
         XCTAssertEqual(MemoryLayout<NativeMetalRenderPacket>.stride, 48)
     }
@@ -274,8 +274,10 @@ final class NativeMetalSolverLifecycleTests: XCTestCase {
             XCTAssertEqual(runner.renderData, frame.renderData)
             XCTAssertEqual(runner.telemetry.backend, .nativeMetal)
             XCTAssertNil(runner.telemetry.fallbackReason)
-            XCTAssertEqual(runner.profile.commandBufferCount, 1)
-            XCTAssertEqual(runner.profile.encoderCount, 2)
+            // Bańki w tej scenie nachodzą na siebie, więc klatka potrzebuje kilku podkroków: bufory idą parami, po jednym enkoderze.
+            XCTAssertGreaterThanOrEqual(runner.profile.commandBufferCount, 2)
+            XCTAssertEqual(runner.profile.commandBufferCount % 2, 0)
+            XCTAssertEqual(runner.profile.encoderCount, runner.profile.commandBufferCount)
         }
     }
 

@@ -7,7 +7,7 @@ import BubblePhysicsReference
 @MainActor
 final class VisualSimulationDriverTests: XCTestCase {
     func testDefaultVisualDriverPublishesRealNativeContours() async throws {
-        let runner = try XCTUnwrap(NativeMetalWorldRunner(configuration: .init(solverIterationCount: 4)))
+        let runner = try XCTUnwrap(NativeMetalWorldRunner(configuration: .init()))
         let driver = try VisualSimulationDriver(nativeRunner: runner)
         _ = await driver.advance(to: 0)
         let frame = await driver.advance(to: 1.0 / 60)

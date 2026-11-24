@@ -17,9 +17,13 @@ enum SceneBuilders {
             eventBufferCapacity: eventBufferCapacity, globalForce: gravity), device: device)
     }
 
-    static func baseTransaction(friction: Float = 0) throws -> WorldTransaction {
+    /// Materiał baniek to K_c i γ: domyślnie sztywny kontakt (K_c = 1e4, ugięcie ułamka procenta przy lekkich bańkach) bez oporu. Sceny, w
+    /// których bańka ma stanąć w styku, podają opór γ (bez niego bańka dociśnięta siłą odbija się bez końca).
+    static func baseTransaction(friction: Float = 0, bubbleStiffness: Float = 1e4,
+                                bubbleDamping: Float = 0) throws -> WorldTransaction {
         try WorldTransaction()
-            .updatePhysicsMaterial(bubbleMaterial, material: PhysicsMaterial(kind: .bubble, friction: friction))
+            .updatePhysicsMaterial(bubbleMaterial, material: PhysicsMaterial(kind: .bubble, contactStiffness: bubbleStiffness,
+                                                                              damping: bubbleDamping))
             .updatePhysicsMaterial(polygonMaterial, material: PhysicsMaterial(kind: .rigid, friction: friction))
             .updateRenderMaterial(style, material: try RenderMaterial())
     }

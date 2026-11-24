@@ -190,41 +190,31 @@ final class JointWorldTests: XCTestCase {
         XCTAssertGreaterThan(abs(try state(result.frame, 1).rotation), 0.05, "para rzeczywiście się obróciła")
     }
 
-    // MARK: Bańki na więzie dystansowym
+    // MARK: Bańki i więzy
 
-    // P-B-25: bańka na więzie ze światem, z bryłą i z inną bańką: odległość środka w granicach 1%,
-    // a kształt konturu nie zmienia się od korekty więzu.
-    func testBubbleOnDistanceJointHoldsLengthAndKeepsContour() async throws {
-        let world = try makeWorld(gravity: [0, -g])
+    // Przeguby z udziałem baniek nie istnieją w 4.0.0 (CD-D-2): transakcja z takim więzem (bańka–świat, bańka–bryła i bańka–bańka)
+    // jest odrzucana z `unsupportedJointBody`, a świat zostaje bez zmian.
+    func testJointWithABubbleIsRejectedAndTheWorldStaysUnchanged() async throws {
+        let world = try makeWorld()
         let pivot = WorldPoint(300, 500)
-        world.submit(try B.baseTransaction()
-            .add(B.bubble(1, at: pivot + [60, 0], radius: 8))
-            .addJoint(B.distanceJoint(1, 1, nil, anchorB: pivot, length: 60))
-            .add(B.circle(2, at: [600, 500], radius: 8))
-            .add(B.bubble(3, at: [650, 500], radius: 8, velocity: [0, 40]))
-            .addJoint(B.distanceJoint(2, 3, 2, length: 50))
-            .add(B.bubble(4, at: [900, 500], radius: 8))
-            .add(B.bubble(5, at: [940, 500], radius: 8, velocity: [30, 30]))
-            .addJoint(B.distanceJoint(3, 4, 5, length: 40)))
-        var worst: [Float] = [0, 0, 0], widths: [[Float]] = [[], [], []]
-        _ = await B.advance(world, steps: 180) { _, frame in
-            guard let b1 = frame.objects[ObjectID(rawValue: 1)], let c2 = frame.objects[ObjectID(rawValue: 2)],
-                  let b3 = frame.objects[ObjectID(rawValue: 3)], let b4 = frame.objects[ObjectID(rawValue: 4)],
-                  let b5 = frame.objects[ObjectID(rawValue: 5)] else { return }
-            worst[0] = max(worst[0], abs(simd_distance(b1.position, pivot) - 60) / 60)
-            worst[1] = max(worst[1], abs(simd_distance(b3.position, c2.position) - 50) / 50)
-            worst[2] = max(worst[2], abs(simd_distance(b4.position, b5.position) - 40) / 40)
-            widths[0].append(b1.bounds.max.x - b1.bounds.min.x)
-            widths[1].append(b3.bounds.max.x - b3.bounds.min.x)
-            widths[2].append(b5.bounds.max.x - b5.bounds.min.x)
-        }
-        healthy(world, "bańki na więzie")
-        XCTAssertLessThanOrEqual(worst[0], 0.01, "bańka–świat")
-        XCTAssertLessThanOrEqual(worst[1], 0.01, "bańka–bryła")
-        XCTAssertLessThanOrEqual(worst[2], 0.01, "bańka–bańka")
-        for series in widths {
-            let spread = (series.max() ?? 0) - (series.min() ?? 0)
-            XCTAssertLessThan(spread, 0.5, "kontur bańki nie zmienia się od więzu")
+        let cases: [(String, WorldTransaction)] = try [
+            ("bańka–świat", WorldTransaction().add(B.bubble(1, at: pivot + [60, 0], radius: 8))
+                .addJoint(B.distanceJoint(1, 1, nil, anchorB: pivot, length: 60))),
+            ("bańka–bryła", WorldTransaction().add(B.bubble(3, at: [650, 500], radius: 8)).add(B.circle(2, at: [600, 500], radius: 8, role: .static))
+                .addJoint(B.distanceJoint(2, 3, 2, length: 50))),
+            ("bańka–bańka", WorldTransaction().add(B.bubble(4, at: [900, 500], radius: 8)).add(B.bubble(5, at: [940, 500], radius: 8))
+                .addJoint(B.distanceJoint(3, 4, 5, length: 40)))]
+        world.submit(try B.baseTransaction())
+        _ = await world.advance(by: B.step)
+        for (name, transaction) in cases {
+            let token = world.submit(transaction)
+            let frame = await world.advance(by: B.step)
+            var rejection: TransactionRejection?
+            for case .transactionRejected(let rejected, let reason) in frame.events where rejected == token { rejection = reason }
+            guard case .unsupportedJointBody? = rejection?.reason else {
+                XCTFail("\(name): oczekiwano unsupportedJointBody, jest \(String(describing: rejection))"); continue
+            }
+            XCTAssertTrue(frame.objects.isEmpty, "\(name): świat bez zmian")
         }
     }
 
@@ -232,21 +222,13 @@ final class JointWorldTests: XCTestCase {
 
     // P-B-66: nakładające się ciała połączone więzem domyślnie nie kolidują; z `collideConnected` się rozpychają.
     func testConnectedBodiesDoNotCollideUnlessEnabled() async throws {
-        func run(collide: Bool) async throws -> (hinge: Float, mixed: Float, bubbles: Float, events: Int, hingeEvents: Int, hingeTurn: Float) {
+        func run(collide: Bool) async throws -> (hinge: Float, events: Int, hingeEvents: Int, hingeTurn: Float) {
             let world = try makeWorld()
             world.submit(try B.baseTransaction()
                 // Dwie bryły na zawiasie.
                 .add(B.box(1, at: [200, 200], half: [20, 20], role: .dynamic, interest: .contact))
                 .add(B.box(2, at: [220, 200], half: [20, 20], role: .dynamic))
-                .addJoint(B.hingeJoint(1, 1, 2, anchorA: [10, 0], anchorB: [-10, 0], collideConnected: collide))
-                // Bańka z bryłą.
-                .add(B.bubble(3, at: [500, 200], radius: 8))
-                .add(B.circle(4, at: [505, 200], radius: 10))
-                .addJoint(B.distanceJoint(2, 3, 4, length: 5, softness: 0.1, collideConnected: collide))
-                // Dwie bańki.
-                .add(B.bubble(5, at: [800, 200], radius: 8))
-                .add(B.bubble(6, at: [804, 200], radius: 8))
-                .addJoint(B.distanceJoint(3, 5, 6, length: 4, softness: 0.1, collideConnected: collide)))
+                .addJoint(B.hingeJoint(1, 1, 2, anchorA: [10, 0], anchorB: [-10, 0], collideConnected: collide)))
             var events = 0, hingeEvents = 0
             let result = await B.advance(world, steps: 90) { _, frame in
                 events += B.began(frame.events).count
@@ -254,20 +236,15 @@ final class JointWorldTests: XCTestCase {
             }
             healthy(world, "collideConnected=\(collide)")
             let s = { (id: UInt64) in try self.state(result.frame, id) }
-            return (simd_distance(try s(1).position, try s(2).position), simd_distance(try s(3).position, try s(4).position),
-                    simd_distance(try s(5).position, try s(6).position), events, hingeEvents,
+            return (simd_distance(try s(1).position, try s(2).position), events, hingeEvents,
                     abs(try s(1).rotation) + abs(try s(2).rotation))
         }
         let off = try await run(collide: false)
         XCTAssertEqual(off.hinge, 20, accuracy: 1.5, "zawias: ciała się nie rozpychają")
-        XCTAssertEqual(off.mixed, 5, accuracy: 1.0, "bańka–bryła: odległość z więzu")
-        XCTAssertEqual(off.bubbles, 4, accuracy: 1.0, "bańka–bańka: odległość z więzu")
         XCTAssertEqual(off.events, 0, "bez kolizji nie ma kontaktu")
         XCTAssertEqual(off.hingeEvents, 0, "zawias bez kolizji: brak kontaktu między ciałami")
         XCTAssertEqual(off.hingeTurn, 0, accuracy: 0.05, "zawias bez kolizji: ciała zostają w miejscu")
         let on = try await run(collide: true)
-        XCTAssertGreaterThan(on.mixed, 12, "bańka–bryła rozepchnięte")
-        XCTAssertGreaterThan(on.bubbles, 10, "bańka–bańka rozepchnięte")
         XCTAssertGreaterThan(on.events, 0, "z przełącznikiem powstaje kontakt")
         // Kotwice zawiasu leżą w obu bryłach, więc nakładanie nie znika; kontakt między nimi jednak działa i je obraca.
         XCTAssertGreaterThan(on.hingeEvents, 0, "zawias: kontakt rigid–rigid z przełącznikiem")
@@ -288,8 +265,6 @@ final class JointWorldTests: XCTestCase {
                 .addJoint(B.weldJoint(1, 1, 2, anchorA: [20, 0], anchorB: [-20, 0]))
                 .add(B.circle(3, at: pivot + [80, 0], radius: 6))
                 .addJoint(B.distanceJoint(2, 3, nil, anchorB: pivot, length: 80))
-                .add(B.bubble(4, at: pivot + [80, -30], radius: 8))
-                .addJoint(B.distanceJoint(3, 4, 3, length: 30, softness: 0.02, damping: 1))
                 .add(B.box(5, at: [600, 200], half: [30, 3], role: .static))
                 .add(B.box(6, at: [600, 230], half: [20, 5], role: .dynamic))
                 .addJoint(B.hingeJoint(4, 6, nil, anchorA: [-20, 0], anchorB: [580, 230],
@@ -302,33 +277,11 @@ final class JointWorldTests: XCTestCase {
             }
         }
         let first = try await run(), second = try await run()
-        XCTAssertEqual(first.count, 36)
+        XCTAssertEqual(first.count, 30)
         XCTAssertEqual(first, second)
     }
 
     // MARK: Usuwanie więzów
-
-    // P-B-26: scalenie baniek usuwa ich więzy, wymienia je w potwierdzeniu, a wynik nie dziedziczy więzu.
-    func testMergingBubblesRemovesTheirJointsAndResultMovesFreely() async throws {
-        let world = try makeWorld()
-        let pivot = WorldPoint(300, 300)
-        let group = MergeGroupSet(rawValue: 1)
-        world.submit(try B.baseTransaction()
-            .add(B.bubble(1, at: pivot + [50, 0], radius: 8, velocity: [0, 120], mergeGroups: group))
-            .add(B.bubble(2, at: pivot + [50, 16], radius: 8, mergeGroups: group))
-            .addJoint(B.distanceJoint(1, 1, nil, anchorB: pivot, length: 50)))
-        _ = await B.advance(world, steps: 5)
-        world.submit(WorldTransaction().mergeBubbles([ObjectID(rawValue: 1), ObjectID(rawValue: 2)],
-            result: BubbleResult(id: ObjectID(rawValue: 9), physicsMaterialID: B.bubbleMaterial, renderMaterialID: B.style)))
-        var removed: [JointID] = []
-        let result = await B.advance(world, steps: 90) { _, frame in
-            for receipt in frame.transactionReceipts { removed += receipt.removedJointIDs }
-        }
-        healthy(world, "scalenie")
-        XCTAssertEqual(removed, [JointID(rawValue: 1)])
-        let merged = try state(result.frame, 9)
-        XCTAssertGreaterThan(simd_distance(merged.position, pivot), 90, "wynik poruszył się swobodnie, bez więzu")
-    }
 
     // P-B-67: bryła z więzem opuszcza region z polityką `remove`: więz znika bez potwierdzenia, partner porusza się swobodnie.
     func testJointDisappearsWhenBodyLeavesRegionAndPartnerMovesFreely() async throws {

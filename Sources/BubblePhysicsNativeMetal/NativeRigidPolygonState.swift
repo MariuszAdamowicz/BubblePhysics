@@ -152,8 +152,10 @@ final class NativeRigidPolygonState {
     private(set) var bodyUploadCount = 0
     private(set) var geometryUploadCount = 0
     private(set) var count = 0
-    /// Pojemność wierszy kandydatów: bryły × k.
+    /// Pojemność wierszy kandydatów: bryły × 128 (pojemność buforów, niezależna od `candidateLimit`).
     private(set) var rowCapacity = 0
+    /// Długość wiersza kandydatów brył (G8-AC4): najwyżej pojemność 128; mniejsza wartość skraca wiersz, bufory zostają.
+    private(set) var candidateLimit = NativeMetalSolver.candidateLimitPerObject
     var bodies: MTLBuffer { buffers["working"]! }
     /// Rekordy ostatniej publikacji: poza po kroku (`pose`) i przed nim (`previous`, `pose.w`); `nil`, gdy nie ma brył.
     var publishedBodies: MTLBuffer? { publishedInputs.isEmpty ? nil : buffers["published"] }
@@ -165,11 +167,18 @@ final class NativeRigidPolygonState {
     var contacts: MTLBuffer { buffers["contacts"]! }
     var candidates: MTLBuffer { buffers["candidates"]! }
     var rowCounts: MTLBuffer { buffers["rowCounts"]! }
-    var walls: MTLBuffer { buffers["walls"]! }
+    /// Kandydaci bańka–bryła (wiersze brył, rodzaj 2) z zapasem obwiedni; powstają przy każdej budowie siatki, osobno od par brył.
+    var bubbleCandidates: MTLBuffer { buffers["bubbleCandidates"]! }
+    var bubbleRowCounts: MTLBuffer { buffers["bubbleRowCounts"]! }
+    /// Rekordy kontaktów bańka–bryła końca kroku, po dwa `float4` na miejsce wiersza kandydatów (`nativeBubbleBodyContacts`).
+    var bubbleContacts: MTLBuffer { buffers["bubbleContacts"]! }
+    /// Liczby dla jądra kandydatów: tryb par brył (`NativeRigidCandidateMode.bodies`) i tryb baniek (`.bubbles`).
     var control: MTLBuffer { buffers["control"]! }
+    var bubbleControl: MTLBuffer { buffers["bubbleControl"]! }
+    var walls: MTLBuffer { buffers["walls"]! }
     /// Bajty pamięci kontaktów brył: wiersze kandydatów z korektami i ściany (O(P·k), niezależnie od liczby baniek).
     var contactMemoryBytes: Int {
-        ["contacts", "candidates", "rowCounts", "walls"].reduce(0) { $0 + (buffers[$1]?.length ?? 0) }
+        ["contacts", "candidates", "rowCounts", "walls", "bubbleCandidates", "bubbleRowCounts", "bubbleContacts"].reduce(0) { $0 + (buffers[$1]?.length ?? 0) }
     }
 
     init(device: MTLDevice) { self.device = device }
@@ -185,10 +194,14 @@ final class NativeRigidPolygonState {
         return value
     }
 
-    func prepare(_ inputs: [NativeRigidPolygonInput], bubbleCount: Int, timeStep: Float) throws {
+    /// Wiersze brył niosą tylko pary brył (`control.w` = 1): bańki nie wchodzą do solvera brył, a ich kontakt z bryłami liczy pętla podkroków
+    /// na kandydatach z osobnych wierszy (`bubbleCandidates`, `bubbleControl.w` = 2).
+    func prepare(_ inputs: [NativeRigidPolygonInput], bubbleCount: Int, timeStep: Float,
+                 candidateLimit rowLimit: Int = NativeMetalSolver.candidateLimitPerObject) throws {
         current = inputs; count = inputs.count
-        let limit = NativeMetalSolver.candidateLimitPerObject
-        let total = UInt64(count) * UInt64(limit)
+        let limit = min(max(1, rowLimit), NativeMetalSolver.candidateLimitPerObject)
+        candidateLimit = limit
+        let total = UInt64(count) * UInt64(NativeMetalSolver.candidateLimitPerObject)
         guard total <= UInt64(UInt32.max) else { throw NativeMetalSolverError.capacityOverflow }
         rowCapacity = Int(total)
         _ = try buffer("published", count: count, stride: MemoryLayout<NativeRigidBody>.stride)
@@ -198,9 +211,18 @@ final class NativeRigidPolygonState {
         _ = try buffer("contacts", count: rowCapacity, stride: MemoryLayout<NativeRigidCorrection>.stride)
         _ = try buffer("candidates", count: rowCapacity, stride: 32)
         _ = try buffer("rowCounts", count: count, stride: MemoryLayout<SIMD2<UInt32>>.stride)
+        _ = try buffer("bubbleCandidates", count: rowCapacity, stride: 32)
+        let bubbleRowCounts = try buffer("bubbleRowCounts", count: count, stride: MemoryLayout<SIMD2<UInt32>>.stride)
+        // Wiersze baniek powstają przy budowie siatki (nie ma ich w kroku bez baniek), więc liczniki poprzedniego kroku nie mogą przetrwać.
+        memset(bubbleRowCounts.contents(), 0, bubbleRowCounts.length)
+        _ = try buffer("bubbleContacts", count: rowCapacity * 2, stride: MemoryLayout<SIMD4<Float>>.stride)
         _ = try buffer("walls", count: count, stride: MemoryLayout<NativeRigidWall>.stride)
         let control = try buffer("control", count: 1, stride: 16)
-        control.contents().storeBytes(of: SIMD4(UInt32(count), UInt32(bubbleCount), UInt32(limit), 0), as: SIMD4<UInt32>.self)
+        control.contents().storeBytes(of: SIMD4(UInt32(count), UInt32(bubbleCount), UInt32(limit), NativeRigidCandidateMode.bodies.rawValue),
+                                      as: SIMD4<UInt32>.self)
+        let bubbleControl = try buffer("bubbleControl", count: 1, stride: 16)
+        bubbleControl.contents().storeBytes(of: SIMD4(UInt32(count), UInt32(bubbleCount), UInt32(limit), NativeRigidCandidateMode.bubbles.rawValue),
+                                            as: SIMD4<UInt32>.self)
         records = []; changes = []; remaps = []
         var vertices: [SIMD2<Float>] = [], triangles: [SIMD4<UInt32>] = []
         let old = Dictionary(uniqueKeysWithValues: publishedInputs.enumerated().map { ($0.element.object.descriptor.id, ($0.offset, $0.element)) })
@@ -340,7 +362,7 @@ final class NativeRigidPolygonState {
     /// bryły, bryła–bryła z wiersza bryły o mniejszym indeksie, a kontakt ze ścianą z sondy `nativeRigidPredict` tylko
     /// wtedy, gdy wiersze nie mają dla tej pary kontaktu (jego odpowiednikiem sumy Δλ jest pęd zatrzymany przez sweep razy krok).
     func contactRecords() -> [ContactRecord] {
-        let limit = NativeMetalSolver.candidateLimitPerObject
+        let limit = candidateLimit
         let counts = rowCounts.contents().bindMemory(to: SIMD2<UInt32>.self, capacity: max(1, count))
         let keys = candidates.contents()
         let wallRecords = walls.contents().bindMemory(to: NativeRigidWall.self, capacity: max(1, count))
@@ -360,6 +382,21 @@ final class NativeRigidPolygonState {
                 if kind == 3 { emittedBodyPairs.insert(SIMD2(first.rawValue, second.rawValue)) }
                 let impulse = Float(bitPattern: keys.load(fromByteOffset: index * 32 + 28, as: UInt32.self))
                 result.append(.init(first: first, second: second, point: point, normal: normal, impulseSum: impulse))
+            }
+        }
+        // Kontakty bańka–bryła z końca kroku (statyczne koło i kapsuła, bryła kinematyczna): normalna od bańki do bryły, impuls siły w kroku.
+        let bubbleCounts = bubbleRowCounts.contents().bindMemory(to: SIMD2<UInt32>.self, capacity: max(1, count))
+        let bubbleKeys = bubbleCandidates.contents()
+        let bubbleRecords = bubbleContacts.contents().bindMemory(to: SIMD4<Float>.self, capacity: max(1, rowCapacity * 2))
+        for body in 0..<count {
+            for slot in 0..<Int(bubbleCounts[body].x) {
+                let index = body * limit + slot
+                let first = bubbleRecords[2 * index], second = bubbleRecords[2 * index + 1]
+                guard first.x != 0 || first.y != 0 else { continue }
+                let bubble = ObjectID(rawValue: UInt64(bitPattern: bubbleKeys.load(fromByteOffset: index * 32, as: Int64.self)))
+                let bodyID = ObjectID(rawValue: UInt64(bitPattern: bubbleKeys.load(fromByteOffset: index * 32 + 8, as: Int64.self)))
+                result.append(.init(first: bubble, second: bodyID, point: WorldPoint(first.z, first.w),
+                                    normal: WorldPoint(first.x, first.y), impulseSum: second.x))
             }
         }
         let position = Dictionary(uniqueKeysWithValues: current.enumerated().map { ($0.element.object.descriptor.id, $0.offset) })

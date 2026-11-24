@@ -13,7 +13,7 @@ struct NativeMetalBubble: Equatable, Sendable {
     var eventData = SIMD2<UInt64>.zero // interest, merge groups
     var bounds = SIMD4<Float>.zero // AABB zdeformowanego konturu po kroku: min.xy, max.xy
     var filter = NativeMetalFilter.default // kategoria, maska, reserved, warstwa (`NativeMetalFilter.encodeLayer`)
-    var contact = SIMD4<Float>.zero // podatność c₀·r/r_ref (0 = kontakt twardy), reserved, ζ_c (współczynnik tłumienia kontaktu miękkiego, także dla bańki twardej), reserved
+    var contact = SIMD4<Float>.zero // zero (dawna podatność XPBD), K_c, zero (dawne ζ_c), znacznik bańki napędzanej siłami (siła globalna, pola, γ)
 
     init(_ bubble: NativeSolverBubble) {
         identity = SIMD2(Int64(bubble.id.rawValue), 0)
@@ -21,6 +21,9 @@ struct NativeMetalBubble: Equatable, Sendable {
         motion = SIMD4(bubble.velocity.x, bubble.velocity.y, bubble.rotation, bubble.angularVelocity)
         physical = SIMD4(bubble.mass, bubble.inverseMass, bubble.targetRadius, bubble.stiffness)
         deformation = .zero
+        // Ścieżka bez ustawień publicznych (diagnostyka) niesie K_c w bańce; bańka z K_c > 0 jest napędzana siłami kontaktu.
+        contact = bubble.contactStiffness > 0 ? NativePublicProperties.contact(stiffness: bubble.contactStiffness, forceDriven: bubble.inverseMass > 0) : .zero
+        material.x = bubble.damping
     }
 
     func unpack(into bubble: inout NativeSolverBubble) {
@@ -146,7 +149,7 @@ struct NativeMetalContactControl: Sendable {
     var limits: SIMD4<UInt32> // frame, expiry, capacity, previousCacheCount
     var counts: SIMD4<UInt32> // candidates, contacts, cache, reserved
     var cache: SIMD4<UInt32> // hits, resets, invalidationCount, k (kandydaci na obiekt)
-    var thresholds: SIMD4<Float> // teleportMultiplier, ccdMultiplier, contactTolerance, separationTolerance
+    var thresholds: SIMD4<Float> // zero, zero, contactTolerance, separationTolerance
     var cellWidth: SIMD4<Float>
 }
 
@@ -157,16 +160,10 @@ struct NativeMetalControl: Sendable {
     var region = SIMD4<Float>.zero
 }
 
-struct NativeMetalSolverControl: Sendable {
-    var counts: SIMD4<UInt32> // active, iterations, corrections, iteration budget
-    var physics: SIMD4<Float> // compliance / dt², position tolerance, final residual, initial residual
-}
-
 struct NativeMetalSafetyControl: Sendable {
-    var counts: SIMD4<UInt32> // kandydaci CCD, korekcje guardów, resetowane rekordy, bity błędów
-    /// Shadery adresują `atomic_uint *safety` jako `safety+0..3` (counts) i `safety+4..7` (diagnostics): para „bańka w bańce”
-    /// to atomic add do `diagnostics.x` (safety+4). Struktury MSL nie ma, więc układ pilnuje stride 32.
-    var diagnostics = SIMD4<UInt32>.zero // liczba par bańka w bańce, rezerwa
+    /// Shadery adresują `atomic_uint *safety` jako `safety+0..3`; `counts.w` to bity błędów (1 nieskończoność, 2 strażnik brył,
+    /// 16 budżet obrotu bryły). Struktury MSL nie ma, więc układ pilnuje stride 16.
+    var counts: SIMD4<UInt32>
 }
 
 struct NativeMetalRenderPacket: Equatable, Sendable {
@@ -303,6 +300,9 @@ public struct NativeMetalFrameProfile: Equatable, Sendable {
     public var rigidGeometryUploadCount = 0
     public var hostEncodingMilliseconds: Double = 0
     public var hostWaitingMilliseconds: Double = 0
+    /// Czekanie CPU na bufor renderu wywołującego (commit, wykonanie, uzupełnienie), po buforze końca kroku. Wchodzi w odcinek publikacji
+    /// (od `waitingEndNanoseconds` do powrotu z `advance`), nie w `hostWaitingMilliseconds`. Zero bez bufora wywołującego.
+    package var renderWaitMilliseconds: Double = 0
     /// Początek kodowania kroku w zegarze `DispatchTime.uptimeNanoseconds`, jak czas klatki w benchmarku;
     /// różnica względem początku `advance` to przygotowanie wejścia po stronie CPU.
     public var encodingStartNanoseconds: UInt64 = 0

@@ -11,7 +11,7 @@ final class NativeMetalRenderHandoffTests: XCTestCase {
         let bubble = NativePublicObject(descriptor: .bubble(try BubbleDescriptor(
             id: .init(rawValue: 7), position: [0, 0], targetRadius: 1,
             physicsMaterialID: .init(rawValue: 1), renderMaterialID: .init(rawValue: 1))))
-        let materials = try [PhysicsMaterialID(rawValue: 1): PhysicsMaterial(kind: .bubble)]
+        let materials = try [PhysicsMaterialID(rawValue: 1): PhysicsMaterial(kind: .bubble, contactStiffness: 1e9)]
         let region = try WorldRectangle(min: [-10, -10], max: [10, 10])
         _ = try await world.step(objects: [bubble], materials: materials,
                                  region: region, duration: 1.0 / 60)
@@ -32,7 +32,7 @@ final class NativeMetalRenderHandoffTests: XCTestCase {
             id: .init(rawValue: 7), position: [0, 0], targetRadius: 1,
             physicsMaterialID: .init(rawValue: 1), renderMaterialID: .init(rawValue: 1))))
         _ = try await world.step(objects: [bubble],
-            materials: [.init(rawValue: 1): PhysicsMaterial(kind: .bubble)],
+            materials: [.init(rawValue: 1): PhysicsMaterial(kind: .bubble, contactStiffness: 1e9)],
             region: WorldRectangle(min: [-10, -10], max: [10, 10]), duration: 1.0 / 60)
         XCTAssertEqual(world.publishedContourCPUReadbackCount, 0)
         let debug = try XCTUnwrap(world.publishedRenderHandoff).debugContourSnapshot()

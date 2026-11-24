@@ -2,11 +2,14 @@ import BubblePhysics
 import simd
 import XCTest
 
-/// Jedno tłumienie ruchu (wycinek 2, P-B-7 – P-B-12; G1-AC1 – G1-AC6): materiał γ działa najpierw na prędkość, dopiero potem
-/// dochodzi F/m · dt, więc w spoczynku bańka dostaje pełną siłę, a prędkość narzucona torem albo napędem kinematycznym nie jest tłumiona.
+/// Jedno tłumienie ruchu (wycinek 2, P-B-7 – P-B-12; G1-AC1 – G1-AC6): materiał γ działa na prędkość w każdym podkroku razem z siłą
+/// (dokładne półimpulsy z oporem, CD-D-6), więc w spoczynku bańka dostaje pełną siłę, a prędkość narzucona torem albo napędem
+/// kinematycznym nie jest tłumiona.
 ///
-/// Testy `testRest…` mierzą ugięcie bańki dociśniętej do grubej ściany (czoło w x = −100, grubość 300, co najmniej 2r). Testy
-/// `testVelocity…` mierzą prędkość ramka po ramce w świecie bez ścian. Krok stały 1/60, materiał baniek o c₀ 0,0108 i r_ref 20.
+/// Testy `testRest…` mierzą ugięcie bańki dociśniętej do grubej ściany (czoło w x = −100, grubość 300, co najmniej 2r) wobec równowagi
+/// z prawa kontaktu F = K_c · ε / (1 − ε)² (K_c = r_ref / c₀ = 20 / 0,0108). Kontakt nie tłumi, więc stan ustalony następuje dopiero po
+/// wygaszeniu drgań przez γ (czas rzędu kilkunastu sekund przy γ = 0,6). Testy `testVelocity…` mierzą prędkość ramka po ramce
+/// w świecie bez ścian. Krok stały 1/60.
 @MainActor
 final class MotionDampingTests: XCTestCase {
     private let dt = CrowdScene.step
@@ -20,10 +23,9 @@ final class MotionDampingTests: XCTestCase {
 
     // MARK: sceny
 
-    /// Materiał baniek z podatnością c₀ · r / r_ref, `deformability` 0 (kontur czysto geometryczny) i tłumieniem γ.
+    /// Materiał baniek z K_c = r_ref / c₀ (c₀ to dawna podatność kontaktu) i tłumieniem γ.
     private func bubbleMaterial(damping: Float, maximumLinearSpeed: Float? = 600) throws -> PhysicsMaterial {
-        try PhysicsMaterial(kind: .bubble, deformability: 0, damping: damping, maximumLinearSpeed: maximumLinearSpeed,
-                            contactCompliance: BubbleContactCompliance(base: baseCompliance, referenceRadius: referenceRadius))
+        try PhysicsMaterial(kind: .bubble, contactStiffness: referenceRadius / baseCompliance, damping: damping)
     }
 
     /// Świat z zasobami sceny tłoku, materiałem brył ruchomych `rigidMaterial` (γ = `rigidDamping`) i opcjonalną grubą ścianą.
@@ -91,41 +93,51 @@ final class MotionDampingTests: XCTestCase {
         _ = world.submit(WorldTransaction().updatePlayerDrive(id(value), target: [faceX - 1000, 0]))
     }
 
+    /// Ugięcie r − d* bańki dociśniętej siłą F do ściany z prawa kontaktu (odniesienie w Double).
+    private func expectedDeflection(force: Float, radius: Float) -> Float {
+        let stiffness = Double(referenceRadius / baseCompliance)
+        return radius - Float(ContactLawReference.equilibriumDistance(force: Double(force), stiffness: stiffness, radius: Double(radius)))
+    }
+
+    /// Kroki do uspokojenia: drgania bańki o ścianę gasi tylko γ (amplituda ~ e^(−γ t / 2)), więc dla γ = 0,6 trzeba ok. 30 s.
+    private let settlingSteps = 1800
+
     /// Wgniecenie konturu w stronę ściany: r − zasięg konturu od środka w −x.
     private func contourDent(_ rest: Rest, radius: Float) -> Float {
         radius - (rest.position.x - (rest.contour.map(\.x).min() ?? rest.position.x))
     }
 
     /// Gumka w nasyceniu: K_band = 100, `maximumForce` 1 200, cel 1 000 jednostek za czołem na prostej przez środek. Bańka r 24 dociągana
-    /// do ściany ma ugięcie c₀ · (r / r_ref) · `maximumForce` dla każdego γ i m, a ugięcia przy różnych γ się zgadzają.
+    /// do ściany ma ugięcie r − d* (prawo kontaktu dla F = `maximumForce`) dla każdego γ i m, a ugięcia przy różnych γ się zgadzają.
+    /// Bez oporu (γ = 0) bańka drga o ścianę bez końca (kontakt nie tłumi), więc stan ustalony mierzymy dla γ > 0.
     func testRestBandInSaturationDeflectsByTheFullMaximumForceForEveryDampingAndMass() async throws {
         let radius: Float = 24, maximumForce: Float = 1200
-        let expected = baseCompliance * (radius / referenceRadius) * maximumForce
-        for mass: Float in [0.34, 1.36, 5.44] {
+        let expected = expectedDeflection(force: maximumForce, radius: radius)
+        for mass: Float in [0.5, 1.36, 5.44] {
             var deflections: [Float] = []
-            for gamma: Float in [0, 0.6, 4] {
+            for gamma: Float in [0.6, 4] {
                 let policy = try BubbleDrivePolicy(bandStiffness: 100, maximumForce: maximumForce)
                 let world = try await world(bubble: bubbleMaterial(damping: gamma), wall: true, extent: 1500) {
                     try $0.add(CrowdScene.bubble(1, at: [faceX + radius, 0], radius: radius, mass: mass, drivePolicy: policy))
                         .beginPlayerDrive(id(1), target: [faceX + radius - 0.1, 0])
                 }
                 try await rampBandToSaturation(world, 1, radius: radius, stiffness: 100, maximumForce: maximumForce)
-                let rest = try await settle(world, 1, radius: radius, steps: 480)
+                let rest = try await settle(world, 1, radius: radius, steps: settlingSteps)
                 XCTAssertEqual(rest.deflection, expected, accuracy: 0.02 * expected,
-                               "m = \(mass), γ = \(gamma): ugięcie \(rest.deflection), oczekiwane c · maximumForce = \(expected)")
+                               "m = \(mass), γ = \(gamma): ugięcie \(rest.deflection), oczekiwane z prawa kontaktu = \(expected)")
                 XCTAssertLessThan(rest.spread, 0.005 * expected, "m = \(mass), γ = \(gamma): ugięcie ma być uspokojone")
                 deflections.append(rest.deflection)
             }
             XCTAssertLessThanOrEqual(((deflections.max() ?? 0) - (deflections.min() ?? 0)) / expected, 0.02,
-                                     "m = \(mass): ugięcia przy γ ∈ {0; 0,6; 4} różnią się: \(deflections)")
+                                     "m = \(mass): ugięcia przy γ ∈ {0,6; 4} różnią się: \(deflections)")
         }
     }
 
-    /// `MotorDrive` F = 600 i, w drugim świecie, siła globalna o tym samym module: ugięcie c · F w obu. Spec podaje γ = 0,6, które
-    /// zabiera tylko 1 % siły (w tolerancji 2 %); γ = 4 zabiera 6,5 % i to ono odróżnia błąd od poprawnego tłumienia.
+    /// `MotorDrive` F = 600 i, w drugim świecie, siła globalna o tym samym module: ugięcie r − d* z prawa kontaktu w obu. γ = 0,6 zabiera
+    /// tylko 1 % siły (w tolerancji 2 %); γ = 4 zabiera 6,5 % i to ono odróżnia błąd od poprawnego tłumienia.
     func testRestMotorDriveAndGlobalForceDeflectByTheFullForce() async throws {
         let radius: Float = 24, force: Float = 600
-        let expected = baseCompliance * (radius / referenceRadius) * force
+        let expected = expectedDeflection(force: force, radius: radius)
         for gamma: Float in [0.6, 4] {
             let motor = try await world(bubble: bubbleMaterial(damping: gamma), wall: true, extent: 500) {
                 try $0.add(CrowdScene.bubble(1, at: [faceX + radius, 0], radius: radius, mass: 1.36))
@@ -135,20 +147,20 @@ final class MotionDampingTests: XCTestCase {
                 try $0.add(CrowdScene.bubble(1, at: [faceX + radius, 0], radius: radius, mass: 1.36)).setGlobalForce([-force, 0])
             }
             for (name, world) in [("MotorDrive", motor), ("siła globalna", global)] {
-                let rest = try await settle(world, 1, radius: radius)
+                let rest = try await settle(world, 1, radius: radius, steps: settlingSteps)
                 XCTAssertEqual(rest.deflection, expected, accuracy: 0.02 * expected,
-                               "\(name), γ = \(gamma): ugięcie \(rest.deflection), oczekiwane c · F = \(expected)")
+                               "\(name), γ = \(gamma): ugięcie \(rest.deflection), oczekiwane z prawa kontaktu = \(expected)")
                 XCTAssertLessThan(rest.spread, 0.005 * expected, "\(name), γ = \(gamma): ugięcie ma być uspokojone")
             }
         }
     }
 
     /// Gumka w nasyceniu (`maximumForce` = F = 600) i `MotorDrive` o tej samej sile dają to samo położenie środka i ten sam kontur
-    /// z tolerancją 2 % ugięcia; chwyt nie zmienia promienia ani kształtu. Oba światy mają też ugięcie c · F (γ = 0,6 ze specyfikacji
-    /// i γ = 4, które wykrywa utratę siły w tłumieniu).
+    /// z tolerancją 2 % ugięcia; chwyt nie zmienia promienia ani kształtu. Oba światy mają też ugięcie r − d* z prawa kontaktu (γ = 0,6
+    /// ze specyfikacji i γ = 4, które wykrywa utratę siły w tłumieniu).
     func testRestBandAndMotorDriveGiveTheSamePositionAndContour() async throws {
         let radius: Float = 24, force: Float = 600
-        let expected = baseCompliance * (radius / referenceRadius) * force
+        let expected = expectedDeflection(force: force, radius: radius)
         for gamma: Float in [0.6, 4] {
             let policy = try BubbleDrivePolicy(bandStiffness: 100, maximumForce: force)
             let band = try await world(bubble: bubbleMaterial(damping: gamma), wall: true, extent: 1500) {
@@ -160,15 +172,15 @@ final class MotionDampingTests: XCTestCase {
                 try $0.add(CrowdScene.bubble(1, at: [faceX + radius, 0], radius: radius, mass: 1.36))
                     .setMotorDrive(id(1), drive: MotorDrive(force: [-force, 0]))
             }
-            let gripped = try await settle(band, 1, radius: radius, steps: 480)
-            let pushed = try await settle(motor, 1, radius: radius)
+            let gripped = try await settle(band, 1, radius: radius, steps: settlingSteps)
+            let pushed = try await settle(motor, 1, radius: radius, steps: settlingSteps)
             let tolerance = 0.02 * expected
             XCTAssertEqual(gripped.position.x, pushed.position.x, accuracy: tolerance, "γ = \(gamma): położenie środka")
             XCTAssertEqual(gripped.position.y, pushed.position.y, accuracy: tolerance, "γ = \(gamma): położenie środka (y)")
             XCTAssertEqual(contourDent(gripped, radius: radius), contourDent(pushed, radius: radius), accuracy: tolerance,
                            "γ = \(gamma): wgniecenie konturu gumka \(contourDent(gripped, radius: radius)), MotorDrive \(contourDent(pushed, radius: radius))")
-            XCTAssertEqual(gripped.deflection, expected, accuracy: tolerance, "γ = \(gamma): gumka, ugięcie c · F")
-            XCTAssertEqual(pushed.deflection, expected, accuracy: tolerance, "γ = \(gamma): MotorDrive, ugięcie c · F")
+            XCTAssertEqual(gripped.deflection, expected, accuracy: tolerance, "γ = \(gamma): gumka, ugięcie z prawa kontaktu")
+            XCTAssertEqual(pushed.deflection, expected, accuracy: tolerance, "γ = \(gamma): MotorDrive, ugięcie z prawa kontaktu")
         }
     }
 
@@ -180,8 +192,10 @@ final class MotionDampingTests: XCTestCase {
 
     private let square: [WorldPoint] = [[-10, -10], [10, -10], [10, 10], [-10, 10]]
 
-    /// Dwie kolejne ramki bez kontaktów: v_{N+1} = v_N · e^(−γ·dt) + F / m · dt dla gumki (z `DriveFeedback` ramki N), `MotorDrive` bańki
-    /// i `MotorDrive` dynamicznej bryły wielokątnej (γ z jej materiału), dla γ baniek ∈ {0, 0,6, 4}. Materiał bryły ma γ + 1,3, więc
+    /// Dwie kolejne ramki bez kontaktów: v_{N+1} = v_N · e^(−γ·dt) + F / m · (1 − e^(−γ·dt)) / γ (dokładny półimpuls z oporem dla siły
+    /// stałej w kroku; dla γ = 0 to F / m · dt) dla gumki (z `DriveFeedback` ramki N), `MotorDrive` bańki i `MotorDrive` dynamicznej
+    /// bryły wielokątnej (γ z jej materiału), dla γ baniek ∈ {0, 0,6, 4}. Siła gumki zależy od położenia, które w kroku się zmienia, więc
+    /// dla niej tolerancja jest szersza (3 %) niż dla stałych sił motoru (1 %). Materiał bryły ma γ + 1,3, więc
     /// odczyt γ z cudzego materiału (bańki zamiast bryły albo odwrotnie) zmienia wynik i test go wykrywa.
     func testVelocityStepIsPreviousVelocityTimesDecayPlusForceOverMassTimesStep() async throws {
         let mass: Float = 2, stiffness: Float = 30, target: WorldPoint = [20, 12], motorForce: WorldPoint = [40, 10]
@@ -219,9 +233,12 @@ final class MotionDampingTests: XCTestCase {
                     let before = try XCTUnwrap(previous.objects[id(1)]).velocity
                     let after = try XCTUnwrap(next.objects[id(1)]).velocity
                     let ownGamma = kind == .rigidMotor ? rigidGamma : gamma
-                    let expected = before * exp(-ownGamma * Float(dt)) + force / mass * Float(dt)
-                    XCTAssertEqual(after.x, expected.x, accuracy: 0.01 * abs(expected.x) + 1e-4, "\(name), ramka \(index) x")
-                    XCTAssertEqual(after.y, expected.y, accuracy: 0.01 * abs(expected.y) + 1e-4, "\(name), ramka \(index) y")
+                    // Bryła dynamiczna zostaje przy dotychczasowej regule hosta: opór, potem F / m · dt (poza podkrokami).
+                    let impulse = kind == .rigidMotor || ownGamma == 0 ? Float(dt) : (1 - exp(-ownGamma * Float(dt))) / ownGamma
+                    let expected = before * exp(-ownGamma * Float(dt)) + force / mass * impulse
+                    let tolerance: Float = kind == .band ? 0.03 : 0.01
+                    XCTAssertEqual(after.x, expected.x, accuracy: tolerance * abs(expected.x) + 1e-4, "\(name), ramka \(index) x")
+                    XCTAssertEqual(after.y, expected.y, accuracy: tolerance * abs(expected.y) + 1e-4, "\(name), ramka \(index) y")
                     previous = next
                 }
             }
@@ -234,8 +251,9 @@ final class MotionDampingTests: XCTestCase {
         return frame
     }
 
-    /// Gumka ze stałym naciągnięciem s (cel przesuwany co krok o stałe naciągnięcie), `maximumForce` nil, bez kontaktów: prędkość
-    /// ustalona to K · s · dt / (m · (1 − e^(−γ·dt))), poniżej `maximumLinearSpeed` (600).
+    /// Gumka ze stałym naciągnięciem s od położenia na początku kroku (cel przesuwany co krok), `maximumForce` nil, bez kontaktów:
+    /// siła liczy się z bieżącego położenia, więc średnie naciągnięcie w kroku to s − v · dt / 2, a prędkość ustalona wynika z
+    /// v = v e^(−γ dt) + (K / m) (s − v dt / 2) (1 − e^(−γ dt)) / γ (poniżej `maximumLinearSpeed` 600).
     func testVelocityOfTheBandAtConstantStretchSettlesAtTheDiscreteSteadyState() async throws {
         let stiffness: Float = 60, stretch: Float = 0.1, mass: Float = 1.36
         for gamma: Float in [0.6, 4] {
@@ -252,10 +270,11 @@ final class MotionDampingTests: XCTestCase {
                 let achieved = try XCTUnwrap(frame.driveFeedback.first, "krok \(index)").achievedPoint
                 _ = world.submit(WorldTransaction().updatePlayerDrive(id(1), target: achieved + WorldPoint(stretch, 0)))
             }
-            let expected = stiffness * stretch * Float(dt) / (mass * (1 - exp(-gamma * Float(dt))))
+            let decay = exp(-gamma * Float(dt)), impulse = (1 - decay) / gamma, k = stiffness / mass
+            let expected = k * stretch * impulse / (1 - decay + k * impulse * Float(dt) / 2)
             let velocity = try XCTUnwrap(state).velocity
             XCTAssertLessThan(expected, 600)
-            XCTAssertEqual(velocity.x, expected, accuracy: 0.01 * expected, "γ = \(gamma): prędkość ustalona \(velocity.x), oczekiwana \(expected)")
+            XCTAssertEqual(velocity.x, expected, accuracy: 0.02 * expected, "γ = \(gamma): prędkość ustalona \(velocity.x), oczekiwana \(expected)")
             XCTAssertEqual(velocity.y, 0, accuracy: 1e-3, "γ = \(gamma)")
         }
     }

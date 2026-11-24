@@ -11,11 +11,10 @@ final class ContactCandidateMarginTests: XCTestCase {
     func testStress300KeepsCandidateLimitWithAtLeastTwofoldMargin() async throws {
         let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
         let world = try BubbleWorld.makeBenchmarkWorld(configuration: try Stress300Scene.configuration(),
-            device: device, solverIterationLimit: 4)
+            device: device)
         world.submit(try Stress300Scene.initialTransaction())
         var maximum = 0
         for index in 0..<300 {
-            if index > 0 { world.submit(try Stress300Scene.triangleReplacement(step: index)) }
             _ = await world.advance(by: 1.0 / 60)
             maximum = max(maximum, world.diagnostics.maximumContactCandidatesPerObject)
             XCTAssertEqual(world.diagnostics.contactCandidateOverflow, 0, "krok \(index + 1): limit k przekroczony")
@@ -25,12 +24,12 @@ final class ContactCandidateMarginTests: XCTestCase {
             "zmierzone maksimum \(maximum) bez dwukrotnego zapasu względem k = \(BubbleWorld.contactCandidateLimit)")
     }
 
-    /// P-B-63: scena mieszana (200 baniek, 60 brył, 10 więzów, 5 kinematycznych) ma wiersze kandydatów brył,
+    /// P-B-63: scena mieszana (200 baniek, 60 brył kinematycznych, w tym 5 belek) ma wiersze kandydatów brył,
     /// których stress-300 nie ma; zapas k musi wystarczyć także tutaj.
     func testMixedSceneKeepsCandidateLimitWithAtLeastTwofoldMargin() async throws {
         let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
         let world = try BubbleWorld.makeBenchmarkWorld(configuration: try MixedScene.configuration(),
-            device: device, solverIterationLimit: 4)
+            device: device)
         world.submit(try MixedScene.initialTransaction())
         var maximum = 0
         var frame = WorldFrame(transactionReceipts: [], events: [])
@@ -53,7 +52,7 @@ final class ContactCandidateMarginTests: XCTestCase {
         let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
         let scene = PublicWorldStressBenchmark.Scene.acceptance
         let world = try BubbleWorld.makeBenchmarkWorld(configuration: try scene.configuration(),
-            device: device, solverIterationLimit: 4)
+            device: device)
         world.submit(try scene.initialTransaction(assets: try XCTUnwrap(world.assets)))
         var maximum = 0
         for index in 0..<(30 + 300) {

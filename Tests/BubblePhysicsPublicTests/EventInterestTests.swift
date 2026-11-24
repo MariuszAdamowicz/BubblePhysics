@@ -11,7 +11,7 @@ final class EventInterestTests: XCTestCase {
             targetRadius: 1, physicsMaterialID: material, renderMaterialID: style)
         let b = try BubbleDescriptor(id: ObjectID(rawValue: 2), position: [0.5, 0],
             targetRadius: 1, physicsMaterialID: material, renderMaterialID: style)
-        let physics = try PhysicsMaterial(kind: .bubble)
+        let physics = try PhysicsMaterial(kind: .bubble, contactStiffness: 1e9)
         let render = try RenderMaterial()
         _ = world.submit(WorldTransaction().updatePhysicsMaterial(material, material: physics)
             .updateRenderMaterial(style, material: render).add(.bubble(a)).add(.bubble(b)))
@@ -36,7 +36,7 @@ final class EventInterestTests: XCTestCase {
         let sensor = try SensorDescriptor(id: sensorID, position: .zero,
             geometry: RangeGeometry.circle(radius: 3),
             eventInterest: [.enteredSensor, .exitedSensor])
-        _ = world.submit(WorldTransaction().updatePhysicsMaterial(material, material: try PhysicsMaterial(kind: .bubble))
+        _ = world.submit(WorldTransaction().updatePhysicsMaterial(material, material: try PhysicsMaterial(kind: .bubble, contactStiffness: 1e9))
             .updateRenderMaterial(style, material: try RenderMaterial()).add(.bubble(body)).add(.sensor(sensor)))
         let entered = await world.advance(by: 1.0 / 60.0)
         XCTAssertTrue(entered.events.contains(.enteredSensor(sensor: sensorID, object: bodyID)))

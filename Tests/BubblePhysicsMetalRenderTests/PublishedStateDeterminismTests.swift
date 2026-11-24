@@ -20,19 +20,17 @@ final class PublishedStateDeterminismTests: XCTestCase {
 
     private func run(steps: Int, device: MTLDevice) async throws -> Run {
         let world = try BubbleWorld.makeBenchmarkWorld(configuration: try Stress300Scene.configuration(),
-            device: device, solverIterationLimit: 4)
+            device: device)
         world.submit(try Stress300Scene.initialTransaction())
         var frame = WorldFrame(transactionReceipts: [], events: [])
         for index in 0..<steps {
-            if index > 0 { world.submit(try Stress300Scene.triangleReplacement(step: index)) }
             frame = await world.advance(by: 1.0 / 60)
-            // Hipoteza (odstępstwo nr 130 planu): przy różnicy hashy odrzucony krok zostawia transakcję w kolejce, a następny `advance`
-            // łączy dwie zamiany w jedną partię i wykonuje dwa kroki (stepIndex i potwierdzenia pokazują taki przypadek).
             let diagnostics = world.diagnostics
             XCTAssertNil(diagnostics.lastAdvanceIssue, "krok \(index + 1): problem advance")
             XCTAssertNil(diagnostics.lastRejectionReason, "krok \(index + 1): odrzucenie klatki")
             XCTAssertEqual(frame.stepIndex, UInt64(index + 1), "krok \(index + 1): numer kroku w klatce")
-            XCTAssertEqual(frame.transactionReceipts.count, 1, "krok \(index + 1): dokładnie jedno potwierdzenie transakcji")
+            // Trójkąt jedzie sam według toru z transakcji początkowej, więc potwierdzenie jest tylko w pierwszym kroku.
+            XCTAssertEqual(frame.transactionReceipts.count, index == 0 ? 1 : 0, "krok \(index + 1): potwierdzenia transakcji")
         }
         let objectHash = PublishedStateHash.objects(frame)
         let contours = world.debugContourSnapshot()
@@ -46,10 +44,11 @@ final class PublishedStateDeterminismTests: XCTestCase {
         let first = try await run(steps: 300, device: device)
         let second = try await run(steps: 300, device: device)
         XCTAssertEqual(first.completedSteps, 300)
-        XCTAssertEqual(first.bubbleCount, 300)
-        // 300 baniek, 4 ściany i trójkąt.
-        XCTAssertEqual(first.objectCount, 305)
-        XCTAssertEqual(second.objectCount, 305)
+        // 300 miejsc siatki bez miejsc w obrysie startowym trójkąta, 4 ściany i trójkąt.
+        let placed = Stress300Scene.placedBubbleCount()
+        XCTAssertEqual(first.bubbleCount, placed)
+        XCTAssertEqual(first.objectCount, placed + 5)
+        XCTAssertEqual(second.objectCount, placed + 5)
         XCTAssertEqual(first.hash, second.hash, "kontury po 300 krokach różnią się między przebiegami")
         XCTAssertEqual(first.objectHash, second.objectHash,
                        "stan obiektów (frame.objects) po 300 krokach różni się między przebiegami")
@@ -77,13 +76,13 @@ final class PublishedStateDeterminismTests: XCTestCase {
         let material = PhysicsMaterialID(rawValue: 1), style = RenderMaterialID(rawValue: 1)
         let world = try BubbleWorld.makeBenchmarkWorld(configuration: WorldConfiguration(
             simulationRegion: WorldRectangle(min: [0, 0], max: [700, 500]), fixedTimeStep: 1.0 / 60),
-            device: device, solverIterationLimit: 4)
+            device: device)
         func descriptor(_ id: Int, _ position: WorldPoint, radius: Float) throws -> WorldObject {
             .bubble(try BubbleDescriptor(id: ObjectID(rawValue: UInt64(id)), position: position, targetRadius: radius,
                 physicsMaterialID: material, renderMaterialID: style))
         }
         var initial = try WorldTransaction()
-            .updatePhysicsMaterial(material, material: PhysicsMaterial(kind: .bubble))
+            .updatePhysicsMaterial(material, material: PhysicsMaterial(kind: .bubble, contactStiffness: 1e4))
             .updateRenderMaterial(style, material: try RenderMaterial())
         for index in 0..<300 {
             initial = initial.add(try descriptor(index + 1, [Float(index % 20) * 30 + 40, Float(index / 20) * 30 + 40], radius: 5))
@@ -154,7 +153,7 @@ final class PublishedStateDeterminismTests: XCTestCase {
 
     private func mixedRun(steps: Int, device: MTLDevice) async throws -> MixedRun {
         let world = try BubbleWorld.makeBenchmarkWorld(configuration: try MixedScene.configuration(),
-            device: device, solverIterationLimit: 4)
+            device: device)
         world.submit(try MixedScene.initialTransaction())
         var run = MixedRun()
         for index in 0..<steps {
@@ -174,7 +173,7 @@ final class PublishedStateDeterminismTests: XCTestCase {
         let second = try await mixedRun(steps: 300, device: device)
         XCTAssertEqual(first.frame.stepIndex, 300)
         XCTAssertEqual(second.frame.stepIndex, 300)
-        // 200 baniek, 60 brył (55 dynamicznych i 5 kinematycznych belek) i 4 ściany.
+        // 200 baniek, 60 brył kinematycznych (55 obracających się w miejscu i 5 belek) i 4 ściany.
         XCTAssertEqual(first.frame.objects.count, 264)
         XCTAssertEqual(second.frame.objects.count, 264)
         var circles = 0, capsules = 0, polygons = 0, bubbles = 0
@@ -189,7 +188,7 @@ final class PublishedStateDeterminismTests: XCTestCase {
         XCTAssertEqual(bubbles, 200)
         XCTAssertGreaterThan(circles, 0)
         XCTAssertGreaterThan(capsules, 0)
-        XCTAssertGreaterThan(polygons, 4 + 5, "ściany, belki i wielokąty dynamiczne")
+        XCTAssertGreaterThan(polygons, 4 + 5, "ściany, belki i obracające się wielokąty")
         let overflowStep = [firstOverflowStep(first.overflow), firstOverflowStep(second.overflow)].compactMap { $0 }.min()
         let compared = overflowStep ?? 300
         for index in 0..<compared {

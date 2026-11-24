@@ -124,86 +124,6 @@ final class ModelValidationTests: XCTestCase {
         XCTAssertThrowsError(try polygon([[0, 0], [1, 0], [0, 1]], rotation: .infinity))
     }
 
-    // P-B-17 (G4-AC7), P-B-3 (G3-AC3): podatność kontaktu w materiale to tylko `base` i `referenceRadius`.
-    func testContactComplianceDefaultsToHardAndAcceptsValidValues() throws {
-        XCTAssertEqual(try PhysicsMaterial(kind: .bubble).contactCompliance, .hard)
-        XCTAssertEqual(BubbleContactCompliance.hard, BubbleContactCompliance(base: 0, referenceRadius: 1))
-        let soft = BubbleContactCompliance(base: 1e-4, referenceRadius: 20)
-        XCTAssertEqual(try PhysicsMaterial(kind: .bubble, contactCompliance: soft).contactCompliance, soft)
-        XCTAssertEqual(soft.base, 1e-4)
-        XCTAssertEqual(soft.referenceRadius, 20)
-        XCTAssertNoThrow(try PhysicsMaterial(kind: .rigid, contactCompliance: .hard))
-        // Materiał `.rigid` przyjmuje tylko `.hard`, także z innym promieniem odniesienia przy c₀ = 0.
-        XCTAssertNoThrow(try PhysicsMaterial(kind: .rigid, contactCompliance: BubbleContactCompliance(base: 0, referenceRadius: 3)))
-    }
-
-    func testMaterialRejectsInvalidContactComplianceWithValueOutOfRange() throws {
-        let invalid: [(String, BubbleContactCompliance, String)] = [
-            ("ujemna podatność", BubbleContactCompliance(base: -1e-3), "contactCompliance.base"),
-            ("NaN podatność", BubbleContactCompliance(base: .nan), "contactCompliance.base"),
-            ("nieskończona podatność", BubbleContactCompliance(base: .infinity), "contactCompliance.base"),
-            ("promień odniesienia 0", BubbleContactCompliance(base: 1, referenceRadius: 0), "contactCompliance.referenceRadius"),
-            ("ujemny promień odniesienia", BubbleContactCompliance(base: 1, referenceRadius: -2), "contactCompliance.referenceRadius"),
-            ("NaN promień odniesienia", BubbleContactCompliance(base: 1, referenceRadius: .nan), "contactCompliance.referenceRadius"),
-            ("nieskończony promień odniesienia", BubbleContactCompliance(base: 1, referenceRadius: .infinity),
-             "contactCompliance.referenceRadius"),
-            // Promień odniesienia sprawdza się także przy c₀ = 0.
-            ("promień odniesienia 0 przy c₀ = 0", BubbleContactCompliance(base: 0, referenceRadius: 0), "contactCompliance.referenceRadius"),
-        ]
-        for (name, compliance, field) in invalid {
-            XCTAssertThrowsError(try PhysicsMaterial(kind: .bubble, contactCompliance: compliance), name) {
-                XCTAssertEqual($0 as? ModelValidationError, .valueOutOfRange(field), name)
-            }
-        }
-    }
-
-    func testRigidMaterialRejectsPositiveContactCompliance() throws {
-        XCTAssertThrowsError(try PhysicsMaterial(kind: .rigid, contactCompliance: BubbleContactCompliance(base: 1e-6))) {
-            XCTAssertEqual($0 as? ModelValidationError, .valueOutOfRange("contactCompliance.base"))
-        }
-    }
-
-    // P-B-24 (G4-AC4, CD-D-15): współczynnik tłumienia kontaktu miękkiego ζ_c w materiale.
-    func testContactDampingRatioDefaultsToOneAndAcceptsNonnegativeFiniteValues() throws {
-        XCTAssertEqual(try PhysicsMaterial(kind: .bubble).contactDampingRatio, 1)
-        XCTAssertEqual(try PhysicsMaterial(kind: .rigid).contactDampingRatio, 1)
-        for value: Float in [0, 0.2, 1, 3.5] {
-            XCTAssertEqual(try PhysicsMaterial(kind: .bubble, contactDampingRatio: value).contactDampingRatio, value)
-        }
-    }
-
-    func testContactDampingRatioRejectsNegativeAndNonFiniteWithValueOutOfRange() throws {
-        for invalid: Float in [-0.1, -1e-6, .nan, .infinity, -.infinity] {
-            XCTAssertThrowsError(try PhysicsMaterial(kind: .bubble, contactDampingRatio: invalid), "ζ_c \(invalid)") {
-                XCTAssertEqual($0 as? ModelValidationError, .valueOutOfRange("contactDampingRatio"))
-            }
-        }
-    }
-
-    func testRigidMaterialRejectsContactDampingRatioOtherThanDefault() throws {
-        for value: Float in [0, 0.2, 2] {
-            XCTAssertThrowsError(try PhysicsMaterial(kind: .rigid, contactDampingRatio: value), "ζ_c \(value)") {
-                XCTAssertEqual($0 as? ModelValidationError, .valueOutOfRange("contactDampingRatio"))
-            }
-        }
-        XCTAssertNoThrow(try PhysicsMaterial(kind: .rigid, contactDampingRatio: 1))
-    }
-
-    func testBubbleDescriptorValidatesContactComplianceOverride() throws {
-        func descriptor(_ override: Float?) throws -> BubbleDescriptor {
-            try BubbleDescriptor(id: ObjectID(rawValue: 1), position: .zero, targetRadius: 1, physicsMaterialID: material,
-                                 renderMaterialID: style, contactCompliance: override)
-        }
-        XCTAssertNil(try descriptor(nil).contactCompliance)
-        XCTAssertEqual(try descriptor(0).contactCompliance, 0)
-        XCTAssertEqual(try descriptor(2.5e-3).contactCompliance, 2.5e-3)
-        for invalid: Float in [-1e-6, .nan, .infinity, -.infinity] {
-            XCTAssertThrowsError(try descriptor(invalid), "nadpisanie \(invalid)") {
-                XCTAssertEqual($0 as? ModelValidationError, .valueOutOfRange("contactCompliance"))
-            }
-        }
-    }
-
     func testFieldAndSensorValidateRangesAndFieldParameters() throws {
         let circle = try RangeGeometry.circle(radius: 3)
         XCTAssertNoThrow(try ForceFieldDescriptor(id: ObjectID(rawValue: 3), position: .zero, geometry: circle,
@@ -224,17 +144,16 @@ final class ModelValidationTests: XCTestCase {
     }
 
     func testPhysicsMaterialValidatesRanges() throws {
-        XCTAssertThrowsError(try PhysicsMaterial(kind: .bubble, deformability: 1.1))
         XCTAssertThrowsError(try PhysicsMaterial(kind: .rigid, friction: -1))
-        XCTAssertThrowsError(try PhysicsMaterial(kind: .bubble, damping: .nan))
-        XCTAssertThrowsError(try PhysicsMaterial(kind: .bubble, restitution: 2))
+        XCTAssertThrowsError(try PhysicsMaterial(kind: .rigid, damping: .nan))
+        XCTAssertThrowsError(try PhysicsMaterial(kind: .rigid, restitution: 2))
     }
 
     func testMaterialSpeedLimitsAreOptionalAndMustBePositiveAndFinite() throws {
         let unlimited = try PhysicsMaterial(kind: .rigid)
         XCTAssertNil(unlimited.maximumLinearSpeed)
         XCTAssertNil(unlimited.maximumAngularSpeed)
-        let limited = try PhysicsMaterial(kind: .bubble, maximumLinearSpeed: 30, maximumAngularSpeed: 4)
+        let limited = try PhysicsMaterial(kind: .rigid, maximumLinearSpeed: 30, maximumAngularSpeed: 4)
         XCTAssertEqual(limited.maximumLinearSpeed, 30)
         XCTAssertEqual(limited.maximumAngularSpeed, 4)
         for bad: Float in [0, -1, .nan, .infinity] {

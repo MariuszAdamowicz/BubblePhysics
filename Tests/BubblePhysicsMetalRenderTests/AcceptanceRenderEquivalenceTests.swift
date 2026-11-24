@@ -19,19 +19,11 @@ final class AcceptanceRenderEquivalenceTests: XCTestCase {
     private static let referenceDeviceName = "Apple M1 Pro"
     private static let referenceSteps = 120
     private static let referenceWidth = 1125, referenceHeight = 2436
-    /// Commit, na którym policzono aktualne hashe wzorca (poprawka 3.0.1, krawędź wejścia): kod renderera bez żadnej zmiany etapu 9.
-    private static let referenceCommit = "f65b13c"
-    /// Wzorzec zapisany przed zadaniem 96 (pula areny) i zadaniem 99 (zmiany renderu).
-    /// Bez limitu λ pary (`pairCorrectionLimit = false`, CD-D-20).
-    /// Hashe zaktualizowane w wycinku 3 wydania 3.0.0 (jednostronne krawędzie statycznych wielokątów): ściany sceny mają grubość 1,
-    /// więc bez drugiej sprężyny od tylnej krawędzi bańki przy ścianach stoją gdzie indziej (Apple M1 Pro, ta sama scena i kroki).
-    /// Hashe zaktualizowane ponownie w 3.0.1 (krawędź wejścia, BF-D-1): przewidziany środek szybkiej bańki mija krawędź ściany
-    /// grubości 1, a krawędź wejścia nadal go odpycha, więc bańki przy ścianach stoją gdzie indziej (Apple M1 Pro).
-    private static let referencePixelHash: UInt64 = 0xc947960553219dd3
-    /// Z limitem λ pary (CD-D-9, domyślnie): limit zmienia pozycje w gęstej scenie, więc piksele po 120 krokach mają nowy hash
-    /// (Apple M1 Pro, ta sama scena, kroki i rozdzielczość co wzorzec).
-    private static let pairLimitPixelHash: UInt64 = 0x043e163361e313fa
-
+    /// Wzorzec policzony od nowa na silniku 4.0.0 (prawo kontaktu K_c w podkrokach, Apple M1 Pro, ta scena i kroki). Hash z silnika 3.x
+    /// (`0xc947960553219dd3`, poprawka 3.0.1) nie ma już sensu: spec. 4 zmienia fizykę kontaktu, więc bańki stoją gdzie indziej,
+    /// a scena kładzie 287 baniek zamiast 300. Wzorzec pilnuje tylko tego, że zmiana renderu nie zmienia ani piksela obrazu silnika 4.0.0.
+    private static let referenceCommit = "silnik 4.0.0 (feature/engine-4-0-0)"
+    private static let referencePixelHash: UInt64 = 0xa09a3905a8a42e43
     private struct RenderedImage {
         let width: Int
         let height: Int
@@ -46,11 +38,10 @@ final class AcceptanceRenderEquivalenceTests: XCTestCase {
 
     /// Te same kroki i ten sam render co benchmark: transakcja kroku, `advance` o 1/60 s z `encodeRender` w buforze aplikacji,
     /// kamera pokrywająca region sceny, cel `bgra8Unorm` czyszczony do czerni w każdej klatce. Zwraca cel po ostatnim kroku.
-    private func render(steps: Int, device: MTLDevice, pairCorrectionLimit: Bool = true) async throws -> RenderedImage {
+    private func render(steps: Int, device: MTLDevice) async throws -> RenderedImage {
         let scene = Scene.acceptance
         let width = Self.referenceWidth, height = Self.referenceHeight
-        let world = try BubbleWorld.makeBenchmarkWorld(configuration: try scene.configuration(), device: device,
-            solverIterationLimit: 4, pairCorrectionLimit: pairCorrectionLimit)
+        let world = try BubbleWorld.makeBenchmarkWorld(configuration: try scene.configuration(), device: device)
         let assets = try XCTUnwrap(world.assets)
         let renderer = try BubblePhysicsMetalRender(device: device, assets: assets)
         world.submit(try scene.initialTransaction(assets: assets))
@@ -91,20 +82,15 @@ final class AcceptanceRenderEquivalenceTests: XCTestCase {
     }
 
     func testAcceptanceSceneRenderedAfter120StepsEqualsTheReferencePixels() async throws {
-        try await assertRenderMatchesReference(pairCorrectionLimit: true)
+        try await assertRenderMatchesReference()
     }
 
-    /// Bliźniak (CD-D-20): z wyłączonym limitem λ pary piksele wzorca z v2.1.0.
-    func testAcceptanceSceneRenderedAfter120StepsEqualsTheReferencePixelsWithoutPairCorrectionLimit() async throws {
-        try await assertRenderMatchesReference(pairCorrectionLimit: false)
-    }
-
-    private func assertRenderMatchesReference(pairCorrectionLimit: Bool) async throws {
+    private func assertRenderMatchesReference() async throws {
         let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
         try XCTSkipUnless(device.name == Self.referenceDeviceName,
             "wzorzec pochodzi z \(Self.referenceDeviceName), a to jest \(device.name)")
-        let expected = pairCorrectionLimit ? Self.pairLimitPixelHash : Self.referencePixelHash
-        let image = try await render(steps: Self.referenceSteps, device: device, pairCorrectionLimit: pairCorrectionLimit)
+        let expected = Self.referencePixelHash
+        let image = try await render(steps: Self.referenceSteps, device: device)
         XCTAssertEqual(image.width, Self.referenceWidth)
         XCTAssertEqual(image.height, Self.referenceHeight)
         // Wzorzec ma coś pokazywać: obraz nie jest pustym czyszczeniem ani samym tłem.

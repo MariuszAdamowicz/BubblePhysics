@@ -2,8 +2,8 @@ import Foundation
 import XCTest
 
 /// P-B-10 (G1-AC1): `docs/migration/v1-api-diff.txt` to wynik `swift-api-digester -diagnose-sdk` między `v1.0.0` a HEAD,
-/// a `docs/MIGRATION-v2.md` ma zamiennik każdego symbolu z tego diffu. README podaje bieżącą wersję 3.0.2 i odsyła
-/// do `CHANGELOG.md` i do `docs/MIGRATION-v3.md`, a dalej wspomina 2.0.0 jako wersję migracji i odsyła do obu przewodników.
+/// a `docs/MIGRATION-v2.md` ma zamiennik każdego symbolu z tego diffu. README podaje bieżącą wersję 4.0.0 i odsyła
+/// do `CHANGELOG.md` i do `docs/MIGRATION-v4.md`, a dalej wspomina 2.0.0 jako wersję migracji i odsyła do starszych przewodników.
 /// Korzeń repozytorium wynika z `#filePath`, jak w `PackageGraphTests`.
 final class MigrationGuideTests: XCTestCase {
     private var root: URL {
@@ -102,13 +102,88 @@ final class MigrationGuideTests: XCTestCase {
         }
     }
 
-    func testReadmeStatesCurrentVersionAndLinksTheChangelogAndBothGuides() throws {
+    func testReadmeStatesCurrentVersionAndLinksTheChangelogAndAllGuides() throws {
         let readme = try read("README.md")
-        XCTAssertTrue(readme.contains("Wersja 3.0.2"), "README podaje bieżącą wersję 3.0.2")
+        XCTAssertTrue(readme.contains("Wersja 4.0.0"), "README podaje bieżącą wersję 4.0.0")
+        XCTAssertFalse(readme.contains("Wersja 3.0.2"), "README nie podaje starej wersji jako bieżącej")
+        XCTAssertTrue(readme.contains("(docs/MIGRATION-v4.md)"), "README odsyła do dokumentu migracji na 4.0.0")
         XCTAssertTrue(readme.contains("(CHANGELOG.md)"), "README odsyła do changeloga")
         XCTAssertTrue(readme.contains("2.0.0"), "README wspomina 2.0.0 jako wersję migracji z 1.x")
         XCTAssertTrue(readme.contains("(docs/MIGRATION-v2.md)"), "README odsyła do dokumentu migracji")
         XCTAssertTrue(readme.contains("(docs/MIGRATION-v3.md)"), "README odsyła do dokumentu migracji na 3.0.0")
         XCTAssertTrue(readme.contains("(docs/integration-guide.md)"), "README odsyła do przewodnika integracji")
+    }
+
+    /// P-B-2 (G1-AC2): `docs/MIGRATION-v4.md` ma wiersz tabeli (symbol w pierwszej komórce, zastępstwo albo powód usunięcia
+    /// w drugiej) dla każdego symbolu usuniętego z publicznego API w 4.0.0.
+    func testMigrationV4HasARowWithAReplacementForEveryRemovedSymbol() throws {
+        let rows = migrationRows(try read("docs/MIGRATION-v4.md"))
+        let removed = [
+            "BubbleContactCompliance", "contactCompliance", "contactDampingRatio", "deformability",
+            "PhysicsParameter.deformability", "SolverGuardCause.centerCrossing", "containedBubblePairCount",
+            "NativeMetalConfiguration.solverIterationCount", "NativeMetalConfiguration.contactCompliance",
+            "NativeMetalConfiguration.cacheExpiryFrames", "NativeMetalConfiguration.teleportDistanceMultiplier",
+            "NativeMetalConfiguration.ccdVelocityMultiplier",
+            "NativeMetalFrameTelemetry.cacheHitCount", "NativeMetalFrameTelemetry.cacheResetCount",
+            "NativeMetalFrameTelemetry.solverIterationCount", "NativeMetalFrameTelemetry.ccdCandidateCount",
+            "NativeMetalFrameTelemetry.guardCorrectionCount", "NativeMetalFrameTelemetry.cacheInvalidationCount"]
+        for symbol in removed {
+            let covered = rows.contains { $0.symbols.contains("`\(symbol)`") && $0.replacement.count >= 10 }
+            XCTAssertTrue(covered, "brak wiersza w MIGRATION-v4.md (symbol w pierwszej komórce, zastępstwo w drugiej) dla: \(symbol)")
+        }
+    }
+
+    /// G9-AC4: `CHANGELOG.md` ma sekcję 4.0.0 nad 3.0.2 i odsyła do przewodnika migracji we wstępie.
+    func testChangelogHasThe400SectionAndLinksTheV4Guide() throws {
+        let changelog = try read("CHANGELOG.md")
+        let sectionStart = try XCTUnwrap(changelog.range(of: "\n## 4.0.0\n"), "CHANGELOG.md bez sekcji `## 4.0.0`").lowerBound
+        let previous = try XCTUnwrap(changelog.range(of: "\n## 3.0.2\n")).lowerBound
+        XCTAssertLessThan(sectionStart, previous, "sekcja 4.0.0 leży nad 3.0.2")
+        XCTAssertTrue(changelog[..<sectionStart].contains("(docs/MIGRATION-v4.md)"), "wstęp CHANGELOG.md odsyła do MIGRATION-v4.md")
+    }
+
+    /// G9-AC4: przyczyny odrzucenia i błędu z 4.0.0 są nazwane, a znane ograniczenia opisują sztywne `contactStiffness` i przeguby z bańkami.
+    func testMigrationV4NamesTheNewRejectionsAndTheRigidStiffnessLimit() throws {
+        let migration = try read("docs/MIGRATION-v4.md")
+        for needle in ["substepLimitExceeded", "unsupportedJointBody", "unsupportedBubbleWithDynamicRigidBody"] {
+            XCTAssertTrue(migration.contains(needle), "MIGRATION-v4.md nie wspomina o \(needle)")
+        }
+        let limits = try XCTUnwrap(migration.range(of: "## Znane ograniczenia"), "brak sekcji Znane ograniczenia")
+        let bullets = migration[limits.upperBound...].split(separator: "\n").filter { $0.hasPrefix("- ") }
+        XCTAssertTrue(bullets.contains { $0.contains("contactStiffness") && $0.contains("sztywn") },
+                      "znane ograniczenia nie opisują sztywnego `contactStiffness`")
+        XCTAssertTrue(bullets.contains { $0.contains("unsupportedJointBody") },
+                      "znane ograniczenia nie opisują przegubów z bańkami (`unsupportedJointBody`)")
+    }
+
+    func testMigrationV4NamesTheAddedSymbolsAndTheKnownLimits() throws {
+        let migration = try read("docs/MIGRATION-v4.md")
+        for needle in ["contactStiffness", "PhysicsParameter.contactStiffness", "WorldFailureDetail", "contactViolation",
+                       "substepCount", "gridRebuildCount", "substepBufferCount", "executionPath", "singleGroupWidth",
+                       "physicsGPUMilliseconds", "contourGPUMilliseconds",
+                       "rigidRotationBudget", "candidateLimitPerObject", "contactCandidateOverflow"] {
+            XCTAssertTrue(migration.contains(needle), "MIGRATION-v4.md nie wspomina o \(needle)")
+        }
+    }
+
+    /// G8-AC4 (P-B-40..45, zadanie 38): przewodnik, migracja, README i CHANGELOG opisują dwie ścieżki wykonania kroku
+    /// (jedna dyspozycja do 1024 baniek, pary buforów powyżej), a migracja podaje próg i pakietowy przełącznik testów.
+    func testDocsDescribeTheExecutionPathsAndNoLongerClaimOneCommandBufferPerStep() throws {
+        for path in ["docs/integration-guide.md", "docs/MIGRATION-v4.md", "README.md", "CHANGELOG.md"] {
+            XCTAssertTrue(try read(path).contains("jednej dyspozycji"), "\(path) nie opisuje ścieżki jednej dyspozycji")
+        }
+        let migration = try read("docs/MIGRATION-v4.md")
+        XCTAssertTrue(migration.contains("1024 baniek"), "MIGRATION-v4.md nie podaje progu 1024 baniek")
+        XCTAssertTrue(migration.contains("forceMultipleDispatches"), "MIGRATION-v4.md nie wspomina o forceMultipleDispatches")
+        let readme = try read("README.md")
+        for stale in ["jednym command bufferze", "najwyżej jeden krok na command buffer"] {
+            XCTAssertFalse(readme.contains(stale), "README zawiera nieaktualne sformułowanie: \(stale)")
+        }
+    }
+
+    /// Zadanie 38: opis w widoku benchmarku iOS nie twierdzi, że fizyka i render dzielą command buffer.
+    func testStressViewDoesNotClaimASharedCommandBuffer() throws {
+        let view = try read("Benchmarks/iOS/BubblePhysicsBench/App/PublicWorldStressView.swift")
+        XCTAssertFalse(view.contains("ten sam command buffer"), "widok benchmarku opisuje stary wspólny command buffer")
     }
 }

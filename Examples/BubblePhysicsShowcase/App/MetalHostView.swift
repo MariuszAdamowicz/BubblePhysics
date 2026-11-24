@@ -107,7 +107,7 @@ struct MetalHostView: UIViewRepresentable {
         func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
 
         // guide-region: mtkview-loop
-        /// Jedna klatka `MTKView`: jeden bufor poleceń na fizykę i render. Drawable, deskryptor passu i bufor pobieramy
+        /// Jedna klatka `MTKView`: fizykę liczy świat we własnych buforach, a render idzie do bufora gry. Drawable, deskryptor passu i bufor pobieramy
         /// synchronicznie, bo system podstawia je tylko na czas tego wywołania.
         func draw(in view: MTKView) {
             // Poprzedni `advance` jeszcze trwa: pobrany drawable po prostu nie zostaje użyty.

@@ -25,14 +25,14 @@ final class NativeMetalBenchmarkTests: XCTestCase {
             seed: matrix.configuration.seed, newtonIterationLimit: 4), warmupSteps: 1, measuredSteps: 2)
         XCTAssertEqual(run.nativeQuality?.cpuPenetrationP95, cpu.penetration.p95)
         XCTAssertEqual(run.nativeQuality?.cpuPenetrationMaximum, cpu.penetration.maximum)
-        // Twardy kontakt może zostać w pełni rozdzielony zanim generujemy
-        // kontur; brak śladu deformacji jest wtedy pożądaną stabilnością.
-        XCTAssertLessThan(try XCTUnwrap(run.nativeQuality?.loadedContourMeanRadiusErrorFraction), 0.001)
+        // 4.0.0: kontur to cięciwa r·(1 − ε) pod obciążeniem, więc bańka wciśnięta w ścianę jest widocznie ściśnięta. Brak śladu
+        // deformacji (dawny twardy kontakt rozdzielony przed konturem) byłby dziś błędem; pomiar powrotu po zwolnieniu się wykonuje.
+        XCTAssertGreaterThan(try XCTUnwrap(run.nativeQuality?.loadedContourMeanRadiusErrorFraction), 0.02)
         let text = matrix.plainText(deviceName: "test", systemVersion: "test")
         XCTAssertTrue(text.contains("native_quality_envelope=pass"))
         XCTAssertTrue(text.contains("cpu_baseline_measured_frames=2"))
         XCTAssertTrue(text.contains("rest_settle_frames=120 rest_measured_frames=30"))
-        XCTAssertTrue(text.contains("released_contour_frames=0"))
+        XCTAssertTrue(text.contains("released_contour_frames=30"), "pomiar powrotu konturu po zwolnieniu ściany biegnie przez 30 klatek")
         XCTAssertTrue(text.contains("repeat_measured_frames=2"))
     }
 
@@ -87,17 +87,21 @@ final class NativeMetalBenchmarkTests: XCTestCase {
         XCTAssertEqual(run.fallbackCount, 0)
         XCTAssertEqual(run.completedMetalSampleCount, 2)
         XCTAssertEqual(run.gpuProfileSampleCount, 2)
-        XCTAssertEqual(run.gpuProfileCommandBuffers.maximumMilliseconds, 1)
-        XCTAssertEqual(run.maximumNativeSolverIterations, 4)
+        // 4.0.0: klatka to pary buforów (podkroki + koniec kroku), więc liczba buforów jest parzysta i co najmniej 2.
+        let commandBuffers = run.gpuProfileCommandBuffers.maximumMilliseconds
+        XCTAssertGreaterThanOrEqual(commandBuffers, 2)
+        XCTAssertEqual(commandBuffers.truncatingRemainder(dividingBy: 2), 0, "bufory idą parami")
+        // Solver nie ma iteracji (XPBD odszedł); pole raportu Reference zostaje w formacie i jest zawsze 0.
+        XCTAssertEqual(run.maximumNativeSolverIterations, 0)
         XCTAssertGreaterThan(run.solver.p95Milliseconds, 0)
         XCTAssertEqual(run.solver.p95Milliseconds, run.completedMetalTiming.p95Milliseconds)
         XCTAssertTrue(run.isGPUAcceptanceMeasurementEligible)
         let text = matrix.plainText(deviceName: "test", systemVersion: "test")
-        XCTAssertTrue(text.contains("native_solver_iterations=4"))
+        XCTAssertTrue(text.contains("native_solver_iterations=0"))
         XCTAssertTrue(text.contains("native_cache_hits="))
         XCTAssertTrue(text.contains("native_cache_resets="))
         XCTAssertTrue(text.contains("native_ccd_candidates="))
-        XCTAssertTrue(text.contains("command_buffers_max=1.0000"))
+        XCTAssertTrue(text.contains(String(format: "command_buffers_max=%.4f", commandBuffers)))
         XCTAssertTrue(text.contains("host_readback_p50_ms=unavailable"))
     }
 
@@ -140,7 +144,7 @@ final class NativeMetalBenchmarkTests: XCTestCase {
 
     func testMixedRunKeepsOnlyPublishedNativeFramesInGPUProfile() async throws {
         let executor = FailSecondNativeBenchmarkFrame(solver: try NativeMetalSolver(
-            device: XCTUnwrap(MTLCreateSystemDefaultDevice()), configuration: .init(solverIterationCount: 4)))
+            device: XCTUnwrap(MTLCreateSystemDefaultDevice()), configuration: .init()))
         let config = ReferenceBenchmarkMatrixConfiguration(scene: .interactive24,
             warmupSteps: 0, measuredSteps: 2, iterationLimits: [4], backend: .nativeMetal)
         let matrix = try await NativeMetalBenchmarkRunner.measure(configuration: config,
@@ -152,7 +156,7 @@ final class NativeMetalBenchmarkTests: XCTestCase {
         XCTAssertEqual(run.gpuProfileSampleCount, 1)
         XCTAssertEqual(run.nativeTelemetrySampleCount, 1)
         XCTAssertEqual(run.cpuFallbackSampleCount, 1)
-        XCTAssertEqual(run.gpuProfileCommandBuffers.maximumMilliseconds, 1)
+        XCTAssertEqual(run.gpuProfileCommandBuffers.maximumMilliseconds, 2, "jedna para buforów opublikowanej klatki, bez klatki CPU")
         XCTAssertEqual(run.fallbackCount, 1)
         XCTAssertFalse(run.isGPUAcceptanceMeasurementEligible)
     }
@@ -175,7 +179,7 @@ private final class ControlBatchFallbackFactory {
         count += 1
         if count == 3 { return NativeMetalWorldRunner(executor: nil) }
         let solver = try NativeMetalSolver(device: XCTUnwrap(MTLCreateSystemDefaultDevice()),
-            configuration: .init(solverIterationCount: limit))
+            configuration: .init())
         return NativeMetalWorldRunner(executor: solver)
     }
 }

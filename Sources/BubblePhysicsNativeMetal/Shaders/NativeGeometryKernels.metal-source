@@ -13,13 +13,8 @@ struct NativeBubble {
     ulong2 eventData;
     float4 bounds;
     uint4 filter; // kategoria, maska, reserved, warstwa (Int32 z odwróconym bitem znaku)
-    float4 contact; // podatność c₀·r/r_ref (0 = kontakt twardy), reserved, ζ_c (współczynnik tłumienia kontaktu miękkiego, także dla bańki twardej), reserved
+    float4 contact; // zero (dawna podatność XPBD), K_c, zero (dawne ζ_c), znacznik bańki napędzanej siłami (siła globalna, pola, γ)
 };
-// Podatność końca kontaktu: c = c₀·r/r_ref, liczona przez hosta w `contact.x` z bieżącego promienia fizycznego bańki.
-// Zero oznacza kontakt twardy jak w v2.1.0.
-float nativeContactCompliance(NativeBubble bubble) {
-    return max(bubble.contact.x, 0.0f);
-}
 struct NativeSegment {
     long2 identity;
     uint4 flags; // x kinematyczny, y ma właściciela, z stała strona (`allowedSide`), w krawędź wielokąta: bit 0 obszary, bit 1 wypukły początek, bit 2 wypukły koniec (informacyjny: jądra go nie czytają)
@@ -162,33 +157,16 @@ float nativeClampAngularSpeed(float velocity, float limit) {
     return limit > 0 ? clamp(velocity, -limit, limit) : velocity;
 }
 
-kernel void nativePredict(device NativeBubble *bubbles [[buffer(0)]],
-                          constant NativeControl &control [[buffer(1)]],
-                          uint index [[thread_position_in_grid]]) {
-    if (index >= control.counts.x) return;
-    NativeBubble b = bubbles[index];
-    b.publicFlags.w = 0;
-    float dt = control.physics.x;
-    b.position.zw = b.position.xy;
-    if (b.publicFlags.x && b.publicFlags.y) { b.motion.xy = 0; b.motion.w = 0; bubbles[index] = b; return; }
-    // Ścieżka publiczna nie tłumi ruchu liniowego: robi to host przed przyrostem prędkości z sił (MotionControllers.prepare).
-    if (!b.publicFlags.x) b.motion.xy *= exp(-control.physics.y * dt);
-    b.motion.xy = nativeClampLinearSpeed(b.motion.xy, b.deformation.z);
-    b.motion.w = nativeClampAngularSpeed(b.motion.w, b.deformation.w);
-    b.position.xy += b.motion.xy * dt;
-    b.motion.z += b.motion.w * dt;
-    b.motion.w *= exp(-(b.publicFlags.x ? b.material.x : control.physics.z) * dt);
-    bubbles[index] = b;
-}
-
 // Rozmiar komórki obejmuje największą średnicę: wystarcza dziewięć sąsiadów.
+// Komórka siatki obejmuje największą średnicę z zapasem obwiedni (2 · (r + zapas) + tolerancja): para kandydatów leży wtedy w
+// sąsiednich komórkach (zapas to droga bańki w kroku, nativeBroadphaseMargin).
 kernel void nativePrepareGrid(device NativeBubble *bubbles [[buffer(0)]],
     constant NativeControl &control [[buffer(1)]], device NativeContactControl &contacts [[buffer(2)]],
-    uint local [[thread_position_in_threadgroup]]) {
+    device float *margins [[buffer(3)]], uint local [[thread_position_in_threadgroup]]) {
     threadgroup float maxima[256];
     float width = contacts.thresholds.w;
     for (uint i = local; i < control.counts.x; i += 256)
-        width = max(width, 2 * bubbles[i].physical.z + contacts.thresholds.w);
+        width = max(width, 2 * (bubbles[i].physical.z + margins[i]) + contacts.thresholds.w);
     maxima[local] = width;
     threadgroup_barrier(mem_flags::mem_threadgroup);
     for (uint stride = 128; stride > 0; stride /= 2) {
@@ -279,13 +257,50 @@ bool nativeJointExcluded(device uint4 *jointRanges, device ulong *jointPartners,
     return false;
 }
 
-kernel void nativeEmitCandidates(device NativeBubble *bubbles [[buffer(0)]],
-    constant NativeControl &control [[buffer(1)]], device NativeContactControl &contacts [[buffer(2)]],
-    device NativeGridEntry *grid [[buffer(3)]], device NativeSegment *segments [[buffer(4)]],
-    device NativeCandidate *rows [[buffer(5)]], device uint *rowCounts [[buffer(6)]],
-    device atomic_uint *overflow [[buffer(7)]], device uint4 *jointRanges [[buffer(8)]],
-    device ulong *jointPartners [[buffer(9)]], uint index [[thread_position_in_grid]]) {
-    if (index >= control.counts.x) return;
+// Para baniek (index < j) jako kandydat wiersza bańki `index`: filtr, więzy i zasięg z zapasami obwiedni. Wspólna dla siatki posortowanej
+// (wyszukiwanie binarne) i siatki haszowanej jądra jednej grupy; wiersz ma stały porządek po kluczu, więc kolejność wywołań nie ma znaczenia.
+void nativeBubblePairCandidate(uint index, uint j, NativeBubble a, device NativeBubble *bubbles, device NativeContactControl &contacts,
+    device NativeCandidate *row, thread uint &count, thread uint &dropped, uint limit, device uint4 *jointRanges,
+    device ulong *jointPartners, device float *margins) {
+    NativeBubble b = bubbles[j];
+    if (!nativeFilterAccepts(a.filter, b.filter)) return;
+    if (nativeJointExcluded(jointRanges, jointPartners, index, ulong(b.identity.x))) return;
+    float reach = a.physical.z + b.physical.z + margins[index] + margins[j] + contacts.thresholds.w;
+    if (all(abs(a.position.xy - b.position.xy) <= reach)) {
+        NativeCandidate candidate = { long2(a.identity.x, b.identity.x), uint4(0, index, j, 1) };
+        nativeInsertCandidate(row, count, dropped, limit, candidate);
+    }
+}
+
+// Reszta wiersza bańki po parach baniek: odcinki, podział wiersza na bańki i odcinki, liczniki przepełnienia.
+void nativeFinishBubbleRow(uint index, NativeBubble a, constant NativeControl &control, device NativeContactControl &contacts,
+    device NativeSegment *segments, device NativeCandidate *row, uint count, uint dropped, uint limit, device uint *rowCounts,
+    device atomic_uint *overflow, device uint4 *jointRanges, device ulong *jointPartners, device float *margins) {
+    for (uint j = 0; j < control.counts.y; ++j) {
+        NativeSegment s = segments[j];
+        if (!nativeFilterAccepts(a.filter, s.filter)) continue;
+        if (s.flags.y && nativeJointExcluded(jointRanges, jointPartners, index, ulong(s.identity.y))) continue;
+        float reach = a.physical.z + margins[index] + contacts.thresholds.w;
+        float2 lower = min(s.current.xy, s.current.zw) - reach;
+        float2 upper = max(s.current.xy, s.current.zw) + reach;
+        if (all(a.position.xy >= lower) && all(a.position.xy <= upper)) {
+            NativeCandidate candidate = { long2(a.identity.x, s.identity.x), uint4(1, index, j, 1) };
+            nativeInsertCandidate(row, count, dropped, limit, candidate);
+        }
+    }
+    // Klucz zaczyna się od rodzaju pary, więc wiersz po obcięciu nadal trzyma najpierw pary baniek.
+    uint bubbleCount = 0;
+    while (bubbleCount < count && row[bubbleCount].metadata.x == 0) ++bubbleCount;
+    rowCounts[index * 2] = bubbleCount;
+    rowCounts[index * 2 + 1] = count - bubbleCount;
+    if (dropped) atomic_fetch_add_explicit(overflow, dropped, memory_order_relaxed);
+    atomic_fetch_max_explicit(overflow + 1, count + dropped, memory_order_relaxed);
+}
+
+void nativeEmitBubbleCandidates(uint index, device NativeBubble *bubbles, constant NativeControl &control,
+    device NativeContactControl &contacts, device NativeGridEntry *grid, device NativeSegment *segments,
+    device NativeCandidate *rows, device uint *rowCounts, device atomic_uint *overflow, device uint4 *jointRanges,
+    device ulong *jointPartners, device float *margins) {
     NativeBubble a = bubbles[index];
     if (!all(isfinite(a.position))) {
         rowCounts[index * 2] = 0; rowCounts[index * 2 + 1] = 0; return;
@@ -308,58 +323,43 @@ kernel void nativeEmitCandidates(device NativeBubble *bubbles [[buffer(0)]],
         for (uint k = low; k < control.counts.x && grid[k].cell.x == target.x && grid[k].cell.y <= target.y + 2; ++k) {
             uint j = grid[k].metadata.x;
             if (j <= index) continue;
-            NativeBubble b = bubbles[j];
-            if (!nativeFilterAccepts(a.filter, b.filter)) continue;
-            if (nativeJointExcluded(jointRanges, jointPartners, index, ulong(b.identity.x))) continue;
-            float reach = a.physical.z + b.physical.z + contacts.thresholds.w;
-            if (all(abs(a.position.xy - b.position.xy) <= reach)) {
-                NativeCandidate candidate = { long2(a.identity.x, b.identity.x), uint4(0, index, j, 1) };
-                nativeInsertCandidate(row, count, dropped, limit, candidate);
-            }
+            nativeBubblePairCandidate(index, j, a, bubbles, contacts, row, count, dropped, limit, jointRanges, jointPartners, margins);
         }
     }
-    for (uint j = 0; j < control.counts.y; ++j) {
-        NativeSegment s = segments[j];
-        if (!nativeFilterAccepts(a.filter, s.filter)) continue;
-        if (s.flags.y && nativeJointExcluded(jointRanges, jointPartners, index, ulong(s.identity.y))) continue;
-        float reach = a.physical.z + contacts.thresholds.w;
-        float2 lower = min(s.current.xy, s.current.zw) - reach;
-        float2 upper = max(s.current.xy, s.current.zw) + reach;
-        if (all(a.position.xy >= lower) && all(a.position.xy <= upper)) {
-            NativeCandidate candidate = { long2(a.identity.x, s.identity.x), uint4(1, index, j, 1) };
-            nativeInsertCandidate(row, count, dropped, limit, candidate);
-        }
-    }
-    // Klucz zaczyna się od rodzaju pary, więc wiersz po obcięciu nadal trzyma najpierw pary baniek.
-    uint bubbleCount = 0;
-    while (bubbleCount < count && row[bubbleCount].metadata.x == 0) ++bubbleCount;
-    rowCounts[index * 2] = bubbleCount;
-    rowCounts[index * 2 + 1] = count - bubbleCount;
-    if (dropped) atomic_fetch_add_explicit(overflow, dropped, memory_order_relaxed);
-    atomic_fetch_max_explicit(overflow + 1, count + dropped, memory_order_relaxed);
+    nativeFinishBubbleRow(index, a, control, contacts, segments, row, count, dropped, limit, rowCounts, overflow, jointRanges, jointPartners, margins);
+}
+
+kernel void nativeEmitCandidates(device NativeBubble *bubbles [[buffer(0)]],
+    constant NativeControl &control [[buffer(1)]], device NativeContactControl &contacts [[buffer(2)]],
+    device NativeGridEntry *grid [[buffer(3)]], device NativeSegment *segments [[buffer(4)]],
+    device NativeCandidate *rows [[buffer(5)]], device uint *rowCounts [[buffer(6)]],
+    device atomic_uint *overflow [[buffer(7)]], device uint4 *jointRanges [[buffer(8)]],
+    device ulong *jointPartners [[buffer(9)]], device float *margins [[buffer(10)]], uint index [[thread_position_in_grid]]) {
+    if (index >= control.counts.x) return;
+    nativeEmitBubbleCandidates(index, bubbles, control, contacts, grid, segments, rows, rowCounts, overflow, jointRanges, jointPartners, margins);
 }
 
 // Kandydaci kontaktów brył: jeden wiersz o stałej długości k (`counts.z`) na bryłę, posortowany po kluczu pary
 // (rodzaj 2 = bańka–bryła, rodzaj 3 = bryła–bryła; para brył trafia do wierszy obu brył z tą samą kolejnością a < b).
-// Testy zasięgu to dokładnie te z nativeRigidContacts, poszerzone o zapas, bo wiersze powstają raz na krok,
-// a poza listą nie ma już par, które kernel kontaktów sprawdzałby w każdej iteracji.
+// Tryb w `counts.w`: bit 0 pomija kandydatów bańka–bryła, bit 1 pomija pary brył. Silnik 4.0.0 koduje dwa wywołania: pary brył raz na krok
+// (tryb 1, solver brył bez baniek) i kandydatów bańka–bryła przy każdej budowie siatki (tryb 2, osobne wiersze), z zapasem obwiedni bańki.
+// Testy zasięgu par brył to dokładnie te z nativeRigidContacts, poszerzone o zapas, bo wiersze powstają raz na krok.
+// Bańka przechodzi przez kandydata, gdy jej obwiednia (środek ± (r + zapas)) styka się z obwiednią drogi bryły w kroku (środki z początku i końca
+// kroku ± promień otaczający, więc także obrót), bo bańka nie wychodzi poza zapas aż do przebudowy siatki.
 // `metadata.w` to bity float: suma normalnych Δλ z iteracji (zeruje ją ten kernel, dopisuje nativeRigidContacts).
-kernel void nativeRigidEmitCandidates(device NativeRigidBody *bodies [[buffer(0)]],
-    device NativeBubble *bubbles [[buffer(1)]], device float4 *positions [[buffer(2)]],
-    constant uint4 &counts [[buffer(3)]], device NativeCandidate *rows [[buffer(4)]],
-    device uint2 *rowCounts [[buffer(5)]], device atomic_uint *overflow [[buffer(6)]],
-    device uint4 *jointRanges [[buffer(7)]], device ulong *jointPartners [[buffer(8)]],
-    threadgroup uchar *hits [[threadgroup(0)]],
-    uint index [[threadgroup_position_in_grid]], uint lane [[thread_position_in_threadgroup]],
-    uint width [[threads_per_threadgroup]]) {
+void nativeEmitBodyCandidates(device NativeRigidBody *bodies, device NativeBubble *bubbles, device float *margins,
+    uint4 counts, device NativeCandidate *rows, device uint2 *rowCounts, device atomic_uint *overflow,
+    device uint4 *jointRanges, device ulong *jointPartners, threadgroup uchar *hits, uint index, uint lane, uint width) {
     if (index >= counts.x) return;
     uint limit = counts.z;
     NativeRigidBody b = bodies[index];
     uint entity = counts.y + index; // bryły leżą w przestrzeni więzów za bańkami
     device NativeCandidate *row = rows + index * limit;
     uint count = 0, dropped = 0;
-    // Statyczny wielokąt dla baniek to odcinki; statyczne koło i kapsuła nie mają odcinków, więc bańki łapie solver brył.
-    if (!b.flags.x || nativeRigidIsRound(b)) {
+    // Statyczny wielokąt dla baniek to odcinki; statyczne koło i kapsuła nie mają odcinków, więc bańki widzą je jako bryły, a bryła
+    // kinematyczna (dowolny kształt) ma ruch zadany z góry. Bryła dynamiczna nie ma kontaktu z bańkami (CD-D-2, G7-AC4).
+    bool bubbleObstacle = b.flags.x ? nativeRigidIsRound(b) : (b.filter.z != 0);
+    if (bubbleObstacle && (counts.w & 1) == 0) {
         float2 bodyLow = min(b.pose.xy, b.previous.xy) - b.physical.z;
         float2 bodyHigh = max(b.pose.xy, b.previous.xy) + b.physical.z;
         // Grupa sprawdza bańki w porcjach po `width`: każdy wątek jedną, a wątek 0 wpisuje trafienia do wiersza
@@ -372,9 +372,9 @@ kernel void nativeRigidEmitCandidates(device NativeRigidBody *bodies [[buffer(0)
                 hit = nativeFilterAccepts(a.filter, b.filter)
                     && !nativeJointExcluded(jointRanges, jointPartners, entity, ulong(a.identity.x));
                 if (hit) {
-                    float2 center = positions[ai].xy;
-                    float reach = 1.5f * a.physical.z;
-                    float2 bubbleLow = min(center, a.position.zw) - reach, bubbleHigh = max(center, a.position.zw) + reach;
+                    float2 center = a.position.xy;
+                    float reach = a.physical.z + max(margins[ai], 0.0f);
+                    float2 bubbleLow = center - reach, bubbleHigh = center + reach;
                     hit = !(any(bubbleHigh < bodyLow) || any(bodyHigh < bubbleLow));
                 }
             }
@@ -391,7 +391,7 @@ kernel void nativeRigidEmitCandidates(device NativeRigidBody *bodies [[buffer(0)
         }
     }
     if (lane != 0) return;
-    for (uint other = 0; other < counts.x; ++other) {
+    for (uint other = 0; other < counts.x && (counts.w & 2) == 0; ++other) {
         if (other == index) continue;
         uint low = min(index, other), high = max(index, other);
         NativeRigidBody a = bodies[low], c = bodies[high];
@@ -412,6 +412,17 @@ kernel void nativeRigidEmitCandidates(device NativeRigidBody *bodies [[buffer(0)
     rowCounts[index] = uint2(count, bubbleCount);
     if (dropped) atomic_fetch_add_explicit(overflow, dropped, memory_order_relaxed);
     atomic_fetch_max_explicit(overflow + 1, count + dropped, memory_order_relaxed);
+}
+
+kernel void nativeRigidEmitCandidates(device NativeRigidBody *bodies [[buffer(0)]],
+    device NativeBubble *bubbles [[buffer(1)]], device float *margins [[buffer(2)]],
+    constant uint4 &counts [[buffer(3)]], device NativeCandidate *rows [[buffer(4)]],
+    device uint2 *rowCounts [[buffer(5)]], device atomic_uint *overflow [[buffer(6)]],
+    device uint4 *jointRanges [[buffer(7)]], device ulong *jointPartners [[buffer(8)]],
+    threadgroup uchar *hits [[threadgroup(0)]],
+    uint index [[threadgroup_position_in_grid]], uint lane [[thread_position_in_threadgroup]],
+    uint width [[threads_per_threadgroup]]) {
+    nativeEmitBodyCandidates(bodies, bubbles, margins, counts, rows, rowCounts, overflow, jointRanges, jointPartners, hits, index, lane, width);
 }
 
 float nativeCross(float2 a, float2 b) { return a.x * b.y - a.y * b.x; }
@@ -611,19 +622,21 @@ bool nativeCenterCrossing(float2 start, float2 end, NativeSegment s) {
     return false;
 }
 
-kernel void nativePrepareCandidateCounts(constant NativeControl &control [[buffer(0)]],
-    device uint *rowCounts [[buffer(1)]], device uint4 *values [[buffer(2)]],
-    uint index [[thread_position_in_grid]]) {
-    if (index >= control.counts.x * 2) return;
-    uint kind = index / control.counts.x, bubble = index % control.counts.x;
+void nativeCandidateRowCount(uint index, uint bubbleCount, device uint *rowCounts, device uint4 *values) {
+    if (index >= bubbleCount * 2) return;
+    uint kind = index / bubbleCount, bubble = index % bubbleCount;
     values[index] = uint4(rowCounts[bubble * 2 + kind], 0, 0, 0);
 }
 
-kernel void nativeCompactCandidates(constant NativeControl &control [[buffer(0)]],
-    device NativeContactControl &contacts [[buffer(1)]], device NativeCandidate *rows [[buffer(2)]],
-    device uint *rowCounts [[buffer(3)]], device NativeCandidate *candidates [[buffer(4)]],
-    device uint4 *offsets [[buffer(5)]], device atomic_uint *statistics [[buffer(6)]],
+kernel void nativePrepareCandidateCounts(constant NativeControl &control [[buffer(0)]],
+    device uint *rowCounts [[buffer(1)]], device uint4 *values [[buffer(2)]],
     uint index [[thread_position_in_grid]]) {
+    nativeCandidateRowCount(index, control.counts.x, rowCounts, values);
+}
+
+void nativeCompactCandidateRow(uint index, constant NativeControl &control, device NativeContactControl &contacts,
+    device NativeCandidate *rows, device uint *rowCounts, device NativeCandidate *candidates, device uint4 *offsets,
+    device atomic_uint *statistics) {
     if (contacts.cache.w == 0) return;
     uint bubble = index / contacts.cache.w, slot = index % contacts.cache.w;
     if (bubble >= control.counts.x || slot >= rowCounts[bubble * 2] + rowCounts[bubble * 2 + 1]) return;
@@ -637,31 +650,12 @@ kernel void nativeCompactCandidates(constant NativeControl &control [[buffer(0)]
     nativeCountWork(statistics, 3);
 }
 
-// Porządek i wyszukiwanie w cache kontaktów po pełnym kluczu (rodzaj, uczestnik, uczestnik); cache jest posortowany po tym kluczu.
-bool nativeCacheLess(NativeContactCache a, NativeContactCache b) {
-    if (a.metadata.x != b.metadata.x) return a.metadata.x < b.metadata.x;
-    if (a.participants.x != b.participants.x) return a.participants.x < b.participants.x;
-    return a.participants.y < b.participants.y;
-}
-
-uint nativeCacheLowerBound(device NativeContactCache *records, uint count, NativeContactCache key) {
-    uint low = 0, high = count;
-    while (low < high) {
-        uint mid = low + (high - low) / 2;
-        if (nativeCacheLess(records[mid], key)) low = mid + 1; else high = mid;
-    }
-    return low;
-}
-
-bool nativeCacheSame(NativeContactCache a, NativeContactCache b) {
-    return a.metadata.x == b.metadata.x && all(a.participants == b.participants);
-}
-
-// Indeks rekordu (rodzaj `kind`, uczestnicy `participants`) w cache `records` (`count` rekordów, posortowany po kluczu) albo -1.
-int nativeCacheFind(device NativeContactCache *records, uint count, uint kind, long2 participants) {
-    NativeContactCache key = { participants, uint4(kind, 0, 0, 0), float4(0), float4(0), float4(0) };
-    uint found = nativeCacheLowerBound(records, count, key);
-    return found < count && nativeCacheSame(records[found], key) ? int(found) : -1;
+kernel void nativeCompactCandidates(constant NativeControl &control [[buffer(0)]],
+    device NativeContactControl &contacts [[buffer(1)]], device NativeCandidate *rows [[buffer(2)]],
+    device uint *rowCounts [[buffer(3)]], device NativeCandidate *candidates [[buffer(4)]],
+    device uint4 *offsets [[buffer(5)]], device atomic_uint *statistics [[buffer(6)]],
+    uint index [[thread_position_in_grid]]) {
+    nativeCompactCandidateRow(index, control, contacts, rows, rowCounts, candidates, offsets, statistics);
 }
 
 // Granica obszarów krawędzi statycznego wielokąta (CD-D-4): czy rzut środka na odcinek from→to wypada na jego końcu albo za nim.
@@ -673,71 +667,22 @@ bool nativePastSegmentEnd(float2 center, float2 from, float2 to) {
     return fma(relative.x, edge.x, relative.y * edge.y) >= fma(edge.x, edge.x, edge.y * edge.y);
 }
 
-// Droga previous → center przecina prostą krawędzi (strony `previousSide` i `centerSide` względem normalnej zewnętrznej mają różne
-// znaki albo `centerSide` = 0) w punkcie, który rzutuje się we wnętrze odcinka start → end (0 < t < 1).
-bool nativePathCrossesSegment(float2 previous, float2 center, float previousSide, float centerSide, float2 start, float2 end) {
-    float2 crossing = previous + (center - previous) * (previousSide / (previousSide - centerSide));
-    return dot(crossing - start, end - start) > 0 && !nativePastSegmentEnd(crossing, start, end);
-}
-
 // Cecha kontaktu z krawędzią statycznego wielokąta, zapisana w response.w do końca kroku: 0 poza obszarami krawędzi
 // (rekord odpada), 1 wnętrze krawędzi (stała normalna zewnętrzna), 2 wierzchołek początkowy wypukły (normalna od wierzchołka).
-// Wnętrze krawędzi to trzy przypadki. Przewidziany środek `center` po stronie zewnętrznej prostej: jego rzut wypada w 0 < t < 1.
-// Środek za prostą (krawędź wejścia, BF-D-1 z 3.0.1): środek z początku kroku `previous` był po stronie zewnętrznej (albo na prostej), a
-// droga previous → center przecina sam odcinek, czyli punkt przecięcia z prostą rzutuje się w 0 < t < 1. Środek odpycha wtedy
-// dokładnie krawędź, przez którą wszedł, wzdłuż normalnej zewnętrznej: tylna krawędź cienkiej ściany i krawędź, której prostą droga
-// przecina poza odcinkiem (skośne wejście nad narożnikiem wypukłym), nie dostają kontaktu. Środek już na początku kroku za prostą
-// (pamięć krawędzi wejścia, BF-D-1 z 3.0.2): bańka dociśnięta siłą F > r_ref / c₀ stoi środkiem za krawędzią (ε = c₀ · F / r_ref > 1),
-// więc krawędź, która w poprzednim kroku była dla niej krawędzią wejścia (`remembered`), odpycha dalej, póki rzut środka wypada
-// w 0 < t < 1. Wierzchołek wypukły należy do krawędzi, która się w nim zaczyna.
-uint nativePolygonEdgeFeature(float2 center, float2 previous, NativeSegment s, float2 outward, bool remembered) {
+// Silnik 4.0.0 trzyma środek bańki po stronie zewnętrznej (asercja kontaktu), więc cecha zależy tylko od położenia środka: bez
+// krawędzi wejścia, bez pamięci z poprzedniego kroku. Wierzchołek wypukły należy do krawędzi, która się w nim zaczyna.
+uint nativePolygonEdgeFeature(float2 center, NativeSegment s, float2 outward) {
     float2 start = s.current.xy, end = s.current.zw;
     float along = dot(center - start, end - start);
     bool convexStart = (s.flags.w & 2) != 0;
     if (convexStart && along <= 0 && nativePastSegmentEnd(center, s.region.xy, start)) return 2;
-    float centerSide = dot(center - start, outward);
     bool interior = along > 0 && !nativePastSegmentEnd(center, start, end);
-    if (centerSide >= 0) return interior ? 1 : 0;
-    float previousSide = dot(previous - start, outward);
-    if (previousSide < 0) return remembered && interior ? 1 : 0;
-    // previousSide ≥ 0 > centerSide, więc mianownik jest dodatni, a udział drogi do przecięcia z prostą leży w [0, 1).
-    return nativePathCrossesSegment(previous, center, previousSide, centerSide, start, end) ? 1 : 0;
-}
-
-// Wyjście środka przez krawędź od jej strony wewnętrznej: droga previous → center przecina sam odcinek, a przewidziany środek
-// stoi po stronie zewnętrznej (albo na prostej).
-bool nativePolygonEdgeExit(float2 center, float2 previous, NativeSegment s, float2 outward) {
-    float centerSide = dot(center - s.current.xy, outward), previousSide = dot(previous - s.current.xy, outward);
-    // previousSide < 0 ≤ centerSide, więc mianownik jest ujemny, a udział drogi do przecięcia z prostą leży w (0, 1].
-    return previousSide < 0 && centerSide >= 0
-        && nativePathCrossesSegment(previous, center, previousSide, centerSide, s.current.xy, s.current.zw);
-}
-
-// Pamięć krawędzi wejścia (BF-D-1 z 3.0.2): poprzedni opublikowany cache `previous` (limits.w rekordów, posortowany po kluczu) ma
-// rekord (bańka, krawędź) `participants` z cechą 1, widziany w poprzednim zaakceptowanym kroku. Licznik klatek limits.x rośnie o 1 na
-// zaakceptowany krok (krok odrzucony powtarza tę samą klatkę z tym samym cache). Rekord, który wypadł z cache (pojemność,
-// wygaśnięcie, unieważnienie), kończy pamięć: środek we wnętrzu bryły wraca wtedy do rzutu strażnika (CD-D-17).
-bool nativeRememberedEntryEdge(device NativeContactCache *previous, device NativeContactControl &control, long2 participants) {
-    int found = nativeCacheFind(previous, control.limits.w, 1, participants);
-    return found >= 0 && previous[found].response.w == 1 && previous[found].metadata.z + 1 == control.limits.x;
-}
-
-// Bańka ma zapamiętaną krawędź wejścia na innej krawędzi właściciela odcinka `s`: jej środek stoi we wnętrzu bryły.
-bool nativeOwnerRemembersEntry(device NativeContactCache *previous, device NativeContactControl &control, long bubble,
-    NativeSegment s, device NativeSegment *segments, uint count) {
-    if (!s.flags.y) return false;
-    for (uint j = 0; j < count; ++j) {
-        NativeSegment other = segments[j];
-        if (other.flags.y && other.identity.y == s.identity.y && (other.flags.w & 1) != 0 && other.identity.x != s.identity.x
-            && nativeRememberedEntryEdge(previous, control, long2(bubble, other.identity.x))) return true;
-    }
-    return false;
+    return dot(center - start, outward) >= 0 && interior ? 1 : 0;
 }
 
 kernel void nativeBuildContacts(device NativeBubble *bubbles [[buffer(0)]],
     device NativeSegment *segments [[buffer(1)]], device NativeContactControl &control [[buffer(2)]],
     device NativeCandidate *candidates [[buffer(3)]], device NativeContactCache *contacts [[buffer(4)]],
-    device NativeContactCache *previous [[buffer(5)]], constant NativeControl &world [[buffer(6)]],
     uint index [[thread_position_in_grid]]) {
     if (index >= control.counts.x) return;
     NativeCandidate c = candidates[index]; NativeBubble a = bubbles[c.metadata.y];
@@ -760,21 +705,10 @@ kernel void nativeBuildContacts(device NativeBubble *bubbles [[buffer(0)]],
         allowedSide = s.flags.z ? s.collision.x : 0;
         penetration = a.physical.z - distance;
         if (s.flags.w & 1) {
-            // Krawędź statycznego wielokąta: kontakt tylko z obszaru wnętrza krawędzi albo wierzchołka (CD-D-3, CD-D-4). Środek
-            // z początku kroku (position.zw z nativePredict) wybiera krawędź wejścia, gdy przewidziany środek minął prostą krawędzi, a jego droga przecięła odcinek (BF-D-1);
-            // środek, który był za prostą już na początku kroku, zachowuje krawędź wejścia z poprzedniego kroku (pamięć z cache, BF-D-1 z 3.0.2).
-            // Wgniecenie r − dot(center − start, outward) jest wtedy większe niż r, z normalną zewnętrzną.
+            // Krawędź statycznego wielokąta: kontakt tylko z obszaru wnętrza krawędzi albo wierzchołka (CD-D-3, CD-D-4).
+            // Wgniecenie r − dot(center − start, outward) liczy się od zewnętrznej normalnej krawędzi.
             float2 outward = base * s.region.z;
-            // Bańka twarda (c = 0) nie stoi środkiem za krawędzią (ε = c · F / r_ref = 0): bez pamięci i reguły wyjścia, jak w 3.0.1.
-            bool soft = nativeContactCompliance(a) > 0;
-            bool remembered = soft && nativeRememberedEntryEdge(previous, control, c.participants);
-            feature = nativePolygonEdgeFeature(a.position.xy, a.position.zw, s, outward, remembered);
-            // Środek wszedł do bryły przez inną jej krawędź (zapamiętaną krawędź wejścia) i wychodzi przez tę od strony wewnętrznej,
-            // np. przez tył cienkiej ściany: ta krawędź wypychałaby go dalej za ścianę, więc kontaktu nie dostaje, a strażnik
-            // zatrzymuje środek po jej stronie wewnętrznej (BF-D-3). Bez zapamiętanej krawędzi wejścia (bańka twarda, wejście
-            // i wyjście w jednym kroku) zachowanie jak w 3.0.1.
-            if (soft && feature == 1 && !remembered && nativePolygonEdgeExit(a.position.xy, a.position.zw, s, outward)
-                && nativeOwnerRemembersEntry(previous, control, c.participants.x, s, segments, world.counts.y)) feature = 0;
+            feature = nativePolygonEdgeFeature(a.position.xy, s, outward);
             if (feature == 1) {
                 normal = outward; point = a.position.xy - outward * dot(a.position.xy - s.current.xy, outward);
                 penetration = a.physical.z - dot(a.position.xy - s.current.xy, outward);

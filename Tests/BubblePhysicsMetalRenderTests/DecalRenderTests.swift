@@ -262,7 +262,7 @@ final class DecalRenderTests: XCTestCase {
         let scene = try makeScene()
         let texture = try scene.assets.register(image)
         scene.world.submit(try WorldTransaction()
-            .updatePhysicsMaterial(B.bubbleMaterial, material: PhysicsMaterial(kind: .bubble, deformability: 1))
+            .updatePhysicsMaterial(B.bubbleMaterial, material: PhysicsMaterial(kind: .bubble, contactStiffness: 229))
             .add(B.box(10, at: [8, 0], half: [8, 30], render: blackID))
             .add(B.bubble(1, at: [-4.8, 0], radius: 8, render: blackID, decal: .image(texture, scale: scale))))
         let frame = await scene.step()

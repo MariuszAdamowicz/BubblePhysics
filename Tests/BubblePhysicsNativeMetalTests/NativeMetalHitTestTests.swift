@@ -26,14 +26,16 @@ final class NativeMetalHitTestTests: XCTestCase {
     private func step(_ objects: [NativePublicObject], hitTests: [WorldPoint], world: NativePublicWorld? = nil) async throws -> NativePublicFrame {
         let world = try world ?? NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         return try await world.step(objects: objects,
-            materials: [bubbleMaterial: PhysicsMaterial(kind: .bubble), rigidMaterial: PhysicsMaterial(kind: .rigid)],
+            materials: [bubbleMaterial: PhysicsMaterial(kind: .bubble, contactStiffness: 1e4), rigidMaterial: PhysicsMaterial(kind: .rigid)],
             region: WorldRectangle(min: [-100, -100], max: [100, 100]),
             duration: 1.0 / 60, hitTests: hitTests)
     }
 
+    /// Bańka statyczna bez kolizji (kategoria 1, maska 0): hit-test ma rozstrzygać nakładające się obiekty, a kolidująca para albo bańka
+    /// z bryłą miałyby kontury rozdzielone cięciwą (G2-AC5) i nie pokrywałyby wspólnego punktu.
     private func bubble(_ value: UInt64, at position: WorldPoint, radius: Float = 5) throws -> WorldObject {
         .bubble(try BubbleDescriptor(id: id(value), position: position, targetRadius: radius, motionRole: .static,
-            physicsMaterialID: bubbleMaterial, renderMaterialID: style))
+            physicsMaterialID: bubbleMaterial, renderMaterialID: style, filter: CollisionFilter(category: 1, mask: 0)))
     }
 
     private func rigid(_ value: UInt64, _ shape: RigidShape, at position: WorldPoint, rotation: Float = 0) throws -> WorldObject {

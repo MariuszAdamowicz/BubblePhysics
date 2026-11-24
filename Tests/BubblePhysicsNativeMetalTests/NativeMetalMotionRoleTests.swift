@@ -6,9 +6,13 @@ import XCTest
 @MainActor
 final class NativeMetalMotionRoleTests: XCTestCase {
     let ball = ObjectID(rawValue: 1), wall = ObjectID(rawValue: 2)
-    func initial(role: MotionRole = .dynamic, soft: Float = 0, wallAt x: Float? = nil) throws -> RuntimeState {
+    /// K_c = 1000 dla „sztywnej” bańki sceny blokad (kulka r 1, m 1, ω = √(K_c / (r · m)) ≈ 32 rad/s); scena blokad bierze też γ = 5, żeby bańka dociśnięta gumką osiadła;
+    /// „miękka” to K_c = 229 jak w grze. Kontaktu twardego nie ma: ściana ustępuje o r · ε z prawa K_c · ε / (1 − ε)².
+    static let stiffBubbleStiffness: Float = 1000, softBubbleStiffness: Float = 229
+    func initial(role: MotionRole = .dynamic, soft: Float = 0, wallAt x: Float? = nil, damping: Float = 0) throws -> RuntimeState {
         var transaction = try WorldTransaction()
-            .updatePhysicsMaterial(.init(rawValue: 1), material: PhysicsMaterial(kind: .bubble, deformability: soft))
+            .updatePhysicsMaterial(.init(rawValue: 1), material: PhysicsMaterial(kind: .bubble,
+                contactStiffness: soft > 0 ? Self.softBubbleStiffness : Self.stiffBubbleStiffness, damping: damping))
             .updatePhysicsMaterial(.init(rawValue: 2), material: PhysicsMaterial(kind: .rigid))
             .updateRenderMaterial(.init(rawValue: 1), material: try RenderMaterial())
             .add(.bubble(BubbleDescriptor(id: ball, position: .zero, targetRadius: 1, motionRole: role,
@@ -32,15 +36,23 @@ final class NativeMetalMotionRoleTests: XCTestCase {
 
     func testBlockedPlayerDriveReportsAchievedPointAndBlockerWithoutTeleporting() async throws {
         let stepper = try NativeCompleteStepper(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
-        var complete = try await step(stepper, initial(wallAt: 2), WorldTransaction().beginPlayerDrive(ball, target: [8,0]))
-        // Gumka K = 60 dociska bańkę do ściany siłą ok. 420, więc twardy kontakt dopuszcza ułamek procenta wnikania; teleport przez ścianę by to wykrył.
-        for _ in 0..<40 {
+        var complete = try await step(stepper, initial(wallAt: 2, damping: 5), WorldTransaction().beginPlayerDrive(ball, target: [8,0]))
+        // Gumka K = 60 dociska bańkę do ściany siłą ok. 400. W prawie kontaktu środek nigdy nie dochodzi do czoła ściany (x = 2), a po
+        // wytłumieniu (γ = 5, ok. 3 s) stoi w równowadze x = 2 − r · (1 − ε*), gdzie ε* rozwiązuje ε / (1 − ε)² = F / K_c, F = 60 · (8 − x).
+        for _ in 0..<200 {
             complete = try await step(stepper, complete.state)
-            XCTAssertLessThanOrEqual(try XCTUnwrap(complete.state.objects[ball]).position.x, 1.01)
+            XCTAssertLessThan(try XCTUnwrap(complete.state.objects[ball]).position.x, 1.9, "środek bańki zbliżył się do czoła ściany")
         }
         let feedback = try XCTUnwrap(complete.driveFeedback.first)
+        let rest = try XCTUnwrap(complete.state.objects[ball]).position.x
+        var equilibrium = 1.0
+        for _ in 0..<60 {   // iteracja stałopunktowa: F zależy od x, x od F
+            let force = 60 * (8 - equilibrium)
+            equilibrium = 2 - ContactLawReference.equilibriumDistance(force: force, stiffness: Double(Self.stiffBubbleStiffness), radius: 1)
+        }
+        XCTAssertEqual(Double(rest), equilibrium, accuracy: 0.02)
         XCTAssertEqual(feedback.blockingContact?.objectID, wall)
-        XCTAssertGreaterThan(feedback.deviation.x, 6.9)
+        XCTAssertGreaterThan(feedback.deviation.x, 6.0)
         XCTAssertEqual(feedback.achievedPoint, complete.state.objects[ball]?.position)
     }
 
@@ -63,23 +75,26 @@ final class NativeMetalMotionRoleTests: XCTestCase {
 
     func testPathDrivenStopsAtUnresolvableBlocker() async throws {
         let stepper = try NativeCompleteStepper(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
-        var complete = try await step(stepper, initial(wallAt: 2), WorldTransaction()
+        var complete = try await step(stepper, initial(wallAt: 2, damping: 5), WorldTransaction()
             .setPathDrive(ball, drive: PathDrive(points: [[8,0],[8,8]], speed: 6)))
-        for _ in 0..<35 { complete = try await step(stepper, complete.state) }
+        for _ in 0..<60 { complete = try await step(stepper, complete.state) }
         let feedback = try XCTUnwrap(complete.driveFeedback.first)
         XCTAssertTrue(feedback.isStopped)
         XCTAssertEqual(feedback.blockingContact?.objectID, wall)
+        // Tor wciska bańkę w ścianę z prędkością 6 j/s, aż siła kontaktu wyhamuje ją do zatrzymania; zatrzymana bańka (prędkość zero na
+        // początku kroku) odpycha się siłą kontaktu do d = r, więc stoi na czole ściany z wgnieceniem poniżej 0,1 % promienia.
         XCTAssertLessThanOrEqual(feedback.achievedPoint.x, 1.001)
         let position = feedback.achievedPoint
         for _ in 0..<5 { complete = try await step(stepper, complete.state) }
-        XCTAssertEqual(complete.state.objects[ball]?.position, position)
+        XCTAssertEqual(try XCTUnwrap(complete.state.objects[ball]).position.x, position.x, accuracy: 1e-3)
+        XCTAssertLessThanOrEqual(try XCTUnwrap(complete.state.objects[ball]).position.x, position.x)
     }
 
     func testPlayerDriveAfterStoppedPathReportsOnlyCurrentDriveState() async throws {
         let stepper = try NativeCompleteStepper(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
-        var complete = try await step(stepper, initial(wallAt: 2), WorldTransaction()
+        var complete = try await step(stepper, initial(wallAt: 2, damping: 5), WorldTransaction()
             .setPathDrive(ball, drive: PathDrive(points: [[8,0]], speed: 6)))
-        for _ in 0..<35 { complete = try await step(stepper, complete.state) }
+        for _ in 0..<60 { complete = try await step(stepper, complete.state) }
         XCTAssertTrue(try XCTUnwrap(complete.driveFeedback.first).isStopped)
         XCTAssertEqual(complete.driveFeedback.first?.blockingContact?.objectID, wall)
 
@@ -129,7 +144,7 @@ final class NativeMetalMotionRoleTests: XCTestCase {
         let stepper = try NativeCompleteStepper(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         let polygon = try RigidBodyDescriptor(id: ball, vertices: [[-0.5,-0.5],[0.5,-0.5],[0.5,0.5],[-0.5,0.5]],
             motionRole: .dynamic, physicsMaterialID: .init(rawValue: 2), renderMaterialID: .init(rawValue: 1))
-        let withPolygon = try await step(stepper, initial(wallAt: 2), WorldTransaction().replace(ball, with: .rigidBody(polygon)))
+        let withPolygon = try await step(stepper, initial(wallAt: 2, damping: 5), WorldTransaction().replace(ball, with: .rigidBody(polygon)))
         let rejected = TransactionStager.stageBatch([PendingTransaction(token: .init(rawValue: 2),
             transaction: WorldTransaction().beginPlayerDrive(ball, target: [8,0]))], against: withPolygon.state, validate: stepper.validate)
         XCTAssertEqual(rejected.frame.events, [.transactionRejected(.init(rawValue: 2),

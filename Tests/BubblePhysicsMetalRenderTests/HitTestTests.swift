@@ -9,6 +9,8 @@ import XCTest
 final class HitTestTests: XCTestCase {
     private typealias B = SceneBuilders
     private func id(_ value: UInt64) -> ObjectID { ObjectID(rawValue: value) }
+    /// Filtr bez kolizji. Bańki, które mają nakładać się w punkcie zapytania, muszą go mieć: kolidująca para baniek albo bańka i bryła mają
+    /// kontury rozdzielone cięciwą (G2-AC5), więc nie pokrywałyby wspólnego punktu, a bryła nie może stanąć nad środkiem kolidującej bańki.
     private let ghost = CollisionFilter(category: 1, mask: 0)
 
     private func makeWorld(region: WorldRectangle? = nil) throws -> BubbleWorld {
@@ -57,8 +59,7 @@ final class HitTestTests: XCTestCase {
         let world = try B.makeWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()), region: region)
         // Materiał bez deformowalności i podatności daje bańkę sztywną, bez wgłębienia; tu kontakt jest sprężyną o c = 3e-3 (δ = c · F = 0,3).
         world.submit(try B.baseTransaction()
-            .updatePhysicsMaterial(B.bubbleMaterial, material: PhysicsMaterial(kind: .bubble, deformability: 1,
-                contactCompliance: BubbleContactCompliance(base: 3e-3)))
+            .updatePhysicsMaterial(B.bubbleMaterial, material: PhysicsMaterial(kind: .bubble, contactStiffness: 333.333))
             .add(B.box(10, at: [0.05, 0], half: [0.05, 10]))
             .add(B.bubble(20, at: [-0.9, 0], radius: 1))
             .setGlobalForce([100, 0]))
@@ -102,11 +103,11 @@ final class HitTestTests: XCTestCase {
     func testLargestObjectIDWinsInOneLayerRegardlessOfInsertionOrderOrKind() async throws {
         let world = try makeWorld()
         try await settle(world, WorldTransaction()
-            .add(B.bubble(11, at: [100, 100], radius: 10, role: .static))
-            .add(B.bubble(9, at: [100.5, 100], radius: 10, role: .static))
-            .add(B.bubble(5, at: [300, 100], radius: 10, role: .static))
+            .add(B.bubble(11, at: [100, 100], radius: 10, filter: ghost, role: .static))
+            .add(B.bubble(9, at: [100.5, 100], radius: 10, filter: ghost, role: .static))
+            .add(B.bubble(5, at: [300, 100], radius: 10, filter: ghost, role: .static))
             .add(B.box(8, at: [300, 100], half: [6, 6]))
-            .add(B.bubble(3, at: [500, 100], radius: 10, role: .static))
+            .add(B.bubble(3, at: [500, 100], radius: 10, filter: ghost, role: .static))
             .add(B.box(8_000, at: [500, 100], half: [6, 6])))
         let results = await hitTests(world, [[100, 100], [300, 100], [500, 100]])
         XCTAssertEqual(results, [id(11), id(8), id(8_000)])
@@ -234,11 +235,11 @@ final class HitTestTests: XCTestCase {
     func testHigherLayerWinsOverLargerObjectID() async throws {
         let world = try makeWorld()
         try await settle(world, WorldTransaction()
-            .add(B.bubble(11, at: [100, 100], radius: 10, role: .static, layer: 0))
-            .add(B.bubble(3, at: [100.5, 100], radius: 10, role: .static, layer: 2))
+            .add(B.bubble(11, at: [100, 100], radius: 10, filter: ghost, role: .static, layer: 0))
+            .add(B.bubble(3, at: [100.5, 100], radius: 10, filter: ghost, role: .static, layer: 2))
             .add(B.box(20, at: [300, 100], half: [6, 6], layer: -1))
             .add(B.circle(4, at: [300, 100], radius: 6, role: .static, layer: 5))
-            .add(B.bubble(5, at: [500, 100], radius: 10, role: .static, layer: 1))
+            .add(B.bubble(5, at: [500, 100], radius: 10, filter: ghost, role: .static, layer: 1))
             .add(B.box(8, at: [500, 100], half: [6, 6], layer: 1)))
         let results = await hitTests(world, [[100, 100], [300, 100], [500, 100]])
         XCTAssertEqual(results, [id(3), id(4), id(8)], "ostatnia para: ta sama warstwa, więc największy ObjectID")
@@ -248,8 +249,8 @@ final class HitTestTests: XCTestCase {
     func testSetLayerChangesTheWinnerOfTheNextHitTest() async throws {
         let world = try makeWorld()
         try await settle(world, WorldTransaction()
-            .add(B.bubble(11, at: [100, 100], radius: 10, role: .static))
-            .add(B.bubble(9, at: [100.5, 100], radius: 10, role: .static)))
+            .add(B.bubble(11, at: [100, 100], radius: 10, filter: ghost, role: .static))
+            .add(B.bubble(9, at: [100.5, 100], radius: 10, filter: ghost, role: .static)))
         var results = await hitTests(world, [[100, 100]])
         XCTAssertEqual(results, [id(11)])
         results = await hitTests(world, [[100, 100]]) { world.submit(WorldTransaction().setLayer(self.id(9), layer: 1)) }

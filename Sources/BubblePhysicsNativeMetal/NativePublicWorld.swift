@@ -18,6 +18,9 @@ package struct NativePublicObject: Equatable, Sendable {
     package var structuralShape: NativeStructuralShape?
     /// Warstwa rysowania i hit-testu; w rekordzie bańki i bryły jako `filter.w`.
     package var layer: Int32 = 0
+    /// Cel gumki bańki w roli `.playerDriven` i napęd motoru: host nie liczy z nich sił, tylko opisuje je GPU (CD-D-5).
+    package var playerDriveTarget: WorldPoint?
+    package var motorDrive: MotorDrive?
 
     /// Stan bańki po kroku solvera: poza, prędkości, promień efektywny i obwiednia konturu (`nil` bez poprawnej obwiedni).
     fileprivate mutating func adopt(_ bubble: NativeSolverBubble, effectiveRadius: Float, bounds: SIMD4<Float>?) {
@@ -56,8 +59,6 @@ package struct NativePublicFrame {
     package var eventOverflow = WorldEventOverflow()
     package var contactCandidateOverflowCount = 0
     package var maximumContactCandidatesPerObject = 0
-    /// Liczba par baniek, z których mniejsza mieści się cała w kole większej, po tym kroku.
-    package var containedBubblePairCount = 0
     /// Wynik dla każdego punktu hit-testu, w kolejności punktów; `nil` oznacza puste miejsce.
     package var hitTestResults: [ObjectID?] = []
     /// Obiekty, które w tym kroku zawinęły się przez region; niezależnie od zainteresowania `didWrap`.
@@ -66,7 +67,7 @@ package struct NativePublicFrame {
 
 struct NativePublicProperties: Equatable, Sendable {
     var flags: SIMD4<UInt32> // enabled, static, wrap, region result (0 unchanged, 1 removed, 2 wrapped)
-    var material: SIMD4<Float> // damping, deformability, 0 (nieużywane), friction
+    var material: SIMD4<Float> // damping, 0 (nieużywane), 0 (nieużywane), friction
     var restitution: Float
     var resources: SIMD2<UInt64> // material ID, render material ID
     var eventData: SIMD2<UInt64> // interest, merge groups
@@ -75,19 +76,20 @@ struct NativePublicProperties: Equatable, Sendable {
     var speedLimits: SIMD2<Float> = .zero
     /// Warstwa obiektu; w rekordzie bańki jako `filter.w` (`NativeMetalFilter.encodeLayer`).
     var layer: Int32 = 0
-    /// Kontakt bańki: podatność c₀·r/r_ref (0 = kontakt twardy), wolna lane `.y` (zawsze 0), współczynnik tłumienia
-    /// kontaktu miękkiego ζ_c (zawsze, także dla bańki twardej: czyta go tłumik pary); w rekordzie bańki jako `contact`.
     var contact: SIMD4<Float> = .zero
 
-    /// c₀ (po nadpisaniu na bańce) · r / r_ref dla bieżącego promienia fizycznego `radius`.
-    /// Lane `.z` zawsze niesie ζ_c, także przy c₀ = 0 (gałąź `guard`): tłumik pary czyta go też dla bańki twardej.
-    /// Przepełnienie Float wyklucza stager (CD-D-15).
-    static func contact(of compliance: BubbleContactCompliance, override: Float?, radius: Float,
-                        dampingRatio: Float) -> SIMD4<Float> {
-        let base = override ?? compliance.base
-        guard base > 0 else { return SIMD4(0, 0, dampingRatio, 0) }
-        // Ten sam wzór w Double co walidacja stagera (`validateWorstAlpha`).
-        return SIMD4(Float(compliance.scaledBase(base, radius: radius)), 0, dampingRatio, 0)
+    /// Kontakt bańki w rekordzie GPU (`contact`): K_c w `.y` i znacznik bańki napędzanej siłami (siła globalna, pola, γ) w `.w`; `.x` i `.z`
+    /// (dawna podatność XPBD i ζ_c) są zerem. Przepełnienie Float wyklucza stager (CD-D-15).
+    static func contact(stiffness: Float?, forceDriven: Bool) -> SIMD4<Float> {
+        SIMD4(0, stiffness ?? 0, 0, forceDriven ? 1 : 0)
+    }
+
+    /// Role, w których siły (globalna, pola, γ, gumka, motor) działają na bańkę w podkrokach; role torowe jadą z prędkością hosta.
+    static func isForceDriven(_ role: MotionRole) -> Bool {
+        switch role {
+        case .dynamic, .motorDriven, .playerDriven: return true
+        case .static, .kinematic, .pathDriven: return false
+        }
     }
 }
 
@@ -100,6 +102,8 @@ struct NativePublicSettings: Equatable, Sendable {
     var structuralShapes: [ObjectID: NativeStructuralShape] = [:]
     var staticPolygonMaterials: [ObjectID: PhysicsMaterial] = [:]
     var joints: [Joint] = []
+    /// Dane sił kroku dla GPU (gumka, siła globalna, pola, motor); budowane w `NativePublicWorld.step`.
+    var forces = NativeForceInput()
 }
 
 /// Adapter używa trwałego solvera; pełna publikacja następuje dopiero po powodzeniu GPU.
@@ -121,6 +125,11 @@ package final class NativePublicWorld {
     /// w kroku bez GPU. Zduplikowany koniec odfiltrowuje historia kompaktora, bo koniec bez pary w historii jest pomijany.
     private var contactHistory: Set<ContactPair> = []
 
+    /// Konfiguracja po `sanitized`, z którą pracuje solver; szew testów przełączników pakietowych.
+    package var nativeConfiguration: NativeMetalConfiguration { solver.configuration }
+    /// Podkroki ostatniego kroku zapisane przy `captureSubsteps`; szew testów 4.0.0.
+    package var capturedSubsteps: [NativeMetalSubstepSample] { solver.capturedSubsteps }
+
     package convenience init(device: MTLDevice, configuration: NativeMetalConfiguration = .default) throws {
         try self.init(device: device, configuration: configuration, commandExecutor: nil)
     }
@@ -139,6 +148,8 @@ package final class NativePublicWorld {
     /// Krok bez GPU (brak ciał z masą) kończy wszystkie pary w `EventCompactor`, więc i tu historia par musi zniknąć;
     /// inaczej para o tych samych ID dodana później nie dostałaby `contactBegan`.
     package func forgetContactHistory() { contactHistory = [] }
+    /// Krok bez solvera nie czekał na bufor renderu, więc czekanie z profilu poprzedniego kroku nie może trafić do pomiaru tego kroku.
+    package func discardPublishedRenderWait() { publishedProfile?.renderWaitMilliseconds = 0 }
     package var publishedRenderHandoff: NativeMetalRenderHandoff? { solver.publishedRenderHandoff }
     package var publishedContourCPUReadbackCount: Int { solver.publishedContourCPUReadbackCount }
     package var publishedTelemetry: NativeMetalFrameTelemetry? { solver.publishedSolverFrame?.telemetry }
@@ -150,7 +161,7 @@ package final class NativePublicWorld {
 
     package func step(objects: [NativePublicObject], materials: [PhysicsMaterialID: PhysicsMaterial],
                       region: WorldRectangle, duration: Double,
-                      joints: [Joint] = [], hitTests: [WorldPoint] = [], eventBufferCapacity: Int = 1024, commandBuffer: MTLCommandBuffer? = nil,
+                      globalForce: WorldPoint = .zero, joints: [Joint] = [], hitTests: [WorldPoint] = [], eventBufferCapacity: Int = 1024, commandBuffer: MTLCommandBuffer? = nil,
                       beforeCommit: ((NativeMetalRenderHandoff) throws -> Void)? = nil) async throws -> NativePublicFrame {
         let dt = Float(duration)
         guard dt.isFinite, dt > 0, Double(dt) > 0 else { throw NativeMetalSolverError.invalidSnapshot }
@@ -191,15 +202,14 @@ package final class NativePublicWorld {
                 solverBubbles.append(bubble)
                 properties[id] = NativePublicProperties(
                     flags: SIMD4(1, object.motionRole == .static ? 1 : 0, b.regionExitPolicy == .wrap ? 1 : 0, 0),
-                    material: SIMD4(material.damping, material.deformability, 0, material.friction),
+                    material: SIMD4(material.damping, 0, 0, material.friction),
                     restitution: material.restitution,
                     resources: SIMD2(b.physicsMaterialID.rawValue, b.renderMaterialID.rawValue),
                     eventData: SIMD2(b.eventInterest.rawValue, b.mergeGroups.rawValue), filter: b.filter,
                     speedLimits: SIMD2(material.maximumLinearSpeed ?? 0, material.maximumAngularSpeed ?? 0),
                     layer: object.layer,
-                    contact: NativePublicProperties.contact(of: material.contactCompliance, override: b.contactCompliance,
-                                                            radius: object.collisionRadius,
-                                                            dampingRatio: material.contactDampingRatio))
+                    contact: NativePublicProperties.contact(stiffness: material.contactStiffness,
+                        forceDriven: NativePublicProperties.isForceDriven(object.motionRole)))
                 if let shape = object.structuralShape { structuralShapes[b.id] = shape }
             case .rigidBody(let p):
                 guard let material = materials[p.physicsMaterialID] else { throw NativeMetalSolverError.invalidSnapshot }
@@ -245,7 +255,7 @@ package final class NativePublicWorld {
                 sensors: objects.compactMap { if case .sensor(let sensor) = $0.descriptor { return sensor }; return nil }
                     .sorted { $0.id.rawValue < $1.id.rawValue }, structuralShapes: structuralShapes,
                 staticPolygonMaterials: staticPolygonMaterials,
-                joints: joints))
+                joints: joints, forces: NativeForceInput(objects: objects, globalForce: globalForce)))
         input.hitTests = hitTests
         let frame = try await solver.executeFrame(input: input, scenarioStep: 0,
             commandBuffer: commandBuffer, beforeCommit: beforeCommit)
@@ -325,7 +335,6 @@ package final class NativePublicWorld {
             contacts: contacts, events: discreteEvents, eventOverflow: WorldEventOverflow(droppedCount: dropped),
             contactCandidateOverflowCount: frame.contactCandidateOverflowCount,
             maximumContactCandidatesPerObject: frame.maximumContactCandidatesPerObject,
-            containedBubblePairCount: frame.containedBubblePairCount,
             hitTestResults: frame.hitTestResults, wrappedObjectIDs: wrappedIDs)
     }
 
@@ -334,7 +343,7 @@ package final class NativePublicWorld {
     /// obiektem). Bez atomików i bez słownika w kolejności wyjścia: pary idą posortowane po kluczu, a sumy w kolejności
     /// rekordów, więc wynik jest deterministyczny. Para wchodzi do historii tylko z zainteresowaniem kontaktem.
     /// Punkt jest średnią ważoną wnikaniem, normalna znormalizowaną sumą (od mniejszego `ObjectID` do większego),
-    /// a impuls sumą mnożników podzieloną przez krok.
+    /// a impuls sumą mnożników (siła · krok², jak dawne λ) podzieloną przez krok, czyli siłą · krok.
     private func contactTransitions(bubbleContacts: [NativeSolverContact], segmentOwners: [Int: ObjectID],
                                     rigidContacts: [NativeRigidPolygonState.ContactRecord], interested: Set<ObjectID>,
                                     duration: Double) -> (events: [WorldEvent], pairs: Set<ContactPair>) {

@@ -26,10 +26,16 @@ package struct NativeSolverBubble: Equatable, Sendable {
     package var stiffness: Float
     package var rotation: Float
     package var angularVelocity: Float
+    /// K_c bańki w ścieżce bez ustawień publicznych (diagnostyka): 0 oznacza bańkę bez kontaktu, bo prawo kontaktu 4.0.0 potrzebuje K_c > 0.
+    /// Ścieżka publiczna podaje K_c w `NativePublicProperties.contact` i to pole pomija.
+    package var contactStiffness: Float
+    /// γ bańki (1/s) w ścieżce bez ustawień publicznych; jak K_c, ścieżka publiczna podaje je w materiale.
+    package var damping: Float
 
     package init(id: NativeSolverBubbleID, center: SIMD2<Float>, previousCenter: SIMD2<Float>? = nil,
                  velocity: SIMD2<Float> = .zero, mass: Float, inverseMass: Float? = nil, targetRadius: Float,
-                 stiffness: Float = 1, rotation: Float = 0, angularVelocity: Float = 0) {
+                 stiffness: Float = 1, rotation: Float = 0, angularVelocity: Float = 0, contactStiffness: Float = 0,
+                 damping: Float = 0) {
         self.id = id
         self.center = center
         self.previousCenter = previousCenter ?? center
@@ -40,6 +46,8 @@ package struct NativeSolverBubble: Equatable, Sendable {
         self.stiffness = stiffness
         self.rotation = rotation
         self.angularVelocity = angularVelocity
+        self.contactStiffness = contactStiffness
+        self.damping = damping
     }
 
     var isFiniteState: Bool {
@@ -240,8 +248,6 @@ package struct NativeSolverFrame {
     package var contactCandidateOverflowCount = 0
     /// Największa liczba kandydatów na obiekt w tym kroku (etap 2).
     package var maximumContactCandidatesPerObject = 0
-    /// Liczba par baniek, z których mniejsza mieści się cała w kole większej, po tym kroku (walidator zawierania).
-    package var containedBubblePairCount = 0
     /// Wynik dla każdego punktu `NativeSolverInput.hitTests`, w tej samej kolejności; `nil` to puste miejsce.
     package var hitTestResults: [ObjectID?] = []
 }
@@ -259,12 +265,33 @@ extension NativeMetalFrameExecuting {
 
 package enum NativeMetalWorldError: Error {
     case unavailable, invalidFrame, frameInFlight, nonFinite, guardFailure
+    /// Asercja kontaktu: d ≤ 0 w parze kolidującej, środek w bryle albo zmiana strony krawędzi (G6-AC2). Błąd silnika.
+    case contactViolation
+    /// Klatka przekroczyła limit 1024 podkroków (G6-AC5). Błąd silnika.
+    case substepLimitExceeded
 }
 
-/// Przyczyna odrzucenia przez strażnik (`NativeMetalWorldError.guardFailure`), odczytana z bitów statusu GPU:
-/// bit 8 to `centerCrossing`, bit 16 to `rigidRotationBudget`. Oba zapalają się zawsze razem z bitem 2.
+/// Człon, który wyznaczył h w ostatnim podkroku: pozostały czas kroku, 1/ω_max (sztywność), d / (4 · v) albo h_zapasu.
+package enum NativeMetalSubstepTerm: Sendable, Equatable {
+    case remainingTime, stiffness, distance, margin
+}
+
+/// Szczegóły awarii silnika: ID obiektów (surowe wartości `ObjectID`), krawędź, odległość d i człon h.
+package struct NativeMetalFailureDetail: Sendable, Equatable {
+    package var objectIDs: [UInt64]
+    package var edgeIndex: Int?
+    package var distance: Float?
+    package var limitingTerm: NativeMetalSubstepTerm?
+    package init(objectIDs: [UInt64], edgeIndex: Int? = nil, distance: Float? = nil,
+                 limitingTerm: NativeMetalSubstepTerm? = nil) {
+        self.objectIDs = objectIDs; self.edgeIndex = edgeIndex; self.distance = distance
+        self.limitingTerm = limitingTerm
+    }
+}
+
+/// Przyczyna odrzucenia przez strażnik brył (`NativeMetalWorldError.guardFailure`), odczytana z bitów statusu GPU:
+/// bit 16 to `rigidRotationBudget` i zapala się zawsze razem z bitem 2.
 package enum NativeMetalGuardCause: Sendable, Equatable {
-    case centerCrossing
     case rigidRotationBudget
 }
 
@@ -274,8 +301,11 @@ package struct NativeMetalSafetyFailure: Error {
     package let profile: NativeMetalFrameProfile
     /// Tylko przy `.guardFailure`; `nil` przy każdym innym powodzie.
     package let guardCause: NativeMetalGuardCause?
+    /// Tylko przy `.contactViolation` i `.substepLimitExceeded`; `nil` przy każdym innym powodzie.
+    package let detail: NativeMetalFailureDetail?
     package init(reason: NativeMetalWorldError, telemetry: NativeMetalFrameTelemetry, profile: NativeMetalFrameProfile,
-                 guardCause: NativeMetalGuardCause? = nil) {
+                 guardCause: NativeMetalGuardCause? = nil, detail: NativeMetalFailureDetail? = nil) {
         self.reason = reason; self.telemetry = telemetry; self.profile = profile; self.guardCause = guardCause
+        self.detail = detail
     }
 }

@@ -9,7 +9,7 @@ final class MotionCommandTests: XCTestCase {
             WorldRectangle(min: [-20,-20], max: [20,20])))
         let id = ObjectID(rawValue: 1)
         world.submit(try WorldTransaction()
-            .updatePhysicsMaterial(.init(rawValue: 1), material: PhysicsMaterial(kind: .bubble))
+            .updatePhysicsMaterial(.init(rawValue: 1), material: PhysicsMaterial(kind: .bubble, contactStiffness: 1e9))
             .updateRenderMaterial(.init(rawValue: 1), material: try RenderMaterial())
             .add(.bubble(BubbleDescriptor(id: id, position: .zero, targetRadius: 0.5,
                 physicsMaterialID: .init(rawValue: 1), renderMaterialID: .init(rawValue: 1),
@@ -39,8 +39,9 @@ final class MotionCommandTests: XCTestCase {
         XCTAssertThrowsError(try BubbleDrivePolicy(bandStiffness: -.infinity))
     }
 
-    /// Wynik scalenia jedzie z polityką z `BubbleResult`: z gumką K = 120 i masą 2 przesuwa się w pierwszym kroku o ≈ 0,17
-    /// (v = F / m · dt = 10), a bez polityki nie da się go chwycić.
+    /// Wynik scalenia jedzie z polityką z `BubbleResult`: z gumką K = 120 i masą 2 przesuwa się w pierwszym kroku o ½ · (F / m) · dt² ≈ 0,083
+    /// (a = 120 · 10 / 2 = 600; całkowanie siłowe leapfrog daje drogę stałego przyspieszenia, nie v · dt = 0,17 jak dawna korekta pozycyjna),
+    /// a bez polityki nie da się go chwycić.
     func testMergedBubbleDrivesWithDrivePolicyFromBubbleResult() async throws {
         let world = try BubbleWorld(configuration: WorldConfiguration(simulationRegion:
             WorldRectangle(min: [-20,-20], max: [20,20])))
@@ -48,7 +49,7 @@ final class MotionCommandTests: XCTestCase {
         let merged = ObjectID(rawValue: 3)
         let policy = try BubbleDrivePolicy(bandStiffness: 120)
         world.submit(try WorldTransaction()
-            .updatePhysicsMaterial(material, material: PhysicsMaterial(kind: .bubble))
+            .updatePhysicsMaterial(material, material: PhysicsMaterial(kind: .bubble, contactStiffness: 1e9))
             .updateRenderMaterial(style, material: try RenderMaterial())
             .add(.bubble(BubbleDescriptor(id: ObjectID(rawValue: 1), position: [-1, 0], targetRadius: 0.5,
                 physicsMaterialID: material, renderMaterialID: style)))
@@ -61,7 +62,7 @@ final class MotionCommandTests: XCTestCase {
         XCTAssertEqual(frame.transactionReceipts.count, 1)
         let feedback = try XCTUnwrap(frame.driveFeedback.first)
         XCTAssertEqual(feedback.objectID, merged)
-        XCTAssertEqual(feedback.achievedPoint.x, 0.17, accuracy: 0.03)
+        XCTAssertEqual(feedback.achievedPoint.x, 0.5 * 600 / 3600, accuracy: 1e-3)
         XCTAssertNil(world.diagnostics.lastAdvanceIssue)
     }
 
@@ -186,7 +187,7 @@ final class MotionCommandTests: XCTestCase {
             WorldRectangle(min: [-20,-20], max: [20,20])))
         let id = ObjectID(rawValue: 1)
         world.submit(try WorldTransaction()
-            .updatePhysicsMaterial(.init(rawValue: 1), material: PhysicsMaterial(kind: .bubble))
+            .updatePhysicsMaterial(.init(rawValue: 1), material: PhysicsMaterial(kind: .bubble, contactStiffness: 1e9))
             .updateRenderMaterial(.init(rawValue: 1), material: try RenderMaterial())
             .add(.bubble(BubbleDescriptor(id: id, position: .zero, targetRadius: 0.5,
                 physicsMaterialID: .init(rawValue: 1), renderMaterialID: .init(rawValue: 1), drivePolicy: policy))))
@@ -221,7 +222,7 @@ final class MotionCommandTests: XCTestCase {
             WorldRectangle(min: [-20,-20], max: [20,20])))
         let id = ObjectID(rawValue: 1)
         world.submit(try WorldTransaction()
-            .updatePhysicsMaterial(.init(rawValue: 1), material: PhysicsMaterial(kind: .bubble))
+            .updatePhysicsMaterial(.init(rawValue: 1), material: PhysicsMaterial(kind: .bubble, contactStiffness: 1e9))
             .updateRenderMaterial(.init(rawValue: 1), material: try RenderMaterial())
             .add(.bubble(BubbleDescriptor(id: id, position: .zero, targetRadius: 0.5,
                 physicsMaterialID: .init(rawValue: 1), renderMaterialID: .init(rawValue: 1),

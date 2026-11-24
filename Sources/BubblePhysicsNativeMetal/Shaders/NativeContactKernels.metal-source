@@ -1,0 +1,562 @@
+uint nativeScanLength(constant NativeControl &control, device NativeContactControl &contacts, uint2 parameters) {
+    uint length = parameters.x == 0 ? control.counts.x * 2
+        : (parameters.x == 1 ? contacts.counts.x : contacts.limits.w + contacts.counts.y);
+    for (uint level = 0; level < parameters.y; ++level) length = (length + 255) / 256;
+    return length;
+}
+
+// Metal 2.3 / Apple4: argumenty powstają i są konsumowane w tym samym encoderze.
+// Pojemności nadal ograniczają zapis, a zero pracy używa jednej bezpiecznej grupy
+// z early-outem (bez zerowych wymiarów indirect dispatchu).
+void nativeIndirectArguments(constant NativeControl &control, device NativeContactControl &contacts, device uint4 *arguments,
+                             uint levels, uint endMode) {
+    uint candidates = contacts.counts.x;
+    uint active = contacts.counts.y;
+    uint merged = contacts.limits.w + contacts.counts.y;
+    uint cache = contacts.counts.z;
+    uint lengths[5] = { candidates, active, merged, cache, max(1u, max(cache, max(control.counts.x, control.counts.y))) };
+    if (endMode != 0) {
+        // Tryb końca kroku (CD-D-29): tylko sloty `EndArgument` za slotami pętli, w kolejności enum: kontakty, flagi i kompaktowanie
+        // idą po kandydatach, sąsiedztwo i impulsy po cache'u, skończoność po największej długości.
+        uint base = 5 + levels * 2;
+        uint selected[6] = { 0, 0, 0, 3, 3, 4 };
+        for (uint i = 0; i < 6; ++i) {
+            uint length = lengths[selected[i]];
+            arguments[base + i] = uint4(max(1u, (length + 31) / 32), 1, 1, length);
+        }
+        return;
+    }
+    for (uint i = 0; i < 5; ++i) arguments[i] = uint4(max(1u, (lengths[i] + 31) / 32), 1, 1, lengths[i]);
+    for (uint mode = 1; mode <= 2; ++mode) {
+        uint length = mode == 1 ? candidates : merged;
+        for (uint level = 0; level < levels; ++level) {
+            arguments[5 + (mode - 1) * levels + level] = uint4(max(1u, (length + 255) / 256), 1, 1, length);
+            length = (length + 255) / 256;
+        }
+    }
+}
+
+kernel void nativePrepareIndirectArguments(constant NativeControl &control [[buffer(0)]],
+    device NativeContactControl &contacts [[buffer(1)]], device uint4 *arguments [[buffer(2)]],
+    constant uint &levels [[buffer(3)]], constant uint &endMode [[buffer(4)]], uint index [[thread_position_in_grid]]) {
+    if (index) return;
+    nativeIndirectArguments(control, contacts, arguments, levels, endMode);
+}
+
+// Osiem kroków skanu lokalnego; kolejne poziomy przetwarzają sumy bloków równolegle.
+kernel void nativeScanBlocks(device uint4 *input [[buffer(0)]], device uint4 *output [[buffer(1)]],
+    device uint4 *blockSums [[buffer(2)]], constant NativeControl &control [[buffer(3)]],
+    device NativeContactControl &contacts [[buffer(4)]], constant uint2 &parameters [[buffer(5)]],
+    uint index [[thread_position_in_grid]], uint local [[thread_position_in_threadgroup]],
+    uint group [[threadgroup_position_in_grid]]) {
+    uint length = nativeScanLength(control, contacts, parameters);
+    if (group * 256 >= length) return;
+    threadgroup uint4 values[256];
+    values[local] = index < length ? input[index] : uint4(0);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint distance = 1; distance < 256; distance *= 2) {
+        uint4 value = values[local];
+        if (local >= distance) value += values[local - distance];
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        values[local] = value;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if (index < length) output[index] = values[local];
+    if (local == 255) blockSums[group] = values[local];
+}
+
+kernel void nativeAddScanBlockOffsets(device uint4 *output [[buffer(0)]], device uint4 *parent [[buffer(1)]],
+    constant NativeControl &control [[buffer(2)]], device NativeContactControl &contacts [[buffer(3)]],
+    constant uint2 &parameters [[buffer(4)]], uint index [[thread_position_in_grid]]) {
+    if (index >= nativeScanLength(control, contacts, parameters)) return;
+    uint block = index / 256;
+    if (block > 0) output[index] += parent[block - 1];
+}
+
+// Tylko odczyt ostatniej sumy i zapis nagłówka; nie przetwarza listy rekordów.
+// Nadmiar ponad pojemność listy odpada na końcu i zwiększa licznik przepełnienia zamiast odrzucać klatkę.
+void nativeWriteScanHeader(device NativeContactControl &contacts, uint mode, uint4 total, device atomic_uint *overflow) {
+    if (mode == 0) {
+        contacts.counts.x = min(total.x, contacts.limits.z);
+        if (total.x > contacts.limits.z)
+            atomic_fetch_add_explicit(overflow, total.x - contacts.limits.z, memory_order_relaxed);
+    } else if (mode == 1) {
+        // Bez historii kontaktów (silnik 4.0.0): aktywne rekordy końca kroku są od razu zbiorem kontaktów kroku.
+        contacts.counts.y = total.x; contacts.counts.z = min(total.x, contacts.limits.z);
+    }
+    else {
+        contacts.counts.z = min(total.x, contacts.limits.z); contacts.cache.xy = total.yz;
+        if (total.x > contacts.limits.z)
+            atomic_fetch_add_explicit(overflow, total.x - contacts.limits.z, memory_order_relaxed);
+    }
+}
+
+kernel void nativeFinishScan(device uint4 *offsets [[buffer(0)]], constant NativeControl &control [[buffer(1)]],
+    device NativeContactControl &contacts [[buffer(2)]], constant uint2 &parameters [[buffer(3)]],
+    device atomic_uint *overflow [[buffer(4)]], uint index [[thread_position_in_grid]]) {
+    if (index != 0) return;
+    uint length = nativeScanLength(control, contacts, parameters);
+    uint4 total = length > 0 ? offsets[length - 1] : uint4(0);
+    nativeWriteScanHeader(contacts, parameters.x, total, overflow);
+}
+
+// Skan prefiksowy jednej grupy: porcje szerokości grupy, suma z poprzednich porcji dodawana do każdej. Wynik i nagłówek
+// (licznik kandydatów, aktywnych kontaktów albo cache'u) są takie same jak z nativeScanBlocks, nativeAddScanBlockOffsets
+// i nativeFinishScan, a odczyt z `input` i zapis do `output` dotyczą tylko zakresu o długości z nativeScanLength.
+void nativeScanInGroup(device uint4 *input, device uint4 *output, constant NativeControl &control,
+                       device NativeContactControl &contacts, uint2 parameters, device atomic_uint *overflow,
+                       threadgroup uint4 *scratch, uint local, uint width) {
+    uint length = nativeScanLength(control, contacts, uint2(parameters.x, 0));
+    uint4 carry = uint4(0);
+    // `width` to szerokość porcji i połowa tablicy `scratch`. Wątki grupy o numerze ≥ width (jądro jednej grupy ma więcej wątków niż porcja)
+    // tylko uczestniczą w barierach; nie dotykają pamięci grupy ani wyniku.
+    bool member = local < width;
+    for (uint base = 0; base < length; base += width) {
+        uint index = base + local;
+        threadgroup uint4 *source = scratch;
+        threadgroup uint4 *target = scratch + width;
+        if (member) source[local] = index < length ? input[index] : uint4(0);
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint distance = 1; distance < width; distance *= 2) {
+            if (member) {
+                uint4 value = source[local];
+                if (local >= distance) value += source[local - distance];
+                target[local] = value;
+            }
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+            threadgroup uint4 *swapped = source; source = target; target = swapped;
+        }
+        if (member && index < length) output[index] = source[local] + carry;
+        carry += source[min(width, length - base) - 1];
+        // Następna porcja nadpisuje pamięć grupy dopiero po odczycie sumy porcji przez wszystkie wątki.
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if (local != 0) return;
+    nativeWriteScanHeader(contacts, parameters.x, carry, overflow);
+}
+
+kernel void nativeScanSingleGroup(device uint4 *input [[buffer(0)]], device uint4 *output [[buffer(1)]],
+    constant NativeControl &control [[buffer(2)]], device NativeContactControl &contacts [[buffer(3)]],
+    constant uint2 &parameters [[buffer(4)]], device atomic_uint *overflow [[buffer(5)]],
+    threadgroup uint4 *scratch [[threadgroup(0)]],
+    uint local [[thread_position_in_threadgroup]], uint width [[threads_per_threadgroup]]) {
+    nativeScanInGroup(input, output, control, contacts, parameters, overflow, scratch, local, width);
+}
+
+kernel void nativePrepareContactFlags(device NativeContactCache *contacts [[buffer(0)]],
+    device NativeContactControl &control [[buffer(1)]], device uint4 *flags [[buffer(2)]],
+    uint index [[thread_position_in_grid]]) {
+    if (index >= control.counts.x) return;
+    // Ten etap musi zachować kandydatów w otoczce rozdzielenia, aby następny
+    // etap mógł połączyć ich z historią cache'u.
+    flags[index] = uint4(contacts[index].response.y > -control.thresholds.w ? 1 : 0, 0, 0, 0);
+}
+
+kernel void nativeCompactActiveContacts(device NativeContactCache *contacts [[buffer(0)]],
+    device NativeContactCache *active [[buffer(1)]], device NativeContactControl &control [[buffer(2)]],
+    device uint4 *offsets [[buffer(3)]], uint index [[thread_position_in_grid]]) {
+    if (index >= control.counts.x || contacts[index].response.y <= -control.thresholds.w) return;
+    active[offsets[index].x - 1] = contacts[index];
+}
+
+uint nativeFindBubble(device NativeBubble *bubbles, uint count, long id) {
+    uint low = 0, high = count;
+    while (low < high) {
+        uint mid = low + (high - low) / 2;
+        if (bubbles[mid].identity.x < id) low = mid + 1; else high = mid;
+    }
+    return low;
+}
+
+uint nativeFindSegment(device NativeSegment *segments, uint count, long id) {
+    uint low = 0, high = count;
+    while (low < high) {
+        uint mid = low + (high - low) / 2;
+        if (segments[mid].identity.x < id) low = mid + 1; else high = mid;
+    }
+    return low;
+}
+
+// Stopnie obiektów liczone przez atomowy przydział miejsca w wierszu o długości k.
+kernel void nativeClearAdjacency(constant NativeControl &control [[buffer(0)]],
+    device uint *degrees [[buffer(1)]], uint index [[thread_position_in_grid]]) {
+    if (index < control.counts.x) degrees[index] = 0;
+}
+
+// Każdy aktywny kontakt trafia do wiersza k obu końców; miejsce przydziela atomowy licznik, a kolejność
+// wewnątrz wiersza ustala dopiero nativeBuildAdjacency (sortowanie po sąsiedzie), więc przy stopniu <= k
+// wynik nie zależy od harmonogramu. Wiersz pełny odrzuca kontakt i zwiększa licznik przepełnienia; WYBÓR odrzuconych
+// kontaktów (kto dostał slot < k) zależy od kolejności wątków GPU, więc po przepełnieniu wynik NIE jest deterministyczny.
+void nativeAppendAdjacency(device uint4 *adjacency, device atomic_uint *degrees, uint limit, uint bubble,
+                           uint4 edge, device atomic_uint *overflow) {
+    uint slot = atomic_fetch_add_explicit(degrees + bubble, 1, memory_order_relaxed);
+    if (slot < limit) adjacency[bubble * limit + slot] = edge;
+    else atomic_fetch_add_explicit(overflow, 1, memory_order_relaxed);
+}
+
+kernel void nativeEmitAdjacency(device NativeBubble *bubbles [[buffer(0)]],
+    device NativeSegment *segments [[buffer(1)]], device NativeContactCache *cache [[buffer(2)]],
+    constant NativeControl &control [[buffer(3)]], device NativeContactControl &contacts [[buffer(4)]],
+    device uint4 *adjacency [[buffer(5)]], device uint4 *endpoints [[buffer(6)]],
+    device atomic_uint *statistics [[buffer(7)]], device atomic_uint *degrees [[buffer(8)]],
+    device atomic_uint *overflow [[buffer(9)]], uint index [[thread_position_in_grid]]) {
+    if (index >= contacts.counts.z) return;
+    NativeContactCache record = cache[index];
+    uint a = nativeFindBubble(bubbles, control.counts.x, record.participants.x);
+    uint b = record.metadata.x == 0 ? nativeFindBubble(bubbles, control.counts.x, record.participants.y)
+        : nativeFindSegment(segments, control.counts.y, record.participants.y);
+    // Rekord kontaktu jest aktywny od dodatniej penetracji contactTolerance; kandydaci w otoczce rozdzielenia zostają tylko w rekordach.
+    bool active = record.response.y > contacts.thresholds.z;
+    endpoints[index] = uint4(a, b, record.metadata.x, active ? 1 : 0);
+    nativeCountWork(statistics, 8);
+    if (!active) return;
+    uint limit = contacts.cache.w;
+    nativeAppendAdjacency(adjacency, degrees, limit, a, uint4(index + 1, b, record.metadata.x, record.metadata.x == 0 ? 0 : 1), overflow);
+    if (record.metadata.x == 0)
+        nativeAppendAdjacency(adjacency, degrees, limit, b, uint4(index + 1, a, 0, 1), overflow);
+}
+
+// Sortowanie wiersza (rodzaj, indeks sąsiada) odtwarza kolejność dawnych slotów: najpierw bańki rosnąco,
+// potem odcinki rosnąco. Dzięki temu suma poprawek float w solverze Jacobi nie zależy od harmonogramu.
+// Stopień przed obcięciem do k trafia do licznika maksimum na obiekt.
+void nativeBuildAdjacencyRow(uint index, uint limit, device uint4 *adjacency, device uint *degrees, device atomic_uint *overflow) {
+    uint demanded = degrees[index];
+    uint degree = min(demanded, limit);
+    device uint4 *row = adjacency + index * limit;
+    for (uint i = 1; i < degree; ++i) {
+        uint4 value = row[i];
+        uint location = i;
+        while (location > 0 && (value.z < row[location - 1].z
+               || (value.z == row[location - 1].z && value.y < row[location - 1].y))) {
+            row[location] = row[location - 1]; --location;
+        }
+        row[location] = value;
+    }
+    for (uint i = 0; i < degree; ++i) row[i].x -= 1;
+    degrees[index] = degree;
+    atomic_fetch_max_explicit(overflow + 1, demanded, memory_order_relaxed);
+}
+
+kernel void nativeBuildAdjacency(constant NativeControl &control [[buffer(0)]],
+    device NativeContactControl &contacts [[buffer(1)]], device uint4 *adjacency [[buffer(2)]],
+    device uint *degrees [[buffer(3)]], device atomic_uint *overflow [[buffer(4)]],
+    uint index [[thread_position_in_grid]]) {
+    if (index >= control.counts.x) return;
+    nativeBuildAdjacencyRow(index, contacts.cache.w, adjacency, degrees, overflow);
+}
+
+bool nativeTriangleContact(thread float2 *a, thread float2 *b, thread float2 &normal,
+                           thread float &depth, thread float2 &point) {
+    depth = INFINITY;
+    for (uint shape=0; shape<2; ++shape) for (uint edge=0; edge<3; ++edge) {
+        float2 delta = shape == 0 ? a[(edge+1)%3]-a[edge] : b[(edge+1)%3]-b[edge];
+        float magnitude = length(delta); if (magnitude <= FLT_MIN) return false;
+        float2 axis = float2(-delta.y,delta.x)/magnitude;
+        float amin=INFINITY,amax=-INFINITY,bmin=INFINITY,bmax=-INFINITY;
+        for(uint k=0;k<3;++k) { float pa=dot(a[k],axis),pb=dot(b[k],axis); amin=min(amin,pa);amax=max(amax,pa);bmin=min(bmin,pb);bmax=max(bmax,pb); }
+        if (amax<bmin || bmax<amin) return false;
+        float plus=amax-bmin,minus=bmax-amin;
+        float overlap=min(plus,minus);
+        if(overlap<depth) { depth=overlap;normal=plus<minus ? axis : -axis; }
+    }
+    // Dwa punkty podparcia; uśrednienie całej płaskiej ściany usuwa arbitralny moment.
+    float maxA=-INFINITY,minB=INFINITY;float2 pa=0,pb=0;uint na=0,nb=0;
+    for(uint k=0;k<3;++k) { maxA=max(maxA,dot(a[k],normal));minB=min(minB,dot(b[k],normal)); }
+    for(uint k=0;k<3;++k) {
+        if(dot(a[k],normal)>=maxA-1e-5f){pa+=a[k];++na;}
+        if(dot(b[k],normal)<=minB+1e-5f){pb+=b[k];++nb;}
+    }
+    point=(pa/float(na)+pb/float(nb))*0.5f;
+    return true;
+}
+
+// Rdzeń okrągły R wobec wielokąta P (unia trójkątów, obrys to krawędzie pierścienia). Normalna od R do P.
+// Rdzeń na zewnątrz: odległość do obrysu minus promień. Oba końce rdzenia we wnętrzu: oś to normalna najbliższej krawędzi
+// obrysu (najkrótsza droga na zewnątrz), głębokość to odległość do niej plus promień; trójkąty podziału są wewnętrzne
+// i nigdy nie dają normalnej. Rdzeń przecinający obrys (żaden lub jeden koniec we wnętrzu): najmniejsze wnikanie po normalnych krawędzi obrysu.
+bool nativeRoundPolygonContact(NativeRoundCore R, NativeRigidBody P, device float2 *vertices, device uint4 *triangles,
+                               thread float2 &normal, thread float &depth, thread float2 &point) {
+    uint count = P.ranges.y;
+    float insideDepth = -1; float2 insideOutward = 0, insidePoint = 0;
+    uint endpoints = any(R.b != R.a) ? 2u : 1u, insideEndpoints = 0;
+    for (uint k = 0; k < endpoints; ++k) {
+        float2 endpoint = k == 0 ? R.a : R.b;
+        if (!nativeRigidInside(endpoint, P, vertices, triangles)) continue;
+        ++insideEndpoints;
+        float nearest = INFINITY; float2 nearestPoint = 0, nearestOutward = 0;
+        for (uint e = 0; e < count; ++e) {
+            float2 p = nativeRigidVertex(P, vertices, e), q = nativeRigidVertex(P, vertices, (e + 1) % count);
+            float2 closest = nativeClosestPoint(endpoint, float4(p, q));
+            float d = distance(endpoint, closest);
+            if (d < nearest) {
+                nearest = d; nearestPoint = closest;
+                float2 edge = q - p; float size = length(edge);
+                nearestOutward = size > FLT_MIN ? float2(edge.y, -edge.x) / size : float2(0, 1);
+            }
+        }
+        if (nearest > insideDepth) { insideDepth = nearest; insidePoint = nearestPoint; insideOutward = nearestOutward; }
+    }
+    // Oba końce we wnętrzu: wyjście najkrótszą drogą najgłębszego końca. Tylko jeden koniec we wnętrzu to przecięcie obrysu
+    // i idzie ścieżką SAT poniżej (najbliższa krawędź jednego końca bywa krawędzią, przez którą wyjście wymaga cofnięcia drugiego).
+    if (insideEndpoints == endpoints) {
+        normal = -insideOutward; depth = R.radius + insideDepth; point = insidePoint;
+        return true;
+    }
+    float best = INFINITY; float2 pc = 0, pe = 0;
+    for (uint e = 0; e < count; ++e) {
+        float2 p = nativeRigidVertex(P, vertices, e), q = nativeRigidVertex(P, vertices, (e + 1) % count);
+        float2 ca, ce;
+        float d = nativeSegmentDistance(R.a, R.b, p, q, ca, ce);
+        if (d < best) { best = d; pc = ca; pe = ce; }
+    }
+    if (best > 1e-4f) {
+        normal = (pe - pc) / best; depth = R.radius - best; point = pe;
+        return true;
+    }
+    // Rdzeń przecina obrys, a żaden jego koniec nie leży we wnętrzu: SAT obrysu wobec odcinka rdzenia. Dla każdej krawędzi
+    // obrysu głębokość to przesunięcie rdzenia o jej zewnętrzną normalną, po którym rdzeń z promieniem leży już poza jej
+    // prostą; wybieramy najmniejsze. Kierunek od środka rdzenia do środka wielokąta był styczny dla przecięć poza środkiem.
+    float minimum = INFINITY; float2 minimumOutward = float2(0, 1), minimumPoint = pe;
+    for (uint e = 0; e < count; ++e) {
+        float2 p = nativeRigidVertex(P, vertices, e), q = nativeRigidVertex(P, vertices, (e + 1) % count);
+        float2 edge = q - p; float size = length(edge);
+        if (size <= FLT_MIN) continue;
+        float2 outward = float2(edge.y, -edge.x) / size;
+        float da = dot(R.a - p, outward), db = dot(R.b - p, outward);
+        float d = R.radius - min(da, db);
+        if (d < minimum) { minimum = d; minimumOutward = outward; minimumPoint = (da <= db ? R.a : R.b) - outward * min(da, db); }
+    }
+    normal = -minimumOutward; depth = isfinite(minimum) ? minimum : R.radius; point = minimumPoint;
+    return true;
+}
+
+// Czy rdzeń okrągły przecina obrys wielokąta albo leży w jego wnętrzu (sam promień kształtu się nie liczy).
+// Bryła, która tak zaczęła krok, jest już „przez” ścianę: wychodzi kontaktem, a nie odrzuceniem ruchu jako tunelowania.
+bool nativeRoundCoreCrossesPolygon(NativeRoundCore R, NativeRigidBody P, device float2 *vertices, device uint4 *triangles) {
+    if (nativeRigidInside(R.a, P, vertices, triangles) || nativeRigidInside(R.b, P, vertices, triangles)) return true;
+    for (uint e = 0; e < P.ranges.y; ++e) {
+        float2 p = nativeRigidVertex(P, vertices, e), q = nativeRigidVertex(P, vertices, (e + 1) % P.ranges.y);
+        float2 ca, ce;
+        if (nativeSegmentDistance(R.a, R.b, p, q, ca, ce) <= 1e-4f) return true;
+    }
+    return false;
+}
+
+// Kontakt pary brył (normalna od a do b, głębokość, punkt). Wielokąt–wielokąt: SAT trójkątów, wybierany najgłębszy
+// kawałek. Pozostałe pary to rdzeń z promieniem: odległość rdzeni minus promienie, a przy przecięciu oś najmniejszego
+// wnikania. Wspólne dla kontaktów i CCD. `false` oznacza brak nakładania się kształtów.
+bool nativeRigidPairContact(NativeRigidBody a, NativeRigidBody b, device float2 *vertices, device uint4 *triangles,
+                            thread float2 &n, thread float &depth, thread float2 &point) {
+    bool aRound = nativeRigidIsRound(a), bRound = nativeRigidIsRound(b);
+    if (aRound && bRound) {
+        // Ciała w parze są posortowane po ObjectID (a przed b), więc stała oś (1, 0) idzie od mniejszego ObjectID.
+        return nativeRoundContact(nativeRoundCoreOf(a, vertices), nativeRoundCoreOf(b, vertices), float2(1, 0), n, depth, point);
+    }
+    if (aRound != bRound) {
+        NativeRigidBody round = aRound ? a : b, polygon = aRound ? b : a;
+        float2 normal;
+        if (!nativeRoundPolygonContact(nativeRoundCoreOf(round, vertices), polygon, vertices, triangles, normal, depth, point)) return false;
+        n = aRound ? normal : -normal;
+        return true;
+    }
+    bool found = false;
+    for (uint i = 0; i < a.ranges.w; ++i) for (uint j = 0; j < b.ranges.w; ++j) {
+        uint4 ta = triangles[a.ranges.z + i], tb = triangles[b.ranges.z + j];
+        float2 av[3] = {nativeRigidVertex(a, vertices, ta.x), nativeRigidVertex(a, vertices, ta.y), nativeRigidVertex(a, vertices, ta.z)};
+        float2 bv[3] = {nativeRigidVertex(b, vertices, tb.x), nativeRigidVertex(b, vertices, tb.y), nativeRigidVertex(b, vertices, tb.z)};
+        float2 normal, p; float d;
+        if (nativeTriangleContact(av, bv, normal, d, p) && (!found || d > depth)) { found = true; depth = d; n = normal; point = p; }
+    }
+    return found;
+}
+
+// Wiersze kandydatów z nativeRigidEmitCandidates (tryb par brył): wątek (bryła, miejsce w wierszu) liczy jeden kontakt bryła–bryła.
+// Bańki nie wchodzą do solvera brył: ich kontakt z bryłami statycznymi i kinematycznymi liczy pętla podkroków (NativeForceKernels).
+kernel void nativeRigidContacts(device NativeRigidBody *bodies [[buffer(0)]],
+    device float2 *vertices [[buffer(1)]], device uint4 *triangles [[buffer(2)]],
+    constant uint4 &counts [[buffer(3)]], device NativeRigidCorrection *corrections [[buffer(4)]],
+    device atomic_uint *safety [[buffer(5)]], device NativeCandidate *rows [[buffer(6)]],
+    device uint2 *rowCounts [[buffer(7)]],
+    uint index [[thread_position_in_grid]]) {
+    uint owner=index/counts.z,slot=index%counts.z;
+    if(owner>=counts.x||slot>=rowCounts[owner].x)return;
+    NativeCandidate candidate=rows[index];
+    NativeRigidCorrection previous=corrections[index];
+    NativeRigidCorrection result={float4(0,0,0,previous.first.w),float4(0,0,0,previous.second.w),
+        float4(0,0,0,previous.velocityFirst.w),float4(0,0,0,previous.velocitySecond.w)};
+    float2 n=0,point=0,va=0,vb=0,ra=0,rb=0;
+    float wa=0,wb=0,ia=0,ib=0,depth=0,spinA=0,spinB=0,frictionA=0,frictionB=0,restitutionA=0,restitutionB=0;
+    if(candidate.metadata.x!=3){corrections[index]=result;return;}
+    uint ai=candidate.metadata.y,bi=candidate.metadata.z;
+    NativeRigidBody a=bodies[ai],b=bodies[bi];
+    // Kandydat bryła–bryła zawsze niesie ai<bi, więc ai>=bi jest tylko zabezpieczeniem, a nie deduplikacją:
+    // para jest rozwiązywana w wierszach obu ciał celowo (determinizm bez atomików).
+    if(ai>=bi || (nativeRigidImmovable(a)&&nativeRigidImmovable(b))){corrections[index]=result;return;}
+    float2 end=a.pose.xy-b.pose.xy;
+    float radius=a.physical.z+b.physical.z,radiusSquared=radius*radius;
+    // Tunelowanie pary brył zatrzymuje CCD (nativeRigidResolveCCD) jeszcze przed pętlą iteracji, więc przemijanie
+    // zasięgu bez nakładania kształtów nie odrzuca już klatki.
+    if(dot(end,end)>radiusSquared){corrections[index]=result;return;}
+    float2 pairNormal,pairPoint;float pairDepth;
+    bool found=nativeRigidPairContact(a,b,vertices,triangles,pairNormal,pairDepth,pairPoint);
+    if(!found){corrections[index]=result;return;}
+    depth=pairDepth;n=pairNormal;point=pairPoint;
+    wa=a.physical.x;wb=b.physical.x;ia=a.physical.y;ib=b.physical.y;
+    ra=point-a.pose.xy;rb=point-b.pose.xy;va=a.motion.xy;vb=b.motion.xy;spinA=a.motion.z;spinB=b.motion.z;
+    frictionA=a.physical.w;frictionB=b.physical.w;restitutionA=as_type<float>(a.flags.w);restitutionB=as_type<float>(b.flags.w);
+    float ca=nativeCross(ra,n),cb=nativeCross(rb,n),denom=wa+wb+ia*ca*ca+ib*cb*cb;
+    if(depth < -0.001f || denom<=FLT_MIN){corrections[index]=result;return;}
+    float lambda=max(0.0f,depth)/denom*0.5f;
+    // Suma normalnych Δλ z iteracji (impuls zdarzenia kontaktu); wiersz należy do tego wątku, więc bez atomików.
+    rows[index].metadata.w=as_type<uint>(as_type<float>(rows[index].metadata.w)+lambda);
+    // Nieużywane lane'y w przenoszą geometrię ciągłego feedbacku bez drugiego solve/readbacku.
+    result.first=float4(-n*wa*lambda,-ca*ia*lambda,n.x);
+    result.second=float4(n*wb*lambda,cb*ib*lambda,n.y);
+    float closing=dot(vb-va,n)+spinB*cb-spinA*ca;
+    // Tarcie: średnia geometryczna. Restitucja: maksimum. Obie reguły są
+    // przemienne, więc wynik nie zależy od kolejności obiektów w parze.
+    float friction=sqrt(max(0.0f,frictionA*frictionB));
+    float restitution=max(restitutionA,restitutionB);
+    float impulse=max(0.0f,-closing)*(1.0f+restitution)/denom*0.5f;
+    float2 tangent=float2(-n.y,n.x);
+    float tangentSpeed=dot(vb-va,tangent)+spinB*nativeCross(rb,tangent)-spinA*nativeCross(ra,tangent);
+    float tangentImpulse=-tangentSpeed*friction/denom*0.5f;
+    result.velocityFirst=float4(-n*wa*impulse-tangent*wa*tangentImpulse,-ca*ia*impulse-nativeCross(ra,tangent)*ia*tangentImpulse,point.x);
+    result.velocitySecond=float4(n*wb*impulse+tangent*wb*tangentImpulse,cb*ib*impulse+nativeCross(rb,tangent)*ib*tangentImpulse,point.y);
+    corrections[index]=result;
+}
+
+kernel void nativeRigidApplyBodies(device NativeRigidBody *bodies [[buffer(0)]],
+    constant uint4 &counts [[buffer(1)]], device NativeRigidCorrection *corrections [[buffer(2)]],
+    device NativeCandidate *rows [[buffer(3)]], device uint2 *rowCounts [[buffer(4)]],
+    uint index [[thread_position_in_grid]]) {
+    if(index>=counts.x)return;
+    float3 delta=0,velocity=0;
+    for(uint slot=0;slot<rowCounts[index].x;++slot){
+        uint at=index*counts.z+slot;
+        NativeCandidate candidate=rows[at];NativeRigidCorrection c=corrections[at];
+        // Bryła jest drugim uczestnikiem pary z bańką i mniejszym albo większym indeksem w parze brył.
+        bool first=candidate.metadata.x==3 && candidate.metadata.y==index;
+        delta+=first?c.first.xyz:c.second.xyz;velocity+=first?c.velocityFirst.xyz:c.velocitySecond.xyz;
+    }
+    bodies[index].pose.xyz+=delta;bodies[index].motion.xyz+=velocity;
+}
+
+// Więzy bryła–bryła i bryła–świat. Bryły nie są ciałami XPBD, więc korekta więzu to przesunięcie pozy i zmiana prędkości (Δpoza / krok,
+// jak w PBD) dla końca więzu. Przeguby z bańkami nie istnieją w silniku 4.0.0: host nie przekazuje takich więzów, a przestrzeń encji zostaje
+// (bańki za indeksami 0..<bubbleCount, bryły za nimi), bo wiersze brył i wykluczenia kolizji są indeksowane encjami.
+// Wątek na więz liczy korekty obu końców z jednego stanu; każde ciało zbiera korekty swojej listy w stałej kolejności.
+struct NativeJointEnd {
+    float2 point; float2 arm; float2 velocity;
+    float inverseMass; float inverseInertia; float angle; float omega;
+};
+
+NativeJointEnd nativeJointEnd(uint entity, float2 anchor, device NativeRigidBody *bodies, uint bubbleCount) {
+    NativeJointEnd end;
+    end.point = anchor; end.arm = 0; end.velocity = 0; end.inverseMass = 0; end.inverseInertia = 0; end.angle = 0; end.omega = 0;
+    if (entity == 0xFFFFFFFFu) return end;
+    NativeRigidBody b = bodies[entity - bubbleCount];
+    // Kotwica leży w układzie początku geometrii; środek masy jest przesunięty o centroid (previous.zw).
+    end.arm = nativeRotate(anchor - b.previous.zw, b.pose.z);
+    end.point = b.pose.xy + end.arm; end.velocity = b.motion.xy; end.omega = b.motion.z; end.angle = b.pose.z;
+    end.inverseMass = b.physical.x; end.inverseInertia = b.physical.y;
+    return end;
+}
+
+float2 nativePerpendicular(float2 v) { return float2(-v.y, v.x); }
+
+kernel void nativeSolveJoints(device NativeRigidBody *bodies [[buffer(0)]], device NativeJoint *joints [[buffer(1)]],
+    device NativeRigidCorrection *corrections [[buffer(2)]], constant uint4 &counts [[buffer(3)]],
+    constant NativeControl &control [[buffer(4)]], uint index [[thread_position_in_grid]]) {
+    if (index >= counts.x) return;
+    NativeJoint joint = joints[index];
+    float dt = max(control.physics.x, 1e-6f);
+    NativeJointEnd a = nativeJointEnd(joint.ends.x, joint.anchors.xy, bodies, counts.y);
+    NativeJointEnd b = nativeJointEnd(joint.ends.y, joint.anchors.zw, bodies, counts.y);
+    float2 moveA = 0, moveB = 0, speedA = 0, speedB = 0;
+    float turnA = 0, turnB = 0, spinA = 0, spinB = 0;
+    float2 pointA = nativePerpendicular(a.arm), pointB = nativePerpendicular(b.arm);
+    uint kind = joint.ends.z;
+    if (kind == 0) {
+        float2 delta = b.point - a.point;
+        float length_ = length(delta);
+        float2 n = length_ > 1e-6f ? delta / length_ : float2(1, 0);
+        float ca = nativeCross(a.arm, n), cb = nativeCross(b.arm, n);
+        float w = a.inverseMass + b.inverseMass + a.inverseInertia * ca * ca + b.inverseInertia * cb * cb;
+        if (w > FLT_MIN) {
+            // XPBD: podatność α/dt², skumulowane λ w kroku (0 = sztywny dystans).
+            float alpha = joint.parameters.y / (dt * dt);
+            float lambda = (-(length_ - joint.parameters.x) - alpha * joint.state.x) / (w + alpha);
+            joint.state.x += lambda;
+            moveA = -n * a.inverseMass * lambda; turnA = -ca * a.inverseInertia * lambda;
+            moveB = n * b.inverseMass * lambda; turnB = cb * b.inverseInertia * lambda;
+            if (joint.parameters.z > 0) {
+                // Tłumienie prędkości względnej wzdłuż więzu, rozłożone na iteracje (łącznie exp(-d·dt) na krok).
+                float relative = dot((b.velocity + b.omega * pointB) - (a.velocity + a.omega * pointA), n);
+                float impulse = -relative * (1.0f - exp(-joint.parameters.z * dt / float(max(counts.w, 1u)))) / w;
+                speedA -= n * a.inverseMass * impulse; spinA -= ca * a.inverseInertia * impulse;
+                speedB += n * b.inverseMass * impulse; spinB += cb * b.inverseInertia * impulse;
+            }
+        }
+    } else {
+        // Zawias i spaw: dwa końce zbiegają się w punkcie (blok 2×2 efektywnej masy).
+        float weight = a.inverseMass + b.inverseMass;
+        float k11 = weight + a.inverseInertia * pointA.x * pointA.x + b.inverseInertia * pointB.x * pointB.x;
+        float k12 = a.inverseInertia * pointA.x * pointA.y + b.inverseInertia * pointB.x * pointB.y;
+        float k22 = weight + a.inverseInertia * pointA.y * pointA.y + b.inverseInertia * pointB.y * pointB.y;
+        float determinant = k11 * k22 - k12 * k12;
+        if (determinant > FLT_MIN) {
+            float2 gap = b.point - a.point;
+            float2 impulse = float2(-(k22 * gap.x - k12 * gap.y), -(-k12 * gap.x + k11 * gap.y)) / determinant;
+            moveA = -impulse * a.inverseMass; turnA = -a.inverseInertia * dot(pointA, impulse);
+            moveB = impulse * b.inverseMass; turnB = b.inverseInertia * dot(pointB, impulse);
+        }
+        float inertia = a.inverseInertia + b.inverseInertia;
+        if (inertia > FLT_MIN) {
+            // Względny kąt po korekcie punktu: obrót B − obrót A − kąt odniesienia.
+            float angle = (b.angle + turnB) - (a.angle + turnA) - joint.parameters.w;
+            float violation = 0;
+            if (kind == 2) violation = angle;
+            else if (joint.ends.w & 1u) violation = angle < joint.limits.x ? angle - joint.limits.x
+                : (angle > joint.limits.y ? angle - joint.limits.y : 0.0f);
+            if (violation != 0) {
+                float lambda = -violation / inertia;
+                turnA -= a.inverseInertia * lambda; turnB += b.inverseInertia * lambda;
+            }
+            if (kind == 1 && (joint.ends.w & 2u)) {
+                // Silnik: dąży do docelowej prędkości względnej; łączny impuls w kroku ograniczony momentem · dt.
+                float relative = (b.omega + turnB / dt) - (a.omega + turnA / dt) - joint.limits.z;
+                float limit = joint.limits.w * dt;
+                float total = clamp(joint.state.y - relative / inertia, -limit, limit);
+                float lambda = total - joint.state.y;
+                joint.state.y = total;
+                spinA -= a.inverseInertia * lambda; spinB += b.inverseInertia * lambda;
+            }
+        }
+    }
+    NativeRigidCorrection result;
+    result.first = float4(moveA, turnA, 0); result.second = float4(moveB, turnB, 0);
+    result.velocityFirst = float4(moveA / dt + speedA, turnA / dt + spinA, 0);
+    result.velocitySecond = float4(moveB / dt + speedB, turnB / dt + spinB, 0);
+    corrections[index] = result;
+    joints[index] = joint;
+}
+
+// Bryła sumuje korekty swoich więzów w kolejności listy i uśrednia je (przy kilku więzach Jacobiego nie przesterowuje).
+kernel void nativeApplyJointBodies(device NativeRigidBody *bodies [[buffer(0)]],
+    device NativeRigidCorrection *corrections [[buffer(1)]], device uint2 *references [[buffer(2)]],
+    device uint4 *ranges [[buffer(3)]], constant uint4 &counts [[buffer(4)]], uint index [[thread_position_in_grid]]) {
+    if (index >= counts.z) return;
+    uint4 range = ranges[counts.y + index];
+    if (range.y == 0) return;
+    float3 delta = 0, velocity = 0;
+    for (uint i = 0; i < range.y; ++i) {
+        uint2 reference = references[range.x + i];
+        NativeRigidCorrection c = corrections[reference.x];
+        delta += reference.y ? c.second.xyz : c.first.xyz;
+        velocity += reference.y ? c.velocitySecond.xyz : c.velocityFirst.xyz;
+    }
+    float relax = 1.0f / float(range.y);
+    bodies[index].pose.xyz += delta * relax;
+    bodies[index].motion.xyz += velocity * relax;
+}

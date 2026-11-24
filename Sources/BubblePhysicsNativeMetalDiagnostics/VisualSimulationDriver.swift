@@ -35,8 +35,8 @@ public final class VisualSimulationDriver {
     public convenience init(backend: ReferenceSimulationBackend = .nativeMetal,
                             density: ReferenceVisualDensity = .twentyFour) throws {
         let factory = {
-            NativeMetalWorldRunner(configuration: .init(solverIterationCount: 4))
-                ?? NativeMetalWorldRunner(executor: nil, configuration: .init(solverIterationCount: 4))
+            NativeMetalWorldRunner(configuration: .init())
+                ?? NativeMetalWorldRunner(executor: nil, configuration: .init())
         }
         try self.init(backend: backend, density: density, nativeRunner: factory(), runnerFactory: factory)
     }

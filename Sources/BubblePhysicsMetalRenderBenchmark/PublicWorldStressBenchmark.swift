@@ -8,12 +8,12 @@ import simd
 
 /// Wynik kompletnej ścieżki publicznego świata i bezpośredniego renderera.
 public struct PublicWorldStressReport: Sendable {
-    /// Nazwa zmierzonej sceny: `stress-300`, `mixed`, `decals` albo `acceptance`.
+    /// Nazwa zmierzonej sceny: `stress-300`, `mixed`, `decals`, `acceptance` albo jedna z czterech scen G8-AC2
+    /// (`resting-crowd`, `band-to-wall`, `head-on-128`, `shot-into-crowd`).
     public let scene: String
     public let deviceName: String
     public let warmupFrames: Int
     public let measuredFrames: Int
-    public let solverIterationLimit: Int
     public let p95Milliseconds: Double
     /// Czas GPU całego command buffera: solver, kontury i bezpośredni renderer.
     public let gpuP95Milliseconds: Double
@@ -29,6 +29,31 @@ public struct PublicWorldStressReport: Sendable {
     public let hostPublicationP95Milliseconds: Double
     /// Czas GPU fizyki: druga seria na świeżym świecie tej samej sceny, z pustym `encodeRender`.
     public let gpuPhysicsP95Milliseconds: Double
+    /// Podkroki fizyki w klatkach mierzonych serii z renderem (`NativeMetalFrameTelemetry.substepCount`): p95 (nearest rank) i maksimum.
+    public internal(set) var substepP95 = 0
+    public internal(set) var substepMax = 0
+    /// Histogram podkroków: liczba podkroków w klatce → liczba klatek mierzonych, które tyle miały.
+    public internal(set) var substepHistogram: [Int: Int] = [:]
+    /// Największa liczba przebudów siatki wymuszonych zapasem w jednej klatce mierzonej (`NativeMetalFrameTelemetry.gridRebuildCount`).
+    public internal(set) var gridRebuildMax = 0
+    /// Największa liczba par buforów podkroków w jednej klatce mierzonej (`NativeMetalFrameTelemetry.substepBufferCount`); 1 w jednej dyspozycji.
+    public internal(set) var substepBuffersMax = 0
+    /// Ścieżka wykonania z telemetrii klatek (`singleDispatch` albo `multipleDispatches`; `mixed`, gdy klatki serii różniły się ścieżką);
+    /// `none`, gdy klatki nie miały telemetrii.
+    public internal(set) var executionPath = "none"
+    /// Szerokość grupy jądra pętli podkroków (`NativeMetalFrameTelemetry.singleGroupWidth`, największa z klatek); 0 w ścieżce wielu dyspozycji.
+    public internal(set) var singleGroupWidth = 0
+    /// Najdłuższa klatka mierzona serii z renderem w milisekundach (ta sama liczba co `max_ms`, pod nazwą z G8-AC2).
+    public internal(set) var longestFrameMilliseconds = 0.0
+    /// Czas GPU fizyki z telemetrii klatek serii z renderem: suma buforów podkroków, p95. Osobno od `gpuPhysicsP95Milliseconds`
+    /// (druga seria bez renderu), który zasila prognozę iPhone'a X.
+    public internal(set) var telemetryPhysicsGPUP95Milliseconds = 0.0
+    /// Czas GPU konturu z telemetrii klatek serii z renderem: bufor końca kroku, p95.
+    public internal(set) var telemetryContourGPUP95Milliseconds = 0.0
+    /// Czekanie CPU na bufor renderu wywołującego (`BubbleWorld.benchmarkRenderWaitMilliseconds`), p95. To część
+    /// `hostPublicationP95Milliseconds`, a nie osobny odcinek klatki.
+    public internal(set) var hostRenderWaitP95Milliseconds = 0.0
+
     /// Szacunek kosztu renderu GPU: czas GPU klatki z renderem minus czas GPU fizyki.
     public var gpuRenderEstimateMilliseconds: Double { gpuP95Milliseconds - gpuPhysicsP95Milliseconds }
     /// Koszt samego czyszczenia celu renderu: czas GPU passa z samym czyszczeniem minus czas GPU fizyki (nie mniej niż 0).
@@ -44,10 +69,15 @@ public struct PublicWorldStressReport: Sendable {
     /// Najgorszy stan termiczny urządzenia z klatek mierzonych wszystkich serii.
     public internal(set) var worstThermalState: ProcessInfo.ThermalState = .nominal
     public let maximumMilliseconds: Double
-    public let guardCorrections: Int
     public let nonFiniteFrames: Int
     public let fallbackFrames: Int
-    public let failedFrames: Int
+    public package(set) var failedFrames: Int
+    /// Powód upadku świata (`WorldDiagnostics.failureReason`) z pierwszej serii przerwanej nieudaną klatką; nil, gdy świat nie padł
+    /// (bugfix iPhone X, BF-D-4).
+    public package(set) var failureReason: WorldFailureReason?
+    /// Szczegóły upadku tej samej serii (`WorldDiagnostics.failureDetail`); raport drukuje je przy `contactViolation`
+    /// i `substepLimitExceeded`.
+    public package(set) var failureDetail: WorldFailureDetail?
     public let contourCPUReadbacks: Int
     /// Rozmiar celu renderu w pikselach.
     public let renderWidth: Int
@@ -76,11 +106,42 @@ public struct PublicWorldStressReport: Sendable {
             : ""
     }
 
+    /// Histogram podkroków jako `przedział:klatki` oddzielone przecinkami, tylko niepuste przedziały rosnąco. Przedziały to potęgi
+    /// dwójki: `1`, `2`, `3-4`, `5-8`, `9-16`, …
+    package static func substepHistogramText(_ histogram: [Int: Int]) -> String {
+        var buckets: [Int: Int] = [:]
+        for (substeps, frames) in histogram where frames > 0 {
+            var upper = 1
+            while upper < substeps { upper *= 2 }
+            buckets[upper, default: 0] += frames
+        }
+        return buckets.keys.sorted().map { upper in
+            let label = upper == 1 ? "1" : upper == 2 ? "2" : "\(upper / 2 + 1)-\(upper)"
+            return "\(label):\(buckets[upper] ?? 0)"
+        }.joined(separator: ",")
+    }
+
+    /// Linia przyczyny upadku świata: `failure_reason=` z powodem, `unknown` przy nieudanych klatkach bez powodu (np. klatka
+    /// odrzucona, świat żyje) albo `none` bez nieudanych klatek, a przy `contactViolation` i `substepLimitExceeded`
+    /// także `failure_detail=` (obiekty, krawędź, odległość, człon h).
+    private var failureLine: String {
+        guard let failureReason else { return failedFrames > 0 ? "failure_reason=unknown" : "failure_reason=none" }
+        var line = "failure_reason=\(failureReason)"
+        if failureReason == .contactViolation || failureReason == .substepLimitExceeded, let detail = failureDetail {
+            let objects = detail.objects.map { String($0.rawValue) }.joined(separator: ",")
+            let edge = detail.edgeIndex.map(String.init) ?? "none"
+            let distance = detail.distance.map { String(format: "%.4f", $0) } ?? "none"
+            let term = detail.limitingTerm.map { "\($0)" } ?? "none"
+            line += "; failure_detail=objects:\(objects) edge:\(edge) distance:\(distance) term:\(term)"
+        }
+        return line
+    }
+
     public var text: String {
         """
         \(PublicWorldStressBenchmark.reportPathHeader)
         device=\(deviceName)
-        scene=\(scene); solver_iteration_limit=\(solverIterationLimit)
+        scene=\(scene)
         render_px=\(renderWidth)x\(renderHeight)
         warmup=\(warmupFrames); measured=\(measuredFrames)
         p95_ms=\(String(format: "%.4f", p95Milliseconds)); max_ms=\(String(format: "%.4f", maximumMilliseconds))
@@ -88,8 +149,14 @@ public struct PublicWorldStressReport: Sendable {
         host_preparation_p95_ms=\(String(format: "%.4f", hostPreparationP95Milliseconds)); host_publication_p95_ms=\(String(format: "%.4f", hostPublicationP95Milliseconds))
         host_encoding_p95_ms=\(String(format: "%.4f", hostEncodingP95Milliseconds)); host_waiting_p95_ms=\(String(format: "%.4f", hostWaitingP95Milliseconds))
         gpu_physics_p95_ms=\(String(format: "%.4f", gpuPhysicsP95Milliseconds)); gpu_render_estimate_ms=\(String(format: "%.4f", gpuRenderEstimateMilliseconds))
-        \(renderSplitLine)guard_corrections=\(guardCorrections); non_finite_frames=\(nonFiniteFrames)
+        substep_p95=\(substepP95); substep_max=\(substepMax); grid_rebuild_max=\(gridRebuildMax)
+        substep_buffers_max=\(substepBuffersMax); execution_path=\(executionPath); single_group_width=\(singleGroupWidth)
+        substep_histogram=\(Self.substepHistogramText(substepHistogram))
+        longest_frame_ms=\(String(format: "%.4f", longestFrameMilliseconds)); host_render_wait_p95_ms=\(String(format: "%.4f", hostRenderWaitP95Milliseconds))
+        telemetry_physics_gpu_p95_ms=\(String(format: "%.4f", telemetryPhysicsGPUP95Milliseconds)); telemetry_contour_gpu_p95_ms=\(String(format: "%.4f", telemetryContourGPUP95Milliseconds))
+        \(renderSplitLine)non_finite_frames=\(nonFiniteFrames)
         fallback_frames=\(fallbackFrames); failed_frames=\(failedFrames)
+        \(failureLine)
         contour_cpu_readbacks=\(contourCPUReadbacks)
         contact_candidate_overflow=\(contactCandidateOverflow); max_candidates_per_object=\(maximumCandidatesPerObject); candidate_limit=\(candidateLimit)
         safety=\(safetyPassed ? "pass" : "fail")
@@ -114,6 +181,17 @@ package struct PublicWorldStressFrameSample {
     package let gpuMilliseconds: Double
     /// Czy klatka wywołała `BubblePhysicsMetalRender.encode`.
     package let renderEncoded: Bool
+    /// Pola telemetrii natywnej klatki (`BubbleWorld.benchmarkTelemetry`; `nil`, gdy jej nie było) i czekanie CPU na bufor renderu
+    /// (`BubbleWorld.benchmarkRenderWaitMilliseconds`).
+    package let substepCount: Int?
+    package let gridRebuildCount: Int?
+    /// Pary buforów podkroków klatki, ścieżka wykonania (`singleDispatch` albo `multipleDispatches`) i szerokość grupy jądra pętli (G8-AC1, G8-AC4).
+    package let substepBufferCount: Int?
+    package let executionPath: String?
+    package let singleGroupWidth: Int?
+    package let physicsGPUMilliseconds: Double?
+    package let contourGPUMilliseconds: Double?
+    package let renderWaitMilliseconds: Double
     /// Znaczniki klatki w zegarze `DispatchTime.uptimeNanoseconds`: początek `advance`, początek kodowania,
     /// koniec oczekiwania na GPU i powrót z `advance`. Zera, gdy profil klatki był niedostępny.
     package let startNanoseconds: UInt64
@@ -124,7 +202,7 @@ package struct PublicWorldStressFrameSample {
 
 @MainActor
 public enum PublicWorldStressBenchmark {
-    /// Jedyne źródło progu akceptacji `stress-300` na iPhonie X (p95 pełnej klatki, limit solvera 4).
+    /// Jedyne źródło progu akceptacji `stress-300` na iPhonie X (p95 pełnej klatki).
     /// Roboczy budżet to 10 ms; właściciel zaakceptował odchylenie 4,6% zmierzone 2026-10-14
     /// (docs/benchmarks/native-metal-bubble-solver-2026-10-14.md).
     public nonisolated static let p95GateMilliseconds = 10.4568
@@ -153,6 +231,14 @@ public enum PublicWorldStressBenchmark {
         /// Scena akceptacyjna iPhone'a X: stress-300 z teksturą przyklejoną i naklejką tekstową, kinematycznym trójkątem
         /// z `KinematicDrive` i połową baniek na warstwie 1; oba materiały baniek mieszają alfą.
         case acceptance
+        /// G8-AC2: 150 baniek w spoczynku w ramie ścian.
+        case restingCrowd
+        /// G8-AC2: bańka „2” ciągnięta gumką w pełnym naciągnięciu do ściany, obok tłum w spoczynku.
+        case bandToWall
+        /// G8-AC2: dwie bańki 128 lecące na siebie po 10³ j/s w osobnym pasie, obok tłum w spoczynku.
+        case headOn128
+        /// G8-AC2: bańka „2” wystrzelona 3 · 10³ j/s przez otwór ramy w tłum.
+        case shotIntoCrowd
 
         package static let stress300 = Scene.stress(bubbleCount: Stress300Scene.defaultBubbleCount)
 
@@ -162,12 +248,20 @@ public enum PublicWorldStressBenchmark {
             case .mixed: return "mixed"
             case .decals: return "decals"
             case .acceptance: return "acceptance"
+            case .restingCrowd: return "resting-crowd"
+            case .bandToWall: return "band-to-wall"
+            case .headOn128: return "head-on-128"
+            case .shotIntoCrowd: return "shot-into-crowd"
             }
         }
 
         /// Próg p95 pełnej klatki sceny.
         package var gateMilliseconds: Double {
-            self == .acceptance ? PublicWorldStressBenchmark.acceptanceGateMilliseconds : PublicWorldStressBenchmark.p95GateMilliseconds
+            switch self {
+            case .acceptance, .restingCrowd, .bandToWall, .headOn128, .shotIntoCrowd:
+                return PublicWorldStressBenchmark.acceptanceGateMilliseconds
+            case .stress, .mixed, .decals: return PublicWorldStressBenchmark.p95GateMilliseconds
+            }
         }
 
         var regionHeight: Float {
@@ -175,6 +269,7 @@ public enum PublicWorldStressBenchmark {
             case .stress(let count): return Stress300Scene.regionHeight(bubbleCount: count)
             case .mixed: return MixedScene.regionHeight
             case .decals, .acceptance: return Stress300Scene.regionHeight(bubbleCount: Stress300Scene.defaultBubbleCount)
+            case .restingCrowd, .bandToWall, .headOn128, .shotIntoCrowd: return BudgetScenes.regionHeight
             }
         }
 
@@ -183,6 +278,7 @@ public enum PublicWorldStressBenchmark {
             case .stress(let count): return try Stress300Scene.configuration(bubbleCount: count)
             case .mixed: return try MixedScene.configuration()
             case .decals, .acceptance: return try Stress300Scene.configuration()
+            case .restingCrowd, .bandToWall, .headOn128, .shotIntoCrowd: return try BudgetScenes.configuration()
             }
         }
 
@@ -194,6 +290,7 @@ public enum PublicWorldStressBenchmark {
             case .decals, .acceptance:
                 return try Self.decoratedTransaction(assets: assets, bubbleCount: Stress300Scene.defaultBubbleCount,
                                                      acceptance: self == .acceptance)
+            case .restingCrowd, .bandToWall, .headOn128, .shotIntoCrowd: return try BudgetScenes.initialTransaction(self)
             }
         }
 
@@ -226,10 +323,10 @@ public enum PublicWorldStressBenchmark {
         /// Transakcja przed krokiem `step` (numer od 0) albo `nil`, gdy scena nic wtedy nie zmienia.
         package func stepTransaction(step: Int) throws -> WorldTransaction? {
             switch self {
-            case .stress, .decals: return step > 0 ? try Stress300Scene.triangleReplacement(step: step) : nil
-            // Trójkąt jedzie sam według `KinematicDrive` z transakcji początkowej.
-            case .acceptance: return nil
+            // Trójkąt jedzie sam według `KinematicDrive` z transakcji początkowej (bryła nie przeskakuje nad bańkami).
+            case .stress, .decals, .acceptance, .restingCrowd, .bandToWall: return nil
             case .mixed: return try MixedScene.stepTransaction(step: step)
+            case .headOn128, .shotIntoCrowd: return try BudgetScenes.stepTransaction(self, step: step)
             }
         }
     }
@@ -278,8 +375,7 @@ public enum PublicWorldStressBenchmark {
         -> PublicWorldStressReport {
         let height = spec.regionHeight
         let (pixelWidth, pixelHeight) = try pixelSize(renderSize ?? spec.renderSize, regionHeight: height)
-        let world = try BubbleWorld.makeBenchmarkWorld(configuration: try spec.configuration(),
-            device: device, solverIterationLimit: 4)
+        let world = try spec.makeWorld(device: device)
         guard let assets = world.assets else { throw StressBenchmarkError.metalUnavailable }
         let renderer = try BubblePhysicsMetalRender(device: device, assets: assets)
         world.submit(try spec.initialTransaction(assets: assets))
@@ -352,14 +448,14 @@ public enum PublicWorldStressBenchmark {
         let extra = [clear, withoutDecals].compactMap { $0 }
         let allSeries = [full, physics] + extra
         var report = PublicWorldStressReport(scene: spec.name, deviceName: device.name, warmupFrames: warmupFrames,
-            measuredFrames: measured.count, solverIterationLimit: 4, p95Milliseconds: frameP95,
+            measuredFrames: measured.count, p95Milliseconds: frameP95,
             gpuP95Milliseconds: p95(full.gpuMilliseconds), hostNonGPUP95Milliseconds: p95(full.hostNonGPUMilliseconds),
             hostEncodingP95Milliseconds: p95(full.encodingMilliseconds),
             hostWaitingP95Milliseconds: p95(full.waitingMilliseconds),
             hostPreparationP95Milliseconds: p95(full.preparationMilliseconds),
             hostPublicationP95Milliseconds: p95(full.publicationMilliseconds),
             gpuPhysicsP95Milliseconds: p95(physics.gpuMilliseconds),
-            maximumMilliseconds: measured.last ?? .infinity, guardCorrections: full.guardCorrections,
+            maximumMilliseconds: measured.last ?? .infinity,
             nonFiniteFrames: allSeries.reduce(0) { $0 + $1.nonFiniteFrames },
             fallbackFrames: allSeries.reduce(0) { $0 + $1.fallbackFrames },
             failedFrames: allSeries.reduce(0) { $0 + $1.failedFrames },
@@ -368,9 +464,28 @@ public enum PublicWorldStressBenchmark {
             contactCandidateOverflow: ([world, physicsWorld] + splitWorlds).reduce(0) { $0 + $1.diagnostics.contactCandidateOverflow },
             maximumCandidatesPerObject: allSeries.map(\.maximumCandidates).max() ?? 0,
             candidateLimit: BubbleWorld.contactCandidateLimit, gateMilliseconds: spec.gateMilliseconds)
+        // Klucze G8-AC1/G8-AC2 z telemetrii klatek mierzonych serii z renderem.
+        let substeps = full.substepCounts.sorted()
+        report.substepMax = substeps.last ?? 0
+        report.substepP95 = substeps.isEmpty ? 0 : Int(p95(substeps.map(Double.init)))
+        report.substepHistogram = Dictionary(full.substepCounts.map { ($0, 1) }, uniquingKeysWith: +)
+        report.gridRebuildMax = full.gridRebuildCounts.max() ?? 0
+        report.substepBuffersMax = full.substepBufferCounts.max() ?? 0
+        // Ścieżka z klatek: wspólna wartość, a gdy klatki się różnią (świat przekroczył próg w trakcie serii), `mixed`.
+        let paths = Set(full.executionPaths)
+        report.executionPath = paths.count == 1 ? paths.first! : (paths.isEmpty ? "none" : "mixed")
+        report.singleGroupWidth = full.singleGroupWidths.max() ?? 0
+        report.longestFrameMilliseconds = measured.last ?? 0
+        report.telemetryPhysicsGPUP95Milliseconds = full.physicsGPUMilliseconds.isEmpty ? 0 : p95(full.physicsGPUMilliseconds)
+        report.telemetryContourGPUP95Milliseconds = full.contourGPUMilliseconds.isEmpty ? 0 : p95(full.contourGPUMilliseconds)
+        report.hostRenderWaitP95Milliseconds = full.renderWaitMilliseconds.isEmpty ? 0 : p95(full.renderWaitMilliseconds)
         report.bubbleCountMismatchFrames = allSeries.reduce(0) { $0 + $1.bubbleCountMismatchFrames }
         report.allSeriesComplete = allSeries.allSatisfy { $0.frameMilliseconds.count == measuredFrames }
         report.worstThermalState = allSeries.map(\.worstThermalState).max { $0.rawValue < $1.rawValue } ?? .nominal
+        if let failed = allSeries.first(where: { $0.failureReason != nil }) {
+            report.failureReason = failed.failureReason
+            report.failureDetail = failed.failureDetail
+        }
         if let clear, let withoutDecals {
             report.hasRenderSplit = true
             report.gpuRenderClearEstimateMilliseconds = max(0, p95(clear.gpuMilliseconds) - p95(physics.gpuMilliseconds))
@@ -419,8 +534,7 @@ public enum PublicWorldStressBenchmark {
     }
     /// Świeży świat tej samej sceny z transakcją początkową, dla serii na identycznej fizyce.
     private static func freshWorld(_ spec: BenchmarkSceneSpec, device: MTLDevice) throws -> BubbleWorld {
-        let world = try BubbleWorld.makeBenchmarkWorld(configuration: try spec.configuration(),
-            device: device, solverIterationLimit: 4)
+        let world = try spec.makeWorld(device: device)
         guard let assets = world.assets else { throw StressBenchmarkError.metalUnavailable }
         world.submit(try spec.initialTransaction(assets: assets))
         return world
@@ -442,7 +556,16 @@ public enum PublicWorldStressBenchmark {
         var encodingMilliseconds: [Double] = []
         var waitingMilliseconds: [Double] = []
         var publicationMilliseconds: [Double] = []
-        var guardCorrections = 0
+        /// Telemetria klatek mierzonych (`benchmarkTelemetry`): podkroki, przebudowy siatki i czasy GPU fizyki i konturu; klatka bez
+        /// telemetrii liczy się już jako nieudana, więc tu jej nie ma.
+        var substepCounts: [Int] = []
+        var gridRebuildCounts: [Int] = []
+        var substepBufferCounts: [Int] = []
+        var executionPaths: [String] = []
+        var singleGroupWidths: [Int] = []
+        var physicsGPUMilliseconds: [Double] = []
+        var contourGPUMilliseconds: [Double] = []
+        var renderWaitMilliseconds: [Double] = []
         var nonFiniteFrames = 0
         var fallbackFrames = 0
         var failedFrames = 0
@@ -451,6 +574,9 @@ public enum PublicWorldStressBenchmark {
         var bubbleCountMismatchFrames = 0
         /// Najgorszy stan termiczny z klatek mierzonych serii.
         var worstThermalState = ProcessInfo.ThermalState.nominal
+        /// Powód i szczegóły upadku świata zapisane przy przerwaniu serii nieudaną klatką.
+        var failureReason: WorldFailureReason?
+        var failureDetail: WorldFailureDetail?
     }
 
     /// Jedna seria `totalFrames` klatek na `world`: transakcja kroku, `advance` z jednym buforem i pomiar składowych.
@@ -482,8 +608,8 @@ public enum PublicWorldStressBenchmark {
                 || world.diagnostics.lastAdvanceIssue != nil { result.failedFrames += 1 }
             var gpuMilliseconds = 0.0, preparation = 0.0, encoding = 0.0, waiting = 0.0, publication = 0.0
             var encodingStartMark: UInt64 = 0, waitingEndMark: UInt64 = 0
-            if let telemetry = world.benchmarkTelemetry {
-                result.guardCorrections += telemetry.guardCorrectionCount
+            let telemetry = world.benchmarkTelemetry
+            if let telemetry {
                 if telemetry.didEncounterNonFinite { result.nonFiniteFrames += 1 }
                 if telemetry.fallbackReason != nil { result.fallbackFrames += 1 }
                 gpuMilliseconds = telemetry.gpuMilliseconds
@@ -510,12 +636,27 @@ public enum PublicWorldStressBenchmark {
                 result.encodingMilliseconds.append(encoding)
                 result.waitingMilliseconds.append(waiting)
                 result.publicationMilliseconds.append(publication)
+                if let telemetry {
+                    result.substepCounts.append(telemetry.substepCount)
+                    result.gridRebuildCounts.append(telemetry.gridRebuildCount)
+                    result.substepBufferCounts.append(telemetry.substepBufferCount)
+                    result.executionPaths.append(telemetry.executionPath.rawValue)
+                    result.singleGroupWidths.append(telemetry.singleGroupWidth)
+                    result.physicsGPUMilliseconds.append(telemetry.physicsGPUMilliseconds)
+                    result.contourGPUMilliseconds.append(telemetry.contourGPUMilliseconds)
+                }
+                result.renderWaitMilliseconds.append(world.benchmarkRenderWaitMilliseconds)
                 result.frameMilliseconds.append(elapsed)
             }
             result.maximumCandidates = max(result.maximumCandidates, world.diagnostics.maximumContactCandidatesPerObject)
             observer?(PublicWorldStressFrameSample(series: kind, index: index, frame: frame, elapsedMilliseconds: elapsed,
                 preparationMilliseconds: preparation, encodingMilliseconds: encoding, waitingMilliseconds: waiting,
                 publicationMilliseconds: publication, gpuMilliseconds: gpuMilliseconds, renderEncoded: renderEncoded,
+                substepCount: telemetry?.substepCount, gridRebuildCount: telemetry?.gridRebuildCount,
+                substepBufferCount: telemetry?.substepBufferCount, executionPath: telemetry?.executionPath.rawValue,
+                singleGroupWidth: telemetry?.singleGroupWidth,
+                physicsGPUMilliseconds: telemetry?.physicsGPUMilliseconds, contourGPUMilliseconds: telemetry?.contourGPUMilliseconds,
+                renderWaitMilliseconds: world.benchmarkRenderWaitMilliseconds,
                 startNanoseconds: start, encodingStartNanoseconds: encodingStartMark,
                 waitingEndNanoseconds: waitingEndMark, endNanoseconds: end))
             progress(index + 1, totalFrames)
@@ -523,17 +664,25 @@ public enum PublicWorldStressBenchmark {
             // kooperacyjnego punktu SwiftUI nie może odmalować postępu ani
             // przyjąć żądania Stop między ukończonymi klatkami benchmarku.
             await Task.yield()
-            if result.failedFrames > 0 { break }
+            if result.failedFrames > 0 {
+                result.failureReason = world.diagnostics.failureReason
+                result.failureDetail = world.diagnostics.failureDetail
+                break
+            }
         }
         return result
     }
 }
 
-/// Scena stress-300: 300 baniek, 4 ściany i kinematyczny trójkąt. Wspólna dla benchmarku, strażnika i testów.
+/// Scena stress-300: 300 baniek, 4 ściany i kinematyczny trójkąt z torem (`PathDrive`). Wspólna dla benchmarku, strażnika i testów.
 /// `bubbleCount` skaluje scenę przy stałej gęstości (15 kolumn, region rośnie wzdłuż osi y), np. 600 dla skalowania.
+/// Bańki leżą na siatce, a trójkąt startuje w jej środku: w 4.0.0 bryła nie może stanąć nad środkiem bańki (G7-AC1), więc
+/// miejsca siatki w obrysie startowym trójkąta (z zapasem na promień bańki) zostają puste, a pozostałe bańki leżą jak dotąd.
 package enum Stress300Scene {
     package static let defaultBubbleCount = 300
     private static let columns = 15
+    /// K_c baniek sceny: start gry (229), czyli prawo kontaktu z granicą na promieniu w skali, którą zobaczy gracz.
+    package static let bubbleContactStiffness: Float = 229
 
     /// Wysokość regionu: 700 dla 300 baniek (20 wierszy po 33,5 i 15 marginesu z obu stron).
     package static func regionHeight(bubbleCount: Int) -> Float {
@@ -550,11 +699,41 @@ package enum Stress300Scene {
     struct Decorations {
         let texture: TextureID
         let font: FontID
-        /// Scena akceptacyjna: materiały alfa, połowa baniek na warstwie 1 i trójkąt kinematyczny z `KinematicDrive`.
+        /// Scena akceptacyjna: materiały alfa i połowa baniek na warstwie 1.
         var acceptance = false
     }
 
-    /// Materiały, 300 baniek, ściany i trójkąt w pozycji początkowej.
+    /// Jedno miejsce siatki: numer bańki (od 0), środek i promień po losowaniu z jednego ciągu (ten sam co przy pełnej siatce).
+    private struct Slot {
+        let index: Int
+        let position: WorldPoint
+        let radius: Float
+    }
+
+    private static func slots(bubbleCount: Int) -> [Slot] {
+        var random = StressLCG(seed: 0x2B_60_F5)
+        let horizontalSpacing: Float = 345 / 15
+        let verticalSpacing: Float = 33.5
+        let baseRadius = min(horizontalSpacing, verticalSpacing) * 0.54
+        let start = triangleWaypoints(regionHeight: regionHeight(bubbleCount: bubbleCount))[0]
+        return (0..<bubbleCount).compactMap { index in
+            let column = index % columns, row = index / columns
+            let jitterX = (random.nextUnit() - 0.5) * horizontalSpacing * 0.12
+            let jitterY = (random.nextUnit() - 0.5) * verticalSpacing * 0.12
+            let radius = baseRadius * (0.78 + random.nextUnit() * 0.44)
+            let position: WorldPoint = [15 + (Float(column) + 0.5) * horizontalSpacing + jitterX,
+                                        15 + (Float(row) + 0.5) * verticalSpacing + jitterY]
+            // Zapas to największy możliwy promień bańki sceny (baseRadius · 1,22) z odstępem.
+            return distanceToTriangle(position, center: start) > baseRadius * 1.22 + 1 ? Slot(index: index, position: position, radius: radius) : nil
+        }
+    }
+
+    /// Liczba baniek, które scena naprawdę tworzy: miejsca siatki poza obrysem startowym trójkąta.
+    package static func placedBubbleCount(bubbleCount: Int = defaultBubbleCount) -> Int {
+        slots(bubbleCount: bubbleCount).count
+    }
+
+    /// Materiały, 300 baniek (bez miejsc w obrysie trójkąta), ściany i trójkąt w pozycji początkowej z torem.
     package static func initialTransaction(bubbleCount: Int = defaultBubbleCount) throws -> WorldTransaction {
         try initialTransaction(bubbleCount: bubbleCount, decorations: nil)
     }
@@ -569,7 +748,7 @@ package enum Stress300Scene {
         let styleID = RenderMaterialID(rawValue: 1)
         let upperStyleID = RenderMaterialID(rawValue: 2)
         var transaction = WorldTransaction()
-            .updatePhysicsMaterial(materialID, material: try PhysicsMaterial(kind: .bubble))
+            .updatePhysicsMaterial(materialID, material: try PhysicsMaterial(kind: .bubble, contactStiffness: bubbleContactStiffness))
             .updatePhysicsMaterial(polygonMaterialID, material: try PhysicsMaterial(kind: .rigid))
             .updateRenderMaterial(styleID, material: try RenderMaterial(texture: decorations?.texture,
                 color: acceptance ? RGBA(1, 1, 1, 0.9) : .white,
@@ -579,24 +758,14 @@ package enum Stress300Scene {
                 material: try RenderMaterial(texture: decorations?.texture, color: RGBA(0.8, 0.9, 1, 0.7), blend: .alpha,
                                              bubbleMapping: .attached))
         }
-        var random = StressLCG(seed: 0x2B_60_F5)
-        let horizontalSpacing: Float = 345 / 15
-        let verticalSpacing: Float = 33.5
-        let baseRadius = min(horizontalSpacing, verticalSpacing) * 0.54
-        for index in 0..<bubbleCount {
-            let column = index % columns, row = index / columns
-            let jitterX = (random.nextUnit() - 0.5) * horizontalSpacing * 0.12
-            let jitterY = (random.nextUnit() - 0.5) * verticalSpacing * 0.12
-            let radius = baseRadius * (0.78 + random.nextUnit() * 0.44)
-            let upper = acceptance && index % 2 == 1
+        for slot in slots(bubbleCount: bubbleCount) {
+            let upper = acceptance && slot.index % 2 == 1
             transaction = transaction.add(.bubble(try BubbleDescriptor(
-                id: ObjectID(rawValue: UInt64(index + 1)),
-                position: [15 + (Float(column) + 0.5) * horizontalSpacing + jitterX,
-                           15 + (Float(row) + 0.5) * verticalSpacing + jitterY],
-                targetRadius: radius, mass: max(1, radius * radius * 0.02),
+                id: ObjectID(rawValue: UInt64(slot.index + 1)), position: slot.position,
+                targetRadius: slot.radius, mass: max(1, slot.radius * slot.radius * 0.02),
                 physicsMaterialID: materialID, renderMaterialID: upper ? upperStyleID : styleID,
                 layer: upper ? 1 : 0,
-                decal: try decorations.map { try Decal.text(String(index % 100), source: .font($0.font)) })))
+                decal: try decorations.map { try Decal.text(String(slot.index % 100), source: .font($0.font)) })))
         }
         let walls: [[WorldPoint]] = [
             [[0,0], [1,0], [1,height], [0,height]],
@@ -609,61 +778,212 @@ package enum Stress300Scene {
                 id: ObjectID(rawValue: UInt64(10_001 + index)), vertices: vertices,
                 physicsMaterialID: polygonMaterialID, renderMaterialID: styleID)))
         }
-        // Tor sceny akceptacyjnej jest odwzorowany w osi y na wysokość regionu (poziomy pojemności); inne sceny zostają przy 700.
-        let triangleRegionHeight = acceptance ? height : referenceRegionHeight
-        transaction = transaction.add(.rigidBody(try triangle(step: 0, kinematic: acceptance, regionHeight: triangleRegionHeight)))
-        if acceptance {
-            transaction = transaction.setKinematicDrive(triangleID, drive: .path(try trianglePath(regionHeight: triangleRegionHeight)))
-        }
+        // Tor trójkąta jest odwzorowany w osi y na wysokość regionu (poziomy pojemności); dla 300 baniek to punkty bez zmian.
+        transaction = transaction.add(.rigidBody(try triangle(regionHeight: height)))
+        transaction = transaction.setKinematicDrive(triangleID, drive: .path(try trianglePath(regionHeight: height)))
         return transaction
     }
 
-    /// Zastępuje trójkąt jego pozycją na kroku `step` (tor po pięciu punktach, 40 kroków na odcinek).
-    package static func triangleReplacement(step: Int) throws -> WorldTransaction {
-        WorldTransaction().replace(triangleID, with: .rigidBody(try triangle(step: step)))
-    }
-
     private static let triangleID = ObjectID(rawValue: 10_000)
-    private static let triangleWaypoints: [WorldPoint] = [[187.5,350], [65,105], [310,595], [310,105], [65,595]]
-    /// Wysokość regionu sceny 300 baniek, dla której podano `triangleWaypoints`.
+    private static let waypoints700: [WorldPoint] = [[187.5,350], [65,105], [310,595], [310,105], [65,595]]
+    /// Wysokość regionu sceny 300 baniek, dla której podano `waypoints700`.
     private static let referenceRegionHeight: Float = 700
+    private static let triangleVertices: [WorldPoint] = [[-46,34], [46,34], [0,-52]]
 
     /// Punkty toru odwzorowane afinicznie w osi y na region o wysokości `regionHeight`:
     /// y′ = 105 + (y − 105)·(H − 210)/490, więc obwiednia trójkąta ma na całym torze te same odstępy od dolnej (53)
     /// i górnej (71) krawędzi co przy H = 700, gdzie punkty zostają bez zmian.
-    private static func waypoints(regionHeight: Float) -> [WorldPoint] {
-        guard regionHeight != referenceRegionHeight else { return triangleWaypoints }
+    private static func triangleWaypoints(regionHeight: Float) -> [WorldPoint] {
+        guard regionHeight != referenceRegionHeight else { return waypoints700 }
         let scale = (regionHeight - 210) / 490
-        return triangleWaypoints.map { WorldPoint($0.x, 105 + ($0.y - 105) * scale) }
+        return waypoints700.map { WorldPoint($0.x, 105 + ($0.y - 105) * scale) }
     }
 
-    /// Tor kinematycznego trójkąta sceny akceptacyjnej: te same punkty co w stress-300, dwa okrążenia, 200 jednostek na sekundę.
-    private static func trianglePath(regionHeight: Float = referenceRegionHeight) throws -> PathDrive {
-        let points = waypoints(regionHeight: regionHeight)
+    /// Tor kinematycznego trójkąta: te same punkty co w stress-300, dwa okrążenia, 200 jednostek na sekundę.
+    private static func trianglePath(regionHeight: Float) throws -> PathDrive {
+        let points = triangleWaypoints(regionHeight: regionHeight)
         let lap = Array(points.dropFirst()) + [points[0]]
         return try PathDrive(points: lap + lap, speed: 200)
     }
 
-    private static func triangle(step: Int, kinematic: Bool = false,
-                                 regionHeight: Float = referenceRegionHeight) throws -> RigidBodyDescriptor {
-        let polygonMaterialID = PhysicsMaterialID(rawValue: 2)
-        let styleID = RenderMaterialID(rawValue: 1)
-        let triangleVertices: [WorldPoint] = [[-46,34], [46,34], [0,-52]]
-        let waypoints = waypoints(regionHeight: regionHeight)
-        let leg = (step / 40) % waypoints.count
-        let next = (leg + 1) % waypoints.count
-        let t = Float(step % 40) / 40
-        let center = WorldPoint(
-            waypoints[leg].x + (waypoints[next].x - waypoints[leg].x) * t,
-            waypoints[leg].y + (waypoints[next].y - waypoints[leg].y) * t)
-        return try RigidBodyDescriptor(id: triangleID, vertices: triangleVertices,
-            position: center, motionRole: kinematic ? .kinematic : .static, physicsMaterialID: polygonMaterialID, renderMaterialID: styleID)
+    private static func triangle(regionHeight: Float) throws -> RigidBodyDescriptor {
+        try RigidBodyDescriptor(id: triangleID, vertices: triangleVertices,
+            position: triangleWaypoints(regionHeight: regionHeight)[0], motionRole: .kinematic,
+            physicsMaterialID: PhysicsMaterialID(rawValue: 2), renderMaterialID: RenderMaterialID(rawValue: 1))
+    }
+
+    /// Odległość punktu od trójkąta o środku `center` (0 w środku): obrys startowy bryły.
+    private static func distanceToTriangle(_ point: WorldPoint, center: WorldPoint) -> Float {
+        let corners = triangleVertices.map { $0 + center }
+        func cross(_ a: WorldPoint, _ b: WorldPoint) -> Float { a.x * b.y - a.y * b.x }
+        let signs = (0..<3).map { cross(corners[($0 + 1) % 3] - corners[$0], point - corners[$0]) }
+        if signs.allSatisfy({ $0 >= 0 }) || signs.allSatisfy({ $0 <= 0 }) { return 0 }
+        return (0..<3).map { edge -> Float in
+            let a = corners[edge], b = corners[(edge + 1) % 3]
+            let t = max(0, min(1, simd_dot(point - a, b - a) / simd_dot(b - a, b - a)))
+            return simd_distance(point, a + (b - a) * t)
+        }.min() ?? 0
     }
 }
 
-/// Scena mieszana: 200 baniek, 60 brył (55 dynamicznych: wielokąty, koła, kapsuły i 5 kinematycznych belek),
-/// 10 więzów i 4 ściany, bez grawitacji (jak stress-300); bryły startują z losową prędkością. Wspólna dla benchmarku, strażnika i testów.
-/// Bańki leżą w dolnym pasie, dynamiczne bryły w siatce 11×5 nad belkami, belki przesuwają się poziomo.
+/// Cztery sceny G8-AC2, po 150 baniek, wszystkie w regionie 375 × 700 z jednym materiałem baniek (K_c gry, γ = 1) i bryłami tylko
+/// statycznymi. Tłum to bańki r 12 (m 0,36) na siatce z nakładaniem 0,5 j (ściśnięty tłum, który leży w spoczynku).
+/// - `restingCrowd`: 150 baniek tłumu w ramie ścian.
+/// - `bandToWall`: 149 baniek tłumu nad poziomą ścianą i bańka „2” (r 24, m 1) w pasie pod nią, ciągnięta gumką gry (K_band 22) do celu
+///   o 900 j za pionową ścianą. „2” startuje w spoczynku w położeniu równowagi (d* z prawa kontaktu dla siły gumki K_band · s,
+///   ok. 3 j od ściany, siła ok. 1,3 · 10⁴), więc w całej rozgrzewce i w klatkach mierzonych stoi dociśnięta napiętą gumką.
+/// - `headOn128`: 148 baniek tłumu pod poziomą ścianą i dwie bańki 128 (r 64) w osobnym pasie nad nią, lecące na siebie po 10³ j/s.
+/// - `shotIntoCrowd`: 149 baniek tłumu w ramie ścian z otworem w lewej ścianie i bańka „2” startująca poza ramą (w pasie przy lewej
+///   ścianie regionu), wystrzelona 3 · 10³ j/s przez otwór w tłum.
+/// Sceny uderzeń (`headOn128`, `shotIntoCrowd`) powtarzają uderzenie co 20 klatek transakcją `.replace` uczestników z pozycją i
+/// prędkością początkową, więc uderzenia są też w części mierzonej, a nie tylko w rozgrzewce.
+fileprivate enum BudgetScenes {
+    static let bubbleCount = 150
+    static let regionHeight: Float = 700
+    /// Co ile klatek sceny uderzeń wznawiają uderzenie.
+    static let impactInterval = 20
+    static let headOnSpeed: Float = 1_000
+    static let shotSpeed: Float = 3_000
+
+    private static let width: Float = 375
+    private static let bubbleMaterial = PhysicsMaterialID(rawValue: 1)
+    private static let rigidMaterial = PhysicsMaterialID(rawValue: 2)
+    private static let style = RenderMaterialID(rawValue: 1)
+    private static let crowdRadius: Float = 12
+    private static let crowdMass: Float = 0.36
+    private static let crowdSpacing: Float = 23.5
+    private static let bandStiffness: Float = 22
+    /// Masa gry m = (n / 2)^(1 / 2,25): „2” ma 1, 128 ma ok. 6,35.
+    private static let mass128: Float = pow(64, 1 / 2.25)
+
+    static func configuration() throws -> WorldConfiguration {
+        try WorldConfiguration(simulationRegion: WorldRectangle(min: [0, 0], max: [width, regionHeight]), fixedTimeStep: 1.0 / 60)
+    }
+
+    /// Bańka spoza tłumu: „2” albo 128, z prędkością początkową i polityką gumki (tylko `bandToWall`).
+    private struct Participant {
+        let id: ObjectID
+        let position: WorldPoint
+        let velocity: WorldPoint
+        let radius: Float
+        let mass: Float
+        var drivePolicy: BubbleDrivePolicy?
+
+        func object() throws -> WorldObject {
+            .bubble(try BubbleDescriptor(id: id, position: position, velocity: velocity, targetRadius: radius, mass: mass,
+                                         physicsMaterialID: BudgetScenes.bubbleMaterial, renderMaterialID: BudgetScenes.style,
+                                         drivePolicy: drivePolicy))
+        }
+    }
+
+    private static func participants(_ scene: PublicWorldStressBenchmark.Scene) throws -> [Participant] {
+        switch scene {
+        case .bandToWall:
+            return [Participant(id: ObjectID(rawValue: 150), position: [bandRestX, bandY], velocity: .zero, radius: 24, mass: 1,
+                                drivePolicy: try BubbleDrivePolicy(bandStiffness: bandStiffness))]
+        case .headOn128:
+            return [Participant(id: ObjectID(rawValue: 149), position: [80, 585], velocity: [headOnSpeed, 0], radius: 64, mass: mass128),
+                    Participant(id: ObjectID(rawValue: 150), position: [295, 585], velocity: [-headOnSpeed, 0], radius: 64, mass: mass128)]
+        case .shotIntoCrowd:
+            return [Participant(id: ObjectID(rawValue: 150), position: [30, 365], velocity: [shotSpeed, 0], radius: 24, mass: 1)]
+        default:
+            return []
+        }
+    }
+
+    /// Cel gumki `bandToWall`: 900 j za pionową ścianą, w osi pasu (y = `bandY`).
+    private static let bandY: Float = 100
+    private static let bandTarget: WorldPoint = [900, bandY]
+    /// Lewa powierzchnia pionowej ściany sceny `bandToWall` (prostokąt 10_006).
+    private static let bandWallX: Float = 330
+    private static let bandRadius: Float = 24
+
+    /// Położenie środka „2” w równowadze z gumką: siła F = K_band · (cel − x) równoważy kontakt ze ścianą, czyli
+    /// d = r · (1 − ε), gdzie ε / (1 − ε)² = F / K_c (prawo kontaktu 4.0.0; ε = 2q / ((2q + 1) + √(4q + 1)) dla q = F / K_c).
+    /// Odległość d zależy od x tylko przez siłę gumki, więc kilka iteracji punktu stałego zbiega do float.
+    private static var bandRestX: Float {
+        var x = Double(bandWallX - bandRadius)
+        for _ in 0..<50 {
+            let force = Double(bandStiffness) * (Double(bandTarget.x) - x)
+            let q = force / Double(Stress300Scene.bubbleContactStiffness)
+            let epsilon = 2 * q / ((2 * q + 1) + (4 * q + 1).squareRoot())
+            x = Double(bandWallX) - Double(bandRadius) * (1 - epsilon)
+        }
+        return Float(x)
+    }
+
+    /// `count` miejsc siatki o kroku `crowdSpacing` w pasie x ∈ [minX, maxX], wyśrodkowanej w poziomie i w pionie względem `centerY`.
+    private static func crowdPositions(count: Int, minX: Float, maxX: Float, centerY: Float) -> [WorldPoint] {
+        let columns = Int((maxX - minX) / crowdSpacing)
+        let rows = (count + columns - 1) / columns
+        let x0 = minX + (maxX - minX - Float(columns) * crowdSpacing) / 2 + crowdSpacing / 2
+        let y0 = centerY - Float(rows - 1) * crowdSpacing / 2
+        return (0..<count).map { [x0 + Float($0 % columns) * crowdSpacing, y0 + Float($0 / columns) * crowdSpacing] }
+    }
+
+    private static func crowd(_ scene: PublicWorldStressBenchmark.Scene, count: Int) -> [WorldPoint] {
+        switch scene {
+        case .bandToWall: return crowdPositions(count: count, minX: 1, maxX: 374, centerY: 450)
+        case .headOn128: return crowdPositions(count: count, minX: 1, maxX: 374, centerY: 235)
+        case .shotIntoCrowd: return crowdPositions(count: count, minX: 61, maxX: 374, centerY: 365)
+        default: return crowdPositions(count: count, minX: 1, maxX: 374, centerY: 350)
+        }
+    }
+
+    private static func rectangle(_ id: UInt64, _ low: WorldPoint, _ high: WorldPoint) throws -> WorldObject {
+        .rigidBody(try RigidBodyDescriptor(id: ObjectID(rawValue: id),
+            vertices: [low, [high.x, low.y], high, [low.x, high.y]],
+            physicsMaterialID: rigidMaterial, renderMaterialID: style))
+    }
+
+    /// Cztery ściany regionu i ściany wewnętrzne sceny (poziome przegrody, ściana oporowa, rama z otworem).
+    private static func walls(_ scene: PublicWorldStressBenchmark.Scene) throws -> [WorldObject] {
+        var walls = [try rectangle(10_001, [0, 0], [1, regionHeight]), try rectangle(10_002, [374, 0], [375, regionHeight]),
+                     try rectangle(10_003, [0, 0], [375, 1]), try rectangle(10_004, [0, regionHeight - 1], [375, regionHeight])]
+        switch scene {
+        case .bandToWall:
+            walls += [try rectangle(10_005, [1, 200], [374, 201]), try rectangle(10_006, [330, 1], [331, 200])]
+        case .headOn128:
+            walls += [try rectangle(10_005, [1, 470], [374, 471])]
+        case .shotIntoCrowd:
+            // Rama tłumu: lewa ściana na x = 60 z otworem y ∈ [330, 400] (średnica „2” 48, otwór 70).
+            walls += [try rectangle(10_005, [60, 1], [61, 330]), try rectangle(10_006, [60, 400], [61, regionHeight - 1])]
+        default:
+            break
+        }
+        return walls
+    }
+
+    static func initialTransaction(_ scene: PublicWorldStressBenchmark.Scene) throws -> WorldTransaction {
+        var transaction = try WorldTransaction()
+            .updatePhysicsMaterial(bubbleMaterial, material: PhysicsMaterial(kind: .bubble, contactStiffness: Stress300Scene.bubbleContactStiffness, damping: 1))
+            .updatePhysicsMaterial(rigidMaterial, material: PhysicsMaterial(kind: .rigid))
+            .updateRenderMaterial(style, material: RenderMaterial())
+        let extra = try participants(scene)
+        for (index, position) in crowd(scene, count: bubbleCount - extra.count).enumerated() {
+            transaction = transaction.add(.bubble(try BubbleDescriptor(id: ObjectID(rawValue: UInt64(index + 1)), position: position,
+                targetRadius: crowdRadius, mass: crowdMass, physicsMaterialID: bubbleMaterial, renderMaterialID: style)))
+        }
+        for participant in extra { transaction = transaction.add(try participant.object()) }
+        for wall in try walls(scene) { transaction = transaction.add(wall) }
+        if scene == .bandToWall, let band = extra.first { transaction = transaction.beginPlayerDrive(band.id, target: bandTarget) }
+        return transaction
+    }
+
+    /// Co `impactInterval` klatek (od drugiej serii, bo krok 0 ma jeszcze stan początkowy) `.replace` uczestników uderzenia.
+    static func stepTransaction(_ scene: PublicWorldStressBenchmark.Scene, step: Int) throws -> WorldTransaction? {
+        guard scene == .headOn128 || scene == .shotIntoCrowd, step > 0, step % impactInterval == 0 else { return nil }
+        var transaction = WorldTransaction()
+        for participant in try participants(scene) { transaction = transaction.replace(participant.id, with: try participant.object()) }
+        return transaction
+    }
+}
+
+/// Scena mieszana: 200 baniek, 60 brył kinematycznych (55 obracających się w miejscu: wielokąty, koła, kapsuły i 5 belek
+/// przesuwających się poziomo) i 4 ściany, bez grawitacji (jak stress-300). Wspólna dla benchmarku, strażnika i testów.
+/// W 4.0.0 świat z bańkami nie ma brył dynamicznych ani przegubów z bańkami (CD-D-2), więc bryły są kinematyczne;
+/// sceny brył dynamicznych są osobne (testy brył bez baniek).
+/// Bańki leżą w dolnym pasie, obracające się bryły w siatce 11×5 nad belkami, belki przesuwają się poziomo.
 package enum MixedScene {
     package static let bubbleCount = 200
     package static let regionHeight: Float = 700
@@ -700,7 +1020,7 @@ package enum MixedScene {
 
     package static func initialTransaction() throws -> WorldTransaction {
         var transaction = try WorldTransaction()
-            .updatePhysicsMaterial(bubbleMaterial, material: PhysicsMaterial(kind: .bubble))
+            .updatePhysicsMaterial(bubbleMaterial, material: PhysicsMaterial(kind: .bubble, contactStiffness: Stress300Scene.bubbleContactStiffness))
             .updatePhysicsMaterial(rigidMaterial, material: PhysicsMaterial(kind: .rigid, friction: 0.2, maximumLinearSpeed: 90, maximumAngularSpeed: 8))
             .updateRenderMaterial(style, material: try RenderMaterial())
         var random = StressLCG(seed: 0x4D_1C_5E)
@@ -711,9 +1031,12 @@ package enum MixedScene {
                 physicsMaterialID: bubbleMaterial, renderMaterialID: style)))
         }
         for index in 0..<(bodyColumns * bodyRows) {
-            transaction = transaction.add(.rigidBody(try dynamicBody(index, scale: 0.8 + random.nextUnit() * 0.4,
-                velocity: [(random.nextUnit() - 0.5) * 80, (random.nextUnit() - 0.5) * 80],
-                angularVelocity: (random.nextUnit() - 0.5) * 6)))
+            let scale = 0.8 + random.nextUnit() * 0.4
+            // Dwa losowania prędkości liniowej zostają w ciągu, żeby rozmiary i obroty były te same co przy dawnej scenie.
+            _ = random.nextUnit(); _ = random.nextUnit()
+            let angularVelocity = (random.nextUnit() - 0.5) * 6
+            transaction = transaction.add(.rigidBody(try spinningBody(index, scale: scale)))
+                .setKinematicDrive(bodyID(index), drive: .velocity(linear: .zero, angular: angularVelocity))
         }
         for index in 0..<barY.count {
             transaction = transaction.add(.rigidBody(try RigidBodyDescriptor(id: barID(index),
@@ -731,64 +1054,29 @@ package enum MixedScene {
             transaction = transaction.add(.rigidBody(try RigidBodyDescriptor(id: ObjectID(rawValue: UInt64(10_001 + index)),
                 vertices: vertices, physicsMaterialID: rigidMaterial, renderMaterialID: style)))
         }
-        for joint in try joints() { transaction = transaction.addJoint(joint) }
         return transaction
     }
 
     /// Cztery rodzaje brył na zmianę: prostokąt, koło, kapsuła, trójkąt. `scale` zmienia rozmiar o ±20%.
-    private static func dynamicBody(_ index: Int, scale: Float, velocity: WorldPoint,
-                                    angularVelocity: Float) throws -> RigidBodyDescriptor {
+    private static func spinningBody(_ index: Int, scale: Float) throws -> RigidBodyDescriptor {
         let id = bodyID(index), position = bodyPosition(index)
         switch index % 4 {
         case 0:
             return try RigidBodyDescriptor(id: id, vertices: [[-9, -6], [9, -6], [9, 6], [-9, 6]].map { $0 * scale },
-                position: position, velocity: velocity, angularVelocity: angularVelocity, motionRole: .dynamic,
+                position: position, motionRole: .kinematic,
                 physicsMaterialID: rigidMaterial, renderMaterialID: style)
         case 1:
             return try RigidBodyDescriptor(id: id, shape: .circle(radius: 8 * scale), position: position,
-                velocity: velocity, angularVelocity: angularVelocity, motionRole: .dynamic, physicsMaterialID: rigidMaterial, renderMaterialID: style)
+                motionRole: .kinematic, physicsMaterialID: rigidMaterial, renderMaterialID: style)
         case 2:
             return try RigidBodyDescriptor(id: id, shape: .capsule(halfLength: 6 * scale, radius: 5 * scale),
-                position: position, velocity: velocity, angularVelocity: angularVelocity, motionRole: .dynamic,
+                position: position, motionRole: .kinematic,
                 physicsMaterialID: rigidMaterial, renderMaterialID: style)
         default:
             return try RigidBodyDescriptor(id: id, vertices: [[-9, 7], [9, 7], [0, -9]].map { $0 * scale },
-                position: position, velocity: velocity, angularVelocity: angularVelocity, motionRole: .dynamic,
+                position: position, motionRole: .kinematic,
                 physicsMaterialID: rigidMaterial, renderMaterialID: style)
         }
-    }
-
-    /// 10 więzów: 3 dystansowe i 2 zawiasy (jeden z zakresem, jeden z silnikiem) oraz spaw między sąsiednimi bryłami,
-    /// 2 dystansowe bryła–świat, bańka–świat i bańka–bańka.
-    private static func joints() throws -> [Joint] {
-        var result: [Joint] = []
-        var nextID: UInt64 = 1
-        func make(_ build: (JointID) throws -> Joint) rethrows {
-            result.append(try build(JointID(rawValue: nextID)))
-            nextID += 1
-        }
-        let half = bodySpacing / 2
-        for index in [0, 13, 24] {
-            try make { try Joint(id: $0, bodyA: bodyID(index), bodyB: bodyID(index + 1),
-                kind: .distance(length: bodySpacing, softness: 0, damping: 0)) }
-        }
-        try make { try Joint(id: $0, bodyA: bodyID(3), bodyB: bodyID(4), anchorA: [half, 0], anchorB: [-half, 0],
-            kind: .hinge(limits: HingeLimits(lower: -0.8, upper: 0.8), motor: nil)) }
-        try make { try Joint(id: $0, bodyA: bodyID(36), bodyB: bodyID(37), anchorA: [half, 0], anchorB: [-half, 0],
-            kind: .hinge(limits: nil, motor: HingeMotor(targetAngularVelocity: 1, maximumTorque: 50))) }
-        try make { try Joint(id: $0, bodyA: bodyID(6), bodyB: bodyID(7), anchorA: [half, 0], anchorB: [-half, 0], kind: .weld) }
-        for index in [9, 31] {
-            let top = bodyPosition(index) + [0, 60]
-            try make { try Joint(id: $0, bodyA: bodyID(index), anchorB: top,
-                kind: .distance(length: 60, softness: 0, damping: 0)) }
-        }
-        let held = bubblePosition(100)
-        try make { try Joint(id: $0, bodyA: bubbleID(100), anchorB: held + [0, 30],
-            kind: .distance(length: 30, softness: 0, damping: 0)) }
-        let spacing = simd_distance(bubblePosition(55), bubblePosition(56))
-        try make { try Joint(id: $0, bodyA: bubbleID(55), bodyB: bubbleID(56),
-            kind: .distance(length: spacing, softness: 0, damping: 0)) }
-        return result
     }
 
     /// Belki zawracają co `barHalfPeriod` kroków; poza tym scena nie zmienia się transakcjami.
@@ -814,11 +1102,14 @@ package struct BenchmarkSceneSpec {
     private let kind: Kind
     /// Transakcje kroków podstawiane przez test za transakcję sceny, gdy zwrócą wartość (szew testowy, np. usunięcie bańki).
     private var extraStepTransaction: ((Int) -> WorldTransaction?)?
+    /// Fabryka światów serii podstawiana przez test (szew testowy, np. świat z przełącznikami natywnymi); bez niej
+    /// `BubbleWorld.makeBenchmarkWorld` z konfiguracją natywną domyślną.
+    private var worldFactory: (@MainActor (WorldConfiguration, MTLDevice) throws -> BubbleWorld)?
 
     package init(_ scene: PublicWorldStressBenchmark.Scene) { kind = .scene(scene) }
 
-    /// Poziom pojemności: obszar 375 × H, H = ⌈n/15⌉·33,5 + 30, ten sam generator baniek (pierwsze n baniek jak na każdym
-    /// poziomie), teksturą i naklejką tekstową na każdej bańce, dwiema warstwami z materiałem alfa i kinematycznym trójkątem
+    /// Poziom pojemności: obszar 375 × H, H = ⌈n/15⌉·33,5 + 30, ten sam generator baniek (pierwsze n miejsc siatki jak na każdym
+    /// poziomie, bez miejsc w obrysie startowym trójkąta), teksturą i naklejką tekstową na każdej bańce, dwiema warstwami z materiałem alfa i kinematycznym trójkątem
     /// z torem odwzorowanym w osi y. Poziom 300 daje te same operacje co `Scene.acceptance`.
     package static func capacity(bubbleCount: Int) -> BenchmarkSceneSpec {
         BenchmarkSceneSpec(kind: .capacity(bubbleCount: bubbleCount))
@@ -831,6 +1122,21 @@ package struct BenchmarkSceneSpec {
         var copy = self
         copy.extraStepTransaction = hook
         return copy
+    }
+
+    /// Specyfikacja, której światy serii (w kolejności serii) buduje `factory` z konfiguracji sceny (szew testowy).
+    package func makingWorlds(_ factory: @escaping @MainActor (WorldConfiguration, MTLDevice) throws -> BubbleWorld)
+        -> BenchmarkSceneSpec {
+        var copy = self
+        copy.worldFactory = factory
+        return copy
+    }
+
+    /// Świat jednej serii z konfiguracji sceny, bez transakcji początkowej.
+    @MainActor package func makeWorld(device: MTLDevice) throws -> BubbleWorld {
+        let configuration = try configuration()
+        if let worldFactory { return try worldFactory(configuration, device) }
+        return try BubbleWorld.makeBenchmarkWorld(configuration: configuration, device: device)
     }
 
     package var name: String {
@@ -871,7 +1177,7 @@ package struct BenchmarkSceneSpec {
 
     /// Liczba baniek, którą świat ma mieć w każdej klatce, albo `nil`, gdy scena jej nie pilnuje.
     package var expectedBubbleCount: Int? {
-        if case .capacity(let count) = kind { return count }
+        if case .capacity(let count) = kind { return Stress300Scene.placedBubbleCount(bubbleCount: count) }
         return nil
     }
 

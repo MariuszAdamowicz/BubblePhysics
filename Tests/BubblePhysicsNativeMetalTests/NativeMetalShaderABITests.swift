@@ -136,8 +136,6 @@ final class NativeMetalShaderABITests: XCTestCase {
             Probe(name: "structuralSource", mslSize: "NativeStructuralSource", swiftSize: MemoryLayout<NativeStructuralSourceRecord>.stride, fields: [
                 ("geometry", MemoryLayout<NativeStructuralSourceRecord>.offset(of: \.geometry)),
                 ("clips", MemoryLayout<NativeStructuralSourceRecord>.offset(of: \.clips))]),
-            Probe(name: "solverControl", mslSize: "NativeSolverControl", swiftSize: MemoryLayout<NativeMetalSolverControl>.stride, fields: [
-                ("physics", MemoryLayout<NativeMetalSolverControl>.offset(of: \.physics))]),
             Probe(name: "contourControl", mslSize: "NativeContourControl", swiftSize: MemoryLayout<NativeMetalContourControl>.stride, fields: [
                 ("shape", MemoryLayout<NativeMetalContourControl>.offset(of: \.shape))]),
             Probe(name: "event", mslSize: "NativeEventRecord", swiftSize: MemoryLayout<NativeMetalEventRecord>.stride, fields: [
@@ -242,6 +240,87 @@ final class NativeMetalShaderABITests: XCTestCase {
     }
 
     /// P-B-71: warstwa w `filter.w` to Int32 z odwróconym bitem znaku, więc porządek uint zgadza się z porządkiem Int32.
+    /// Rekordy sił silnika 4.0.0: gumka, pole, motor i sterowanie podkrokami mają ten sam układ w Swift i w shaderze.
+    func testForceRecordsMatchShaderLayouts() throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let sources = try NativeMetalShaderSource.solverFiles.map(source)
+        let probes: [Probe] = [
+            Probe(name: "bandDrive", mslSize: "NativeBandDrive", swiftSize: MemoryLayout<NativeMetalBandDrive>.stride, fields: [
+                ("identity", MemoryLayout<NativeMetalBandDrive>.offset(of: \.identity)),
+                ("band", MemoryLayout<NativeMetalBandDrive>.offset(of: \.band))]),
+            Probe(name: "forceField", mslSize: "NativeForceField", swiftSize: MemoryLayout<NativeMetalForceField>.stride, fields: [
+                ("identity", MemoryLayout<NativeMetalForceField>.offset(of: \.identity)),
+                ("pose", MemoryLayout<NativeMetalForceField>.offset(of: \.pose)),
+                ("strength", MemoryLayout<NativeMetalForceField>.offset(of: \.strength)),
+                ("shape", MemoryLayout<NativeMetalForceField>.offset(of: \.shape)),
+                ("filter", MemoryLayout<NativeMetalForceField>.offset(of: \.filter))]),
+            Probe(name: "motor", mslSize: "NativeMotor", swiftSize: MemoryLayout<NativeMetalMotor>.stride, fields: [
+                ("identity", MemoryLayout<NativeMetalMotor>.offset(of: \.identity)),
+                ("drive", MemoryLayout<NativeMetalMotor>.offset(of: \.drive))]),
+            Probe(name: "forceControl", mslSize: "NativeForceControl", swiftSize: MemoryLayout<NativeMetalForceControl>.stride, fields: [
+                ("global", MemoryLayout<NativeMetalForceControl>.offset(of: \.global)),
+                ("counts", MemoryLayout<NativeMetalForceControl>.offset(of: \.counts))]),
+            Probe(name: "substepControl", mslSize: "NativeSubstepControl", swiftSize: MemoryLayout<NativeMetalSubstepControl>.stride, fields: [
+                ("time", MemoryLayout<NativeMetalSubstepControl>.offset(of: \.time)),
+                ("counts", MemoryLayout<NativeMetalSubstepControl>.offset(of: \.counts)),
+                ("limiter", MemoryLayout<NativeMetalSubstepControl>.offset(of: \.limiter))]),
+            Probe(name: "contactAssertion", mslSize: "NativeContactAssertion", swiftSize: MemoryLayout<NativeMetalContactAssertion>.stride, fields: [
+                ("state", MemoryLayout<NativeMetalContactAssertion>.offset(of: \.state)),
+                ("objects", MemoryLayout<NativeMetalContactAssertion>.offset(of: \.objects)),
+                ("detail", MemoryLayout<NativeMetalContactAssertion>.offset(of: \.detail))])
+        ]
+        assertMatches(probes, try measure(probes, sources: sources, device: device))
+        XCTAssertEqual(MemoryLayout<NativeMetalBandDrive>.stride, 32)
+        XCTAssertEqual(MemoryLayout<NativeMetalForceField>.stride, 80)
+        XCTAssertEqual(MemoryLayout<NativeMetalMotor>.stride, 32)
+        XCTAssertEqual(MemoryLayout<NativeMetalSubstepControl>.stride, 48)
+        XCTAssertEqual(MemoryLayout<NativeMetalForceControl>.stride, 32)
+        XCTAssertEqual(MemoryLayout<NativeMetalContactAssertion>.stride, 48)
+    }
+
+    /// Jądro `nativeSubstepLoopSingleGroup` czyta stałe i przesunięcia wycinków ze struktury `NativeSingleGroupParameters`: układ musi
+    /// zgadzać się z tym, co koduje `NativeMetalSubstepLoop.encodeSingleDispatch`.
+    func testSingleGroupKernelStructsMatchShaderLayouts() throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let sources = try NativeMetalShaderSource.solverFiles.map(source)
+        let probes: [Probe] = [
+            Probe(name: "singleGroupParameters", mslSize: "NativeSingleGroupParameters",
+                  swiftSize: MemoryLayout<NativeMetalSingleGroupParameters>.stride, fields: [
+                ("flags", MemoryLayout<NativeMetalSingleGroupParameters>.offset(of: \.flags)),
+                ("diagnostics", MemoryLayout<NativeMetalSingleGroupParameters>.offset(of: \.diagnostics)),
+                ("injectionObject", MemoryLayout<NativeMetalSingleGroupParameters>.offset(of: \.injectionObject)),
+                ("injectionPosition", MemoryLayout<NativeMetalSingleGroupParameters>.offset(of: \.injectionPosition)),
+                ("stepControlOffsets", MemoryLayout<NativeMetalSingleGroupParameters>.offset(of: \.stepControlOffsets)),
+                ("stepControlOffsetsTail", MemoryLayout<NativeMetalSingleGroupParameters>.offset(of: \.stepControlOffsetsTail)),
+                ("forceRecordOffsets", MemoryLayout<NativeMetalSingleGroupParameters>.offset(of: \.forceRecordOffsets)),
+                ("forceRecordOffsetsTail", MemoryLayout<NativeMetalSingleGroupParameters>.offset(of: \.forceRecordOffsetsTail))])
+        ]
+        assertMatches(probes, try measure(probes, sources: sources, device: device))
+        XCTAssertEqual(MemoryLayout<NativeMetalSingleGroupParameters>.stride, 128)
+    }
+
+    /// A11 (rodzina Apple4) ma argument buffers tier 1: struktura wskaźników z adresami GPU tam nie działa, a każdy bufor jądra
+    /// liczy się do limitu 31 wpisów tablicy buforów funkcji. Jądro jednej grupy musi więc wiązać bufory zwykłymi slotami
+    /// i mieścić się w tym limicie (bugfix iPhone X, BF-D-2).
+    func testSingleGroupKernelFitsTier1ArgumentTable() throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let options = MTLCompileOptions()
+        options.fastMathEnabled = false
+        let library = try device.makeLibrary(source: NativeMetalShaderSource.solverSource(), options: options)
+        let function = try XCTUnwrap(library.makeFunction(name: "nativeSubstepLoopSingleGroup"))
+        var reflection: MTLComputePipelineReflection?
+        _ = try device.makeComputePipelineState(function: function, options: [.bindingInfo], reflection: &reflection)
+        let buffers = try XCTUnwrap(reflection).bindings.compactMap { $0 as? MTLBufferBinding }
+        XCTAssertLessThanOrEqual(buffers.count, 31, "tier 1 liczy każdy bufor jądra do limitu 31 wpisów tablicy buforów")
+        XCTAssertEqual(buffers.count, NativeMetalSubstep.singleGroupBufferCount + 1, "sloty buforów i slot parametrów")
+        let parameters = try XCTUnwrap(buffers.first { $0.index == NativeMetalSubstep.singleGroupBufferCount })
+        XCTAssertEqual(parameters.bufferDataSize, MemoryLayout<NativeMetalSingleGroupParameters>.stride)
+        for binding in buffers {
+            let pointers = binding.bufferStructType?.members.filter { $0.dataType == .pointer }.count ?? 0
+            XCTAssertEqual(pointers, 0, "argument \(binding.name) ma wskaźniki GPU, a tier 1 ich nie obsługuje")
+        }
+    }
+
     func testLayerEncodingKeepsSignedOrderAndRoundTrips() {
         let layers: [Int32] = [.min, -70_000, -2, -1, 0, 1, 2, 70_000, .max - 1, .max]
         let encoded = layers.map(NativeMetalFilter.encodeLayer)
@@ -251,22 +330,12 @@ final class NativeMetalShaderABITests: XCTestCase {
         XCTAssertEqual(NativeMetalFilter.encodeLayer(0), 0x8000_0000)
     }
 
-    /// P-B-33: host liczy c₀·r/r_ref tylko dla c₀ > 0 (z nadpisaniem), a rekord bańki niesie wynik w `contact.x`, ζ_c w `contact.z`
-    /// i zawsze 0 w wolnej lane `.y` (nie ma już wykładnika ściśnięcia).
-    func testHostComputesContactComplianceForBubbleRecord() throws {
-        let compliance = BubbleContactCompliance(base: 2, referenceRadius: 10)
-        // Lane .z niesie ζ_c każdej bańki (CD-D-6), także twardej: tłumik kontaktu miękkiego pary czyta ζ_c obu końców.
-        XCTAssertEqual(NativePublicProperties.contact(of: compliance, override: nil, radius: 20, dampingRatio: 0.7), SIMD4(4, 0, 0.7, 0))
-        XCTAssertEqual(NativePublicProperties.contact(of: compliance, override: 0.5, radius: 20, dampingRatio: 0.7), SIMD4(1, 0, 0.7, 0), "nadpisanie c₀")
-        XCTAssertEqual(NativePublicProperties.contact(of: compliance, override: 0, radius: 20, dampingRatio: 0.7), SIMD4(0, 0, 0.7, 0),
-                       "nadpisanie 0 daje kontakt twardy, ale ζ_c zostaje")
-        XCTAssertEqual(NativePublicProperties.contact(of: .hard, override: nil, radius: 5, dampingRatio: 1), SIMD4(0, 0, 1, 0))
-        XCTAssertEqual(NativePublicProperties.contact(of: .hard, override: nil, radius: 5, dampingRatio: 0), .zero)
-        // Podatność rośnie liniowo z promieniem: ta sama bańka o r = 5 i r = 40 ma c różne dokładnie o 8×.
-        let small = NativePublicProperties.contact(of: compliance, override: nil, radius: 5, dampingRatio: 1)
-        let large = NativePublicProperties.contact(of: compliance, override: nil, radius: 40, dampingRatio: 1)
-        XCTAssertEqual(small.x, 1)
-        XCTAssertEqual(large.x, 8)
+    /// Rekord bańki niesie K_c w `contact.y` i znacznik bańki napędzanej siłami w `contact.w`; podatność XPBD c = r / K_c i ζ_c
+    /// zniknęły razem z XPBD (zadanie 7c), więc `contact.x` i `contact.z` to zero niezależnie od K_c i promienia.
+    func testHostWritesStiffnessAndForceDrivenFlagToBubbleRecord() throws {
+        XCTAssertEqual(NativePublicProperties.contact(stiffness: 5, forceDriven: true), SIMD4(0, 5, 0, 1))
+        XCTAssertEqual(NativePublicProperties.contact(stiffness: 1e9, forceDriven: false), SIMD4(0, 1e9, 0, 0))
+        XCTAssertEqual(NativePublicProperties.contact(stiffness: nil, forceDriven: false), SIMD4(0, 0, 0, 0))
 
         let id = NativeSolverBubbleID(rawValue: 4)
         var properties = NativePublicProperties(flags: SIMD4(1, 0, 0, 0), material: .zero, restitution: 0,
@@ -304,11 +373,9 @@ final class NativeMetalShaderABITests: XCTestCase {
     }
 
     /// F-13: shadery adresują bufor safety jako `atomic_uint *safety` bez struktury MSL, więc sonda ABI go nie widzi.
-    /// Układ pilnujemy po stronie Swift: 8 słów `uint`, safety+0..3 to `counts`, safety+4..7 to `diagnostics`.
-    func testSafetyControlIsEightUIntWordsWithDiagnosticsAtWordFour() {
-        XCTAssertEqual(MemoryLayout<NativeMetalSafetyControl>.stride, 32, "bufor safety: 8 × uint")
-        XCTAssertEqual(MemoryLayout<NativeMetalSafetyControl>.offset(of: \.counts), 0, "safety+0..3: liczniki i bity błędów")
-        XCTAssertEqual(MemoryLayout<NativeMetalSafetyControl>.offset(of: \.diagnostics), 16,
-            "safety+4: licznik par bańka w bańce (atomic add w shaderze)")
+    /// Układ pilnujemy po stronie Swift: 4 słowa `uint`, safety+3 to bity błędów.
+    func testSafetyControlIsFourUIntWordsWithErrorBitsAtWordThree() {
+        XCTAssertEqual(MemoryLayout<NativeMetalSafetyControl>.stride, 16, "bufor safety: 4 × uint")
+        XCTAssertEqual(MemoryLayout<NativeMetalSafetyControl>.offset(of: \.counts), 0, "safety+0..3: bity błędów w słowie 3")
     }
 }

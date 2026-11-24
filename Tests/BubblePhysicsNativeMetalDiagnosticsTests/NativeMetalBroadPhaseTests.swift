@@ -15,12 +15,14 @@ final class NativeMetalBroadPhaseTests: XCTestCase {
                     mass: 1, targetRadius: i % 3 == 0 ? 1.5 : 0.5))
             }
             let solver = try NativeMetalSolver(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
-            let frame = try await solver.executeFrame(world: world, scenarioStep: 1)
+            // K_c = 0: bańki nie ruszają się w klatce, więc kandydaci pochodzą z położeń wejściowych (z K_c > 0 siatka przebudowuje się
+            // w trakcie klatki, a kandydaci opisują już inny stan). Obwiednia bańki ma zapas r / 4 (bańka bez prędkości i sił, G5-AC3).
+            let frame = try await solver.executeFrame(world: world, scenarioStep: 1, contactStiffness: 0)
             var expected: [NativeContactKey] = []
             for i in world.bubbles.indices {
                 for j in world.bubbles.indices where j > i {
                     let a = world.bubbles[i], b = world.bubbles[j]
-                    let radius = a.targetRadius + b.targetRadius
+                    let radius = a.targetRadius * 1.25 + b.targetRadius * 1.25
                     if abs(a.center.x - b.center.x) <= radius && abs(a.center.y - b.center.y) <= radius {
                         expected.append(.bubblePair(Int64(a.id.rawValue), Int64(b.id.rawValue)))
                     }
@@ -39,8 +41,9 @@ final class NativeMetalBroadPhaseTests: XCTestCase {
         world.addBubble(try .init(id: .init(rawValue: 1), center: .zero, mass: 1, targetRadius: 1))
         let first = try await solver.executeFrame(world: world, scenarioStep: 1)
         XCTAssertEqual(first.contactCandidateOverflowCount, 0)
+        // Środki rozsunięte o 0,1 j: nakładające się, ale nie wspólne (d = 0 to naruszenie asercji kontaktu silnika 4.0.0).
         for id in 2...3 {
-            world.addBubble(try .init(id: .init(rawValue: id), center: .zero, mass: 1, targetRadius: 1))
+            world.addBubble(try .init(id: .init(rawValue: id), center: .init(x: Float(id - 1) * 0.1, y: 0), mass: 1, targetRadius: 1))
         }
         let frame = try await solver.executeFrame(world: world, scenarioStep: 2)
         XCTAssertGreaterThan(frame.contactCandidateOverflowCount, 0, "3 pary przy pojemności 1 muszą zwiększyć licznik")
@@ -58,7 +61,7 @@ final class NativeMetalBroadPhaseTests: XCTestCase {
                 center: .init(x: Float(i % 8) * 0.1, y: Float(i / 8) * 0.1), mass: 1, targetRadius: 1))
         }
         let solver = try NativeMetalSolver(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
-        let frame = try await solver.executeFrame(world: world, scenarioStep: 1)
+        let frame = try await solver.executeFrame(world: world, scenarioStep: 1, contactStiffness: 0)
         var expected: [NativeContactKey] = []
         var dropped = 0
         for i in 0..<count {
@@ -68,17 +71,26 @@ final class NativeMetalBroadPhaseTests: XCTestCase {
         }
         XCTAssertGreaterThan(dropped, 0, "scena musi przepełniać wiersze")
         XCTAssertEqual(solver.candidateKeys, expected.sorted())
-        XCTAssertGreaterThan(frame.contactCandidateOverflowCount, 0)
+        // CD-D-26: licznik to liczba odrzuconych kandydatów w kroku, każdy raz. Wiersz kandydatów odrzuca `dropped` par, a wiersz sąsiedztwa
+        // obiektu (k miejsc, wpisy z obu końców zachowanych par) odrzuca stopień ponad k; ten sam kandydat nie liczy się drugi raz
+        // przy końcowym budowaniu sąsiedztwa z kontaktów.
+        var degrees = [Int](repeating: 0, count: count)
+        for i in 0..<count { for j in (i + 1)..<max(i + 1, min(count, i + 1 + limit)) { degrees[i] += 1; degrees[j] += 1 } }
+        let adjacencyDropped = degrees.reduce(0) { $0 + max(0, $1 - limit) }
+        XCTAssertGreaterThan(adjacencyDropped, 0, "scena musi przepełniać także wiersze sąsiedztwa")
+        XCTAssertEqual(frame.contactCandidateOverflowCount, dropped + adjacencyDropped)
         XCTAssertGreaterThanOrEqual(frame.maximumContactCandidatesPerObject, limit)
     }
 
+    // Odcinek jednostronny przed bańką (strona dozwolona 1 to +y): kontakt ma normalną +y, a prawo kontaktu odpycha bańkę od odcinka.
+    // Bańka po niedozwolonej stronie odcinka nie jest już scenariuszem kroku: w 4.0.0 jest to naruszenie asercji, a nie korekta strażnika.
     func testSegmentCandidatesAndNarrowPhaseUseGPUWorldGeometry() async throws {
         let solver = try NativeMetalSolver(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         var world = ReferenceWorld(configuration: .init(linearDamping: 0), broadPhase: BruteForceBroadPhase())
         world.addBubble(try .init(id: .init(rawValue: Int.max), center: .zero, mass: 1, targetRadius: 1))
-        world.addSegment(.staticSegment(id: .init(rawValue: Int.min), a: .init(x: -2, y: 0.5), b: .init(x: 2, y: 0.5), collisionMode: .oneSided(allowedSide: 1)))
-        world.addSegment(.staticSegment(id: .init(rawValue: 10), a: .init(x: 0.9, y: 0.9), b: .init(x: 2, y: 2)))
-        world.addSegment(.staticSegment(id: .init(rawValue: 11), a: .init(x: 10, y: 10), b: .init(x: 12, y: 12)))
+        world.addSegment(.staticSegment(id: .init(rawValue: Int.min), a: .init(x: -2, y: -0.5), b: .init(x: 2, y: -0.5), collisionMode: .oneSided(allowedSide: 1)))
+        world.addSegment(.staticSegment(id: .init(rawValue: 10), a: .init(x: 0.9, y: -0.9), b: .init(x: 2, y: -2)))
+        world.addSegment(.staticSegment(id: .init(rawValue: 11), a: .init(x: 10, y: -10), b: .init(x: 12, y: -12)))
         let frame = try await solver.executeFrame(world: world, scenarioStep: 1)
         XCTAssertEqual(solver.candidateKeys, [.bubbleSegment(Int64.max, Int64.min), .bubbleSegment(Int64.max, 10)])
         XCTAssertEqual(frame.contacts.count, 1)
@@ -86,7 +98,8 @@ final class NativeMetalBroadPhaseTests: XCTestCase {
         XCTAssertEqual(frame.contacts[0].normal.x, 0, accuracy: 1e-6)
         XCTAssertEqual(frame.contacts[0].normal.y, 1, accuracy: 1e-6)
         XCTAssertEqual(frame.contacts[0].allowedSide, 1)
-        XCTAssertEqual(frame.contacts[0].penetration, 0, accuracy: 1e-6)
-        XCTAssertGreaterThanOrEqual(frame.bubbles[0].center.y, 1.4999)
+        // Środek stoi 0,5 j nad odcinkiem (d = 0,5 < r): siła F = K · (r − d) · r / d² > 0 odpycha go w górę, bez przejścia przez odcinek.
+        XCTAssertGreaterThan(frame.bubbles[0].center.y, 0)
+        XCTAssertGreaterThan(frame.bubbles[0].velocity.y, 0)
     }
 }

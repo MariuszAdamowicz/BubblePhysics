@@ -2,7 +2,7 @@
 
 `BubblePhysics` to pakiet Swift z silnikiem fizycznym GPU dla deformowalnych baniek 2D, sztywnych brył (wielokąty, koła, kapsuły), więzów, sensorów i pól sił. Działa na iOS 16+ i macOS 13+ (GPU Apple z Metal).
 
-**Wersja 3.0.2.** Zmiany w kolejnych wydaniach opisuje [CHANGELOG.md](CHANGELOG.md). Wersja 3.0.0 zmieniła model podatności kontaktu, tłumienie ruchu, napęd chwytu i krawędzie ścian statycznych, a przejście z 2.x opisuje [docs/MIGRATION-v3.md](docs/MIGRATION-v3.md). Wersja 2.0.0 zmieniła publiczne API względem 1.x, a przejście z `v1.0.0` opisuje [docs/MIGRATION-v2.md](docs/MIGRATION-v2.md). Integrację z `MTKView`, rejestrację zasobów, zapytania i zdarzenia opisuje [docs/integration-guide.md](docs/integration-guide.md).
+**Wersja 4.0.0.** Zmiany w kolejnych wydaniach opisuje [CHANGELOG.md](CHANGELOG.md). Wersja 4.0.0 zmieniła prawo kontaktu baniek (granica na promieniu, materiał to sztywność K_c i opór γ) i sposób liczenia ruchu (siły w podkrokach), a przejście z 3.x opisuje [docs/MIGRATION-v4.md](docs/MIGRATION-v4.md). Wersja 3.0.0 zmieniła model podatności kontaktu, tłumienie ruchu, napęd chwytu i krawędzie ścian statycznych, a przejście z 2.x opisuje [docs/MIGRATION-v3.md](docs/MIGRATION-v3.md). Wersja 2.0.0 zmieniła publiczne API względem 1.x, a przejście z `v1.0.0` opisuje [docs/MIGRATION-v2.md](docs/MIGRATION-v2.md). Integrację z `MTKView`, rejestrację zasobów, zapytania i zdarzenia opisuje [docs/integration-guide.md](docs/integration-guide.md).
 
 ## Produkty
 
@@ -14,7 +14,7 @@
 | `BubblePhysicsBenchmarkSupport` | Wyłącznie moduły diagnostyczne (solvery referencyjne, historyczne eksperymenty). Nie są częścią API gry. |
 | `BubblePhysicsReferenceBench` | Runner benchmarków dla macOS z linii poleceń. |
 
-Produkty dla gry działają na backendzie `native-metal` (trwały stan na GPU, trwały cache kontaktów, solver XPBD/PBD Jacobi). Referencyjny solver CPU (`BubblePhysicsReference`) jest wyrocznią poprawności dla testów i benchmarków; nie jest fallbackiem `BubbleWorld` w czasie działania. Na ścieżce gry nie ma `ReferenceWorld`, a pamięć kontaktów rośnie jak O(n·k) zamiast O(n²); kernele kontroli zawierania baniek pozostają O(n²), co jest pomijalne do kilkuset baniek.
+Produkty dla gry działają na backendzie `native-metal` (trwały stan na GPU, kontakt z granicą na promieniu, ruch liczony siłami w podkrokach leapfrog). Referencyjny solver CPU (`BubblePhysicsReference`) jest wyrocznią poprawności dla testów i benchmarków; nie jest fallbackiem `BubbleWorld` w czasie działania. Na ścieżce gry nie ma `ReferenceWorld`, a pamięć kontaktów rośnie jak O(n·k) zamiast O(n²).
 
 ## Szybki start
 
@@ -46,7 +46,7 @@ world.submit(WorldTransaction()
 let frame = await world.advance(by: 1.0 / 60)
 for event in frame.events { /* merge, wejście/wyjście z sensora, wyjście z regionu, ... */ }
 
-// Fizyka i render w jednym command bufferze:
+// Fizyka we własnych buforach świata, render w buforze gry:
 let renderer = try BubblePhysicsMetalRender(device: device, assets: world.assets!)
 let rendered = await world.advance(by: 1.0 / 60, commandBuffer: commandBuffer) {
     try renderer.encode(world: world, viewport: Viewport(center: [187.5, 350], size: [375, 700]),
@@ -59,8 +59,8 @@ let rendered = await world.advance(by: 1.0 / 60, commandBuffer: commandBuffer) {
 
 ## Zachowanie w czasie działania, o którym warto wiedzieć
 
-- Czas płynie stałymi krokami. `advance(by:commandBuffer:encodeRender:)` wykonuje najwyżej jeden krok na command buffer; reszta czasu zostaje w `world.diagnostics.backlogSeconds`. Gdy czas nie wystarcza na krok (np. ekran 120 Hz przy kroku 1/60), `advance` i tak woła `encodeRender`, zatwierdza bufor i rysuje opublikowany stan z interpolacją między krokami t−1 i t; nic nie jest wtedy publikowane. Pauza, stan „zawiódł” i odrzucona klatka nie zatwierdzają bufora (`didRenderLastAdvance == false`). Gdy aplikacja przechodzi w tło, świat pauzuje sam (`WorldConfiguration.automaticPause`, domyślnie włączone; na iOS według powiadomień UIKit, własne źródło podaje parametr `lifecycle:` inicjalizatora): `advance` zwraca ostatnią klatkę, nie rysuje i nie zatwierdza bufora, a po powrocie pierwszy przyrost czasu jest odrzucany. Pauza automatyczna jest niezależna od `pause()` i `resume()`. Zaległy czas ma górny limit `WorldConfiguration.maximumBacklog` (domyślnie 0,25 s): nadmiar jest odrzucany, a jego sumę podaje `world.diagnostics.discardedBacklogSeconds`.
-- Błąd w kroku ma trzy skutki. Błąd wykonania bufora na GPU albo wartości nieskończone (NaN, ±∞) przełączają świat w stan końcowy „zawiódł” (`diagnostics.failureReason`): kolejka transakcji jest porzucana, a `advance` i `submit` nic nie robią i zwracają ostatnią klatkę (`lastAdvanceIssue = .worldFailed`); dalej prowadzi tylko nowy `BubbleWorld`. Błąd zgłoszony przez domknięcie `encodeRender` albo kodowanie renderu odrzuca tylko klatkę (`lastAdvanceIssue = .frameRejected`): krok nie jest publikowany, poprzednia klatka zostaje, kolejka czeka na następne `advance`. Inne błędy solvera (naruszenie strażnika, niepoprawna klatka, wartość skończona poza zakresem) odrzucają krok (`lastAdvanceIssue = .stepFailed`, powód w `diagnostics.lastRejectionReason`) i też zachowują kolejkę. Ścieżka gry nie ma fallbacku CPU.
+- Czas płynie stałymi krokami. `advance(by:commandBuffer:encodeRender:)` wykonuje najwyżej jeden krok na wywołanie. Świat do 1024 baniek liczy ten krok w jednej dyspozycji GPU jednej grupy wątków (z przebudową siatki w jądrze), a większy parami buforów; ścieżkę wybiera silnik, a telemetria podaje ją w `executionPath`. Reszta czasu zostaje w `world.diagnostics.backlogSeconds`. Gdy czas nie wystarcza na krok (np. ekran 120 Hz przy kroku 1/60), `advance` i tak woła `encodeRender`, zatwierdza bufor i rysuje opublikowany stan z interpolacją między krokami t−1 i t; nic nie jest wtedy publikowane. Pauza, stan „zawiódł” i odrzucona klatka nie zatwierdzają bufora (`didRenderLastAdvance == false`). Gdy aplikacja przechodzi w tło, świat pauzuje sam (`WorldConfiguration.automaticPause`, domyślnie włączone; na iOS według powiadomień UIKit, własne źródło podaje parametr `lifecycle:` inicjalizatora): `advance` zwraca ostatnią klatkę, nie rysuje i nie zatwierdza bufora, a po powrocie pierwszy przyrost czasu jest odrzucany. Pauza automatyczna jest niezależna od `pause()` i `resume()`. Zaległy czas ma górny limit `WorldConfiguration.maximumBacklog` (domyślnie 0,25 s): nadmiar jest odrzucany, a jego sumę podaje `world.diagnostics.discardedBacklogSeconds`.
+- Błąd w kroku ma trzy skutki. Błąd wykonania bufora na GPU, wartości nieskończone (NaN, ±∞), naruszenie geometrii kontaktu (`.contactViolation`) albo klatka potrzebująca ponad 1024 podkroków (`.substepLimitExceeded`) przełączają świat w stan końcowy „zawiódł” (`diagnostics.failureReason`, szczegóły kontaktu i podkroków w `diagnostics.failureDetail`): kolejka transakcji jest porzucana, a `advance` i `submit` nic nie robią i zwracają ostatnią klatkę (`lastAdvanceIssue = .worldFailed`); dalej prowadzi tylko nowy `BubbleWorld`. Błąd zgłoszony przez domknięcie `encodeRender` albo kodowanie renderu odrzuca tylko klatkę (`lastAdvanceIssue = .frameRejected`): krok nie jest publikowany, poprzednia klatka zostaje, kolejka czeka na następne `advance`. Inne błędy solvera (budżet obrotu bryły dynamicznej, niepoprawna klatka, wartość skończona poza zakresem) odrzucają krok (`lastAdvanceIssue = .stepFailed`, powód w `diagnostics.lastRejectionReason`) i też zachowują kolejkę. Ścieżka gry nie ma fallbacku CPU.
 - Stan obiektów (pozycja, prędkość, obrót, AABB) czyta się z `WorldFrame.objects` bez odczytu z GPU; renderer czyta kontury bezpośrednio z buforów GPU, a `DriveFeedback` podaje osiągnięty punkt obiektów sterowanych.
 - Tekstury mają alfę przemnożoną (premultiplied alpha). `register(_: CGImage)` przemnaża obraz sam (dekoduje do `rgba8Unorm` w sRGB), a `register(_: MTLTexture)` przyjmuje bajty bez zmian, więc gotowa tekstura musi już mieć RGB pomnożone przez alfę; akceptowane są formaty `rgba8Unorm` i `bgra8Unorm` (warianty `_srgb` są odrzucane, bo potok liczy w przestrzeni celu renderu bez konwersji liniowej). Przesunięcie i skala UV materiału (`uvOffset`, `uvScale`) dotyczą tylko brył, na bańkach są ignorowane.
 - `debugContourSnapshot()` kopiuje kontury na CPU i służy wyłącznie do debugowania.
@@ -76,14 +76,18 @@ Testy Metal działają na macOS z lokalnym GPU. Źródła shaderów są dołącz
 
 ## Benchmark na urządzeniu
 
-Aplikacja hosta iOS jest w `Benchmarks/iOS/BubblePhysicsBench` i ma jeden ekran, który uruchamia `PublicWorldStressBenchmark` (moduł i produkt `BubblePhysicsMetalRenderBenchmark`, poza rendererem gry) na wybranej scenie. Świat i renderer (`BubblePhysicsMetalRender`) działają w tym samym command bufferze co krok fizyki, a render idzie poza ekranem w natywnej rozdzielczości ekranu (`UIScreen.main.nativeBounds`):
+Aplikacja hosta iOS jest w `Benchmarks/iOS/BubblePhysicsBench` i ma jeden ekran, który uruchamia `PublicWorldStressBenchmark` (moduł i produkt `BubblePhysicsMetalRenderBenchmark`, poza rendererem gry) na wybranej scenie. Krok fizyki świata biegnie we własnych buforach poleceń (liczba podkroków jest znana dopiero na GPU), a renderer (`BubblePhysicsMetalRender`) koduje render do bufora wywołującego, na który CPU czeka po kroku; render idzie poza ekranem w natywnej rozdzielczości ekranu (`UIScreen.main.nativeBounds`):
 
 | Scena | Skład | Bramka p95 |
 |-------|-------|------------|
-| `stress-300` | 300 baniek, cztery ściany, poruszający się trójkąt | 10,4568 ms |
-| `mixed` | 200 baniek, 60 brył (wielokąty, koła, kapsuły), 10 więzów, belki kinematyczne | 10,4568 ms |
+| `stress-300` | 287 baniek (obrys startowy trójkąta zostaje pusty), cztery ściany, trójkąt kinematyczny jadący po torze | 10,4568 ms |
+| `mixed` | 200 baniek, 60 brył kinematycznych (wielokąty, koła, kapsuły, belki przesuwane poziomo) i cztery ściany; bez brył dynamicznych i przegubów (świat z bańkami ich nie przyjmuje) | 10,4568 ms |
 | `decals` | stress-300 z teksturą przyklejoną i naklejką tekstową na każdej bańce | 10,4568 ms |
 | `acceptance` | `decals`, trójkąt kinematyczny z `KinematicDrive`, połowa baniek na warstwie 1; dwa materiały alfa | 16,67 ms |
+| `resting-crowd` | G8-AC2: 150 baniek tłumu (r 12) w spoczynku w ramie ścian | 16,67 ms |
+| `band-to-wall` | G8-AC2: bańka „2” (r 24, m 1) stoi w spoczynku w położeniu równowagi, dociśnięta do ściany w pełnym naciągnięciu gumki gry (K_band 22, cel 900 j za ścianą), obok tłum; razem 150 baniek | 16,67 ms |
+| `head-on-128` | G8-AC2: dwie bańki 128 lecące na siebie po 10³ j/s w osobnym pasie, obok tłum; razem 150 baniek, uderzenie wznawiane co 20 klatek transakcją `.replace` | 16,67 ms |
+| `shot-into-crowd` | G8-AC2: bańka „2” wystrzelona 3 · 10³ j/s przez otwór ramy w tłum; razem 150 baniek, uderzenie wznawiane co 20 klatek | 16,67 ms |
 
 Scena `acceptance` jest punktem odniesienia strażnika i podstawą trybu pojemności; kryterium urządzenia to pomiar pojemności, bez wymaganego minimum. Tryb pojemności („capacity” w aplikacji, `PublicWorldStressBenchmark.measureCapacity`), który podaje, ile baniek scena akceptacyjna mieści w 60 FPS:
 

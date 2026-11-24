@@ -11,23 +11,19 @@ package final class NativeCompleteStepper: CompleteStepper {
     /// Historia policzona w ostatnim kroku; wchodzi do `previousBlockers` i `previousContacts` dopiero w `didPublish`,
     /// więc krok lub klatka odrzucone przez świat zostawiają stepper bez zmian.
     private var candidateHistory: (blockers: [ObjectID: ObjectID], contacts: Set<ContactPair>)?
-    /// Podstawowa podatność konfiguracji solvera (α_cfg · dt²), po tej samej normalizacji co w solverze.
-    private let configuredContactCompliance: Float
     package init(device: MTLDevice?, configuration: NativeMetalConfiguration = .default) throws {
         native = try device.map { try NativePublicWorld(device: $0, configuration: configuration) }
-        configuredContactCompliance = configuration.sanitized.contactCompliance
     }
     /// Szew testów: stepper na gotowym świecie natywnym (np. z wstrzykniętym wykonawcą poleceń).
-    package init(world: NativePublicWorld, configuration: NativeMetalConfiguration = .default) {
+    package init(world: NativePublicWorld) {
         native = world
-        configuredContactCompliance = configuration.sanitized.contactCompliance
     }
-    package var baseContactCompliance: Float { configuredContactCompliance }
-    package var positionTolerance: Float { NativePublicWorld.positionTolerance }
     /// Pary z dostarczonym `contactBegan` po ostatnio opublikowanym kroku; szew testów `didPublish`.
     package var publishedContactPairs: Set<ContactPair> { previousContacts }
     package var publishedRenderHandoff: NativeMetalRenderHandoff? { native?.publishedRenderHandoff }
     package var publishedTelemetry: NativeMetalFrameTelemetry? { native?.publishedTelemetry }
+    package var nativeConfiguration: NativeMetalConfiguration? { native?.nativeConfiguration }
+    package var capturedSubsteps: [NativeMetalSubstepSample] { native?.capturedSubsteps ?? [] }
     package var publishedContourCPUReadbackCount: Int { native?.publishedContourCPUReadbackCount ?? 0 }
     package var publishedFrameProfile: NativeMetalFrameProfile? { native?.lastPublishedProfile }
 
@@ -60,21 +56,34 @@ package final class NativeCompleteStepper: CompleteStepper {
                         if case .rigidBody = object.descriptor { try role(id, value, polygon: true) }
                         else { try role(id, value, polygon: false) }
                     }
-                case .updatePhysicsMaterial(let id, let material):
-                    if material.kind == .rigid && material.deformability != 0 {
-                        throw TransactionRejectionReason.unsupportedPhysicsParameter(id, .deformability)
-                    }
-                case .startTransition(let transition):
-                    if case .physicsMaterial(let id, let parameter) = transition.target,
-                       case .scalar(let value) = transition.value, value > 0,
-                       parameter == .deformability && change.state.physicsMaterials[id]?.kind == .rigid {
-                        throw TransactionRejectionReason.unsupportedPhysicsParameter(id, parameter)
-                    }
                 default: break
                 }
             } catch let reason as TransactionRejectionReason {
                 throw TransactionRejection(operationIndex: index, reason: reason)
             }
+        }
+        try rejectBubbleWithDynamicRigidBody(change)
+    }
+
+    /// W 4.0.0 bańka nie spotyka się z bryłą dynamiczną (CD-D-2, G7-AC4): reguła patrzy na stan po całej transakcji, więc nie zależy
+    /// od tego, która operacja wprowadziła bryłę ani bańkę (`add`, `replace`, `replaceRigidBodies`, `setMotion`, napędy). Świat
+    /// z samymi bańkami albo z samymi bryłami dynamicznymi przechodzi. Odrzucenie wskazuje ostatnią operację transakcji.
+    private func rejectBubbleWithDynamicRigidBody(_ change: StagedWorldChange) throws {
+        var hasBubble = false, hasDynamicBody = false
+        for object in change.state.objects.values {
+            switch object.descriptor {
+            case .bubble: hasBubble = true
+            case .rigidBody:
+                switch object.motionRole {
+                case .dynamic, .motorDriven, .playerDriven, .pathDriven: hasDynamicBody = true
+                case .static, .kinematic: break
+                }
+            case .forceField, .sensor: break
+            }
+        }
+        guard !(hasBubble && hasDynamicBody) else {
+            throw TransactionRejection(operationIndex: max(0, change.operations.count - 1),
+                                       reason: .unsupportedBubbleWithDynamicRigidBody)
         }
     }
 
@@ -116,6 +125,7 @@ package final class NativeCompleteStepper: CompleteStepper {
             // Bez bańki i bryły nie ma czego trafić: każdy punkt hit-testu daje puste miejsce.
             let noHits = [ObjectID?](repeating: nil, count: hitTests.count)
             native?.forgetContactHistory()
+            native?.discardPublishedRenderWait()
             guard !previousContacts.isEmpty else {
                 return .init(state: state, hitTestResults: noHits, snappedObjectIDs: batch.appearedObjectIDs)
             }
@@ -134,10 +144,11 @@ package final class NativeCompleteStepper: CompleteStepper {
             value.angularVelocity = object.angularVelocity; value.motionRole = object.motionRole
             value.collisionRadius = object.collisionRadius
             value.structuralShape = object.structuralShape; value.layer = object.layer
+            value.playerDriveTarget = object.playerDriveTarget; value.motorDrive = object.motorDrive
             return value
         }
         let frame = try await native.step(objects: input, materials: state.physicsMaterials,
-            region: state.configuration.simulationRegion, duration: duration,
+            region: state.configuration.simulationRegion, duration: duration, globalForce: state.globalForce,
             joints: Array(state.joints.values), hitTests: hitTests,
             eventBufferCapacity: state.configuration.eventBufferCapacity,
             commandBuffer: commandBuffer,
@@ -158,7 +169,6 @@ package final class NativeCompleteStepper: CompleteStepper {
         return .init(state: state, events: discrete.events, eventOverflow: discrete.overflow,
             driveFeedback: feedback, contactCandidateOverflowCount: frame.contactCandidateOverflowCount,
             maximumContactCandidatesPerObject: frame.maximumContactCandidatesPerObject,
-            containedBubblePairCount: frame.containedBubblePairCount,
             hitTestResults: frame.hitTestResults,
             snappedObjectIDs: batch.appearedObjectIDs.union(frame.wrappedObjectIDs))
     }

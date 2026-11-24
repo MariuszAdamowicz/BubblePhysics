@@ -17,7 +17,7 @@ final class JointStagingTests: XCTestCase {
 
     private func resources() throws -> WorldTransaction {
         WorldTransaction()
-            .updatePhysicsMaterial(bubbleMaterial, material: try PhysicsMaterial(kind: .bubble))
+            .updatePhysicsMaterial(bubbleMaterial, material: try PhysicsMaterial(kind: .bubble, contactStiffness: 1e9))
             .updatePhysicsMaterial(rigidMaterial, material: try PhysicsMaterial(kind: .rigid))
             .updateRenderMaterial(styleID, material: try RenderMaterial())
     }
@@ -25,12 +25,6 @@ final class JointStagingTests: XCTestCase {
     private func bubble(_ value: UInt64, role: MotionRole = .dynamic, at x: Float = 0) throws -> WorldObject {
         .bubble(try BubbleDescriptor(id: id(value), position: [x, 0], targetRadius: 2, mass: 2, motionRole: role,
                                      physicsMaterialID: bubbleMaterial, renderMaterialID: styleID))
-    }
-
-    /// Bańka z polityką gumki, którą `beginPlayerDrive` przyjmuje.
-    private func grabbableBubble(_ value: UInt64, at x: Float = 0) throws -> WorldObject {
-        .bubble(try BubbleDescriptor(id: id(value), position: [x, 0], targetRadius: 2, mass: 2, physicsMaterialID: bubbleMaterial,
-                                     renderMaterialID: styleID, drivePolicy: BubbleDrivePolicy(bandStiffness: 60)))
     }
 
     private func box(_ value: UInt64, role: MotionRole = .dynamic, at x: Float = 0) throws -> WorldObject {
@@ -79,25 +73,26 @@ final class JointStagingTests: XCTestCase {
         catch { XCTFail("odrzucone: \(error)", file: file, line: line); throw error }
     }
 
-    // MARK: P-B-26: bańka tylko w więzie dystansowym
+    // MARK: P-B-26: bańka w więzie jest odrzucana
 
-    func testHingeAndWeldWithBubbleAreRejectedExplicitlyButDistanceIsAccepted() throws {
-        let state = try world([bubble(1), box(2), bubble(3, at: 10)])
+    // Silnik 4.0.0 nie ma przegubów z bańkami (CD-D-2): każdy rodzaj więzu z bańką na którymkolwiek końcu to `unsupportedJointBody`,
+    // a więzy między bryłami i ze światem zostają.
+    func testJointWithABubbleIsRejectedForEveryKind() throws {
+        let state = try world([bubble(1), box(2, at: 5), bubble(3, at: 10)])
         assertRejected(WorldTransaction().addJoint(hinge(1, 1, 2)), against: state, index: 0, reason: .unsupportedJointBody(joint(1)))
         assertRejected(WorldTransaction().addJoint(hinge(1, 2, 1)), against: state, reason: .unsupportedJointBody(joint(1)))
         assertRejected(WorldTransaction().addJoint(weld(4, 1, 2)), against: state, reason: .unsupportedJointBody(joint(4)))
         assertRejected(WorldTransaction().addJoint(weld(5, 1, nil)), against: state, reason: .unsupportedJointBody(joint(5)))
         assertRejected(WorldTransaction().addJoint(hinge(6, 1, 3)), against: state, reason: .unsupportedJointBody(joint(6)))
         // Dystans: bańka–bryła, bańka–świat, bańka–bańka.
-        let accepted = try assertAccepted(WorldTransaction().addJoint(distance(1, 1, 2)).addJoint(distance(2, 1, nil))
-            .addJoint(distance(3, 1, 3)), against: state)
-        XCTAssertEqual(Set(accepted.state.joints.keys), [joint(1), joint(2), joint(3)])
-        XCTAssertEqual(accepted.state.joints[joint(3)]?.bodyB, id(3))
+        assertRejected(WorldTransaction().addJoint(distance(1, 1, 2)), against: state, reason: .unsupportedJointBody(joint(1)))
+        assertRejected(WorldTransaction().addJoint(distance(2, 1, nil)), against: state, reason: .unsupportedJointBody(joint(2)))
+        assertRejected(WorldTransaction().addJoint(distance(3, 1, 3)), against: state, reason: .unsupportedJointBody(joint(3)))
     }
 
     func testRejectedJointTransactionLeavesStateUnchangedInsideBatch() throws {
-        let state = try world([bubble(1), box(2)])
-        let bad = WorldTransaction().addJoint(distance(1, 1, 2)).addJoint(hinge(2, 1, 2))
+        let state = try world([box(1), box(2, at: 5), bubble(3, at: 10)])
+        let bad = WorldTransaction().addJoint(distance(1, 1, 2)).addJoint(distance(2, 1, 3))
         let batch = TransactionStager.stageBatch([PendingTransaction(token: TransactionToken(rawValue: 7), transaction: bad)],
                                                  against: state)
         XCTAssertEqual(batch.state, state)
@@ -177,14 +172,12 @@ final class JointStagingTests: XCTestCase {
 
     func testJointWithMovableBodyIsAcceptedIncludingOneImmobileEndAndWorld() throws {
         let state = try world([box(1, role: .static), box(2, role: .kinematic), box(3, role: .dynamic, at: 5),
-                               box(4, role: .motorDriven, at: 9), circle(5, role: .dynamic, at: 12), grabbableBubble(6, at: 20)])
-        // Chwycona bańka (z polityką gumki) jest ruchomym końcem więzu dystansowego.
-        let transaction = WorldTransaction().beginPlayerDrive(id(6), target: [1, 1])
+                               box(4, role: .motorDriven, at: 9), circle(5, role: .dynamic, at: 12)])
+        let transaction = WorldTransaction()
             .addJoint(weld(1, 1, 3)).addJoint(weld(2, 2, 3)).addJoint(hinge(3, 4, 1)).addJoint(hinge(4, 4, nil))
-            .addJoint(weld(5, 3, nil)).addJoint(hinge(6, 5, 2)).addJoint(distance(7, 6, nil))
+            .addJoint(weld(5, 3, nil)).addJoint(hinge(6, 5, 2))
         let change = try assertAccepted(transaction, against: state)
-        XCTAssertEqual(Set(change.state.joints.keys), Set((1...7).map { joint($0) }))
-        XCTAssertEqual(change.state.objects[id(6)]?.motionRole, .playerDriven)
+        XCTAssertEqual(Set(change.state.joints.keys), Set((1...6).map { joint($0) }))
     }
 
     func testSetMotionThatWouldLeaveJointWithoutMovableBodyIsRejected() throws {
@@ -249,7 +242,7 @@ final class JointStagingTests: XCTestCase {
     // MARK: Usuwanie więzów razem z ciałami
 
     func testRemovingBodyRemovesItsJointsAndReceiptListsThemSortedLeavingOthers() throws {
-        let state = try world([box(1), box(2, at: 5), box(3, at: 9), bubble(4, at: 14)])
+        let state = try world([box(1), box(2, at: 5), box(3, at: 9), box(4, at: 14)])
         let joined = try TransactionStager.stage(WorldTransaction()
             .addJoint(weld(30, 1, 2)).addJoint(hinge(10, 2, nil)).addJoint(distance(20, 3, 2)).addJoint(distance(5, 3, 4)),
             against: state).state
@@ -269,25 +262,6 @@ final class JointStagingTests: XCTestCase {
         let change = try assertAccepted(WorldTransaction().replaceRigidBodies([id(1), id(2)], with: replacements), against: joined)
         XCTAssertEqual(Set(change.state.joints.keys), [joint(3)])
         XCTAssertEqual(change.removedJointIDs, [joint(1), joint(2)])
-    }
-
-    func testMergeAndSplitRemoveSourceJointsAndResultDoesNotInheritThem() throws {
-        let state = try world([bubble(1), bubble(2, at: 3), box(3, at: 9), bubble(4, at: 20)])
-        let joined = try TransactionStager.stage(WorldTransaction()
-            .addJoint(distance(1, 1, 3)).addJoint(distance(2, 2, nil)).addJoint(distance(3, 1, 2)).addJoint(distance(4, 4, 3)),
-            against: state).state
-        let result = BubbleResult(id: id(5), physicsMaterialID: bubbleMaterial, renderMaterialID: styleID)
-        let merged = try assertAccepted(WorldTransaction().mergeBubbles([id(1), id(2)], result: result), against: joined)
-        XCTAssertEqual(Set(merged.state.joints.keys), [joint(4)])
-        XCTAssertEqual(merged.removedJointIDs, [joint(1), joint(2), joint(3)])
-        XCTAssertFalse(merged.state.joints.values.contains { $0.bodyA == id(5) || $0.bodyB == id(5) })
-
-        let partA = BubbleSplitPart(result: BubbleResult(id: id(6), physicsMaterialID: bubbleMaterial, renderMaterialID: styleID), share: 0.5)
-        let partB = BubbleSplitPart(result: BubbleResult(id: id(7), physicsMaterialID: bubbleMaterial, renderMaterialID: styleID), share: 0.5)
-        let split = try assertAccepted(WorldTransaction().splitBubble(id(4), first: partA, second: partB), against: joined)
-        XCTAssertEqual(Set(split.state.joints.keys), [joint(1), joint(2), joint(3)])
-        XCTAssertEqual(split.removedJointIDs, [joint(4)])
-        XCTAssertFalse(split.state.joints.values.contains { [id(6), id(7)].contains($0.bodyA) || [id(6), id(7)].contains($0.bodyB ?? id(0)) })
     }
 
     func testJointAddedAndBodyRemovedInOneTransactionIsListedOnce() throws {

@@ -7,26 +7,26 @@ final class TransitionTests: XCTestCase {
     let object = ObjectID(rawValue: 1)
     func initial() throws -> RuntimeState {
         try TransactionStager.stage(WorldTransaction()
-            .updatePhysicsMaterial(material, material: PhysicsMaterial(kind: .bubble))
+            .updatePhysicsMaterial(material, material: PhysicsMaterial(kind: .bubble, contactStiffness: 200))
             .updateRenderMaterial(style, material: RenderMaterial())
             .add(.bubble(BubbleDescriptor(id: object, position: .zero, targetRadius: 1,
                 physicsMaterialID: material, renderMaterialID: style))), against: RuntimeState(configuration:
                     WorldConfiguration(simulationRegion: WorldRectangle(min: [-20,-20], max: [20,20])))).state
     }
     func testNewTransitionForSameParameterReplacesPriorTransitionDeterministically() throws {
-        let friction = TransitionTarget.physicsMaterial(material, .friction)
+        let friction = TransitionTarget.physicsMaterial(material, .damping)
         var state = try initial()
-        state.physicsMaterials[material] = try PhysicsMaterial(kind: .bubble, friction: 2)
+        state.physicsMaterials[material] = try PhysicsMaterial(kind: .bubble, contactStiffness: 200, damping: 2)
         state = try TransactionStager.stage(WorldTransaction().startTransition(.init(target: friction,
             value: .scalar(10), duration: 2)), against: state).state
         try MotionControllers.prepare(&state, duration: 0.5)
-        XCTAssertEqual(state.physicsMaterials[material]?.friction, 4)
+        XCTAssertEqual(state.physicsMaterials[material]?.damping, 4)
         state = try TransactionStager.stage(WorldTransaction().startTransition(.init(target: friction,
             value: .scalar(0), duration: 1)), against: state).state
         try MotionControllers.prepare(&state, duration: 0.5)
-        XCTAssertEqual(state.physicsMaterials[material]?.friction, 2)
+        XCTAssertEqual(state.physicsMaterials[material]?.damping, 2)
         try MotionControllers.prepare(&state, duration: 0.5)
-        XCTAssertEqual(state.physicsMaterials[material]?.friction, 0)
+        XCTAssertEqual(state.physicsMaterials[material]?.damping, 0)
         XCTAssertTrue(state.transitions.isEmpty)
     }
     func testSerializableCurvesReachEndpointsAndSimulationTimeIsPartitionIndependent() throws {
@@ -42,30 +42,17 @@ final class TransitionTests: XCTestCase {
         }
     }
 
-    // P-B-28: przejście parametru materiału nie może zgubić limitów prędkości (materiał jest budowany od nowa).
-    func testMaterialTransitionKeepsSpeedLimits() throws {
-        var state = try initial()
-        state.physicsMaterials[material] = try PhysicsMaterial(kind: .bubble, maximumLinearSpeed: 30, maximumAngularSpeed: 4)
-        state = try TransactionStager.stage(WorldTransaction()
-            .startTransition(.init(target: .physicsMaterial(material, .friction), value: .scalar(0.8), duration: 1)),
-            against: state).state
-        try MotionControllers.prepare(&state, duration: 0.5)
-        XCTAssertEqual(state.physicsMaterials[material]?.friction, 0.4)
-        XCTAssertEqual(state.physicsMaterials[material]?.maximumLinearSpeed, 30)
-        XCTAssertEqual(state.physicsMaterials[material]?.maximumAngularSpeed, 4)
-    }
-
-    func testMaterialContactTransitionsUpdateFrictionAndRestitutionTogether() throws {
+    func testMaterialContactTransitionsUpdateStiffnessAndDampingTogether() throws {
         var state = try TransactionStager.stage(WorldTransaction()
-            .startTransition(.init(target: .physicsMaterial(material, .friction), value: .scalar(0.8), duration: 1))
-            .startTransition(.init(target: .physicsMaterial(material, .restitution), value: .scalar(0.6), duration: 1)),
+            .startTransition(.init(target: .physicsMaterial(material, .contactStiffness), value: .scalar(400), duration: 1))
+            .startTransition(.init(target: .physicsMaterial(material, .damping), value: .scalar(0.6), duration: 1)),
             against: initial()).state
         try MotionControllers.prepare(&state, duration: 0.5)
-        XCTAssertEqual(state.physicsMaterials[material]?.friction, 0.4)
-        XCTAssertEqual(state.physicsMaterials[material]?.restitution, 0.3)
+        XCTAssertEqual(state.physicsMaterials[material]?.contactStiffness, 300)
+        XCTAssertEqual(try XCTUnwrap(state.physicsMaterials[material]?.damping), 0.3, accuracy: 1e-6)
         try MotionControllers.prepare(&state, duration: 0.5)
-        XCTAssertEqual(state.physicsMaterials[material]?.friction, 0.8)
-        XCTAssertEqual(state.physicsMaterials[material]?.restitution, 0.6)
+        XCTAssertEqual(state.physicsMaterials[material]?.contactStiffness, 400)
+        XCTAssertEqual(state.physicsMaterials[material]?.damping, 0.6)
     }
 }
 
@@ -81,10 +68,10 @@ final class MaterialContactTransitionTests: XCTestCase {
         let bubble = try BubbleDescriptor(id: .init(rawValue: 1), position: .zero, velocity: [2, 0],
             targetRadius: 1, physicsMaterialID: material, renderMaterialID: style)
         let token = world.submit(WorldTransaction()
-            .updatePhysicsMaterial(material, material: try PhysicsMaterial(kind: .bubble, friction: 0.6, restitution: 0.4))
+            .updatePhysicsMaterial(material, material: try PhysicsMaterial(kind: .bubble, contactStiffness: 1e9))
             .updateRenderMaterial(style, material: try RenderMaterial())
             .add(.bubble(bubble))
-            .startTransition(ParameterTransition(target: .physicsMaterial(material, .restitution), value: .scalar(0.8), duration: 1)))
+            .startTransition(ParameterTransition(target: .physicsMaterial(material, .contactStiffness), value: .scalar(400), duration: 1)))
 
         let frame = await world.advance(by: 1.0 / 60.0)
         XCTAssertEqual(frame.transactionReceipts.map(\.token), [token])
