@@ -1,47 +1,22 @@
+/// Konfiguracja silnika 4.0.0: bez pól publicznych. Przełączniki pakietowe służą testom i diagnostyce; domyślnie wszystkie są wyłączone.
 public struct NativeMetalConfiguration: Equatable, Sendable {
-    public var solverIterationCount: Int
-    /// Zero oznacza twardy kontakt PBD; wartość dodatnia włącza compliance XPBD.
-    public var contactCompliance: Float
-    public var cacheExpiryFrames: Int
-    public var teleportDistanceMultiplier: Float
-    public var ccdVelocityMultiplier: Float
-    /// Limit λ pary bańka–bańka (CD-D-9). Przełącznik wyłącznie dla testów bliźniaczych z dawnym oczekiwaniem
-    /// (CD-D-20): poza publicznym `init`, więc gra go nie widzi; `sanitized` go zachowuje.
-    package var pairCorrectionLimit = true
-    /// Przełączniki pakietowe silnika 4.0.0, widoczne tylko dla testów i diagnostyki (poza publicznym `init`). Domyślnie
-    /// wszystkie są wyłączone i nie zmieniają silnika; `sanitized` je zachowuje.
     /// Mnożnik drobniejszego podziału podkroku (G4-AC3): 1 to podział naturalny, 4 daje czterokrotnie drobniejszy.
     package var substepSplitMultiplier = 1
     /// Zapas obwiedni tylko r / 4, bez członu z prędkości i przyspieszenia (G5-AC3).
     package var minimumMarginOnly = false
-    /// Zapis x, v i h po każdym podkroku do odczytu przez test (rozwinięcie `nativeCapturePositions`).
+    /// Zapis x, v i h po każdym podkroku do odczytu przez test.
     package var captureSubsteps = false
     /// Asercja kontaktu po każdym podkroku, a nie tylko na końcu kroku (G6-AC2).
     package var assertEverySubstep = false
     /// Stan wstrzykiwany po wskazanym podkroku, by sprawdzić asercję kontaktu (G6-AC2).
     package var injectedSubstepState: NativeMetalInjectedSubstepState?
 
-    public init(solverIterationCount: Int = 8, cacheExpiryFrames: Int = 30,
-                teleportDistanceMultiplier: Float = 2, ccdVelocityMultiplier: Float = 1,
-                contactCompliance: Float = 0) {
-        self.solverIterationCount = solverIterationCount
-        self.contactCompliance = contactCompliance
-        self.cacheExpiryFrames = cacheExpiryFrames
-        self.teleportDistanceMultiplier = teleportDistanceMultiplier
-        self.ccdVelocityMultiplier = ccdVelocityMultiplier
-    }
+    public init() {}
 
     public static let `default` = NativeMetalConfiguration()
 
     public var sanitized: NativeMetalConfiguration {
         var value = self
-        value.solverIterationCount = max(1, solverIterationCount)
-        value.contactCompliance = contactCompliance.isFinite ? max(0, contactCompliance) : 0
-        value.cacheExpiryFrames = max(0, cacheExpiryFrames)
-        value.teleportDistanceMultiplier = teleportDistanceMultiplier.isFinite && teleportDistanceMultiplier > 0
-            ? teleportDistanceMultiplier : Self.default.teleportDistanceMultiplier
-        value.ccdVelocityMultiplier = ccdVelocityMultiplier.isFinite && ccdVelocityMultiplier > 0
-            ? ccdVelocityMultiplier : Self.default.ccdVelocityMultiplier
         value.substepSplitMultiplier = max(1, substepSplitMultiplier)
         return value
     }
@@ -81,13 +56,7 @@ public struct NativeMetalFrameTelemetry: Equatable, Sendable {
     public let backend: NativeMetalFrameBackend
     public let commandBufferCount: Int
     public let encoderCount: Int
-    public let cacheHitCount: Int
-    public let cacheResetCount: Int
     public let contactCount: Int
-    public let solverIterationCount: Int
-    public let ccdCandidateCount: Int
-    public let guardCorrectionCount: Int
-    public let cacheInvalidationCount: Int
     public let didEncounterNonFinite: Bool
     public let fallbackReason: String?
     public let gpuMilliseconds: Double
@@ -101,23 +70,15 @@ public struct NativeMetalFrameTelemetry: Equatable, Sendable {
     public let contourGPUMilliseconds: Double
 
     public init(backend: NativeMetalFrameBackend = .cpu, commandBufferCount: Int = 0,
-                encoderCount: Int = 0, cacheHitCount: Int = 0, cacheResetCount: Int = 0,
+                encoderCount: Int = 0,
                 contactCount: Int = 0, didEncounterNonFinite: Bool = false,
                 fallbackReason: String? = nil, gpuMilliseconds: Double = 0,
-                solverIterationCount: Int = 0, ccdCandidateCount: Int = 0,
-                guardCorrectionCount: Int = 0, cacheInvalidationCount: Int = 0,
                 substepCount: Int = 0, gridRebuildCount: Int = 0, physicsGPUMilliseconds: Double = 0,
                 contourGPUMilliseconds: Double = 0) {
         self.backend = backend
         self.commandBufferCount = commandBufferCount
         self.encoderCount = encoderCount
-        self.cacheHitCount = cacheHitCount
-        self.cacheResetCount = cacheResetCount
         self.contactCount = contactCount
-        self.solverIterationCount = solverIterationCount
-        self.ccdCandidateCount = ccdCandidateCount
-        self.guardCorrectionCount = guardCorrectionCount
-        self.cacheInvalidationCount = cacheInvalidationCount
         self.didEncounterNonFinite = didEncounterNonFinite
         self.fallbackReason = fallbackReason
         self.gpuMilliseconds = gpuMilliseconds

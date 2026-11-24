@@ -9,8 +9,8 @@ public enum NativeMetalBenchmarkRunner {
         progress: @escaping @Sendable (ReferenceBenchmarkProgress) async -> Void = { _ in }
     ) async throws -> ReferenceBenchmarkMatrixReport {
         try await measure(configuration: configuration, progress: progress, makeRunner: { limit in
-            NativeMetalWorldRunner(configuration: .init(solverIterationCount: limit))
-                ?? NativeMetalWorldRunner(executor: nil, configuration: .init(solverIterationCount: limit))
+            NativeMetalWorldRunner(configuration: .init())
+                ?? NativeMetalWorldRunner(executor: nil, configuration: .init())
         })
     }
 
@@ -226,8 +226,8 @@ extension NativeMetalWorldRunner {
             backend: telemetry.backend == .nativeMetal ? .nativeMetal : .cpu, fallbackReason: telemetry.fallbackReason,
             gpuTelemetry: .init(completedCommandBuffersMilliseconds: succeeded ? telemetry.gpuMilliseconds : nil,
                 contactCount: telemetry.contactCount, profile: succeeded ? neutralProfile : nil,
-                native: succeeded ? .init(cacheHits: telemetry.cacheHitCount, cacheResets: telemetry.cacheResetCount,
-                    solverIterations: telemetry.solverIterationCount, ccdCandidates: telemetry.ccdCandidateCount) : nil))
+                native: succeeded ? .init(cacheHits: 0, cacheResets: 0,
+                    solverIterations: 0, ccdCandidates: 0) : nil))
     }
 
     private static func milliseconds(_ duration: Duration) -> Double {

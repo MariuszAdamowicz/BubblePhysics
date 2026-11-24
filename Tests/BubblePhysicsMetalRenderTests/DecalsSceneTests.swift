@@ -11,7 +11,7 @@ import XCTest
 final class DecalsSceneTests: XCTestCase {
     private func makeWorld(_ scene: PublicWorldStressBenchmark.Scene) throws -> (BubbleWorld, AssetRegistry, MTLDevice) {
         let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
-        let world = try BubbleWorld.makeBenchmarkWorld(configuration: scene.configuration(), device: device, solverIterationLimit: 4)
+        let world = try BubbleWorld.makeBenchmarkWorld(configuration: scene.configuration(), device: device)
         return (world, try XCTUnwrap(world.assets), device)
     }
 

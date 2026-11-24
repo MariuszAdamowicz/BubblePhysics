@@ -33,7 +33,6 @@ public final class BubbleWorld {
     private var failureDetail: WorldFailureDetail?
     private var lastRejectionReason: WorldRejectionReason?
     private var lastSolverGuardCause: SolverGuardCause?
-    private var containedBubblePairCount = 0
     private var didRenderLastAdvance = false
     /// Obiekty ostatniego opublikowanego kroku, które rysują się bez interpolacji.
     private var snappedObjects: Set<ObjectID> = []
@@ -81,17 +80,6 @@ public final class BubbleWorld {
         (stepper as? NativeCompleteStepper)?.nativeConfiguration
     }
 
-    /// Konstruktor wyłącznie dla diagnostycznego harnessu; limit nie jest parametrem API gry.
-    package static func makeBenchmarkWorld(configuration: WorldConfiguration, device: MTLDevice,
-                                           solverIterationLimit: Int,
-                                           pairCorrectionLimit: Bool = true) throws -> BubbleWorld {
-        var solver = NativeMetalConfiguration(solverIterationCount: solverIterationLimit)
-        // Bliźniacze testy z dawnym oczekiwaniem wyłączają limit λ pary (CD-D-20).
-        solver.pairCorrectionLimit = pairCorrectionLimit
-        return try BubbleWorld(configuration: configuration, stepper: NativeCompleteStepper(device: device,
-            configuration: solver), assets: AssetRegistry(device: device))
-    }
-
     /// Podkroki ostatniego kroku zapisane przy `captureSubsteps` (x, v, h po każdym); pusta bez tego przełącznika. Szew testów 4.0.0.
     package var benchmarkCapturedSubsteps: [NativeMetalSubstepSample] {
         (stepper as? NativeCompleteStepper)?.capturedSubsteps ?? []
@@ -134,7 +122,7 @@ public final class BubbleWorld {
             contactCandidateOverflow: contactCandidateOverflow,
             maximumContactCandidatesPerObject: maximumContactCandidatesPerObject,
             failureReason: failureReason, failureDetail: failureDetail, lastRejectionReason: lastRejectionReason,
-            lastSolverGuardCause: lastSolverGuardCause, containedBubblePairCount: containedBubblePairCount,
+            lastSolverGuardCause: lastSolverGuardCause,
             didRenderLastAdvance: didRenderLastAdvance)
     }
 
@@ -367,8 +355,6 @@ public final class BubbleWorld {
                 droppedEvents += complete.eventOverflow.droppedCount
                 contactCandidateOverflow += complete.contactCandidateOverflowCount
                 maximumContactCandidatesPerObject = complete.maximumContactCandidatesPerObject
-                // Przypisanie po kroku, jak maksimum kandydatów, nie suma jak przepełnienie.
-                containedBubblePairCount = complete.containedBubblePairCount
                 lastFrame = WorldFrame(stepIndex: clock.completedSteps, simulationTime: clock.simulationTime,
                     transactionReceipts: receipts, events: events,
                     eventOverflow: WorldEventOverflow(droppedCount: droppedEvents), driveFeedback: complete.driveFeedback,
@@ -454,7 +440,6 @@ public final class BubbleWorld {
             let outcome = outcome(of: failure.reason)
             guard case .stepRejected(.solverGuard, _) = outcome else { return outcome }
             let cause: SolverGuardCause? = switch failure.guardCause {
-            case .centerCrossing: .centerCrossing
             case .rigidRotationBudget: .rigidRotationBudget
             case nil: nil
             }

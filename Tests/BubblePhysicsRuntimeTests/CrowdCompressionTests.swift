@@ -39,16 +39,6 @@ final class CrowdCompressionTests: XCTestCase {
         assertCrowdKeptStepsAccepted(report, world: world, balance: 2.5)
     }
 
-    // Solver rozsuwa pary „bańka w bańce” w kilku krokach: przy B = 1 po 600 krokach od ostatniej bańki żadnej pary zawartej już
-    // nie ma (przy c₀ = 0 i B = 1,5 jedna para zostaje zawarta w równowadze).
-    func testHardCrowdBalance1SeparatesAllContainedPairs() async throws {
-        let world = try await CrowdScene.makeWorld()
-        let report = try await CrowdScene.runCrowd(world: world, balance: 1, seed: 2_500, extraSteps: 600)
-        assertCrowdKeptStepsAccepted(report, world: world, balance: 1)
-        XCTAssertGreaterThan(report.peakContainedPairs, 0, "pary zawarte w trakcie przebiegu")
-        XCTAssertEqual(report.lastContainedPairs, 0, "pary zawarte po ostatnim kroku")
-    }
-
     /// Narożnik z G1-AC4: bańka r = 20 pchana siłą 3000 po przekątnej w narożnik ramy, za nią tłok 10 baniek. Zwraca bańkę 1 z
     /// ostatniej klatki; asercje kroków i środków w ramie są w środku.
     private func runCorner(material: PhysicsMaterial) async throws -> ObjectState {
@@ -132,11 +122,6 @@ final class CrowdCompressionTests: XCTestCase {
             let report = try await CrowdScene.runCrowd(world: world, balance: balance, seed: 2_500, extraSteps: 600)
             XCTAssertNil(report.firstIssue?.issue, "B = \(balance): krok \(report.firstIssue?.step ?? 0) odrzucony")
             XCTAssertEqual(report.lastSecond.count, CrowdScene.lastSecondSteps)
-            // Przy B = 1,5 materiał miękki rozsuwa wszystkie pary zawarte (przy B = 2,5 część zostaje w równowadze).
-            if balance == 1.5 {
-                XCTAssertGreaterThan(report.peakContainedPairs, 0, "B = 1,5: pary zawarte w trakcie przebiegu")
-                XCTAssertEqual(report.lastContainedPairs, 0, "B = 1,5: pary zawarte po ostatnim kroku")
-            }
             ratios[balance] = report.meanEffectiveRadiusRatioInLastSecond
         }
         let low = try XCTUnwrap(ratios[1.5]), high = try XCTUnwrap(ratios[2.5])

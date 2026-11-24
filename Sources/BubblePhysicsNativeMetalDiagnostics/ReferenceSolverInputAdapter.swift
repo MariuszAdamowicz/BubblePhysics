@@ -102,8 +102,7 @@ extension NativeMetalWorldFrame {
             isComplete: frame.isComplete, regionRemovals: Set(frame.regionRemovals.map(bubbleID)),
             regionWraps: Set(frame.regionWraps.map(bubbleID)), events: frame.events,
             eventOverflow: frame.eventOverflow, contactCandidateOverflowCount: frame.contactCandidateOverflowCount,
-            maximumContactCandidatesPerObject: frame.maximumContactCandidatesPerObject,
-            containedBubblePairCount: frame.containedBubblePairCount)
+            maximumContactCandidatesPerObject: frame.maximumContactCandidatesPerObject)
     }
 }
 

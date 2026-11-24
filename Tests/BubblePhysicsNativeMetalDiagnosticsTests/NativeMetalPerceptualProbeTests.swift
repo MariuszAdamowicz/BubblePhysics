@@ -8,7 +8,7 @@ import BubblePhysicsReference
 final class NativeMetalPerceptualProbeTests: XCTestCase {
     func testNativeContourCanBeComparedWithCPUContourFromTheSameGPUPhysicsFrame() async throws {
         let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
-        let runner = try XCTUnwrap(NativeMetalWorldRunner(device: device, configuration: .init(solverIterationCount: 4)))
+        let runner = try XCTUnwrap(NativeMetalWorldRunner(device: device, configuration: .init()))
         var cpuScene = try ReferenceVisualSceneFactory.make(density: .six)
         var gpuScene = try ReferenceVisualSceneFactory.make(density: .six)
         var cpuCenter = ReferenceVisualSceneFactory.initialPolygonCenter

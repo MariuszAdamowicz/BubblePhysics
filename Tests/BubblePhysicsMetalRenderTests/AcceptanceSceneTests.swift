@@ -15,7 +15,7 @@ final class AcceptanceSceneTests: XCTestCase {
     private func acceptanceOperations() throws -> [WorldOperation] {
         let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
         let scene = Scene.acceptance
-        let world = try BubbleWorld.makeBenchmarkWorld(configuration: scene.configuration(), device: device, solverIterationLimit: 4)
+        let world = try BubbleWorld.makeBenchmarkWorld(configuration: scene.configuration(), device: device)
         return try scene.initialTransaction(assets: XCTUnwrap(world.assets)).operations
     }
 

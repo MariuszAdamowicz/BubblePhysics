@@ -111,4 +111,32 @@ final class MigrationGuideTests: XCTestCase {
         XCTAssertTrue(readme.contains("(docs/MIGRATION-v3.md)"), "README odsyła do dokumentu migracji na 3.0.0")
         XCTAssertTrue(readme.contains("(docs/integration-guide.md)"), "README odsyła do przewodnika integracji")
     }
+
+    /// P-B-2 (G1-AC2): `docs/MIGRATION-v4.md` ma wiersz tabeli (symbol w pierwszej komórce, zastępstwo albo powód usunięcia
+    /// w drugiej) dla każdego symbolu usuniętego z publicznego API w 4.0.0.
+    func testMigrationV4HasARowWithAReplacementForEveryRemovedSymbol() throws {
+        let rows = migrationRows(try read("docs/MIGRATION-v4.md"))
+        let removed = [
+            "BubbleContactCompliance", "contactCompliance", "contactDampingRatio", "deformability",
+            "PhysicsParameter.deformability", "SolverGuardCause.centerCrossing", "containedBubblePairCount",
+            "NativeMetalConfiguration.solverIterationCount", "NativeMetalConfiguration.contactCompliance",
+            "NativeMetalConfiguration.cacheExpiryFrames", "NativeMetalConfiguration.teleportDistanceMultiplier",
+            "NativeMetalConfiguration.ccdVelocityMultiplier",
+            "NativeMetalFrameTelemetry.cacheHitCount", "NativeMetalFrameTelemetry.cacheResetCount",
+            "NativeMetalFrameTelemetry.solverIterationCount", "NativeMetalFrameTelemetry.ccdCandidateCount",
+            "NativeMetalFrameTelemetry.guardCorrectionCount", "NativeMetalFrameTelemetry.cacheInvalidationCount"]
+        for symbol in removed {
+            let covered = rows.contains { $0.symbols.contains("`\(symbol)`") && $0.replacement.count >= 10 }
+            XCTAssertTrue(covered, "brak wiersza w MIGRATION-v4.md (symbol w pierwszej komórce, zastępstwo w drugiej) dla: \(symbol)")
+        }
+    }
+
+    func testMigrationV4NamesTheAddedSymbolsAndTheKnownLimits() throws {
+        let migration = try read("docs/MIGRATION-v4.md")
+        for needle in ["contactStiffness", "PhysicsParameter.contactStiffness", "WorldFailureDetail", "contactViolation",
+                       "substepCount", "gridRebuildCount", "physicsGPUMilliseconds", "contourGPUMilliseconds",
+                       "rigidRotationBudget", "candidateLimitPerObject", "contactCandidateOverflow"] {
+            XCTAssertTrue(migration.contains(needle), "MIGRATION-v4.md nie wspomina o \(needle)")
+        }
+    }
 }

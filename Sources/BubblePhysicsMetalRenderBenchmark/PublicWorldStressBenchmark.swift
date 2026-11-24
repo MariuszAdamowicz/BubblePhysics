@@ -279,7 +279,7 @@ public enum PublicWorldStressBenchmark {
         let height = spec.regionHeight
         let (pixelWidth, pixelHeight) = try pixelSize(renderSize ?? spec.renderSize, regionHeight: height)
         let world = try BubbleWorld.makeBenchmarkWorld(configuration: try spec.configuration(),
-            device: device, solverIterationLimit: 4)
+            device: device)
         guard let assets = world.assets else { throw StressBenchmarkError.metalUnavailable }
         let renderer = try BubblePhysicsMetalRender(device: device, assets: assets)
         world.submit(try spec.initialTransaction(assets: assets))
@@ -420,7 +420,7 @@ public enum PublicWorldStressBenchmark {
     /// Świeży świat tej samej sceny z transakcją początkową, dla serii na identycznej fizyce.
     private static func freshWorld(_ spec: BenchmarkSceneSpec, device: MTLDevice) throws -> BubbleWorld {
         let world = try BubbleWorld.makeBenchmarkWorld(configuration: try spec.configuration(),
-            device: device, solverIterationLimit: 4)
+            device: device)
         guard let assets = world.assets else { throw StressBenchmarkError.metalUnavailable }
         world.submit(try spec.initialTransaction(assets: assets))
         return world
@@ -483,7 +483,6 @@ public enum PublicWorldStressBenchmark {
             var gpuMilliseconds = 0.0, preparation = 0.0, encoding = 0.0, waiting = 0.0, publication = 0.0
             var encodingStartMark: UInt64 = 0, waitingEndMark: UInt64 = 0
             if let telemetry = world.benchmarkTelemetry {
-                result.guardCorrections += telemetry.guardCorrectionCount
                 if telemetry.didEncounterNonFinite { result.nonFiniteFrames += 1 }
                 if telemetry.fallbackReason != nil { result.fallbackFrames += 1 }
                 gpuMilliseconds = telemetry.gpuMilliseconds

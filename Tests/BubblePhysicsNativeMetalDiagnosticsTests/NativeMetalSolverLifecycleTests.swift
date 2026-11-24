@@ -19,7 +19,7 @@ final class NativeMetalSolverLifecycleTests: XCTestCase {
             // Sąsiednie rekordy są łączone w jedno polecenie blit.
             XCTAssertEqual(runner.profile.bubbleUploadCommandCount, step == 0 ? 1 : 0)
             XCTAssertEqual(world.bubbles.count, 300)
-            XCTAssertEqual(runner.profile.commandBufferCount, 1)
+            XCTAssertEqual(runner.profile.commandBufferCount, 2)
         }
     }
 
@@ -112,16 +112,16 @@ final class NativeMetalSolverLifecycleTests: XCTestCase {
         let existing = try XCTUnwrap(second.bubbles.first { $0.id.rawValue == 2 })
         XCTAssertEqual(existing.center.x, 11, accuracy: 1e-6)
         XCTAssertEqual(existing.previousCenter.x, 10.5, accuracy: 1e-6)
-        XCTAssertEqual(second.profile.commandBufferCount, 1)
+        XCTAssertEqual(second.profile.commandBufferCount, 2)
     }
 
-    func testNormalFrameUsesExactlyOneCommandBuffer() async throws {
+    func testNormalFrameUsesOneCommandBufferPairForPhysicsAndContour() async throws {
         let executor = ControlledCommandExecutor()
         let solver = try NativeMetalSolver(device: XCTUnwrap(MTLCreateSystemDefaultDevice()), commandExecutor: executor)
         let frame = try await solver.executeFrame(snapshot: .init(world: try makeWorld()), scenarioStep: 7)
         XCTAssertEqual(executor.submissionStatuses, [.notEnqueued])
         XCTAssertEqual(executor.commitCount, 1)
-        XCTAssertEqual(frame.profile.commandBufferCount, 1)
+        XCTAssertEqual(frame.profile.commandBufferCount, 2)
         XCTAssertEqual(frame.profile.encoderCount, 2)
         XCTAssertGreaterThanOrEqual(frame.profile.hostEncodingMilliseconds, 0)
         XCTAssertGreaterThanOrEqual(frame.profile.hostWaitingMilliseconds, 0)
@@ -253,8 +253,6 @@ final class NativeMetalSolverLifecycleTests: XCTestCase {
         XCTAssertEqual(MemoryLayout<NativeMetalContactControl>.stride, 80)
         XCTAssertEqual(MemoryLayout<NativeMetalControl>.alignment, 16)
         XCTAssertEqual(MemoryLayout<NativeMetalControl>.stride, 64)
-        XCTAssertEqual(MemoryLayout<NativeMetalSolverControl>.alignment, 16)
-        XCTAssertEqual(MemoryLayout<NativeMetalSolverControl>.stride, 32)
         XCTAssertEqual(MemoryLayout<NativeMetalRenderPacket>.alignment, 16)
         XCTAssertEqual(MemoryLayout<NativeMetalRenderPacket>.stride, 48)
     }
@@ -274,7 +272,7 @@ final class NativeMetalSolverLifecycleTests: XCTestCase {
             XCTAssertEqual(runner.renderData, frame.renderData)
             XCTAssertEqual(runner.telemetry.backend, .nativeMetal)
             XCTAssertNil(runner.telemetry.fallbackReason)
-            XCTAssertEqual(runner.profile.commandBufferCount, 1)
+            XCTAssertEqual(runner.profile.commandBufferCount, 2)
             XCTAssertEqual(runner.profile.encoderCount, 2)
         }
     }

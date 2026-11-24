@@ -15,11 +15,6 @@ struct NativeBubble {
     uint4 filter; // kategoria, maska, reserved, warstwa (Int32 z odwróconym bitem znaku)
     float4 contact; // zero (dawna podatność XPBD), K_c, zero (dawne ζ_c), znacznik bańki napędzanej siłami (siła globalna, pola, γ)
 };
-// Podatność końca kontaktu: c = c₀·r/r_ref, liczona przez hosta w `contact.x` z bieżącego promienia fizycznego bańki.
-// Zero oznacza kontakt twardy jak w v2.1.0.
-float nativeContactCompliance(NativeBubble bubble) {
-    return max(bubble.contact.x, 0.0f);
-}
 struct NativeSegment {
     long2 identity;
     uint4 flags; // x kinematyczny, y ma właściciela, z stała strona (`allowedSide`), w krawędź wielokąta: bit 0 obszary, bit 1 wypukły początek, bit 2 wypukły koniec (informacyjny: jądra go nie czytają)
@@ -160,25 +155,6 @@ float2 nativeClampLinearSpeed(float2 velocity, float limit) {
 
 float nativeClampAngularSpeed(float velocity, float limit) {
     return limit > 0 ? clamp(velocity, -limit, limit) : velocity;
-}
-
-kernel void nativePredict(device NativeBubble *bubbles [[buffer(0)]],
-                          constant NativeControl &control [[buffer(1)]],
-                          uint index [[thread_position_in_grid]]) {
-    if (index >= control.counts.x) return;
-    NativeBubble b = bubbles[index];
-    b.publicFlags.w = 0;
-    float dt = control.physics.x;
-    b.position.zw = b.position.xy;
-    if (b.publicFlags.x && b.publicFlags.y) { b.motion.xy = 0; b.motion.w = 0; bubbles[index] = b; return; }
-    // Ścieżka publiczna nie tłumi ruchu liniowego: robi to host przed przyrostem prędkości z sił (MotionControllers.prepare).
-    if (!b.publicFlags.x) b.motion.xy *= exp(-control.physics.y * dt);
-    b.motion.xy = nativeClampLinearSpeed(b.motion.xy, b.deformation.z);
-    b.motion.w = nativeClampAngularSpeed(b.motion.w, b.deformation.w);
-    b.position.xy += b.motion.xy * dt;
-    b.motion.z += b.motion.w * dt;
-    b.motion.w *= exp(-(b.publicFlags.x ? b.material.x : control.physics.z) * dt);
-    bubbles[index] = b;
 }
 
 // Rozmiar komórki obejmuje największą średnicę: wystarcza dziewięć sąsiadów.
@@ -644,33 +620,6 @@ kernel void nativeCompactCandidates(constant NativeControl &control [[buffer(0)]
     nativeCountWork(statistics, 3);
 }
 
-// Porządek i wyszukiwanie w cache kontaktów po pełnym kluczu (rodzaj, uczestnik, uczestnik); cache jest posortowany po tym kluczu.
-bool nativeCacheLess(NativeContactCache a, NativeContactCache b) {
-    if (a.metadata.x != b.metadata.x) return a.metadata.x < b.metadata.x;
-    if (a.participants.x != b.participants.x) return a.participants.x < b.participants.x;
-    return a.participants.y < b.participants.y;
-}
-
-uint nativeCacheLowerBound(device NativeContactCache *records, uint count, NativeContactCache key) {
-    uint low = 0, high = count;
-    while (low < high) {
-        uint mid = low + (high - low) / 2;
-        if (nativeCacheLess(records[mid], key)) low = mid + 1; else high = mid;
-    }
-    return low;
-}
-
-bool nativeCacheSame(NativeContactCache a, NativeContactCache b) {
-    return a.metadata.x == b.metadata.x && all(a.participants == b.participants);
-}
-
-// Indeks rekordu (rodzaj `kind`, uczestnicy `participants`) w cache `records` (`count` rekordów, posortowany po kluczu) albo -1.
-int nativeCacheFind(device NativeContactCache *records, uint count, uint kind, long2 participants) {
-    NativeContactCache key = { participants, uint4(kind, 0, 0, 0), float4(0), float4(0), float4(0) };
-    uint found = nativeCacheLowerBound(records, count, key);
-    return found < count && nativeCacheSame(records[found], key) ? int(found) : -1;
-}
-
 // Granica obszarów krawędzi statycznego wielokąta (CD-D-4): czy rzut środka na odcinek from→to wypada na jego końcu albo za nim.
 // Obie krawędzie przy wierzchołku wołają tę funkcję z tymi samymi argumentami (koniec krawędzi poprzedniej: from = jej początek,
 // to = wierzchołek; początek następnej: from = region.xy, to = jej początek), więc wynik jest dokładnym dopełnieniem także o jedno ULP
@@ -680,71 +629,22 @@ bool nativePastSegmentEnd(float2 center, float2 from, float2 to) {
     return fma(relative.x, edge.x, relative.y * edge.y) >= fma(edge.x, edge.x, edge.y * edge.y);
 }
 
-// Droga previous → center przecina prostą krawędzi (strony `previousSide` i `centerSide` względem normalnej zewnętrznej mają różne
-// znaki albo `centerSide` = 0) w punkcie, który rzutuje się we wnętrze odcinka start → end (0 < t < 1).
-bool nativePathCrossesSegment(float2 previous, float2 center, float previousSide, float centerSide, float2 start, float2 end) {
-    float2 crossing = previous + (center - previous) * (previousSide / (previousSide - centerSide));
-    return dot(crossing - start, end - start) > 0 && !nativePastSegmentEnd(crossing, start, end);
-}
-
 // Cecha kontaktu z krawędzią statycznego wielokąta, zapisana w response.w do końca kroku: 0 poza obszarami krawędzi
 // (rekord odpada), 1 wnętrze krawędzi (stała normalna zewnętrzna), 2 wierzchołek początkowy wypukły (normalna od wierzchołka).
-// Wnętrze krawędzi to trzy przypadki. Przewidziany środek `center` po stronie zewnętrznej prostej: jego rzut wypada w 0 < t < 1.
-// Środek za prostą (krawędź wejścia, BF-D-1 z 3.0.1): środek z początku kroku `previous` był po stronie zewnętrznej (albo na prostej), a
-// droga previous → center przecina sam odcinek, czyli punkt przecięcia z prostą rzutuje się w 0 < t < 1. Środek odpycha wtedy
-// dokładnie krawędź, przez którą wszedł, wzdłuż normalnej zewnętrznej: tylna krawędź cienkiej ściany i krawędź, której prostą droga
-// przecina poza odcinkiem (skośne wejście nad narożnikiem wypukłym), nie dostają kontaktu. Środek już na początku kroku za prostą
-// (pamięć krawędzi wejścia, BF-D-1 z 3.0.2): bańka dociśnięta siłą F > r_ref / c₀ stoi środkiem za krawędzią (ε = c₀ · F / r_ref > 1),
-// więc krawędź, która w poprzednim kroku była dla niej krawędzią wejścia (`remembered`), odpycha dalej, póki rzut środka wypada
-// w 0 < t < 1. Wierzchołek wypukły należy do krawędzi, która się w nim zaczyna.
-uint nativePolygonEdgeFeature(float2 center, float2 previous, NativeSegment s, float2 outward, bool remembered) {
+// Silnik 4.0.0 trzyma środek bańki po stronie zewnętrznej (asercja kontaktu), więc cecha zależy tylko od położenia środka: bez
+// krawędzi wejścia, bez pamięci z poprzedniego kroku. Wierzchołek wypukły należy do krawędzi, która się w nim zaczyna.
+uint nativePolygonEdgeFeature(float2 center, NativeSegment s, float2 outward) {
     float2 start = s.current.xy, end = s.current.zw;
     float along = dot(center - start, end - start);
     bool convexStart = (s.flags.w & 2) != 0;
     if (convexStart && along <= 0 && nativePastSegmentEnd(center, s.region.xy, start)) return 2;
-    float centerSide = dot(center - start, outward);
     bool interior = along > 0 && !nativePastSegmentEnd(center, start, end);
-    if (centerSide >= 0) return interior ? 1 : 0;
-    float previousSide = dot(previous - start, outward);
-    if (previousSide < 0) return remembered && interior ? 1 : 0;
-    // previousSide ≥ 0 > centerSide, więc mianownik jest dodatni, a udział drogi do przecięcia z prostą leży w [0, 1).
-    return nativePathCrossesSegment(previous, center, previousSide, centerSide, start, end) ? 1 : 0;
-}
-
-// Wyjście środka przez krawędź od jej strony wewnętrznej: droga previous → center przecina sam odcinek, a przewidziany środek
-// stoi po stronie zewnętrznej (albo na prostej).
-bool nativePolygonEdgeExit(float2 center, float2 previous, NativeSegment s, float2 outward) {
-    float centerSide = dot(center - s.current.xy, outward), previousSide = dot(previous - s.current.xy, outward);
-    // previousSide < 0 ≤ centerSide, więc mianownik jest ujemny, a udział drogi do przecięcia z prostą leży w (0, 1].
-    return previousSide < 0 && centerSide >= 0
-        && nativePathCrossesSegment(previous, center, previousSide, centerSide, s.current.xy, s.current.zw);
-}
-
-// Pamięć krawędzi wejścia (BF-D-1 z 3.0.2): poprzedni opublikowany cache `previous` (limits.w rekordów, posortowany po kluczu) ma
-// rekord (bańka, krawędź) `participants` z cechą 1, widziany w poprzednim zaakceptowanym kroku. Licznik klatek limits.x rośnie o 1 na
-// zaakceptowany krok (krok odrzucony powtarza tę samą klatkę z tym samym cache). Rekord, który wypadł z cache (pojemność,
-// wygaśnięcie, unieważnienie), kończy pamięć: środek we wnętrzu bryły wraca wtedy do rzutu strażnika (CD-D-17).
-bool nativeRememberedEntryEdge(device NativeContactCache *previous, device NativeContactControl &control, long2 participants) {
-    int found = nativeCacheFind(previous, control.limits.w, 1, participants);
-    return found >= 0 && previous[found].response.w == 1 && previous[found].metadata.z + 1 == control.limits.x;
-}
-
-// Bańka ma zapamiętaną krawędź wejścia na innej krawędzi właściciela odcinka `s`: jej środek stoi we wnętrzu bryły.
-bool nativeOwnerRemembersEntry(device NativeContactCache *previous, device NativeContactControl &control, long bubble,
-    NativeSegment s, device NativeSegment *segments, uint count) {
-    if (!s.flags.y) return false;
-    for (uint j = 0; j < count; ++j) {
-        NativeSegment other = segments[j];
-        if (other.flags.y && other.identity.y == s.identity.y && (other.flags.w & 1) != 0 && other.identity.x != s.identity.x
-            && nativeRememberedEntryEdge(previous, control, long2(bubble, other.identity.x))) return true;
-    }
-    return false;
+    return dot(center - start, outward) >= 0 && interior ? 1 : 0;
 }
 
 kernel void nativeBuildContacts(device NativeBubble *bubbles [[buffer(0)]],
     device NativeSegment *segments [[buffer(1)]], device NativeContactControl &control [[buffer(2)]],
     device NativeCandidate *candidates [[buffer(3)]], device NativeContactCache *contacts [[buffer(4)]],
-    device NativeContactCache *previous [[buffer(5)]], constant NativeControl &world [[buffer(6)]],
     uint index [[thread_position_in_grid]]) {
     if (index >= control.counts.x) return;
     NativeCandidate c = candidates[index]; NativeBubble a = bubbles[c.metadata.y];
@@ -767,21 +667,10 @@ kernel void nativeBuildContacts(device NativeBubble *bubbles [[buffer(0)]],
         allowedSide = s.flags.z ? s.collision.x : 0;
         penetration = a.physical.z - distance;
         if (s.flags.w & 1) {
-            // Krawędź statycznego wielokąta: kontakt tylko z obszaru wnętrza krawędzi albo wierzchołka (CD-D-3, CD-D-4). Środek
-            // z początku kroku (position.zw z nativePredict) wybiera krawędź wejścia, gdy przewidziany środek minął prostą krawędzi, a jego droga przecięła odcinek (BF-D-1);
-            // środek, który był za prostą już na początku kroku, zachowuje krawędź wejścia z poprzedniego kroku (pamięć z cache, BF-D-1 z 3.0.2).
-            // Wgniecenie r − dot(center − start, outward) jest wtedy większe niż r, z normalną zewnętrzną.
+            // Krawędź statycznego wielokąta: kontakt tylko z obszaru wnętrza krawędzi albo wierzchołka (CD-D-3, CD-D-4).
+            // Wgniecenie r − dot(center − start, outward) liczy się od zewnętrznej normalnej krawędzi.
             float2 outward = base * s.region.z;
-            // Bańka twarda (c = 0) nie stoi środkiem za krawędzią (ε = c · F / r_ref = 0): bez pamięci i reguły wyjścia, jak w 3.0.1.
-            bool soft = nativeContactCompliance(a) > 0;
-            bool remembered = soft && nativeRememberedEntryEdge(previous, control, c.participants);
-            feature = nativePolygonEdgeFeature(a.position.xy, a.position.zw, s, outward, remembered);
-            // Środek wszedł do bryły przez inną jej krawędź (zapamiętaną krawędź wejścia) i wychodzi przez tę od strony wewnętrznej,
-            // np. przez tył cienkiej ściany: ta krawędź wypychałaby go dalej za ścianę, więc kontaktu nie dostaje, a strażnik
-            // zatrzymuje środek po jej stronie wewnętrznej (BF-D-3). Bez zapamiętanej krawędzi wejścia (bańka twarda, wejście
-            // i wyjście w jednym kroku) zachowanie jak w 3.0.1.
-            if (soft && feature == 1 && !remembered && nativePolygonEdgeExit(a.position.xy, a.position.zw, s, outward)
-                && nativeOwnerRemembersEntry(previous, control, c.participants.x, s, segments, world.counts.y)) feature = 0;
+            feature = nativePolygonEdgeFeature(a.position.xy, s, outward);
             if (feature == 1) {
                 normal = outward; point = a.position.xy - outward * dot(a.position.xy - s.current.xy, outward);
                 penetration = a.physical.z - dot(a.position.xy - s.current.xy, outward);

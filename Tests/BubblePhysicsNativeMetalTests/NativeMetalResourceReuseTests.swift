@@ -44,7 +44,6 @@ final class NativeMetalResourceReuseTests: XCTestCase {
         let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
         let first = try NativeMetalPipelineCache.pipelines(for: device)
         let second = try NativeMetalPipelineCache.pipelines(for: device)
-        XCTAssertTrue(first.predict === second.predict)
         XCTAssertEqual(Set(first.stages.keys), Set(NativeMetalPipelineCache.stageNames))
     }
 }

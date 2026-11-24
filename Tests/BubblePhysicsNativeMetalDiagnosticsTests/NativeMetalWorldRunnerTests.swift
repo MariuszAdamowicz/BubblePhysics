@@ -44,12 +44,9 @@ final class NativeMetalWorldRunnerTests: XCTestCase {
     }
 
     func testConfigurationSanitizesInvalidValues() {
-        let configuration = NativeMetalConfiguration(solverIterationCount: -1, cacheExpiryFrames: -1,
-            teleportDistanceMultiplier: .nan, ccdVelocityMultiplier: -.infinity).sanitized
-        XCTAssertEqual(configuration.solverIterationCount, 1)
-        XCTAssertEqual(configuration.cacheExpiryFrames, 0)
-        XCTAssertEqual(configuration.teleportDistanceMultiplier, NativeMetalConfiguration.default.teleportDistanceMultiplier)
-        XCTAssertEqual(configuration.ccdVelocityMultiplier, NativeMetalConfiguration.default.ccdVelocityMultiplier)
+        var configuration = NativeMetalConfiguration()
+        configuration.substepSplitMultiplier = -3
+        XCTAssertEqual(configuration.sanitized.substepSplitMultiplier, 1)
     }
 
     private func makeWorld() throws -> ReferenceWorld {

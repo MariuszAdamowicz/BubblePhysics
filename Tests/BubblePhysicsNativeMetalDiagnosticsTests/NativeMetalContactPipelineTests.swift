@@ -6,66 +6,10 @@ import BubblePhysicsReference
 
 @MainActor
 final class NativeMetalContactPipelineTests: XCTestCase {
-    func testResidualAndIndirectCacheIncludeContactsBeyondFirstThreadgroup() async throws {
-        let solver = try NativeMetalSolver(device: XCTUnwrap(MTLCreateSystemDefaultDevice()),
-            configuration: .init(solverIterationCount: 1), collectDispatchStatistics: true)
-        var world = ReferenceWorld(configuration: .init(timeStep: 1, linearDamping: 0), broadPhase: BruteForceBroadPhase())
-        for id in 0..<300 {
-            world.addBubble(try .init(id: .init(rawValue: id),
-                center: .init(x: id == 299 ? 2981.5 : Float(id) * 10, y: 0), mass: 1, targetRadius: 1))
-        }
-        let frame = try await solver.executeFrame(world: world, scenarioStep: 1)
-        XCTAssertEqual(frame.contacts.count, 1)
-        XCTAssertEqual(frame.bubbles[298].center.x, 2979.75)
-        XCTAssertEqual(frame.bubbles[299].center.x, 2981.75)
-        XCTAssertEqual(frame.report.solver.initialResidualNorm, 0.5)
-        XCTAssertEqual(frame.report.solver.finalResidualNorm, 0)
-        XCTAssertEqual(frame.report.solver.positionCorrectionCount, 2)
-        XCTAssertEqual(frame.report.solver.iterations, 1)
-        XCTAssertEqual(frame.profile.stageGPUWorkItemCounts["residualRecords"], 600)
-        XCTAssertEqual(frame.profile.stageGPUWorkItemCounts["cacheDispatchThreads"], 32)
-    }
-
-    // Mały graf nie może dispatchować całej pojemności; pusty graf nadal sprawdza finite.
-    func testIndirectDispatchTracksCompletedCacheInsteadOfCapacityIncludingEmptyWorld() async throws {
-        let solver = try NativeMetalSolver(device: XCTUnwrap(MTLCreateSystemDefaultDevice()),
-            collectDispatchStatistics: true)
-        var world = ReferenceWorld(configuration: .default, broadPhase: BruteForceBroadPhase())
-        let empty = try await solver.executeFrame(world: world, scenarioStep: 0)
-        XCTAssertEqual(empty.profile.stageGPUWorkItemCounts["cacheDispatchThreads"], 32)
-        XCTAssertEqual(empty.profile.commandBufferCount, 1)
-        for id in 1...17 {
-            world.addBubble(try .init(id: .init(rawValue: id), center: .init(x: Float(id) * 1.5, y: 0),
-                mass: 1, targetRadius: 1))
-        }
-        let frame = try await solver.executeFrame(world: world, scenarioStep: 1)
-        XCTAssertEqual(frame.contacts.count, 16)
-        XCTAssertEqual(frame.profile.stageGPUWorkItemCounts["cacheDispatchThreads"], 32)
-        XCTAssertEqual(frame.profile.stageGPUWorkItemCounts["candidateDispatchThreads"], 32)
-        XCTAssertGreaterThan(try XCTUnwrap(solver.persistentState).contactCapacity, 32)
-        XCTAssertEqual(frame.profile.commandBufferCount, 1)
-    }
-
-    // Redukcja musi odwiedzać wszystkie bańki i zachować initial/final oraz liczbę korekcji.
-    func testParallelResidualReductionPreservesIterationAccounting() async throws {
-        let solver = try NativeMetalSolver(device: XCTUnwrap(MTLCreateSystemDefaultDevice()),
-            configuration: .init(solverIterationCount: 1), collectDispatchStatistics: true)
-        var world = ReferenceWorld(configuration: .init(linearDamping: 0), broadPhase: BruteForceBroadPhase())
-        for (id, x) in [(1, Float(0)), (2, 1.5), (3, 3)] {
-            world.addBubble(try .init(id: .init(rawValue: id), center: .init(x: x, y: 0), mass: 1, targetRadius: 1))
-        }
-        let frame = try await solver.executeFrame(world: world, scenarioStep: 1)
-        XCTAssertEqual(frame.report.solver.initialResidualNorm, 0.5, accuracy: 0.00001)
-        XCTAssertEqual(frame.report.solver.finalResidualNorm, 0.375, accuracy: 0.00001)
-        XCTAssertEqual(frame.report.solver.iterations, 1)
-        XCTAssertEqual(frame.report.solver.positionCorrectionCount, 2)
-        XCTAssertEqual(frame.profile.stageGPUWorkItemCounts["residualRecords"], 6)
-    }
-
     // Emisja końców kontaktu musi zachować kolejność sąsiadów, stopnie i usuwanie krawędzi.
     func testParallelAdjacencyUsesOnlyCacheRecordsAndKeepsStableNeighborOrder() async throws {
         let solver = try NativeMetalSolver(device: XCTUnwrap(MTLCreateSystemDefaultDevice()),
-            configuration: .init(solverIterationCount: 4), collectDispatchStatistics: true)
+            configuration: .init(), collectDispatchStatistics: true)
         var world = ReferenceWorld(configuration: .init(linearDamping: 0), broadPhase: BruteForceBroadPhase())
         for (id, x) in [(1, Float(0)), (2, 1.5), (3, 3)] {
             world.addBubble(try .init(id: .init(rawValue: id), center: .init(x: x, y: 0), mass: 1, targetRadius: 1))

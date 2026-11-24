@@ -240,8 +240,6 @@ package struct NativeSolverFrame {
     package var contactCandidateOverflowCount = 0
     /// Największa liczba kandydatów na obiekt w tym kroku (etap 2).
     package var maximumContactCandidatesPerObject = 0
-    /// Liczba par baniek, z których mniejsza mieści się cała w kole większej, po tym kroku (walidator zawierania).
-    package var containedBubblePairCount = 0
     /// Wynik dla każdego punktu `NativeSolverInput.hitTests`, w tej samej kolejności; `nil` to puste miejsce.
     package var hitTestResults: [ObjectID?] = []
 }
@@ -283,10 +281,9 @@ package struct NativeMetalFailureDetail: Sendable, Equatable {
     }
 }
 
-/// Przyczyna odrzucenia przez strażnik (`NativeMetalWorldError.guardFailure`), odczytana z bitów statusu GPU:
-/// bit 8 to `centerCrossing`, bit 16 to `rigidRotationBudget`. Oba zapalają się zawsze razem z bitem 2.
+/// Przyczyna odrzucenia przez strażnik brył (`NativeMetalWorldError.guardFailure`), odczytana z bitów statusu GPU:
+/// bit 16 to `rigidRotationBudget` i zapala się zawsze razem z bitem 2.
 package enum NativeMetalGuardCause: Sendable, Equatable {
-    case centerCrossing
     case rigidRotationBudget
 }
 

@@ -15,7 +15,7 @@ final class ObjectStateTests: XCTestCase {
     private func makeWorld(device: MTLDevice) throws -> BubbleWorld {
         try BubbleWorld.makeBenchmarkWorld(configuration: try WorldConfiguration(
             simulationRegion: WorldRectangle(min: [0, 0], max: [200, 200]), fixedTimeStep: 1.0 / 60),
-            device: device, solverIterationLimit: 4)
+            device: device)
     }
 
     private func baseTransaction() throws -> WorldTransaction {
@@ -74,7 +74,7 @@ final class ObjectStateTests: XCTestCase {
     func testStress300BubbleCenterMatchesContourCentroidAndBoundsContainContour() async throws {
         let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
         let world = try BubbleWorld.makeBenchmarkWorld(configuration: try Stress300Scene.configuration(),
-            device: device, solverIterationLimit: 4)
+            device: device)
         world.submit(try Stress300Scene.initialTransaction())
         var frame = WorldFrame(transactionReceipts: [], events: [])
         for index in 0..<60 {

@@ -23,8 +23,7 @@ final class CapacityMeasurementTests: XCTestCase {
     private func device() throws -> MTLDevice { try XCTUnwrap(MTLCreateSystemDefaultDevice()) }
 
     private func operations(_ spec: BenchmarkSceneSpec, device: MTLDevice) throws -> [WorldOperation] {
-        let world = try BubbleWorld.makeBenchmarkWorld(configuration: spec.configuration(), device: device,
-                                                       solverIterationLimit: 4)
+        let world = try BubbleWorld.makeBenchmarkWorld(configuration: spec.configuration(), device: device)
         return try spec.initialTransaction(assets: XCTUnwrap(world.assets)).operations
     }
 
@@ -116,8 +115,7 @@ final class CapacityMeasurementTests: XCTestCase {
         let device = try device()
         let capacity = try operations(.capacity(bubbleCount: 300), device: device)
         let acceptance = try Scene.acceptance.initialTransaction(
-            assets: XCTUnwrap(BubbleWorld.makeBenchmarkWorld(configuration: Scene.acceptance.configuration(), device: device,
-                                                             solverIterationLimit: 4).assets)).operations
+            assets: XCTUnwrap(BubbleWorld.makeBenchmarkWorld(configuration: Scene.acceptance.configuration(), device: device).assets)).operations
         XCTAssertEqual(capacity, acceptance)
         XCTAssertEqual(try region(.capacity(bubbleCount: 300)), try Scene.acceptance.configuration().simulationRegion)
         XCTAssertEqual(BenchmarkSceneSpec.capacity(bubbleCount: 300).renderSize, CGSize(width: 1125, height: 2436))

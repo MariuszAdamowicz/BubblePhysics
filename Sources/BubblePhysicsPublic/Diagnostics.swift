@@ -69,11 +69,8 @@ public enum WorldRejectionReason: Equatable, Sendable {
     case unexpected
 }
 
-/// Przyczyna odrzucenia kroku przez strażnika solvera (`WorldRejectionReason.solverGuard`).
+/// Przyczyna odrzucenia kroku przez strażnika solvera brył (`WorldRejectionReason.solverGuard`).
 public enum SolverGuardCause: Equatable, Sendable {
-    /// Środek bańki w trakcie symulacji przeszedł przez ścianę albo wszedł we wnętrze bryły; także łuk obrotu bryły
-    /// pominięty przez próbkowanie, który mógł dotknąć bańki.
-    case centerCrossing
     /// Bryła sztywna obróciła się w jednym kroku o więcej, niż pozwala budżet 128 próbek obrotu.
     case rigidRotationBudget
 }
@@ -105,8 +102,6 @@ public struct WorldDiagnostics: Equatable, Sendable {
     /// Przyczyna ostatniego odrzucenia przez strażnika; nil, gdy nic nie odrzucono albo ostatnie odrzucenie miało inny
     /// powód niż `.solverGuard`.
     public let lastSolverGuardCause: SolverGuardCause?
-    /// Liczba par baniek, z których mniejsza mieści się cała w kole większej, po ostatnim ukończonym kroku.
-    public let containedBubblePairCount: Int
     /// Prawda tylko wtedy, gdy ostatnie `advance` zatwierdziło bufor poleceń z renderem; gra prezentuje drawable tylko przy
     /// prawdzie. Pauza, stan „zawiódł”, odrzucona klatka i `advance` bez bufora dają fałsz (etap 6).
     public let didRenderLastAdvance: Bool

@@ -140,7 +140,7 @@ final class NativeMetalBenchmarkTests: XCTestCase {
 
     func testMixedRunKeepsOnlyPublishedNativeFramesInGPUProfile() async throws {
         let executor = FailSecondNativeBenchmarkFrame(solver: try NativeMetalSolver(
-            device: XCTUnwrap(MTLCreateSystemDefaultDevice()), configuration: .init(solverIterationCount: 4)))
+            device: XCTUnwrap(MTLCreateSystemDefaultDevice()), configuration: .init()))
         let config = ReferenceBenchmarkMatrixConfiguration(scene: .interactive24,
             warmupSteps: 0, measuredSteps: 2, iterationLimits: [4], backend: .nativeMetal)
         let matrix = try await NativeMetalBenchmarkRunner.measure(configuration: config,
@@ -175,7 +175,7 @@ private final class ControlBatchFallbackFactory {
         count += 1
         if count == 3 { return NativeMetalWorldRunner(executor: nil) }
         let solver = try NativeMetalSolver(device: XCTUnwrap(MTLCreateSystemDefaultDevice()),
-            configuration: .init(solverIterationCount: limit))
+            configuration: .init())
         return NativeMetalWorldRunner(executor: solver)
     }
 }

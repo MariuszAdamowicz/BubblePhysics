@@ -224,7 +224,7 @@ final class NativeMetalContourTests: XCTestCase {
     }
 
     private func makeSolver() throws -> NativeMetalSolver {
-        try .init(device: XCTUnwrap(MTLCreateSystemDefaultDevice()), configuration: .init(contactCompliance: 0.01))
+        try .init(device: XCTUnwrap(MTLCreateSystemDefaultDevice()), configuration: .init())
     }
 
     private func makeWorld() throws -> ReferenceWorld {

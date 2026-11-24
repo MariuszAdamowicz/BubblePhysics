@@ -136,8 +136,6 @@ final class NativeMetalShaderABITests: XCTestCase {
             Probe(name: "structuralSource", mslSize: "NativeStructuralSource", swiftSize: MemoryLayout<NativeStructuralSourceRecord>.stride, fields: [
                 ("geometry", MemoryLayout<NativeStructuralSourceRecord>.offset(of: \.geometry)),
                 ("clips", MemoryLayout<NativeStructuralSourceRecord>.offset(of: \.clips))]),
-            Probe(name: "solverControl", mslSize: "NativeSolverControl", swiftSize: MemoryLayout<NativeMetalSolverControl>.stride, fields: [
-                ("physics", MemoryLayout<NativeMetalSolverControl>.offset(of: \.physics))]),
             Probe(name: "contourControl", mslSize: "NativeContourControl", swiftSize: MemoryLayout<NativeMetalContourControl>.stride, fields: [
                 ("shape", MemoryLayout<NativeMetalContourControl>.offset(of: \.shape))]),
             Probe(name: "event", mslSize: "NativeEventRecord", swiftSize: MemoryLayout<NativeMetalEventRecord>.stride, fields: [
@@ -337,11 +335,9 @@ final class NativeMetalShaderABITests: XCTestCase {
     }
 
     /// F-13: shadery adresują bufor safety jako `atomic_uint *safety` bez struktury MSL, więc sonda ABI go nie widzi.
-    /// Układ pilnujemy po stronie Swift: 8 słów `uint`, safety+0..3 to `counts`, safety+4..7 to `diagnostics`.
-    func testSafetyControlIsEightUIntWordsWithDiagnosticsAtWordFour() {
-        XCTAssertEqual(MemoryLayout<NativeMetalSafetyControl>.stride, 32, "bufor safety: 8 × uint")
-        XCTAssertEqual(MemoryLayout<NativeMetalSafetyControl>.offset(of: \.counts), 0, "safety+0..3: liczniki i bity błędów")
-        XCTAssertEqual(MemoryLayout<NativeMetalSafetyControl>.offset(of: \.diagnostics), 16,
-            "safety+4: licznik par bańka w bańce (atomic add w shaderze)")
+    /// Układ pilnujemy po stronie Swift: 4 słowa `uint`, safety+3 to bity błędów.
+    func testSafetyControlIsFourUIntWordsWithErrorBitsAtWordThree() {
+        XCTAssertEqual(MemoryLayout<NativeMetalSafetyControl>.stride, 16, "bufor safety: 4 × uint")
+        XCTAssertEqual(MemoryLayout<NativeMetalSafetyControl>.offset(of: \.counts), 0, "safety+0..3: bity błędów w słowie 3")
     }
 }

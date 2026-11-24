@@ -20,7 +20,7 @@ final class PublishedStateDeterminismTests: XCTestCase {
 
     private func run(steps: Int, device: MTLDevice) async throws -> Run {
         let world = try BubbleWorld.makeBenchmarkWorld(configuration: try Stress300Scene.configuration(),
-            device: device, solverIterationLimit: 4)
+            device: device)
         world.submit(try Stress300Scene.initialTransaction())
         var frame = WorldFrame(transactionReceipts: [], events: [])
         for index in 0..<steps {
@@ -77,7 +77,7 @@ final class PublishedStateDeterminismTests: XCTestCase {
         let material = PhysicsMaterialID(rawValue: 1), style = RenderMaterialID(rawValue: 1)
         let world = try BubbleWorld.makeBenchmarkWorld(configuration: WorldConfiguration(
             simulationRegion: WorldRectangle(min: [0, 0], max: [700, 500]), fixedTimeStep: 1.0 / 60),
-            device: device, solverIterationLimit: 4)
+            device: device)
         func descriptor(_ id: Int, _ position: WorldPoint, radius: Float) throws -> WorldObject {
             .bubble(try BubbleDescriptor(id: ObjectID(rawValue: UInt64(id)), position: position, targetRadius: radius,
                 physicsMaterialID: material, renderMaterialID: style))
@@ -154,7 +154,7 @@ final class PublishedStateDeterminismTests: XCTestCase {
 
     private func mixedRun(steps: Int, device: MTLDevice) async throws -> MixedRun {
         let world = try BubbleWorld.makeBenchmarkWorld(configuration: try MixedScene.configuration(),
-            device: device, solverIterationLimit: 4)
+            device: device)
         world.submit(try MixedScene.initialTransaction())
         var run = MixedRun()
         for index in 0..<steps {
