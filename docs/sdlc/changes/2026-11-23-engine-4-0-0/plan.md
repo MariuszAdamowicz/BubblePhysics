@@ -12,8 +12,7 @@
 **Template version:** default/0.3.3
 
 **Plugin version:** 0.7.11
-**Agent Sessions:** claude-code: ca9caf94-f667-4817-9350-6d22399ebca1
-**Agent Sessions:** claude-code: 16e9c99f-b156-404d-bed6-ef59c058ff89
+**Agent Sessions:** claude-code: ca9caf94-f667-4817-9350-6d22399ebca1, 16e9c99f-b156-404d-bed6-ef59c058ff89, dc45740c-21ae-481c-991f-1c346cfdbf2e
 
 ---
 
@@ -98,14 +97,15 @@ flowchart LR
 +   NativePostSolveKernels.metal-source # - CCD, strażniki, zawarcie, nacisk z λ; cięciwa r·(1 − ε)
 + Sources/BubblePhysicsNativeMetalDiagnostics/    # runnery i adapter na nowym NativeSolverInput i telemetrii
 + Benchmarks/macOS/BubblePhysicsReferenceBench/   # kompiluje się z nowym modułem diagnostycznym
-+ Sources/BubblePhysicsMetalRenderBenchmark/PublicWorldStressBenchmark.swift # K_c, bez brył dynamicznych z bańkami; histogram podkroków (slice 2)
-+ Benchmarks/macOS/BubblePhysicsPerfGuard/        # działa na K_c; nowe bazy (slice 2)
-+ Benchmarks/iOS/BubblePhysicsBench/              # kompiluje się; sceny G8-AC2 (slice 2)
++ Sources/BubblePhysicsMetalRenderBenchmark/PublicWorldStressBenchmark.swift # K_c, bez brył dynamicznych z bańkami; PublicWorldStressReport z histogramem podkroków, najdłuższą klatką i czasem GPU fizyki osobno od konturu, nowe przypadki Scene: cztery sceny G8-AC2 po 150 baniek, .restingCrowd, .bandToWall, .headOn128, .shotIntoCrowd (slice 2)
++ Benchmarks/macOS/BubblePhysicsPerfGuard/        # działa na K_c; bazy w docs/benchmarks/perf-guard.json odświeżone przez --record (slice 2)
++ Benchmarks/iOS/BubblePhysicsBench/App/PublicWorldStressView.swift # kompiluje się; cztery sceny G8-AC2 w przełączniku scen (slice 2)
 + Examples/BubblePhysicsShowcase/App/BubbleScene.swift # contactStiffness zamiast deformability
-+ docs/integration-guide.md  # bloki kodu zgodne ze Showcase; reszta wydania (slice 2)
-+ docs/MIGRATION-v4.md       # NEW tabela symboli i zastępstw; zmiany zachowania, znane ograniczenia (slice 2)
-  CHANGELOG.md, README.md    # wydanie 4.0.0 (slice 2)
-  Tests/                     # audyt według spec. 4, w tym BubblePhysicsMetalRenderTests (sceny z materiałem bańki)
++ docs/integration-guide.md  # bloki kodu zgodne ze Showcase; proza na K_c i γ, tytuł 4.0 (slice 2)
++ docs/MIGRATION-v4.md       # NEW tabela symboli, zmiany zachowania i znane ograniczenia; przeguby z bańkami i sztywne K_c (slice 2)
++ docs/benchmarks/           # NEW raporty v4.0.0: Mac naprzemiennie z v3.0.2, iPhone X, bramka gry (slice 2)
++ CHANGELOG.md, README.md    # wydanie 4.0.0, README bez XPBD w opisie produktu (slice 2)
++ Tests/                     # audyt według spec. 4, w tym BubblePhysicsMetalRenderTests (sceny z materiałem bańki); MigrationGuideTests na 4.0.0 (slice 2)
 ```
 
 Promień z przejścia (`bubbleRadius`) host ustala raz na krok w `MotionControllers.prepare`, przed broadphase. Siatka, kandydaci i zapas widzą więc już nowy promień, a w trakcie kroku promień się nie zmienia, więc zapas nie musi pokrywać jego przyrostu. Przyrost zwiększa tylko wgniecenie przy tej samej odległości d > 0, a większe ω daje więcej podkroków ([P-B-21](#p-b-21)).
@@ -154,7 +154,7 @@ Stan przejściowy wewnątrz wycinka 1: od zadania 2 do zadania 7 `NativePublicWo
 +                 └── bufor wywołującego: tylko render przez beforeCommit, po końcu kroku
 ```
 
-Typowa klatka ma jedną parę buforów i jedno czekanie CPU, jak dziś ([CD-D-18](change-design.md#cd-d-18)). Czas GPU fizyki to suma `gpuEndTime − gpuStartTime` buforów podkroków, a czas konturu to ten sam pomiar bufora końca kroku. Nie trzeba więc próbkowania liczników. Dziś fizyka koduje się w buforze wywołującego (`NM/NativeMetalSolver.swift:572`). Po zmianie ten bufor dostaje tylko render, z końcowego stanu kroku ([P-B-39](#p-b-39)).
+Typowa klatka ma jedną parę buforów ([CD-D-18](change-design.md#cd-d-18)) i dwa czekania CPU: na bufor końca kroku i na bufor renderu wywołującego, bo `BubbleWorld.advance` publikuje stan po renderze (odchylenie implementacji nr 15). Czas GPU fizyki to suma `gpuEndTime − gpuStartTime` buforów podkroków, a czas konturu to ten sam pomiar bufora końca kroku. Nie trzeba więc próbkowania liczników. Dziś fizyka koduje się w buforze wywołującego (`NM/NativeMetalSolver.swift:572`). Po zmianie ten bufor dostaje tylko render, z końcowego stanu kroku ([P-B-39](#p-b-39)).
 
 **Transakcja.** `TransactionStager.stageBatch` (`RT/TransactionStager.swift:178`), dziś i po zmianie:
 
@@ -261,7 +261,8 @@ Zachowania kodu zastępowanego, które muszą przetrwać:
 | runtime (bez GPU) | walidacja transakcji, gumki i ról | [P-B-15](#p-b-15) (stager), [P-B-17](#p-b-17) (odrzucenie `.kinematic`), [P-B-35](#p-b-35)–[P-B-38](#p-b-38) |
 | świat na GPU (szew `makeBenchmarkWorld(configuration:device:native:)`, porównanie z odniesieniem w Double z testu) | prawo kontaktu, brak przejścia, całkowanie, podkroki, asercje, telemetria, render | [P-B-4](#p-b-4)–[P-B-27](#p-b-27), [P-B-39](#p-b-39) |
 | kontrola statyczna i build Xcode | graf symboli bez usuniętych nazw; pełny pakiet zielony; Showcase i benchmark iOS się budują | [P-B-2](#p-b-2), [P-B-31](#p-b-31), [P-B-32](#p-b-32) |
-| pomiar (slice 2) | perf guard, stress, iPhone X | [P-B-28](#p-b-28)–[P-B-30](#p-b-30) |
+| raport benchmarku (bez urządzenia docelowego, slice 2) | raport stress ma histogram podkroków, najdłuższą klatkę i czasy GPU fizyki i konturu; cztery sceny [G8-AC2](change-design.md#g8-ac2) budują się ze 150 bańkami i liczą bez `worldFailed` | [P-B-28](#p-b-28), [P-B-29](#p-b-29) (sceny) |
+| pomiar (slice 2) | perf guard i stress na Macu naprzemiennie z `v3.0.2`; iPhone X | [P-B-29](#p-b-29), [P-B-30](#p-b-30) |
 | dokumentacja (slice 2) | wersja i przewodnik migracji | [P-B-34](#p-b-34) |
 | bramka gry (poza repozytorium, ręcznie, slice 2) | przyjęcie w realnym tłumie | [P-B-33](#p-b-33) |
 
@@ -270,7 +271,9 @@ Zachowania kodu zastępowanego, które muszą przetrwać:
 - testy runtime: `Tests/BubblePhysicsRuntimeTests/`, nowe klasy `RigidPlacementTests`, `DynamicRigidExclusionTests` i `BandStabilityThresholdTests`;
 - testy świata: `Tests/BubblePhysicsRuntimeTests/`, jedna klasa na zadanie: `ContactLawStaticsTests` ([P-B-4](#p-b-4)–[P-B-6](#p-b-6)), `ForceIntegrationTests` ([P-B-12](#p-b-12), [P-B-13](#p-b-13)), `NoCrossingTests` ([P-B-9](#p-b-9), [P-B-10](#p-b-10)), `SubstepCountTests` ([P-B-18](#p-b-18), [P-B-19](#p-b-19)), `GridRebuildTests` ([P-B-20](#p-b-20)), `SubstepForceTests` ([P-B-14](#p-b-14)–[P-B-16](#p-b-16)), `RigidContactTests` ([P-B-7](#p-b-7), [P-B-11](#p-b-11), [P-B-17](#p-b-17)), `ContactAssertionTests` ([P-B-22](#p-b-22)–[P-B-26](#p-b-26)), `ContourChordTests` ([P-B-8](#p-b-8)), `SubstepTelemetryTests` ([P-B-27](#p-b-27)), `CrowdStabilityTests` ([P-B-21](#p-b-21));
 - odniesienie w Double: `Tests/BubblePhysicsRuntimeTests/ContactLawReference.swift`, obok `CrowdSceneSupport.swift`;
-- testy natywne i ABI rekordów: `Tests/BubblePhysicsNativeMetalTests/` (`NativeMetalShaderABITests`, `NativeMetalRenderHandoffTests`).
+- testy natywne i ABI rekordów: `Tests/BubblePhysicsNativeMetalTests/` (`NativeMetalShaderABITests`, `NativeMetalRenderHandoffTests`);
+- testy raportu benchmarku: `Tests/BubblePhysicsMetalRenderTests/`, nowe klasy `StressSubstepReportTests` ([P-B-28](#p-b-28)) i `BudgetSceneTests` ([P-B-29](#p-b-29), sceny); perf guard: `swift run -c release BubblePhysicsPerfGuard`, testy `Tests/BubblePhysicsPerfGuardTests/`;
+- testy dokumentacji: `Tests/BubblePhysicsPublicTests/MigrationGuideTests.swift`, `IntegrationGuideTests.swift` ([P-B-34](#p-b-34)).
 
 Testy GPU pomijają się (`XCTSkip`) bez urządzenia Metal, więc liczą się tylko przebiegi na Macu z GPU. Repozytorium nie ma lintera ani CI.
 
@@ -281,7 +284,7 @@ Testy GPU pomijają się (`XCTSkip`) bez urządzenia Metal, więc liczą się ty
 | Slice | Name | Delivers | Seams | Behaviours | Status |
 |-------|------|----------|-------|------------|--------|
 | 1 | Silnik 4.0.0 w pakiecie | Gra może zbudować się na gałęzi silnika: nowy materiał, prawo kontaktu, podkroki, asercje, walidacja transakcji, telemetria; Showcase i benchmark iOS się budują ([G1](change-design.md#g1-ac1)–[G7](change-design.md#g7-ac4), [G8-AC1](change-design.md#g8-ac1) w części silnika, [G9-AC1](change-design.md#g9-ac1), [G9-AC2](change-design.md#g9-ac2)) | Model, Runtime, `NM/`, shadery, moduł diagnostyczny, `BubblePhysicsReferenceBench`, stress i perf guard na K_c, Showcase, bloki kodu przewodnika, tabela symboli `docs/MIGRATION-v4.md` | [P-B-1](#p-b-1)–[P-B-27](#p-b-27), [P-B-31](#p-b-31), [P-B-32](#p-b-32), [P-B-35](#p-b-35)–[P-B-39](#p-b-39) | done |
-| 2 | Wydanie 4.0.0 | Pomiar na iPhonie X, nowe bazy, dokumentacja wydania, bramka gry i tag ([G8-AC1](change-design.md#g8-ac1) w części benchmarku, [G8-AC2](change-design.md#g8-ac2), [G8-AC3](change-design.md#g8-ac3), [G9-AC3](change-design.md#g9-ac3), [G9-AC4](change-design.md#g9-ac4)) | stress i benchmark iOS (sceny, histogram), perf guard (bazy), `CHANGELOG.md`, `README.md`, `docs/MIGRATION-v4.md` (zachowanie i ograniczenia), `docs/integration-guide.md` (wydanie) | [P-B-28](#p-b-28)–[P-B-30](#p-b-30), [P-B-33](#p-b-33), [P-B-34](#p-b-34) | unplanned |
+| 2 | Wydanie 4.0.0 | Pomiar na iPhonie X, nowe bazy, dokumentacja wydania, bramka gry i tag ([G8-AC1](change-design.md#g8-ac1) w części benchmarku, [G8-AC2](change-design.md#g8-ac2), [G8-AC3](change-design.md#g8-ac3), [G9-AC3](change-design.md#g9-ac3), [G9-AC4](change-design.md#g9-ac4)) | `PublicWorldStressBenchmark` (raport z histogramem, cztery sceny [G8-AC2](change-design.md#g8-ac2)), przełącznik scen benchmarku iOS, bazy perf guard, raporty w `docs/benchmarks/`, `CHANGELOG.md`, `README.md`, `MigrationGuideTests`, `docs/MIGRATION-v4.md` (uzupełnienie), proza `docs/integration-guide.md` | [P-B-28](#p-b-28)–[P-B-30](#p-b-30), [P-B-33](#p-b-33), [P-B-34](#p-b-34) | unplanned |
 
 Wycinek 1 ma sens sam: cały pakiet, Showcase i benchmark iOS działają na nowym silniku z zielonym `swift test`, a autor może od razu podpiąć gałąź gry i stroić. Brakuje w nim dowodu wydajności na iPhonie X, nowych baz, dokumentacji wydania i bramki gry. Bez nich nie ma tagu. Wycinek 2 domyka wydanie i może zmienić się po pomiarze: przekroczenie budżetu wraca do autora jako decyzja o lokalnym h.
 
@@ -432,18 +435,41 @@ Każde zadanie zostawia pakiet z kompilującymi się testami (`swift build --bui
     exit=0
     ```
 
+## Slice 2: Wydanie 4.0.0
+
+**Delivers:** tag `v4.0.0` na `main` z dowodem wydajności na iPhonie X, nowymi bazami z Maca, zaliczoną bramką gry i dokumentacją wydania.
+
+Zadania 18–22 wykonuje agent. Zadania 23–25 wymagają człowieka albo wychodzą poza tę maszynę. Pomiary na Macu biegną na bezczynnej maszynie (load average ≤ 2 w `uptime`, README).
+
+18. Powierzchnia bez działania i czerwone testy: cztery nowe przypadki `PublicWorldStressBenchmark.Scene` (na razie pusty świat) i nowe klucze raportu z zerami, a do tego klasy `StressSubstepReportTests` (klucze z telemetrii klatek), `BudgetSceneTests` (każda scena ma 150 baniek i liczy 60 klatek bez `worldFailed`) i `MigrationGuideTests` (README „Wersja 4.0.0” z linkiem do `MIGRATION-v4.md`, `## 4.0.0` w `CHANGELOG.md`, w `MIGRATION-v4.md` nazwy `substepLimitExceeded`, `unsupportedJointBody`, `unsupportedBubbleWithDynamicRigidBody` i ograniczenie sztywnego `contactStiffness`), covering [P-B-28](#p-b-28), [P-B-29](#p-b-29), [P-B-34](#p-b-34) · verify: `swift build --build-tests && ! swift test --filter "StressSubstepReportTests|BudgetSceneTests|MigrationGuideTests"`
+19. Nowe klucze `PublicWorldStressReport` z `benchmarkTelemetry` każdej mierzonej klatki: `substep_p95`, `substep_max`, `substep_histogram`, `grid_rebuild_max`, `longest_frame_ms`, `telemetry_physics_gpu_p95_ms`, `telemetry_contour_gpu_p95_ms` oraz `host_render_wait_p95_ms` (czekanie na bufor renderu osobno od `host_waiting_p95_ms`, które mierzy czekanie na bufor końca kroku, `NM/NativeMetalSolver.swift:926`). Dotychczasowy `gpu_physics_p95_ms` z serii samej fizyki zostaje bez zmian, bo czyta go prognoza iPhone'a X w perf guardzie (`DevicePrediction.swift:115`), covering [P-B-28](#p-b-28) · verify: `swift test --filter "StressSubstepReportTests|PerfGuardTests"`
+20. Cztery sceny [G8-AC2](change-design.md#g8-ac2) w przypadkach `Scene` (tłum w spoczynku; gumka w pełnym naciągnięciu do ściany; dwie bańki 128 czołowo po 10³ j/s; „2” wystrzelona 3 · 10³ j/s w tłum) z progiem `p95_gate` 16,67 ms, i w liście `scenes` w `PublicWorldStressView`, covering [P-B-29](#p-b-29) · verify: `swift test --filter BudgetSceneTests && test "$(grep -cE '\.(restingCrowd|bandToWall|headOn128|shotIntoCrowd)' Benchmarks/iOS/BubblePhysicsBench/App/PublicWorldStressView.swift)" -eq 4 && xcodebuild -project Benchmarks/iOS/BubblePhysicsBench/BubblePhysicsBench.xcodeproj -scheme BubblePhysicsBench -configuration Release -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build`
+21. `MIGRATION-v4.md` uzupełniony o odrzucanie przegubów z bańkami i o sztywne K_c jako znane ograniczenie. Proza `docs/integration-guide.md` przepisana na 4.0.0: tytuł, wiersz 17 (fizyka we własnych buforach, render w buforze gry), 93–101, 119–122 (opór i gumka liczone na GPU w podkrokach, zakres K_band ≤ m / (16 · dt²), [CD-D-20](change-design.md#cd-d-20)), 128–130 i 246. `README.md`: wersja w wierszu 5 z linkiem do `MIGRATION-v4.md` i opis w wierszu 17. Sekcja `## 4.0.0` w `CHANGELOG.md` i link do `MIGRATION-v4.md` we wstępie, covering [P-B-34](#p-b-34) · verify: `swift test --filter "MigrationGuideTests|IntegrationGuideTests" && grep -q '^# Przewodnik integracji BubblePhysics 4.0' docs/integration-guide.md && ! grep -nE 'contactCompliance|contactDampingRatio|BubbleContactCompliance|XPBD|3600 · m|jednym buforze poleceń na klatkę' docs/integration-guide.md README.md`
+22. Nowe bazy perf guard (`--record` dla każdej sceny) i raport `docs/benchmarks/v4.0.0-mac-ab-<data>.md`: perf guard i stress z worktree tagu `v3.0.2` i z tej gałęzi na zmianę, na tym samym Macu. Raport mówi, że scena stress-300 w 4.0.0 jest inna (trójkąt po torze, 287 baniek), covering [P-B-30](#p-b-30) · verify: `! git diff --quiet main -- docs/benchmarks/perf-guard.json && swift run -c release BubblePhysicsPerfGuard && ls docs/benchmarks/v4.0.0-mac-ab-*.md`
+23. **Człowiek:** pomiar na iPhonie X w Release (podpis z własnego `Signing.local.xcconfig`, fizyczne urządzenie), cztery sceny [G8-AC2](change-design.md#g8-ac2), raporty skopiowane do `docs/benchmarks/v4.0.0-iphone-x-<data>.md` z mierzonym commitem i z oboma czekaniami CPU (`host_waiting_p95_ms`, `host_render_wait_p95_ms`), co mierzy koszt odstępstwa od [CD-D-18](change-design.md#cd-d-18); p95 klatki powyżej 16,67 ms w którejkolwiek scenie wstrzymuje tag i wraca do autora jako decyzja o lokalnym h, covering [P-B-29](#p-b-29) · verify: `test "$(cat docs/benchmarks/v4.0.0-iphone-x-*.md | grep -o 'p95_gate=pass' | wc -l)" -ge 4 && ! grep -q 'p95_gate=fail' docs/benchmarks/v4.0.0-iphone-x-*.md`
+24. **Człowiek, poza repozytorium:** bramka przeciskania na gałęzi gry wskazującej na `feature/engine-4-0-0` (warunek wejścia: gra zmigrowana do 4.0.0), raport w `docs/benchmarks/v4.0.0-game-gate-<data>.md` z wersjami `PhysicsGate.json` i `PhysicsTuning.json` oraz rozbieżnościami względem specyfikacji, covering [P-B-33](#p-b-33) · verify: `grep -q '15/15' docs/benchmarks/v4.0.0-game-gate-*.md`
+25. **Człowiek:** PR gałęzi do `main` (opis zmieniany przez `gh api PATCH`), scalenie po zaliczeniu zadań 23 i 24, anotowany tag `v4.0.0` („BubblePhysics 4.0.0”) na commicie scalającym · verify: `git ls-remote --tags origin v4.0.0 | grep -q v4.0.0`
 
 ## Deviations from Design
 
 | ID | Type | Status | Design updated? | Note |
 |----|------|--------|-----------------|------|
 | [G4-AC6](change-design.md#g4-ac6) | change | approved | yes, §G4-AC6 edited 2026-11-23 | Kryterium wymaga bańki `.kinematic` „jak w `v3.0.2`”, ale `v3.0.2` odrzuca bańkę `.kinematic` błędem `unsupportedMotionRole` (`RT/TransactionStager.swift:515-517`, test `KinematicStagingTests.testKinematicBubbleIsRejectedOnAddReplaceAndSetMotion`), a [CD-D-9](change-design.md#cd-d-9) mówi „bez zmian w API ról ruchu”. Plan sprawdza bańkę `.pathDriven` i zostawia odrzucenie `.kinematic`. Autor zatwierdził, a brzmienie G4-AC6 w projekcie jest poprawione. |
+| [CD-D-18](change-design.md#cd-d-18) | change | pending | no | Klatka czeka na CPU dwa razy (bufor końca kroku i bufor renderu), a nie raz jak w `v3.0.2`. Wynika to z kontraktu `BubbleWorld.advance`: publikacja po renderze, a błąd renderu jest błędem świata (odchylenie implementacji nr 15, zatwierdzone). Koszt drugiego czekania mierzy wycinek 2 na iPhonie X. |
 
 ## Replan log
 
 | Slice | Assumed | Found | Plan change | Date |
 |-------|---------|-------|-------------|------|
-|       |         |       |             |      |
+| 2 | Zmiany zachowania i znane ograniczenia w `MIGRATION-v4.md` pisze wycinek 2 | Wycinek 1 je napisał (odchylenie nr 20); brakuje przegubów z bańkami (`unsupportedJointBody`, odchylenie nr 18); test nie sprawdza trzech nowych przyczyn | zadanie 21 tylko uzupełnia; zadanie 18 rozszerza `MigrationGuideTests` | 2026-11-24 |
+| 2 | W przewodniku integracji zostaje tylko „reszta wydania” | Proza wierszy 93–101, 128–130 i 246 opisuje usunięte API, tytuł mówi 3.0 (odchylenie nr 25) | zadanie 21 przepisuje prozę; R2 opisuje to wprost | 2026-11-24 |
+| 2 | Jedno czekanie CPU na klatkę ([CD-D-18](change-design.md#cd-d-18)) | Dwa czekania (odchylenie nr 15) | R2 poprawione; wiersz w Deviations from Design; raport z iPhone'a X podaje koszt | 2026-11-24 |
+| 2 | Sceny [G8-AC2](change-design.md#g8-ac2) powstają w `Benchmarks/iOS/BubblePhysicsBench` | Sceny są w `PublicWorldStressBenchmark.Scene`, aplikacja iOS ma tylko przełącznik i raport na ekranie; żadnej z czterech scen nie ma, moduł nie używa gumki | R2: sceny w module benchmarku, w aplikacji tylko przełącznik; zadanie 20 | 2026-11-24 |
+| 2 | Stress ma dane do histogramu podkroków | Raport czyta tylko `gpuMilliseconds`; pola podkroków, przebudów i czasów GPU istnieją w `NativeMetalFrameTelemetry` | zadanie 19; nowa warstwa testów „raport benchmarku” w strategii testów | 2026-11-24 |
+| 2 | Pomiar naprzemienny z `v3.0.2` na gotowym narzędziu | Brak skryptu A/B; scena stress-300 w 4.0.0 inna niż w `v3.0.2` (odchylenie nr 21) | zadanie 22 ręcznie z worktree tagu, raport opisuje różnicę scen | 2026-11-24 |
+| 2 | README zmienia tylko numer wersji | Wiersz 17 opisuje solver XPBD i cache kontaktów | zadanie 21 obejmuje wiersz 17 | 2026-11-24 |
+| 2 | Obserwacje sztywnego K_c zostają w odchyleniu nr 26 | Autor zatwierdził dopisanie ich do znanych ograniczeń | zadanie 21 | 2026-11-24 |
+| 2 | Wydanie kończy tag | Tag idzie na commit scalający PR na `main`; gałąź nie ma jeszcze PR | zadanie 25 dla człowieka | 2026-11-24 |
 
 ## Implementation deviations
 
@@ -463,7 +489,7 @@ Każde zadanie zostawia pakiet z kompilującymi się testami (`swift build --bui
 | 12 | 1 | 7 | change | Krawędź jednostronna pcha tylko, gdy środek jest po jej zewnętrznej stronie (tylna krawędź cienkiej ściany nie przepycha). Test natywny używa `ContactLawReference.swift` przez dowiązanie symboliczne do pliku z `BubblePhysicsRuntimeTests`. | approved | 2026-11-24 |
 | 13 | 1 | 8, 12 | change | Koniec kroku: region → rekordy kontaktów → `nativeCheckFinite` → asercja (R2: `nativeCheckFinite` przed regionem); kolejność rozstrzygania przyczyn (limit, skończoność, kontakt) zachowana po stronie hosta. `commandBufferCount` i `encoderCount` = 2 × liczba par. | approved | 2026-11-24 |
 | 14 | 1 | 8 | change | **Kryterium do decyzji:** w `NoCrossingTests` para ukośna przy 10³ i 3·10³ j/s sprawdza tylko d > 0, bez zamiany stron. Przy odsunięciu R/2 bańka mija drugą przez strefę nakładania (miękkie prawo), a stare kryterium strony z pierwszego nakładania oznacza to jako zamianę. G3-AC2 wymaga „środki nie zamieniają się stronami wzdłuż prostej zderzenia” także dla pary ukośnej. | approved | 2026-11-24 |
-| 15 | 1 | 8, przegląd | change | **Do decyzji:** klatka czeka na CPU dwa razy (bufor końca kroku i bufor renderu wywołującego), a CD-D-18 i R2 mówią o jednym czekaniu jak dziś. Drugie czekanie wynika z kontraktu `BubbleWorld.advance` (publikacja po renderze, błąd renderu = błąd świata, strona t−1 ping-pong). Wpływa na budżet G8-AC2 w wycinku 2. | approved | 2026-11-24 |
+| 15 | 1 | 8, przegląd | change | **Do decyzji:** klatka czeka na CPU dwa razy (bufor końca kroku i bufor renderu wywołującego), a [CD-D-18](change-design.md#cd-d-18) i R2 mówią o jednym czekaniu jak dziś. Drugie czekanie wynika z kontraktu `BubbleWorld.advance` (publikacja po renderze, błąd renderu = błąd świata, strona t−1 ping-pong). Wpływa na budżet [G8-AC2](change-design.md#g8-ac2) w wycinku 2. | approved | 2026-11-24 |
 | 16 | 1 | 10 | change | `substepSplitMultiplier` w `time.w` `NativeMetalSubstepControl`; podział obejmuje limit czasu, sztywność i odległość, nie zapas; reszta < 1e-5 kroku dołączana do bieżącego podkroku; gumka i motor szukane binarnie po ID; moment motoru tylko dla baniek sterowanych siłą; `BandDriveTests` i `MotionDampingTests` przeliczone na nowe całkowanie. | approved | 2026-11-24 |
 | 17 | 1 | 11 | change | Przeszkody dla baniek: statyczne koła i kapsuły oraz każda bryła kinematyczna (wielokąt statyczny zostaje krawędziami); rekordy kontaktu bańka–bryła z nowego `nativeBubbleBodyContacts` z impulsem F·Δt, żeby zdarzenia i blokada sterowania działały. | approved | 2026-11-24 |
 | 18 | 1 | 15 | change | **Do potwierdzenia:** `TransactionStager` odrzuca każdy przegub z bańką (`unsupportedJointBody`). Wcześniej stager go przyjmował, a GPU po cichu pomijał. Plan nie wspominał stagera; opis zachowania dla `MIGRATION-v4.md` należy do wycinka 2. | approved | 2026-11-24 |
