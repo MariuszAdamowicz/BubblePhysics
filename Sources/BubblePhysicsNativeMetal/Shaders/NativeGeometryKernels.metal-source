@@ -257,6 +257,46 @@ bool nativeJointExcluded(device uint4 *jointRanges, device ulong *jointPartners,
     return false;
 }
 
+// Para baniek (index < j) jako kandydat wiersza bańki `index`: filtr, więzy i zasięg z zapasami obwiedni. Wspólna dla siatki posortowanej
+// (wyszukiwanie binarne) i siatki haszowanej jądra jednej grupy; wiersz ma stały porządek po kluczu, więc kolejność wywołań nie ma znaczenia.
+void nativeBubblePairCandidate(uint index, uint j, NativeBubble a, device NativeBubble *bubbles, device NativeContactControl &contacts,
+    device NativeCandidate *row, thread uint &count, thread uint &dropped, uint limit, device uint4 *jointRanges,
+    device ulong *jointPartners, device float *margins) {
+    NativeBubble b = bubbles[j];
+    if (!nativeFilterAccepts(a.filter, b.filter)) return;
+    if (nativeJointExcluded(jointRanges, jointPartners, index, ulong(b.identity.x))) return;
+    float reach = a.physical.z + b.physical.z + margins[index] + margins[j] + contacts.thresholds.w;
+    if (all(abs(a.position.xy - b.position.xy) <= reach)) {
+        NativeCandidate candidate = { long2(a.identity.x, b.identity.x), uint4(0, index, j, 1) };
+        nativeInsertCandidate(row, count, dropped, limit, candidate);
+    }
+}
+
+// Reszta wiersza bańki po parach baniek: odcinki, podział wiersza na bańki i odcinki, liczniki przepełnienia.
+void nativeFinishBubbleRow(uint index, NativeBubble a, constant NativeControl &control, device NativeContactControl &contacts,
+    device NativeSegment *segments, device NativeCandidate *row, uint count, uint dropped, uint limit, device uint *rowCounts,
+    device atomic_uint *overflow, device uint4 *jointRanges, device ulong *jointPartners, device float *margins) {
+    for (uint j = 0; j < control.counts.y; ++j) {
+        NativeSegment s = segments[j];
+        if (!nativeFilterAccepts(a.filter, s.filter)) continue;
+        if (s.flags.y && nativeJointExcluded(jointRanges, jointPartners, index, ulong(s.identity.y))) continue;
+        float reach = a.physical.z + margins[index] + contacts.thresholds.w;
+        float2 lower = min(s.current.xy, s.current.zw) - reach;
+        float2 upper = max(s.current.xy, s.current.zw) + reach;
+        if (all(a.position.xy >= lower) && all(a.position.xy <= upper)) {
+            NativeCandidate candidate = { long2(a.identity.x, s.identity.x), uint4(1, index, j, 1) };
+            nativeInsertCandidate(row, count, dropped, limit, candidate);
+        }
+    }
+    // Klucz zaczyna się od rodzaju pary, więc wiersz po obcięciu nadal trzyma najpierw pary baniek.
+    uint bubbleCount = 0;
+    while (bubbleCount < count && row[bubbleCount].metadata.x == 0) ++bubbleCount;
+    rowCounts[index * 2] = bubbleCount;
+    rowCounts[index * 2 + 1] = count - bubbleCount;
+    if (dropped) atomic_fetch_add_explicit(overflow, dropped, memory_order_relaxed);
+    atomic_fetch_max_explicit(overflow + 1, count + dropped, memory_order_relaxed);
+}
+
 void nativeEmitBubbleCandidates(uint index, device NativeBubble *bubbles, constant NativeControl &control,
     device NativeContactControl &contacts, device NativeGridEntry *grid, device NativeSegment *segments,
     device NativeCandidate *rows, device uint *rowCounts, device atomic_uint *overflow, device uint4 *jointRanges,
@@ -283,35 +323,10 @@ void nativeEmitBubbleCandidates(uint index, device NativeBubble *bubbles, consta
         for (uint k = low; k < control.counts.x && grid[k].cell.x == target.x && grid[k].cell.y <= target.y + 2; ++k) {
             uint j = grid[k].metadata.x;
             if (j <= index) continue;
-            NativeBubble b = bubbles[j];
-            if (!nativeFilterAccepts(a.filter, b.filter)) continue;
-            if (nativeJointExcluded(jointRanges, jointPartners, index, ulong(b.identity.x))) continue;
-            float reach = a.physical.z + b.physical.z + margins[index] + margins[j] + contacts.thresholds.w;
-            if (all(abs(a.position.xy - b.position.xy) <= reach)) {
-                NativeCandidate candidate = { long2(a.identity.x, b.identity.x), uint4(0, index, j, 1) };
-                nativeInsertCandidate(row, count, dropped, limit, candidate);
-            }
+            nativeBubblePairCandidate(index, j, a, bubbles, contacts, row, count, dropped, limit, jointRanges, jointPartners, margins);
         }
     }
-    for (uint j = 0; j < control.counts.y; ++j) {
-        NativeSegment s = segments[j];
-        if (!nativeFilterAccepts(a.filter, s.filter)) continue;
-        if (s.flags.y && nativeJointExcluded(jointRanges, jointPartners, index, ulong(s.identity.y))) continue;
-        float reach = a.physical.z + margins[index] + contacts.thresholds.w;
-        float2 lower = min(s.current.xy, s.current.zw) - reach;
-        float2 upper = max(s.current.xy, s.current.zw) + reach;
-        if (all(a.position.xy >= lower) && all(a.position.xy <= upper)) {
-            NativeCandidate candidate = { long2(a.identity.x, s.identity.x), uint4(1, index, j, 1) };
-            nativeInsertCandidate(row, count, dropped, limit, candidate);
-        }
-    }
-    // Klucz zaczyna się od rodzaju pary, więc wiersz po obcięciu nadal trzyma najpierw pary baniek.
-    uint bubbleCount = 0;
-    while (bubbleCount < count && row[bubbleCount].metadata.x == 0) ++bubbleCount;
-    rowCounts[index * 2] = bubbleCount;
-    rowCounts[index * 2 + 1] = count - bubbleCount;
-    if (dropped) atomic_fetch_add_explicit(overflow, dropped, memory_order_relaxed);
-    atomic_fetch_max_explicit(overflow + 1, count + dropped, memory_order_relaxed);
+    nativeFinishBubbleRow(index, a, control, contacts, segments, row, count, dropped, limit, rowCounts, overflow, jointRanges, jointPartners, margins);
 }
 
 kernel void nativeEmitCandidates(device NativeBubble *bubbles [[buffer(0)]],

@@ -121,6 +121,8 @@ enum NativeMetalSubstepLoop {
 
 /// Wynik `NativeMetalSubstepLoop.run`: liczba par buforów klatki i czasy GPU osobno dla buforów podkroków (fizyka) i końca kroku (kontur).
 struct NativeMetalSubstepRun {
+    /// Ścieżka wybrana na początku kroku (CD-D-27).
+    var executionPath = NativeMetalExecutionPath.multipleDispatches
     var pairCount = 0
     /// Przebudowy siatki wymuszone znacznikiem zapasu obwiedni (`h_zapasu` wyznaczył h albo zapas się wyczerpał, `substepControl.counts.z`),
     /// bez par, które skończyły się tylko dlatego, że wyczerpały swoje podkroki (CD-D-23). To `gridRebuildCount` telemetrii; pary liczy `pairCount`.
@@ -133,6 +135,12 @@ struct NativeMetalSubstepRun {
 }
 
 extension NativeMetalSubstepLoop {
+    /// Wybór ścieżki na każdy krok z liczby baniek po transakcjach: do progu jedna grupa wątków buduje siatkę w jądrze, większy świat
+    /// i przełącznik testowy `forceMultipleDispatches` dają broadphase wieloma dyspozycjami (CD-D-27, G8-AC4).
+    static func executionPath(bubbleCount: Int, forceMultipleDispatches: Bool) -> NativeMetalExecutionPath {
+        bubbleCount <= NativeMetalSubstep.singleDispatchBubbleLimit && !forceMultipleDispatches ? .singleDispatch : .multipleDispatches
+    }
+
     /// Bufor podkroków kończy się przed buforem końca kroku (kolejność commitu), więc to wywołanie wraca od razu; handler po commicie
     /// jest niedozwolony, a `waitUntilCompleted` jest niedostępne w kontekście asynchronicznym, stąd osobna funkcja synchroniczna.
     private static func waitForCompletion(_ command: MTLCommandBuffer) { command.waitUntilCompleted() }
@@ -145,13 +153,16 @@ extension NativeMetalSubstepLoop {
     /// nie zmienia stanu świata ani sąsiedztwa czytanego przez kontynuację.
     ///
     /// `encodePair(indeks, podkroki, przebudowa)` zwraca parę niezatwierdzonych buforów (podkroków, końca kroku) w tej kolejności
-    /// i woła `invalidatePreviousContours` swojego uchwytu przed pierwszym commitem. `przebudowa` jest prawdą w parze 0 i po znaczniku;
+    /// i woła `invalidatePreviousContours` swojego uchwytu przed pierwszym commitem; `ścieżka` mówi, czy przebudowę koduje jądro jednej grupy.
+    /// `przebudowa` jest prawdą w parze 0 i po znaczniku;
     /// tylko wtedy para koduje broadphase i siły początkowe, a `prepareContinuation` zeruje liczniki kontaktów i kandydatów.
-    static func run(state: NativeMetalPersistentState, previousFrameSubsteps: Int, executor: any NativeMetalCommandExecuting,
-                    prepareContinuation: () -> Void,
-                    encodePair: (_ pair: Int, _ substeps: Int, _ rebuild: Bool) throws -> (MTLCommandBuffer, MTLCommandBuffer))
-                    async throws -> NativeMetalSubstepRun {
+    static func run(state: NativeMetalPersistentState, previousFrameSubsteps: Int, bubbleCount: Int, forceMultipleDispatches: Bool,
+                    executor: any NativeMetalCommandExecuting, prepareContinuation: () -> Void,
+                    encodePair: (_ pair: Int, _ substeps: Int, _ rebuild: Bool, _ path: NativeMetalExecutionPath) throws
+                        -> (MTLCommandBuffer, MTLCommandBuffer)) async throws -> NativeMetalSubstepRun {
         var result = NativeMetalSubstepRun()
+        let path = executionPath(bubbleCount: bubbleCount, forceMultipleDispatches: forceMultipleDispatches)
+        result.executionPath = path
         var pairSize = max(2, 2 * previousFrameSubsteps)
         var done = 0
         var rebuild = true
@@ -168,7 +179,7 @@ extension NativeMetalSubstepLoop {
             }
             // Jeden podkrok ponad limit, żeby `nativeReduceSubstep` ustawił znacznik limitu, gdy krok jeszcze trwa.
             let substeps = min(pairSize, NativeMetalSubstep.frameLimit + 1 - done)
-            let (stepsCommand, endCommand) = try encodePair(result.pairCount, substeps, rebuild)
+            let (stepsCommand, endCommand) = try encodePair(result.pairCount, substeps, rebuild, path)
             stepsCommand.commit()
             let end = try await executor.complete(endCommand)
             // Kolejka wykonuje bufory w kolejności commitu, więc bufor podkroków już się skończył.

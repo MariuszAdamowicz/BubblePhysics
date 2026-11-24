@@ -36,6 +36,9 @@ final class NativeMetalSubstepSurfaceTests: XCTestCase {
             configuration.gridHashBucketCount = invalid
             XCTAssertEqual(configuration.sanitized.gridHashBucketCount, 1, "kubełki \(invalid)")
         }
+        // Kubełki siatki leżą w 8 KB pamięci grupy jądra jednej grupy, więc więcej niż 2048 nie mieści się.
+        configuration.gridHashBucketCount = 100_000
+        XCTAssertEqual(configuration.sanitized.gridHashBucketCount, 2048, "kubełki ponad pojemność pamięci grupy")
     }
 
     func testSanitizedKeepsSwitchesAndClampsSplitMultiplier() {

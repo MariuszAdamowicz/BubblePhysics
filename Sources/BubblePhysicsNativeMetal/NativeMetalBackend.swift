@@ -17,7 +17,7 @@ public struct NativeMetalConfiguration: Equatable, Sendable {
     /// Liczba kubełków siatki haszowanej w grupie, domyślnie 2048; 1 wymusza kolizję każdej komórki (P-B-46).
     package var gridHashBucketCount = NativeMetalConfiguration.defaultGridHashBucketCount
 
-    /// Domyślna liczba kubełków siatki haszowanej jądra jednej grupy.
+    /// Domyślna i największa liczba kubełków siatki haszowanej jądra jednej grupy (8 KB pamięci grupy).
     package static let defaultGridHashBucketCount = 2048
 
     public init() {}
@@ -28,7 +28,7 @@ public struct NativeMetalConfiguration: Equatable, Sendable {
         var value = self
         value.substepSplitMultiplier = max(1, substepSplitMultiplier)
         value.candidateLimitPerObject = min(max(1, candidateLimitPerObject), NativeMetalSolver.candidateLimitPerObject)
-        value.gridHashBucketCount = max(1, gridHashBucketCount)
+        value.gridHashBucketCount = min(max(1, gridHashBucketCount), NativeMetalConfiguration.defaultGridHashBucketCount)
         return value
     }
 }

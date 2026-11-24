@@ -292,6 +292,9 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
     /// Limit k kandydatów kontaktu na obiekt, wspólny dla baniek, odcinków i brył (zadanie 14: k = 48; zadanie 32: k = 128, bo wiersz statycznej ściany scena mieszana wypełnia wszystkimi bryłami w zasięgu).
     nonisolated package static let candidateLimitPerObject = 128
 
+    /// Szerokość grupy jądra jednej grupy: min(`maxTotalThreadsPerThreadgroup` potoku, 1024); A11 może dać mniej niż Mac (CD-D-27).
+    static func singleGroupWidth(_ pipeline: MTLComputePipelineState) -> Int { min(pipeline.maxTotalThreadsPerThreadgroup, 1024) }
+
     /// Szczegóły naruszenia asercji kontaktu z rekordu GPU: obiekty (bańka i drugi koniec), odległość i dla zmiany strony krawędzi numer krawędzi
     /// w wielokącie właściciela (kolejność identyfikatorów jego odcinków; krawędzie współliniowe są scalone).
     static func violationDetail(_ record: NativeMetalContactAssertion, kind: NativeMetalContactAssertion.Kind,
@@ -806,6 +809,31 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
             dispatch("nativeBuildAdjacency", buffers: [state.control, state.contactControl,
                 state.adjacency, state.adjacencyCounts, state.candidateOverflow], threads: count)
         }
+        // Ścieżka jednej dyspozycji (CD-D-27): ta sama budowa, ale jedną grupą wątków w jądrze `nativeBroadphaseSingleGroup` (do zadania 37 jeszcze
+        // z parami buforów). Wskaźniki idą jedną strukturą (bufor argumentów), bo jądro ma ponad 31 buforów; adresy GPU w kolejności pól struktury
+        // `NativeBroadphaseBuffers`, a `useResource` udostępnia każdy bufor. Bryły są kandydatami tylko przy `hasRigidBodies`.
+        func encodeBroadphaseSingleGroup() {
+            guard count > 0 else { return }
+            let pipeline = pipelines["nativeBroadphaseSingleGroup"]!
+            let buffers: [MTLBuffer] = [state.workingBubbles, state.control, state.contactControl, state.grid, state.workingSegments,
+                state.candidateRows, state.candidateRowCounts, state.candidateOverflow, jointState.ranges, jointState.exclusions,
+                state.broadphaseMargin, state.referencePositions, state.nonContactAcceleration, forceBuffers.control!, forceBuffers.fields!,
+                forceBuffers.fieldVertices!, forceBuffers.fieldObjectIDs!, forceBuffers.bands!, forceBuffers.motors!, state.substepControl,
+                rigidState.bodies, rigidState.bubbleControl, rigidState.bubbleCandidates, rigidState.bubbleRowCounts, state.scanValues,
+                state.scanOffsets, state.candidates, state.dispatchStatistics, state.adjacency, state.adjacencyCounts]
+            var table = buffers.map(\.gpuAddress)
+            var parameters = SIMD4<UInt32>(configuration.minimumMarginOnly ? 1 : 0, UInt32(configuration.gridHashBucketCount),
+                                           hasRigidBodies ? 1 : 0, 0)
+            encoder.memoryBarrier(scope: .buffers)
+            encoder.setComputePipelineState(pipeline)
+            encoder.setBytes(&table, length: table.count * MemoryLayout<UInt64>.stride, index: 0)
+            encoder.setBytes(&parameters, length: MemoryLayout<SIMD4<UInt32>>.stride, index: 1)
+            var seen = Set<ObjectIdentifier>()
+            for buffer in buffers where seen.insert(ObjectIdentifier(buffer)).inserted { encoder.useResource(buffer, usage: [.read, .write]) }
+            encoder.setThreadgroupMemoryLength(NativeMetalSubstep.singleGroupMemoryLength, index: 0)
+            let width = Self.singleGroupWidth(pipeline)
+            encoder.dispatchThreadgroups(.init(width: 1, height: 1, depth: 1), threadsPerThreadgroup: .init(width: width, height: 1, depth: 1))
+        }
         // Koniec kroku: jądra bez efektu ubocznego liczą się w każdym buforze końca kroku, a z efektem (region, zdarzenia, czujniki,
         // zakończenie brył, asercja) idą bramkami, więc biegną raz na krok, w ostatnim buforze końca kroku.
         func encodeEndOfStep() {
@@ -933,18 +961,19 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         }
         let encodingEnd = DispatchTime.now().uptimeNanoseconds
         let loop = try await NativeMetalSubstepLoop.run(state: state, previousFrameSubsteps: previousFrameSubstepCount,
+            bubbleCount: count, forceMultipleDispatches: configuration.forceMultipleDispatches,
             executor: commandExecutor, prepareContinuation: {
                 // Przebudowa siatki w kolejnej parze zaczyna od zera liczników kontaktów i kandydatów, jak pierwsza para; czasy i liczniki
                 // klatki zostają. Kontynuacja bez przebudowy ich nie rusza: czyta sąsiedztwo z poprzedniej pary.
                 state.contactControl.contents().storeBytes(of: contactParameters, as: NativeMetalContactControl.self)
             },
-            encodePair: { pair, substeps, rebuild in
+            encodePair: { pair, substeps, rebuild, path in
                 let first = pair == 0
                 let stepsCommand = try makeCommand("native.frame.step.\(scenarioStep).substeps.\(pair)")
                 if first { try encodeInputs(stepsCommand) }
                 try beginCompute(stepsCommand, label: "native.substeps")
                 if first { encodeStepPrefix() }
-                if rebuild { encodeBroadphase() }
+                if rebuild { if path == .singleDispatch { encodeBroadphaseSingleGroup() } else { encodeBroadphase() } }
                 NativeMetalSubstepLoop.encode(encoder, pipelines: pipelines, state: state, forces: forceBuffers, rigid: rigidState, count: count,
                                               capture: configuration.captureSubsteps, substeps: substeps, initialForces: rebuild,
                                               diagnostics: NativeMetalSubstepDiagnostics(injection: configuration.injectedSubstepState,
@@ -960,6 +989,8 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
                 }
                 return (stepsCommand, endCommand)
             })
+        // Szerokość grupy jądra pętli podkroków: 0 w ścieżce wielu dyspozycji (A11 może dać mniej niż Mac).
+        let singleGroupWidth = loop.executionPath == .singleDispatch ? Self.singleGroupWidth(pipelines["nativeBroadphaseSingleGroup"]!) : 0
         let timing = NativeMetalCommandTiming(gpuMilliseconds: loop.substepGPUMilliseconds + loop.endGPUMilliseconds)
         previousFrameSubstepCount = Int(state.substepControl.contents().load(as: NativeMetalSubstepControl.self).counts.y)
         let waitingEnd = DispatchTime.now().uptimeNanoseconds
@@ -984,7 +1015,7 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
             gpuMilliseconds: timing.gpuMilliseconds, substepCount: Int(substepResult.counts.y),
             gridRebuildCount: loop.rebuildCount, physicsGPUMilliseconds: loop.substepGPUMilliseconds,
             contourGPUMilliseconds: loop.endGPUMilliseconds, substepBufferCount: loop.pairCount,
-            executionPath: .multipleDispatches)
+            executionPath: loop.executionPath, singleGroupWidth: singleGroupWidth)
         func rejectSafety(_ reason: NativeMetalWorldError, guardCause: NativeMetalGuardCause? = nil,
                           detail: NativeMetalFailureDetail? = nil) -> NativeMetalSafetyFailure {
             .init(reason: reason, telemetry: diagnostics, profile: profile, guardCause: guardCause, detail: detail)
@@ -1085,7 +1116,8 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
                 encoderCount: 2 * loop.pairCount, contactCount: contacts.count, gpuMilliseconds: timing.gpuMilliseconds,
                 substepCount: Int(substepResult.counts.y), gridRebuildCount: loop.rebuildCount,
                 physicsGPUMilliseconds: loop.substepGPUMilliseconds, contourGPUMilliseconds: loop.endGPUMilliseconds,
-                substepBufferCount: loop.pairCount, executionPath: .multipleDispatches),
+                substepBufferCount: loop.pairCount, executionPath: loop.executionPath,
+                singleGroupWidth: singleGroupWidth),
             profile: profile, contours: contours, renderData: renderData,
             bubbleEffectiveRadii: effectiveRadii, bubbleBoundsRecords: bubbleBounds, isComplete: true)
         if !snapshot.hitTests.isEmpty {
@@ -1292,7 +1324,7 @@ enum NativeMetalPipelineCache {
         "nativeAddScanBlockOffsets", "nativeFinishScan", "nativeScanSingleGroup", "nativeClearAdjacency", "nativeEmitAdjacency", "nativeBuildAdjacency",
         "nativeContactForces", "nativeContactImpulses", "nativeAccelerationWithoutContacts", "nativeBroadphaseMargin",
         "nativeReduceSubstep", "nativeIntegrateSubstep", "nativeAssertContacts", "nativeInjectSubstepState", "nativePrepareEndGates", "nativeBeginStep",
-        "nativeEmitCandidateAdjacency", "nativeEmitRigidAdjacency", "nativeBubbleBodyContacts",
+        "nativeEmitCandidateAdjacency", "nativeEmitRigidAdjacency", "nativeBubbleBodyContacts", "nativeBroadphaseSingleGroup",
         "nativeCheckFinite",
         "nativeAccumulateContactPressure", "nativeSeedStructuralContours", "nativeGenerateContours", "nativeGenerateContoursFused", "nativePrepareRenderData", "nativePrepareRenderDataGrouped",
         "nativeApplyPublicRegion",

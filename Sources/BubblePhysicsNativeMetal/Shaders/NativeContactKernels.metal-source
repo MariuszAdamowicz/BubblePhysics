@@ -108,20 +108,25 @@ void nativeScanInGroup(device uint4 *input, device uint4 *output, constant Nativ
                        threadgroup uint4 *scratch, uint local, uint width) {
     uint length = nativeScanLength(control, contacts, uint2(parameters.x, 0));
     uint4 carry = uint4(0);
+    // `width` to szerokość porcji i połowa tablicy `scratch`. Wątki grupy o numerze ≥ width (jądro jednej grupy ma więcej wątków niż porcja)
+    // tylko uczestniczą w barierach; nie dotykają pamięci grupy ani wyniku.
+    bool member = local < width;
     for (uint base = 0; base < length; base += width) {
         uint index = base + local;
         threadgroup uint4 *source = scratch;
         threadgroup uint4 *target = scratch + width;
-        source[local] = index < length ? input[index] : uint4(0);
+        if (member) source[local] = index < length ? input[index] : uint4(0);
         threadgroup_barrier(mem_flags::mem_threadgroup);
         for (uint distance = 1; distance < width; distance *= 2) {
-            uint4 value = source[local];
-            if (local >= distance) value += source[local - distance];
-            target[local] = value;
+            if (member) {
+                uint4 value = source[local];
+                if (local >= distance) value += source[local - distance];
+                target[local] = value;
+            }
             threadgroup_barrier(mem_flags::mem_threadgroup);
             threadgroup uint4 *swapped = source; source = target; target = swapped;
         }
-        if (index < length) output[index] = source[local] + carry;
+        if (member && index < length) output[index] = source[local] + carry;
         carry += source[min(width, length - base) - 1];
         // Następna porcja nadpisuje pamięć grupy dopiero po odczycie sumy porcji przez wszystkie wątki.
         threadgroup_barrier(mem_flags::mem_threadgroup);

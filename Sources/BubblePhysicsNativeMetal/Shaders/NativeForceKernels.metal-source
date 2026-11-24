@@ -469,14 +469,20 @@ float2 nativeNonContactAcceleration(NativeBubble b, float2 position, constant Na
     return force * inverseMass;
 }
 
+void nativeBubbleAcceleration(uint index, device NativeBubble *bubbles, constant NativeForceControl &forces,
+                              device NativeForceField *fields, device float2 *vertices, device ulong *ids,
+                              device float2 *accelerations, device NativeBandDrive *bands, device NativeMotor *motors) {
+    NativeBubble bubble = bubbles[index];
+    accelerations[index] = nativeNonContactAcceleration(bubble, bubble.position.xy, forces, fields, vertices, ids, bands, motors);
+}
+
 kernel void nativeAccelerationWithoutContacts(device NativeBubble *bubbles [[buffer(0)]], constant NativeControl &control [[buffer(1)]],
     constant NativeForceControl &forces [[buffer(2)]], device NativeForceField *fields [[buffer(3)]],
     device float2 *vertices [[buffer(4)]], device ulong *ids [[buffer(5)]], device float2 *accelerations [[buffer(6)]],
     device NativeBandDrive *bands [[buffer(7)]], device NativeMotor *motors [[buffer(8)]],
     uint index [[thread_position_in_grid]]) {
     if (index >= control.counts.x) return;
-    NativeBubble bubble = bubbles[index];
-    accelerations[index] = nativeNonContactAcceleration(bubble, bubble.position.xy, forces, fields, vertices, ids, bands, motors);
+    nativeBubbleAcceleration(index, bubbles, forces, fields, vertices, ids, accelerations, bands, motors);
 }
 
 // Zapas obwiedni bańki: max(1,05 · (|v| · t + ½ |a₀| · t²), r / 4), gdzie t to czas pozostały w kroku; x₀ to pozycja z tej budowy siatki.
@@ -919,4 +925,195 @@ kernel void nativeInjectSubstepState(device NativeBubble *bubbles [[buffer(0)]],
     uint index [[thread_position_in_grid]]) {
     if (index >= control.counts.x || substep.counts.y != uint(selection.y) + 1) return;
     if (ulong(bubbles[index].identity.x) == selection.x) bubbles[index].position.xy = position;
+}
+
+// MARK: Broadphase w jednej grupie (CD-D-27, P-B-44, P-B-46)
+//
+// Te same funkcje urządzenia co jądra ścieżki wielu dyspozycji, ale jedna grupa wątków robi całą budowę: a₀, zapas, siatka haszowana
+// w pamięci grupy (zliczanie w kubełkach, suma prefiksowa, rozpisanie), kandydaci, skan, kompaktowanie i sąsiedztwo. Fazy rozdziela
+// `threadgroup_barrier(mem_flags::mem_device | mem_flags::mem_threadgroup)`, bo wynik jednej fazy leży w buforach urządzenia.
+// Jądro ma więcej buforów niż tablica argumentów Metala (31), więc wskaźniki idą jedną strukturą (bufor argumentów); host zapisuje
+// adresy GPU w kolejności pól i woła `useResource` dla każdego bufora.
+#define NATIVE_GROUP_BARRIER threadgroup_barrier(mem_flags::mem_device | mem_flags::mem_threadgroup)
+
+struct NativeBroadphaseBuffers {
+    device NativeBubble *bubbles;
+    constant NativeControl *control;
+    device NativeContactControl *contacts;
+    device NativeGridEntry *grid;
+    device NativeSegment *segments;
+    device NativeCandidate *candidateRows;
+    device uint *candidateRowCounts;
+    device atomic_uint *overflow;
+    device uint4 *jointRanges;
+    device ulong *jointPartners;
+    device float *margins;
+    device float2 *references;
+    device float2 *nonContactAcceleration;
+    constant NativeForceControl *forces;
+    device NativeForceField *fields;
+    device float2 *fieldVertices;
+    device ulong *fieldObjectIDs;
+    device NativeBandDrive *bands;
+    device NativeMotor *motors;
+    device NativeSubstepControl *substep;
+    device NativeRigidBody *bodies;
+    device uint4 *bubbleControl;
+    device NativeCandidate *bubbleCandidates;
+    device uint2 *bubbleRowCounts;
+    device uint4 *scanValues;
+    device uint4 *scanOffsets;
+    device NativeCandidate *candidates;
+    device atomic_uint *statistics;
+    device uint4 *adjacency;
+    device atomic_uint *degrees;
+};
+
+// Rozmieszczenie pamięci grupy (słowa 32-bitowe): kubełki siatki [0, 2048), częściowe sumy i redukcja szerokości komórki [2048, 3072);
+// po zbudowaniu kandydatów baniek kubełki nie są potrzebne, więc od 0 leżą wtedy tablice skanu (uint4, 2 × 256) i znaczniki trafień brył.
+constant uint nativeGroupBucketLimit = 2048;
+constant uint nativeGroupPartialBase = 2048;
+constant uint nativeGroupScanChunk = 256;
+
+// Kubełek komórki siatki; wpis przechowuje swoją komórkę, więc kolizja kubełków nie dubluje par (P-B-46).
+uint nativeGroupBucket(long2 cell, uint bucketCount) {
+    return (uint(cell.x) * 73856093u ^ uint(cell.y) * 19349663u) % bucketCount;
+}
+
+// Zakres wpisów kubełka po rozpisaniu: `ends[b]` to koniec kubełka b, początek to koniec poprzedniego.
+uint2 nativeGroupBucketRange(threadgroup uint *ends, uint bucket) {
+    return uint2(bucket == 0 ? 0u : ends[bucket - 1], ends[bucket]);
+}
+
+// Wiersz kandydatów bańki z siatki haszowanej: dziewięć komórek wokół bańki, wpis liczy się tylko z własnej komórki.
+void nativeEmitBubbleCandidatesHashed(uint index, constant NativeBroadphaseBuffers &b, threadgroup uint *ends, uint bucketCount) {
+    NativeBubble a = b.bubbles[index];
+    device NativeContactControl &contacts = *b.contacts;
+    if (!all(isfinite(a.position))) {
+        b.candidateRowCounts[index * 2] = 0; b.candidateRowCounts[index * 2 + 1] = 0; return;
+    }
+    long2 cell = long2(floor(a.position.xy / contacts.cellWidth.x));
+    uint limit = contacts.cache.w;
+    device NativeCandidate *row = b.candidateRows + index * limit;
+    uint count = 0, dropped = 0;
+    for (int dx = -1; dx <= 1; ++dx) {
+        for (int dy = -1; dy <= 1; ++dy) {
+            long2 target = cell + long2(dx, dy);
+            uint2 range = nativeGroupBucketRange(ends, nativeGroupBucket(target, bucketCount));
+            for (uint k = range.x; k < range.y; ++k) {
+                NativeGridEntry entry = b.grid[k];
+                if (entry.cell.x != target.x || entry.cell.y != target.y) continue;
+                uint j = entry.metadata.x;
+                if (j <= index) continue;
+                nativeBubblePairCandidate(index, j, a, b.bubbles, contacts, row, count, dropped, limit, b.jointRanges, b.jointPartners, b.margins);
+            }
+        }
+    }
+    nativeFinishBubbleRow(index, a, *b.control, contacts, b.segments, row, count, dropped, limit, b.candidateRowCounts, b.overflow,
+                          b.jointRanges, b.jointPartners, b.margins);
+}
+
+// Cała budowa siatki i kandydatów jednej grupy. `parameters`: zapas tylko r / 4 (1 = tak), liczba kubełków, liczba brył (0 = bez kandydatów
+// bańka–bryła), reserved. Zakłada wyzerowane liczniki kontaktów i kandydatów (`contactControl`, `candidateOverflow`), jak jądra ścieżki
+// wielu dyspozycji; czas pozostały w kroku bierze z `substep.time`, więc przebudowa w tej samej klatce liczy zapas z pozostałego czasu.
+void nativeBroadphaseInGroup(constant NativeBroadphaseBuffers &b, uint4 parameters, threadgroup uint *shared, uint lane, uint width) {
+    uint count = b.control->counts.x;
+    uint bucketCount = clamp(parameters.y, 1u, nativeGroupBucketLimit);
+    device NativeContactControl &contacts = *b.contacts;
+    threadgroup uint *partial = shared + nativeGroupPartialBase;
+    // a₀, zapas obwiedni i x₀ (nativeAccelerationWithoutContacts, nativeBroadphaseMargin).
+    for (uint i = lane; i < count; i += width) {
+        nativeBubbleAcceleration(i, b.bubbles, *b.forces, b.fields, b.fieldVertices, b.fieldObjectIDs, b.nonContactAcceleration, b.bands, b.motors);
+        nativeBubbleMargin(i, b.bubbles, b.nonContactAcceleration, *b.substep, b.margins, b.references, parameters.x);
+    }
+    NATIVE_GROUP_BARRIER;
+    // Szerokość komórki: największa średnica z zapasem (nativePrepareGrid); redukcja drzewem dla dowolnej szerokości grupy.
+    float cellWidth = contacts.thresholds.w;
+    for (uint i = lane; i < count; i += width)
+        cellWidth = max(cellWidth, 2 * (b.bubbles[i].physical.z + b.margins[i]) + contacts.thresholds.w);
+    threadgroup float *maxima = (threadgroup float *)partial;
+    maxima[lane] = cellWidth;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint size = width; size > 1; size = (size + 1) / 2) {
+        uint upper = (size + 1) / 2;
+        if (lane < upper && lane + upper < size) maxima[lane] = max(maxima[lane], maxima[lane + upper]);
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    cellWidth = max(maxima[0], FLT_MIN);
+    if (lane == 0) contacts.cellWidth.x = cellWidth;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    // Siatka haszowana: zliczanie, suma prefiksowa kubełków, rozpisanie wpisów (komórka, indeks) do `grid`.
+    threadgroup uint *ends = shared;
+    threadgroup atomic_uint *counters = (threadgroup atomic_uint *)shared;
+    for (uint i = lane; i < bucketCount; i += width) atomic_store_explicit(counters + i, 0u, memory_order_relaxed);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint i = lane; i < count; i += width) {
+        float2 position = b.bubbles[i].position.xy;
+        if (!all(isfinite(position))) continue;
+        long2 cell = long2(floor(position / cellWidth));
+        atomic_fetch_add_explicit(counters + nativeGroupBucket(cell, bucketCount), 1u, memory_order_relaxed);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    // Prefiks wyłączny: wątek sumuje swój spójny przedział kubełków, sumy przedziałów skanuje się równolegle (Hillis–Steele), potem wątek
+    // zapisuje początki kubełków swojego przedziału. Po rozpisaniu licznik kubełka rośnie do jego końca.
+    uint perLane = (bucketCount + width - 1) / width;
+    uint first = min(lane * perLane, bucketCount), last = min(first + perLane, bucketCount);
+    uint sum = 0;
+    for (uint i = first; i < last; ++i) sum += ends[i];
+    partial[lane] = sum;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint distance = 1; distance < width; distance *= 2) {
+        uint value = partial[lane];
+        if (lane >= distance) value += partial[lane - distance];
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        partial[lane] = value;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    uint running = lane == 0 ? 0u : partial[lane - 1];
+    for (uint i = first; i < last; ++i) { uint own = ends[i]; ends[i] = running; running += own; }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint i = lane; i < count; i += width) {
+        float2 position = b.bubbles[i].position.xy;
+        if (!all(isfinite(position))) continue;
+        long2 cell = long2(floor(position / cellWidth));
+        uint slot = atomic_fetch_add_explicit(counters + nativeGroupBucket(cell, bucketCount), 1u, memory_order_relaxed);
+        NativeGridEntry entry;
+        entry.cell = cell;
+        entry.metadata = uint4(i, 1, 0, 0);
+        b.grid[slot] = entry;
+    }
+    NATIVE_GROUP_BARRIER;
+    // Kandydaci bańka–bańka i bańka–odcinek.
+    for (uint i = lane; i < count; i += width) nativeEmitBubbleCandidatesHashed(i, b, ends, bucketCount);
+    NATIVE_GROUP_BARRIER;
+    // Kandydaci bańka–bryła: wiersze brył (grupa przechodzi bańki w porcjach po `width`), kubełki są już zbędne.
+    uint4 bodyCounts = parameters.z > 0 ? *b.bubbleControl : uint4(0);
+    for (uint body = 0; body < bodyCounts.x; ++body)
+        nativeEmitBodyCandidates(b.bodies, b.bubbles, b.margins, bodyCounts, b.bubbleCandidates, b.bubbleRowCounts, b.overflow,
+                                 b.jointRanges, b.jointPartners, (threadgroup uchar *)shared, body, lane, width);
+    NATIVE_GROUP_BARRIER;
+    // Skan długości wierszy kandydatów, nagłówek `contacts.counts.x`, kompaktowanie wierszy do listy kandydatów.
+    for (uint i = lane; i < count * 2; i += width) nativeCandidateRowCount(i, count, b.candidateRowCounts, b.scanValues);
+    NATIVE_GROUP_BARRIER;
+    nativeScanInGroup(b.scanValues, b.scanOffsets, *b.control, contacts, uint2(0, 0), b.overflow, (threadgroup uint4 *)shared,
+                      lane, min(width, nativeGroupScanChunk));
+    NATIVE_GROUP_BARRIER;
+    for (uint i = lane; i < count * contacts.cache.w; i += width)
+        nativeCompactCandidateRow(i, *b.control, contacts, b.candidateRows, b.candidateRowCounts, b.candidates, b.scanOffsets, b.statistics);
+    for (uint i = lane; i < count; i += width) ((device uint *)b.degrees)[i] = 0;
+    NATIVE_GROUP_BARRIER;
+    // Sąsiedztwo z kandydatów: baniek i odcinków, potem brył; wiersze sortowane po (rodzaj, sąsiad).
+    for (uint k = lane; k < contacts.counts.x; k += width)
+        nativeEmitCandidateEdges(k, b.candidates, contacts.cache.w, b.adjacency, b.degrees, b.overflow);
+    for (uint k = lane; k < bodyCounts.x * bodyCounts.z; k += width)
+        nativeEmitBodyEdges(k, bodyCounts, b.bubbleCandidates, b.bubbleRowCounts, contacts.cache.w, b.adjacency, b.degrees, b.overflow);
+    NATIVE_GROUP_BARRIER;
+    for (uint i = lane; i < count; i += width) nativeBuildAdjacencyRow(i, contacts.cache.w, b.adjacency, (device uint *)b.degrees, b.overflow);
+    NATIVE_GROUP_BARRIER;
+}
+
+kernel void nativeBroadphaseSingleGroup(constant NativeBroadphaseBuffers &buffers [[buffer(0)]], constant uint4 &parameters [[buffer(1)]],
+    threadgroup uint *shared [[threadgroup(0)]], uint lane [[thread_position_in_threadgroup]],
+    uint width [[threads_per_threadgroup]]) {
+    nativeBroadphaseInGroup(buffers, parameters, shared, lane, width);
 }

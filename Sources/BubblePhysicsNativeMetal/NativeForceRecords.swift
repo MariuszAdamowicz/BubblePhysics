@@ -66,6 +66,10 @@ struct NativeMetalForceControl: Equatable, Sendable {
 enum NativeMetalSubstep {
     /// Najwięcej podkroków w klatce (CD-D-21); kolejny podkrok ustawia znacznik limitu.
     static let frameLimit = 1024
+    /// Świat do tylu baniek liczy krok jedną dyspozycją jednej grupy wątków (CD-D-27); większy idzie parami buforów.
+    static let singleDispatchBubbleLimit = 1024
+    /// Pamięć grupy jądra jednej grupy w bajtach: jedna tablica współdzielona przez fazy (kubełki siatki 8 KB, sumy częściowe i skan nad nią).
+    static let singleGroupMemoryLength = 16_384
     /// Szerokość grupy jąder podkroku; `nativeReduceSubstep` zapisuje liczbę grup dla tej szerokości.
     static let groupWidth = 64
     /// Szerokość grupy `nativeReduceSubstep` (jedna grupa na świat): największa potęga dwójki, którą pipeline pomieści, do 1024.
