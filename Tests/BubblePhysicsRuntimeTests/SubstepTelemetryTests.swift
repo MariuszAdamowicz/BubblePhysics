@@ -41,6 +41,27 @@ final class SubstepTelemetryTests: XCTestCase {
         }
         XCTAssertGreaterThan(peak, 5, "uderzenie 1000 j/s ma dać wyraźnie więcej niż 1 podkrok w klatce")
     }
+
+    /// Czas GPU fizyki to suma buforów podkroków, a czas konturu to bufor końca kroku: razem dają całkowity czas GPU klatki, także w klatce
+    /// uderzenia z kilkoma parami buforów i przebudową siatki.
+    func testPhysicsAndContourTimesAddUpToTheFrameGPUTime() async throws {
+        let world = try ForceScene.makeWorld {
+            try $0.add(ForceScene.bubble(1, at: [360 - 24 - 100, 0], velocity: [1000, 0])).add(ForceScene.wall(2, x: 360))
+        }
+        let recorded = try await ForceScene.run(world, frames: 40)
+        ForceScene.assertHealthy(world)
+        var impactFrames = 0
+        for item in recorded {
+            let telemetry = try XCTUnwrap(item.telemetry, "krok \(item.step): brak telemetrii")
+            guard ForceScene.check(telemetry.physicsGPUMilliseconds > 0 && telemetry.contourGPUMilliseconds > 0,
+                                   "krok \(item.step): czasy \(telemetry.physicsGPUMilliseconds) i \(telemetry.contourGPUMilliseconds)"),
+                  ForceScene.check(abs(telemetry.physicsGPUMilliseconds + telemetry.contourGPUMilliseconds - telemetry.gpuMilliseconds) < 1e-9,
+                                   "krok \(item.step): fizyka + kontur ≠ całkowity czas GPU \(telemetry.gpuMilliseconds)")
+            else { return }
+            if telemetry.substepCount > 1 { impactFrames += 1 }
+        }
+        XCTAssertGreaterThan(impactFrames, 0, "scena ma mieć klatki z kilkoma podkrokami")
+    }
 }
 
 /// Pola po XPBD, CCD i strażnikach baniek znikają z telemetrii (G8-AC1). Dopóki zadanie 14 ich nie usunie, ten test jest czerwony: to część

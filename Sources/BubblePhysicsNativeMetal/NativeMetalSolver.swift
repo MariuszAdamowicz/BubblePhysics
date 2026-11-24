@@ -1018,7 +1018,8 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
             gpuMilliseconds: timing.gpuMilliseconds, solverIterationCount: configuration.solverIterationCount,
             ccdCandidateCount: Int(safetyResult.counts.x), guardCorrectionCount: Int(safetyResult.counts.y),
             cacheInvalidationCount: Int(safetyResult.counts.z), substepCount: Int(substepResult.counts.y),
-            gridRebuildCount: loop.rebuildCount)
+            gridRebuildCount: loop.rebuildCount, physicsGPUMilliseconds: loop.substepGPUMilliseconds,
+            contourGPUMilliseconds: loop.endGPUMilliseconds)
         func rejectSafety(_ reason: NativeMetalWorldError, guardCause: NativeMetalGuardCause? = nil,
                           detail: NativeMetalFailureDetail? = nil) -> NativeMetalSafetyFailure {
             .init(reason: reason, telemetry: diagnostics, profile: profile, guardCause: guardCause, detail: detail)
@@ -1142,7 +1143,8 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
                 solverIterationCount: configuration.solverIterationCount,
                 ccdCandidateCount: Int(safetyResult.counts.x), guardCorrectionCount: Int(safetyResult.counts.y),
                 cacheInvalidationCount: Int(safetyResult.counts.z), substepCount: Int(substepResult.counts.y),
-                gridRebuildCount: loop.rebuildCount),
+                gridRebuildCount: loop.rebuildCount, physicsGPUMilliseconds: loop.substepGPUMilliseconds,
+                contourGPUMilliseconds: loop.endGPUMilliseconds),
             profile: profile, contours: contours, renderData: renderData,
             bubbleEffectiveRadii: effectiveRadii, bubbleBoundsRecords: bubbleBounds, isComplete: true)
         if !snapshot.hitTests.isEmpty {

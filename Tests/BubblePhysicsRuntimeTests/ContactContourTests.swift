@@ -14,8 +14,8 @@ final class ContactContourTests: XCTestCase {
     /// Tolerancja asercji „nie płycej niż geometria”: kontur z GPU w Float, próbkowany punktami.
     private let depthTolerance: Float = 0.02
 
-    private func softWorld(base: Float, _ build: (WorldTransaction) throws -> WorldTransaction) throws -> BubbleWorld {
-        try softWorld(material: CrowdScene.softBubblePhysics(base: base), build)
+    private func softWorld(base: Float, damping: Float = 0, _ build: (WorldTransaction) throws -> WorldTransaction) throws -> BubbleWorld {
+        try softWorld(material: CrowdScene.softBubblePhysics(base: base, damping: damping), build)
     }
 
     private func softWorld(material: PhysicsMaterial, _ build: (WorldTransaction) throws -> WorldTransaction) throws -> BubbleWorld {
@@ -172,13 +172,15 @@ final class ContactContourTests: XCTestCase {
             placed.append((UInt64(placed.count + 1), point, bubbleRadius))
         }
         XCTAssertEqual(placed.count, count, "scena ma mieć co najmniej 20 baniek")
-        let world = try softWorld(base: 0.0108) { setup in
+        // Silnik 4.0.0 ma tylko siły: uspokojenie tłoku daje opór γ materiału (bez niego tłok drga bez końca), a bańki bez tarcia osiadają
+        // powoli (zsuwanie wzdłuż ścian z prędkością graniczną F / (m γ)), stąd 4 000 klatek.
+        let world = try softWorld(base: 0.0108, damping: 5) { setup in
             try placed.reduce(setup) { transaction, bubble in
                 transaction.add(try CrowdScene.bubble(bubble.id, at: bubble.position, radius: bubble.radius, mass: bubble.radius * bubble.radius / 400))
             }.setGlobalForce([-40, -40])
         }
         var frame = await world.advance(by: CrowdScene.step)
-        for index in 0..<1_500 {
+        for index in 0..<4_000 {
             frame = await world.advance(by: CrowdScene.step)
             XCTAssertNil(world.diagnostics.lastAdvanceIssue, "krok \(index): \(String(describing: world.diagnostics.lastRejectionReason))")
             if world.diagnostics.lastAdvanceIssue != nil { return }
