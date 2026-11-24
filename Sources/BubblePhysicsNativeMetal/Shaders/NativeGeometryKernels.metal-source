@@ -257,13 +257,10 @@ bool nativeJointExcluded(device uint4 *jointRanges, device ulong *jointPartners,
     return false;
 }
 
-kernel void nativeEmitCandidates(device NativeBubble *bubbles [[buffer(0)]],
-    constant NativeControl &control [[buffer(1)]], device NativeContactControl &contacts [[buffer(2)]],
-    device NativeGridEntry *grid [[buffer(3)]], device NativeSegment *segments [[buffer(4)]],
-    device NativeCandidate *rows [[buffer(5)]], device uint *rowCounts [[buffer(6)]],
-    device atomic_uint *overflow [[buffer(7)]], device uint4 *jointRanges [[buffer(8)]],
-    device ulong *jointPartners [[buffer(9)]], device float *margins [[buffer(10)]], uint index [[thread_position_in_grid]]) {
-    if (index >= control.counts.x) return;
+void nativeEmitBubbleCandidates(uint index, device NativeBubble *bubbles, constant NativeControl &control,
+    device NativeContactControl &contacts, device NativeGridEntry *grid, device NativeSegment *segments,
+    device NativeCandidate *rows, device uint *rowCounts, device atomic_uint *overflow, device uint4 *jointRanges,
+    device ulong *jointPartners, device float *margins) {
     NativeBubble a = bubbles[index];
     if (!all(isfinite(a.position))) {
         rowCounts[index * 2] = 0; rowCounts[index * 2 + 1] = 0; return;
@@ -317,6 +314,16 @@ kernel void nativeEmitCandidates(device NativeBubble *bubbles [[buffer(0)]],
     atomic_fetch_max_explicit(overflow + 1, count + dropped, memory_order_relaxed);
 }
 
+kernel void nativeEmitCandidates(device NativeBubble *bubbles [[buffer(0)]],
+    constant NativeControl &control [[buffer(1)]], device NativeContactControl &contacts [[buffer(2)]],
+    device NativeGridEntry *grid [[buffer(3)]], device NativeSegment *segments [[buffer(4)]],
+    device NativeCandidate *rows [[buffer(5)]], device uint *rowCounts [[buffer(6)]],
+    device atomic_uint *overflow [[buffer(7)]], device uint4 *jointRanges [[buffer(8)]],
+    device ulong *jointPartners [[buffer(9)]], device float *margins [[buffer(10)]], uint index [[thread_position_in_grid]]) {
+    if (index >= control.counts.x) return;
+    nativeEmitBubbleCandidates(index, bubbles, control, contacts, grid, segments, rows, rowCounts, overflow, jointRanges, jointPartners, margins);
+}
+
 // Kandydaci kontaktów brył: jeden wiersz o stałej długości k (`counts.z`) na bryłę, posortowany po kluczu pary
 // (rodzaj 2 = bańka–bryła, rodzaj 3 = bryła–bryła; para brył trafia do wierszy obu brył z tą samą kolejnością a < b).
 // Tryb w `counts.w`: bit 0 pomija kandydatów bańka–bryła, bit 1 pomija pary brył. Silnik 4.0.0 koduje dwa wywołania: pary brył raz na krok
@@ -325,14 +332,9 @@ kernel void nativeEmitCandidates(device NativeBubble *bubbles [[buffer(0)]],
 // Bańka przechodzi przez kandydata, gdy jej obwiednia (środek ± (r + zapas)) styka się z obwiednią drogi bryły w kroku (środki z początku i końca
 // kroku ± promień otaczający, więc także obrót), bo bańka nie wychodzi poza zapas aż do przebudowy siatki.
 // `metadata.w` to bity float: suma normalnych Δλ z iteracji (zeruje ją ten kernel, dopisuje nativeRigidContacts).
-kernel void nativeRigidEmitCandidates(device NativeRigidBody *bodies [[buffer(0)]],
-    device NativeBubble *bubbles [[buffer(1)]], device float *margins [[buffer(2)]],
-    constant uint4 &counts [[buffer(3)]], device NativeCandidate *rows [[buffer(4)]],
-    device uint2 *rowCounts [[buffer(5)]], device atomic_uint *overflow [[buffer(6)]],
-    device uint4 *jointRanges [[buffer(7)]], device ulong *jointPartners [[buffer(8)]],
-    threadgroup uchar *hits [[threadgroup(0)]],
-    uint index [[threadgroup_position_in_grid]], uint lane [[thread_position_in_threadgroup]],
-    uint width [[threads_per_threadgroup]]) {
+void nativeEmitBodyCandidates(device NativeRigidBody *bodies, device NativeBubble *bubbles, device float *margins,
+    uint4 counts, device NativeCandidate *rows, device uint2 *rowCounts, device atomic_uint *overflow,
+    device uint4 *jointRanges, device ulong *jointPartners, threadgroup uchar *hits, uint index, uint lane, uint width) {
     if (index >= counts.x) return;
     uint limit = counts.z;
     NativeRigidBody b = bodies[index];
@@ -395,6 +397,17 @@ kernel void nativeRigidEmitCandidates(device NativeRigidBody *bodies [[buffer(0)
     rowCounts[index] = uint2(count, bubbleCount);
     if (dropped) atomic_fetch_add_explicit(overflow, dropped, memory_order_relaxed);
     atomic_fetch_max_explicit(overflow + 1, count + dropped, memory_order_relaxed);
+}
+
+kernel void nativeRigidEmitCandidates(device NativeRigidBody *bodies [[buffer(0)]],
+    device NativeBubble *bubbles [[buffer(1)]], device float *margins [[buffer(2)]],
+    constant uint4 &counts [[buffer(3)]], device NativeCandidate *rows [[buffer(4)]],
+    device uint2 *rowCounts [[buffer(5)]], device atomic_uint *overflow [[buffer(6)]],
+    device uint4 *jointRanges [[buffer(7)]], device ulong *jointPartners [[buffer(8)]],
+    threadgroup uchar *hits [[threadgroup(0)]],
+    uint index [[threadgroup_position_in_grid]], uint lane [[thread_position_in_threadgroup]],
+    uint width [[threads_per_threadgroup]]) {
+    nativeEmitBodyCandidates(bodies, bubbles, margins, counts, rows, rowCounts, overflow, jointRanges, jointPartners, hits, index, lane, width);
 }
 
 float nativeCross(float2 a, float2 b) { return a.x * b.y - a.y * b.x; }
@@ -594,19 +607,21 @@ bool nativeCenterCrossing(float2 start, float2 end, NativeSegment s) {
     return false;
 }
 
-kernel void nativePrepareCandidateCounts(constant NativeControl &control [[buffer(0)]],
-    device uint *rowCounts [[buffer(1)]], device uint4 *values [[buffer(2)]],
-    uint index [[thread_position_in_grid]]) {
-    if (index >= control.counts.x * 2) return;
-    uint kind = index / control.counts.x, bubble = index % control.counts.x;
+void nativeCandidateRowCount(uint index, uint bubbleCount, device uint *rowCounts, device uint4 *values) {
+    if (index >= bubbleCount * 2) return;
+    uint kind = index / bubbleCount, bubble = index % bubbleCount;
     values[index] = uint4(rowCounts[bubble * 2 + kind], 0, 0, 0);
 }
 
-kernel void nativeCompactCandidates(constant NativeControl &control [[buffer(0)]],
-    device NativeContactControl &contacts [[buffer(1)]], device NativeCandidate *rows [[buffer(2)]],
-    device uint *rowCounts [[buffer(3)]], device NativeCandidate *candidates [[buffer(4)]],
-    device uint4 *offsets [[buffer(5)]], device atomic_uint *statistics [[buffer(6)]],
+kernel void nativePrepareCandidateCounts(constant NativeControl &control [[buffer(0)]],
+    device uint *rowCounts [[buffer(1)]], device uint4 *values [[buffer(2)]],
     uint index [[thread_position_in_grid]]) {
+    nativeCandidateRowCount(index, control.counts.x, rowCounts, values);
+}
+
+void nativeCompactCandidateRow(uint index, constant NativeControl &control, device NativeContactControl &contacts,
+    device NativeCandidate *rows, device uint *rowCounts, device NativeCandidate *candidates, device uint4 *offsets,
+    device atomic_uint *statistics) {
     if (contacts.cache.w == 0) return;
     uint bubble = index / contacts.cache.w, slot = index % contacts.cache.w;
     if (bubble >= control.counts.x || slot >= rowCounts[bubble * 2] + rowCounts[bubble * 2 + 1]) return;
@@ -618,6 +633,14 @@ kernel void nativeCompactCandidates(constant NativeControl &control [[buffer(0)]
     if (offset + local >= contacts.limits.z) return;
     candidates[offset + local] = rows[index];
     nativeCountWork(statistics, 3);
+}
+
+kernel void nativeCompactCandidates(constant NativeControl &control [[buffer(0)]],
+    device NativeContactControl &contacts [[buffer(1)]], device NativeCandidate *rows [[buffer(2)]],
+    device uint *rowCounts [[buffer(3)]], device NativeCandidate *candidates [[buffer(4)]],
+    device uint4 *offsets [[buffer(5)]], device atomic_uint *statistics [[buffer(6)]],
+    uint index [[thread_position_in_grid]]) {
+    nativeCompactCandidateRow(index, control, contacts, rows, rowCounts, candidates, offsets, statistics);
 }
 
 // Granica obszarów krawędzi statycznego wielokąta (CD-D-4): czy rzut środka na odcinek from→to wypada na jego końcu albo za nim.

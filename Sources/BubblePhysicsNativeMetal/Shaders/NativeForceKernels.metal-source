@@ -213,19 +213,13 @@ NativeBodyObstacle nativeBodyObstacle(NativeRigidBody source, float fraction, de
 // jak buduje je nativeBuildAdjacency; sąsiad rodzaju 2 to indeks bryły. Geometria liczy się od zera z bieżących położeń, nie z rekordu kontaktu, bo w podkroku środek już
 // się przesunął. Siła pary liczy się w kolejności indeksów (mniejszy pierwszy), więc obie baniki dostają dokładnie przeciwne wektory.
 // Zapis, nie dodawanie: `forces[i]` to wyłącznie siła kontaktów.
-kernel void nativeContactForces(device NativeBubble *bubbles [[buffer(0)]],
-    device NativeSegment *segments [[buffer(1)]], constant NativeControl &control [[buffer(2)]],
-    device NativeContactControl &contacts [[buffer(3)]], device uint4 *adjacency [[buffer(4)]],
-    device uint *degrees [[buffer(5)]], device float2 *forces [[buffer(6)]],
-    device NativeRigidBody *bodies [[buffer(7)]], device float2 *vertices [[buffer(8)]], device uint4 *triangles [[buffer(9)]],
-    device NativeSubstepControl &substep [[buffer(10)]],
-    uint index [[thread_position_in_grid]]) {
-    if (index >= control.counts.x) return;
+float2 nativeBubbleContactForce(uint index, device NativeBubble *bubbles, device NativeSegment *segments, uint limit,
+                                device uint4 *adjacency, device uint *degrees, device NativeRigidBody *bodies,
+                                device float2 *vertices, device uint4 *triangles, float fraction) {
     NativeBubble bubble = bubbles[index];
     float radius = bubble.physical.z, stiffness = bubble.contact.y;
     float2 total = 0;
-    float fraction = nativeStepFraction(substep);
-    uint limit = contacts.cache.w, degree = min(degrees[index], limit);
+    uint degree = min(degrees[index], limit);
     for (uint j = 0; j < degree; ++j) {
         uint4 edge = adjacency[index * limit + j];
         if (edge.z == 0) {
@@ -245,7 +239,19 @@ kernel void nativeContactForces(device NativeBubble *bubbles [[buffer(0)]],
             total += nativeWallContactLaw(stiffness, radius, obstacle.distanceValue).force * obstacle.normal;
         }
     }
-    forces[index] = total;
+    return total;
+}
+
+kernel void nativeContactForces(device NativeBubble *bubbles [[buffer(0)]],
+    device NativeSegment *segments [[buffer(1)]], constant NativeControl &control [[buffer(2)]],
+    device NativeContactControl &contacts [[buffer(3)]], device uint4 *adjacency [[buffer(4)]],
+    device uint *degrees [[buffer(5)]], device float2 *forces [[buffer(6)]],
+    device NativeRigidBody *bodies [[buffer(7)]], device float2 *vertices [[buffer(8)]], device uint4 *triangles [[buffer(9)]],
+    device NativeSubstepControl &substep [[buffer(10)]],
+    uint index [[thread_position_in_grid]]) {
+    if (index >= control.counts.x) return;
+    forces[index] = nativeBubbleContactForce(index, bubbles, segments, contacts.cache.w, adjacency, degrees, bodies, vertices, triangles,
+                                             nativeStepFraction(substep));
 }
 
 // Impuls siły kontaktu w rekordach końca kroku (zdarzenie `contactBegan` czyta go z `response.x`): F z prawa kontaktu dla geometrii końca
@@ -289,29 +295,39 @@ kernel void nativeBeginStep(device NativeBubble *bubbles [[buffer(0)]], constant
 // Sąsiedztwo z kandydatów broadphase (nie z kontaktów aktywnych na początku kroku): w podkroku bańka dochodzi do kandydata, który
 // jeszcze nie dotykał, a redukcja h i siły czytają wiersze sąsiedztwa. Wiersz bańki niesie (indeks kandydata + 1, sąsiad, rodzaj, 0 albo 1),
 // jak nativeEmitAdjacency; nativeBuildAdjacency sortuje wiersz i odejmuje 1. Para trafia do wierszy obu baniek, odcinek do wiersza bańki.
+void nativeEmitCandidateEdges(uint index, device NativeCandidate *candidates, uint limit, device uint4 *adjacency,
+                              device atomic_uint *degrees, device atomic_uint *overflow) {
+    NativeCandidate candidate = candidates[index];
+    uint a = candidate.metadata.y, b = candidate.metadata.z, kind = candidate.metadata.x;
+    nativeAppendAdjacency(adjacency, degrees, limit, a, uint4(index + 1, b, kind, kind == 0 ? 0 : 1), overflow);
+    if (kind == 0) nativeAppendAdjacency(adjacency, degrees, limit, b, uint4(index + 1, a, 0, 1), overflow);
+}
+
 kernel void nativeEmitCandidateAdjacency(device NativeContactControl &contacts [[buffer(0)]],
     device NativeCandidate *candidates [[buffer(1)]], device uint4 *adjacency [[buffer(2)]],
     device atomic_uint *degrees [[buffer(3)]], device atomic_uint *overflow [[buffer(4)]],
     uint index [[thread_position_in_grid]]) {
     if (index >= contacts.counts.x) return;
-    NativeCandidate candidate = candidates[index];
-    uint limit = contacts.cache.w, a = candidate.metadata.y, b = candidate.metadata.z, kind = candidate.metadata.x;
-    nativeAppendAdjacency(adjacency, degrees, limit, a, uint4(index + 1, b, kind, kind == 0 ? 0 : 1), overflow);
-    if (kind == 0) nativeAppendAdjacency(adjacency, degrees, limit, b, uint4(index + 1, a, 0, 1), overflow);
+    nativeEmitCandidateEdges(index, candidates, contacts.cache.w, adjacency, degrees, overflow);
 }
 
 // Kandydaci bańka–bryła (wiersze brył z nativeRigidEmitCandidates w trybie baniek, z zapasem obwiedni) trafiają do wiersza sąsiedztwa bańki
 // jako rodzaj 2: sąsiad to indeks bryły. Wątek na (bryła, miejsce w wierszu); `counts`: bryły, bańki, długość wiersza brył, reserved.
 // Wywoływany między nativeEmitCandidateAdjacency a nativeBuildAdjacency, który sortuje wiersz po (rodzaj, sąsiad).
-kernel void nativeEmitRigidAdjacency(device NativeCandidate *rows [[buffer(0)]], device uint2 *rowCounts [[buffer(1)]],
-    constant uint4 &counts [[buffer(2)]], device NativeContactControl &contacts [[buffer(3)]], device uint4 *adjacency [[buffer(4)]],
-    device atomic_uint *degrees [[buffer(5)]], device atomic_uint *overflow [[buffer(6)]],
-    uint index [[thread_position_in_grid]]) {
+void nativeEmitBodyEdges(uint index, uint4 counts, device NativeCandidate *rows, device uint2 *rowCounts, uint limit,
+                         device uint4 *adjacency, device atomic_uint *degrees, device atomic_uint *overflow) {
     uint body = index / counts.z, slot = index % counts.z;
     if (body >= counts.x || slot >= rowCounts[body].x) return;
     NativeCandidate candidate = rows[index];
     if (candidate.metadata.x != 2 || candidate.metadata.y >= counts.y) return;
-    nativeAppendAdjacency(adjacency, degrees, contacts.cache.w, candidate.metadata.y, uint4(1, body, 2, 1), overflow);
+    nativeAppendAdjacency(adjacency, degrees, limit, candidate.metadata.y, uint4(1, body, 2, 1), overflow);
+}
+
+kernel void nativeEmitRigidAdjacency(device NativeCandidate *rows [[buffer(0)]], device uint2 *rowCounts [[buffer(1)]],
+    constant uint4 &counts [[buffer(2)]], device NativeContactControl &contacts [[buffer(3)]], device uint4 *adjacency [[buffer(4)]],
+    device atomic_uint *degrees [[buffer(5)]], device atomic_uint *overflow [[buffer(6)]],
+    uint index [[thread_position_in_grid]]) {
+    nativeEmitBodyEdges(index, counts, rows, rowCounts, contacts.cache.w, adjacency, degrees, overflow);
 }
 
 // Rekordy kontaktów bańka–bryła końca kroku (zdarzenia kontaktu i sprzężenie napędu kinematycznego czytają je na CPU): dla każdego kandydata
@@ -467,15 +483,20 @@ kernel void nativeAccelerationWithoutContacts(device NativeBubble *bubbles [[buf
 // Mnożnik 1,05 sprawia, że bańka bez kontaktów nie wyczerpuje zapasu w pełnym kroku z powodu zaokrąglenia.
 // `minimumOnly` != 0 (przełącznik pakietowy minimumMarginOnly, G5-AC3) zostawia tylko r / 4. Wywołanie przy każdej budowie siatki, także przy
 // przebudowie w tej samej klatce, liczy zapas z czasu pozostałego w kroku i ustawia x₀ na bieżące położenie.
-kernel void nativeBroadphaseMargin(device NativeBubble *bubbles [[buffer(0)]], constant NativeControl &control [[buffer(1)]],
-    device float2 *nonContact [[buffer(2)]], device NativeSubstepControl &substep [[buffer(3)]], device float *margins [[buffer(4)]],
-    device float2 *references [[buffer(5)]], constant uint &minimumOnly [[buffer(6)]], uint index [[thread_position_in_grid]]) {
-    if (index >= control.counts.x) return;
+void nativeBubbleMargin(uint index, device NativeBubble *bubbles, device float2 *nonContact, device NativeSubstepControl &substep,
+                        device float *margins, device float2 *references, uint minimumOnly) {
     NativeBubble bubble = bubbles[index];
     float t = max(substep.time.x - substep.time.y, 0.0f);
     float travel = length(nativeEffectiveVelocity(bubble)) * t + 0.5f * length(nonContact[index]) * t * t;
     margins[index] = minimumOnly != 0 ? 0.25f * bubble.physical.z : max(1.05f * travel, 0.25f * bubble.physical.z);
     references[index] = bubble.position.xy;
+}
+
+kernel void nativeBroadphaseMargin(device NativeBubble *bubbles [[buffer(0)]], constant NativeControl &control [[buffer(1)]],
+    device float2 *nonContact [[buffer(2)]], device NativeSubstepControl &substep [[buffer(3)]], device float *margins [[buffer(4)]],
+    device float2 *references [[buffer(5)]], constant uint &minimumOnly [[buffer(6)]], uint index [[thread_position_in_grid]]) {
+    if (index >= control.counts.x) return;
+    nativeBubbleMargin(index, bubbles, nonContact, substep, margins, references, minimumOnly);
 }
 
 // ω_i² z Gershgorina dla sztywności znormalizowanej masami: Σ_j k_j · (1/m_i + 1/√(m_i · m_j)) po kontaktach aktywnych bańki i, plus K_band / m_i
@@ -593,16 +614,14 @@ float nativeBubbleMarginBound(uint index, device NativeBubble *bubbles, device f
 // Gdy h_zapasu wyznacza h, podkrok się odbywa i ustawia znacznik przebudowy (counts.z); wyczerpany zapas daje podkrok pusty ze znacznikiem.
 // Podkrok pusty (czas kroku minął, znacznik przebudowy albo limitu) ma h = 0 i zero grup w argumentach pośredniej dyspozycji; limit
 // 1024 podkroków ustawia znacznik, gdy do końca kroku zostało jeszcze czasu, i zostawia obiekt i człon z ostatniego podkroku.
-kernel void nativeReduceSubstep(device NativeBubble *bubbles [[buffer(0)]], device NativeSegment *segments [[buffer(1)]],
-    constant NativeControl &control [[buffer(2)]], device NativeContactControl &contacts [[buffer(3)]],
-    device uint4 *adjacency [[buffer(4)]], device uint *degrees [[buffer(5)]], device float2 *accelerations [[buffer(6)]],
-    device NativeSubstepControl &substep [[buffer(7)]], device uint *dispatchArguments [[buffer(8)]],
-    device float *stepHistory [[buffer(9)]], device float *margins [[buffer(10)]], device float2 *references [[buffer(11)]],
-    constant NativeForceControl &forces [[buffer(12)]], device NativeBandDrive *bands [[buffer(13)]],
-    device NativeRigidBody *bodies [[buffer(14)]], device float2 *vertices [[buffer(15)]], device uint4 *triangles [[buffer(16)]],
-    uint local [[thread_position_in_threadgroup]], uint width [[threads_per_threadgroup]]) {
-    threadgroup float values[1024];
-    threadgroup uint owners[1024];
+void nativeReduceSubstepInGroup(device NativeBubble *bubbles, device NativeSegment *segments,
+    constant NativeControl &control, device NativeContactControl &contacts,
+    device uint4 *adjacency, device uint *degrees, device float2 *accelerations,
+    device NativeSubstepControl &substep, device uint *dispatchArguments,
+    device float *stepHistory, device float *margins, device float2 *references,
+    constant NativeForceControl &forces, device NativeBandDrive *bands,
+    device NativeRigidBody *bodies, device float2 *vertices, device uint4 *triangles,
+    threadgroup float *values, threadgroup uint *owners, uint local, uint width) {
     float remaining = substep.time.x - substep.time.y;
     bool over = !(remaining > 0), stopped = substep.counts.z != 0 || substep.counts.w != 0;
     bool limited = substep.counts.y >= nativeSubstepFrameLimit;
@@ -708,6 +727,20 @@ kernel void nativeReduceSubstep(device NativeBubble *bubbles [[buffer(0)]], devi
     dispatchArguments[1] = 1; dispatchArguments[2] = 1;
 }
 
+kernel void nativeReduceSubstep(device NativeBubble *bubbles [[buffer(0)]], device NativeSegment *segments [[buffer(1)]],
+    constant NativeControl &control [[buffer(2)]], device NativeContactControl &contacts [[buffer(3)]],
+    device uint4 *adjacency [[buffer(4)]], device uint *degrees [[buffer(5)]], device float2 *accelerations [[buffer(6)]],
+    device NativeSubstepControl &substep [[buffer(7)]], device uint *dispatchArguments [[buffer(8)]],
+    device float *stepHistory [[buffer(9)]], device float *margins [[buffer(10)]], device float2 *references [[buffer(11)]],
+    constant NativeForceControl &forces [[buffer(12)]], device NativeBandDrive *bands [[buffer(13)]],
+    device NativeRigidBody *bodies [[buffer(14)]], device float2 *vertices [[buffer(15)]], device uint4 *triangles [[buffer(16)]],
+    uint local [[thread_position_in_threadgroup]], uint width [[threads_per_threadgroup]]) {
+    threadgroup float values[1024];
+    threadgroup uint owners[1024];
+    nativeReduceSubstepInGroup(bubbles, segments, control, contacts, adjacency, degrees, accelerations, substep, dispatchArguments,
+                               stepHistory, margins, references, forces, bands, bodies, vertices, triangles, values, owners, local, width);
+}
+
 // Dokładny półimpuls z oporem: dv/dt = a − γ v przy stałym a w połowie podkroku daje v e^(−γ h/2) + a (1 − e^(−γ h/2)) / γ.
 // Współczynnik przy a to (1 − e^(−x)) / γ = (h/2) · (1 − e^(−x)) / x, x = γ h / 2; dla małego x szereg, bez kasowania się cyfr.
 float nativeHalfImpulseFactor(float gamma, float halfStep) {
@@ -716,22 +749,18 @@ float nativeHalfImpulseFactor(float gamma, float halfStep) {
     return (1 - exp(-x)) / gamma;
 }
 
-// Leapfrog (kick–drift–kick) po bańkach; faza w mode.x (mode.y: zapis podkroku do `capture`):
+// Leapfrog (kick–drift–kick) po bańkach, jedna bańka na wywołanie; `phase` (kernel: mode.x; captureEnabled: mode.y, zapis podkroku do `capture`):
 //   0: ½ impulsu z przyspieszeniem a z końca poprzedniego podkroku, potem ruch x += v h i obrót (kąt + ω h, ω e^(−γ h));
 //   1: po nativeContactForces: a = siły kontaktu / m + a₀ w nowym położeniu (pola zależą od położenia), drugie ½ impulsu, zapis podkroku;
 //   2: przyspieszenie początku kroku z a₀ i sił kontaktu, bez ruchu i bez czasu.
 // Bańka statyczna stoi. Bańki torowe i kinematyczne dostają tylko kontakt: bez oporu, siły globalnej i pól (CD-D-9).
-kernel void nativeIntegrateSubstep(device NativeBubble *bubbles [[buffer(0)]], constant NativeControl &control [[buffer(1)]],
-    constant NativeForceControl &forces [[buffer(2)]], device NativeForceField *fields [[buffer(3)]],
-    device float2 *vertices [[buffer(4)]], device ulong *ids [[buffer(5)]], device float2 *accelerations [[buffer(6)]],
-    device float2 *nonContact [[buffer(7)]], device float2 *contactForces [[buffer(8)]],
-    device NativeSubstepControl &substep [[buffer(9)]], device float4 *capture [[buffer(10)]], constant uint4 &mode [[buffer(11)]],
-    device NativeBandDrive *bands [[buffer(12)]], device NativeMotor *motors [[buffer(13)]],
-    uint index [[thread_position_in_grid]]) {
-    if (index >= control.counts.x) return;
+void nativeIntegratePhase(uint index, uint phase, uint captureEnabled, device NativeBubble *bubbles, constant NativeControl &control,
+    constant NativeForceControl &forces, device NativeForceField *fields, device float2 *vertices, device ulong *ids,
+    device float2 *accelerations, device float2 *nonContact, device float2 *contactForces,
+    device NativeSubstepControl &substep, device float4 *capture, device NativeBandDrive *bands, device NativeMotor *motors) {
     NativeBubble bubble = bubbles[index];
     float inverseMass = nativeInverseMass(bubble);
-    if (mode.x == 2) {
+    if (phase == 2) {
         accelerations[index] = contactForces[index] * inverseMass + nonContact[index];
         return;
     }
@@ -740,7 +769,7 @@ kernel void nativeIntegrateSubstep(device NativeBubble *bubbles [[buffer(0)]], c
     float halfStep = 0.5f * h;
     float gamma = nativeIsForceDriven(bubble) ? max(bubble.material.x, 0.0f) : 0.0f;
     float decay = exp(-gamma * halfStep), factor = nativeHalfImpulseFactor(gamma, halfStep);
-    if (mode.x == 0) {
+    if (phase == 0) {
         if (!(inverseMass > 0)) return;
         float2 velocity = bubble.motion.xy * decay + accelerations[index] * factor;
         // Moment motoru: dω/dt = M / I − γ ω, dokładnie dla stałego momentu w podkroku (bezwładność ½ m r² z rekordu).
@@ -760,8 +789,20 @@ kernel void nativeIntegrateSubstep(device NativeBubble *bubbles [[buffer(0)]], c
         accelerations[index] = a;
         bubbles[index].motion.xy = velocity;
     }
-    if (mode.y != 0 && substep.counts.y > 0 && substep.counts.y <= nativeSubstepFrameLimit)
+    if (captureEnabled != 0 && substep.counts.y > 0 && substep.counts.y <= nativeSubstepFrameLimit)
         capture[(substep.counts.y - 1) * control.counts.x + index] = float4(position, velocity);
+}
+
+kernel void nativeIntegrateSubstep(device NativeBubble *bubbles [[buffer(0)]], constant NativeControl &control [[buffer(1)]],
+    constant NativeForceControl &forces [[buffer(2)]], device NativeForceField *fields [[buffer(3)]],
+    device float2 *vertices [[buffer(4)]], device ulong *ids [[buffer(5)]], device float2 *accelerations [[buffer(6)]],
+    device float2 *nonContact [[buffer(7)]], device float2 *contactForces [[buffer(8)]],
+    device NativeSubstepControl &substep [[buffer(9)]], device float4 *capture [[buffer(10)]], constant uint4 &mode [[buffer(11)]],
+    device NativeBandDrive *bands [[buffer(12)]], device NativeMotor *motors [[buffer(13)]],
+    uint index [[thread_position_in_grid]]) {
+    if (index >= control.counts.x) return;
+    nativeIntegratePhase(index, mode.x, mode.y, bubbles, control, forces, fields, vertices, ids, accelerations, nonContact, contactForces,
+                         substep, capture, bands, motors);
 }
 
 // Bramka końca kroku (CD-D-18, CD-D-29): bufor końca kroku commituje się zaraz po buforze podkroków, bez czekania, więc jego dyspozycje

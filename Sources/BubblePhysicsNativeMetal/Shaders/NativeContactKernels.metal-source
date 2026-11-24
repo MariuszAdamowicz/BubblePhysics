@@ -8,10 +8,8 @@ uint nativeScanLength(constant NativeControl &control, device NativeContactContr
 // Metal 2.3 / Apple4: argumenty powstają i są konsumowane w tym samym encoderze.
 // Pojemności nadal ograniczają zapis, a zero pracy używa jednej bezpiecznej grupy
 // z early-outem (bez zerowych wymiarów indirect dispatchu).
-kernel void nativePrepareIndirectArguments(constant NativeControl &control [[buffer(0)]],
-    device NativeContactControl &contacts [[buffer(1)]], device uint4 *arguments [[buffer(2)]],
-    constant uint &levels [[buffer(3)]], constant uint &endMode [[buffer(4)]], uint index [[thread_position_in_grid]]) {
-    if (index) return;
+void nativeIndirectArguments(constant NativeControl &control, device NativeContactControl &contacts, device uint4 *arguments,
+                             uint levels, uint endMode) {
     uint candidates = contacts.counts.x;
     uint active = contacts.counts.y;
     uint merged = contacts.limits.w + contacts.counts.y;
@@ -36,6 +34,13 @@ kernel void nativePrepareIndirectArguments(constant NativeControl &control [[buf
             length = (length + 255) / 256;
         }
     }
+}
+
+kernel void nativePrepareIndirectArguments(constant NativeControl &control [[buffer(0)]],
+    device NativeContactControl &contacts [[buffer(1)]], device uint4 *arguments [[buffer(2)]],
+    constant uint &levels [[buffer(3)]], constant uint &endMode [[buffer(4)]], uint index [[thread_position_in_grid]]) {
+    if (index) return;
+    nativeIndirectArguments(control, contacts, arguments, levels, endMode);
 }
 
 // Osiem kroków skanu lokalnego; kolejne poziomy przetwarzają sumy bloków równolegle.
@@ -70,17 +75,12 @@ kernel void nativeAddScanBlockOffsets(device uint4 *output [[buffer(0)]], device
 
 // Tylko odczyt ostatniej sumy i zapis nagłówka; nie przetwarza listy rekordów.
 // Nadmiar ponad pojemność listy odpada na końcu i zwiększa licznik przepełnienia zamiast odrzucać klatkę.
-kernel void nativeFinishScan(device uint4 *offsets [[buffer(0)]], constant NativeControl &control [[buffer(1)]],
-    device NativeContactControl &contacts [[buffer(2)]], constant uint2 &parameters [[buffer(3)]],
-    device atomic_uint *overflow [[buffer(4)]], uint index [[thread_position_in_grid]]) {
-    if (index != 0) return;
-    uint length = nativeScanLength(control, contacts, parameters);
-    uint4 total = length > 0 ? offsets[length - 1] : uint4(0);
-    if (parameters.x == 0) {
+void nativeWriteScanHeader(device NativeContactControl &contacts, uint mode, uint4 total, device atomic_uint *overflow) {
+    if (mode == 0) {
         contacts.counts.x = min(total.x, contacts.limits.z);
         if (total.x > contacts.limits.z)
             atomic_fetch_add_explicit(overflow, total.x - contacts.limits.z, memory_order_relaxed);
-    } else if (parameters.x == 1) {
+    } else if (mode == 1) {
         // Bez historii kontaktów (silnik 4.0.0): aktywne rekordy końca kroku są od razu zbiorem kontaktów kroku.
         contacts.counts.y = total.x; contacts.counts.z = min(total.x, contacts.limits.z);
     }
@@ -91,14 +91,21 @@ kernel void nativeFinishScan(device uint4 *offsets [[buffer(0)]], constant Nativ
     }
 }
 
+kernel void nativeFinishScan(device uint4 *offsets [[buffer(0)]], constant NativeControl &control [[buffer(1)]],
+    device NativeContactControl &contacts [[buffer(2)]], constant uint2 &parameters [[buffer(3)]],
+    device atomic_uint *overflow [[buffer(4)]], uint index [[thread_position_in_grid]]) {
+    if (index != 0) return;
+    uint length = nativeScanLength(control, contacts, parameters);
+    uint4 total = length > 0 ? offsets[length - 1] : uint4(0);
+    nativeWriteScanHeader(contacts, parameters.x, total, overflow);
+}
+
 // Skan prefiksowy jednej grupy: porcje szerokości grupy, suma z poprzednich porcji dodawana do każdej. Wynik i nagłówek
 // (licznik kandydatów, aktywnych kontaktów albo cache'u) są takie same jak z nativeScanBlocks, nativeAddScanBlockOffsets
 // i nativeFinishScan, a odczyt z `input` i zapis do `output` dotyczą tylko zakresu o długości z nativeScanLength.
-kernel void nativeScanSingleGroup(device uint4 *input [[buffer(0)]], device uint4 *output [[buffer(1)]],
-    constant NativeControl &control [[buffer(2)]], device NativeContactControl &contacts [[buffer(3)]],
-    constant uint2 &parameters [[buffer(4)]], device atomic_uint *overflow [[buffer(5)]],
-    threadgroup uint4 *scratch [[threadgroup(0)]],
-    uint local [[thread_position_in_threadgroup]], uint width [[threads_per_threadgroup]]) {
+void nativeScanInGroup(device uint4 *input, device uint4 *output, constant NativeControl &control,
+                       device NativeContactControl &contacts, uint2 parameters, device atomic_uint *overflow,
+                       threadgroup uint4 *scratch, uint local, uint width) {
     uint length = nativeScanLength(control, contacts, uint2(parameters.x, 0));
     uint4 carry = uint4(0);
     for (uint base = 0; base < length; base += width) {
@@ -120,20 +127,15 @@ kernel void nativeScanSingleGroup(device uint4 *input [[buffer(0)]], device uint
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
     if (local != 0) return;
-    uint4 total = carry;
-    if (parameters.x == 0) {
-        contacts.counts.x = min(total.x, contacts.limits.z);
-        if (total.x > contacts.limits.z)
-            atomic_fetch_add_explicit(overflow, total.x - contacts.limits.z, memory_order_relaxed);
-    } else if (parameters.x == 1) {
-        // Bez historii kontaktów (silnik 4.0.0): aktywne rekordy końca kroku są od razu zbiorem kontaktów kroku.
-        contacts.counts.y = total.x; contacts.counts.z = min(total.x, contacts.limits.z);
-    }
-    else {
-        contacts.counts.z = min(total.x, contacts.limits.z); contacts.cache.xy = total.yz;
-        if (total.x > contacts.limits.z)
-            atomic_fetch_add_explicit(overflow, total.x - contacts.limits.z, memory_order_relaxed);
-    }
+    nativeWriteScanHeader(contacts, parameters.x, carry, overflow);
+}
+
+kernel void nativeScanSingleGroup(device uint4 *input [[buffer(0)]], device uint4 *output [[buffer(1)]],
+    constant NativeControl &control [[buffer(2)]], device NativeContactControl &contacts [[buffer(3)]],
+    constant uint2 &parameters [[buffer(4)]], device atomic_uint *overflow [[buffer(5)]],
+    threadgroup uint4 *scratch [[threadgroup(0)]],
+    uint local [[thread_position_in_threadgroup]], uint width [[threads_per_threadgroup]]) {
+    nativeScanInGroup(input, output, control, contacts, parameters, overflow, scratch, local, width);
 }
 
 kernel void nativePrepareContactFlags(device NativeContactCache *contacts [[buffer(0)]],
@@ -212,12 +214,7 @@ kernel void nativeEmitAdjacency(device NativeBubble *bubbles [[buffer(0)]],
 // Sortowanie wiersza (rodzaj, indeks sąsiada) odtwarza kolejność dawnych slotów: najpierw bańki rosnąco,
 // potem odcinki rosnąco. Dzięki temu suma poprawek float w solverze Jacobi nie zależy od harmonogramu.
 // Stopień przed obcięciem do k trafia do licznika maksimum na obiekt.
-kernel void nativeBuildAdjacency(constant NativeControl &control [[buffer(0)]],
-    device NativeContactControl &contacts [[buffer(1)]], device uint4 *adjacency [[buffer(2)]],
-    device uint *degrees [[buffer(3)]], device atomic_uint *overflow [[buffer(4)]],
-    uint index [[thread_position_in_grid]]) {
-    if (index >= control.counts.x) return;
-    uint limit = contacts.cache.w;
+void nativeBuildAdjacencyRow(uint index, uint limit, device uint4 *adjacency, device uint *degrees, device atomic_uint *overflow) {
     uint demanded = degrees[index];
     uint degree = min(demanded, limit);
     device uint4 *row = adjacency + index * limit;
@@ -233,6 +230,14 @@ kernel void nativeBuildAdjacency(constant NativeControl &control [[buffer(0)]],
     for (uint i = 0; i < degree; ++i) row[i].x -= 1;
     degrees[index] = degree;
     atomic_fetch_max_explicit(overflow + 1, demanded, memory_order_relaxed);
+}
+
+kernel void nativeBuildAdjacency(constant NativeControl &control [[buffer(0)]],
+    device NativeContactControl &contacts [[buffer(1)]], device uint4 *adjacency [[buffer(2)]],
+    device uint *degrees [[buffer(3)]], device atomic_uint *overflow [[buffer(4)]],
+    uint index [[thread_position_in_grid]]) {
+    if (index >= control.counts.x) return;
+    nativeBuildAdjacencyRow(index, contacts.cache.w, adjacency, degrees, overflow);
 }
 
 bool nativeTriangleContact(thread float2 *a, thread float2 *b, thread float2 &normal,
