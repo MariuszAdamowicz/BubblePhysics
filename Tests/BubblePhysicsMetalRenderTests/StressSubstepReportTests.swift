@@ -196,4 +196,14 @@ final class StressSubstepReportTests: XCTestCase {
         XCTAssertEqual(try value(of: "failure_reason", in: report.text), "substepLimitExceeded")
         XCTAssertEqual(try value(of: "failure_detail", in: report.text), "objects:7 edge:none distance:0.5000 term:stiffness")
     }
+
+    /// Bugfix iPhone X (BF-D-4, review): nieudane klatki bez powodu upadku świata (np. klatka odrzucona) dają `unknown`, a nie `none`,
+    /// bo `none` znaczy „świat nie padł”.
+    func testFailedFramesWithoutAWorldFailureReasonReportUnknown() async throws {
+        var report = try await run(warmup: 2, measured: 5).report
+        report.failedFrames = 1
+        XCTAssertNil(report.failureReason)
+        XCTAssertEqual(try value(of: "failure_reason", in: report.text), "unknown")
+        XCTAssertNil(report.text.range(of: "failure_detail="), "bez powodu raport nie ma szczegółów")
+    }
 }

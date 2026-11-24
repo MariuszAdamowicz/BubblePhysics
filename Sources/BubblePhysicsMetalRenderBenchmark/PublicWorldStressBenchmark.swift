@@ -71,7 +71,7 @@ public struct PublicWorldStressReport: Sendable {
     public let maximumMilliseconds: Double
     public let nonFiniteFrames: Int
     public let fallbackFrames: Int
-    public let failedFrames: Int
+    public package(set) var failedFrames: Int
     /// Powód upadku świata (`WorldDiagnostics.failureReason`) z pierwszej serii przerwanej nieudaną klatką; nil, gdy świat nie padł
     /// (bugfix iPhone X, BF-D-4).
     public package(set) var failureReason: WorldFailureReason?
@@ -121,10 +121,11 @@ public struct PublicWorldStressReport: Sendable {
         }.joined(separator: ",")
     }
 
-    /// Linia przyczyny upadku świata: `failure_reason=` z powodem albo `none`, a przy `contactViolation` i `substepLimitExceeded`
+    /// Linia przyczyny upadku świata: `failure_reason=` z powodem, `unknown` przy nieudanych klatkach bez powodu (np. klatka
+    /// odrzucona, świat żyje) albo `none` bez nieudanych klatek, a przy `contactViolation` i `substepLimitExceeded`
     /// także `failure_detail=` (obiekty, krawędź, odległość, człon h).
     private var failureLine: String {
-        guard let failureReason else { return "failure_reason=none" }
+        guard let failureReason else { return failedFrames > 0 ? "failure_reason=unknown" : "failure_reason=none" }
         var line = "failure_reason=\(failureReason)"
         if failureReason == .contactViolation || failureReason == .substepLimitExceeded, let detail = failureDetail {
             let objects = detail.objects.map { String($0.rawValue) }.joined(separator: ",")
