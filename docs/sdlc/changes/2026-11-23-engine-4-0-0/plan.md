@@ -292,22 +292,146 @@ Wycinek 1 ma sens sam: cały pakiet, Showcase i benchmark iOS działają na nowy
 Każde zadanie zostawia pakiet z kompilującymi się testami (`swift build --build-tests`). Każde zaczyna od czerwonego testu swojej klasy. Od zadania 6 do zadania 10 istniejące testy gumki, oporu, pól i motoru (`BandDriveTests`, `MotionDampingTests` i podobne) są czerwone: host przestaje liczyć te siły w zadaniu 6, a GPU zaczyna w zadaniu 10. To spodziewany stan przejściowy, a nie regresja.
 
 1. Odniesienie w Double dla testów (`ContactLawReference`: ε(q), U(ε), d*, Newton dla różnych K, symulacja 1D reguły h, całkowanie pola) z własnymi testami · verify: `swift test --filter BubblePhysicsRuntimeTests.ContactLawReferenceTests`
+
+    ```text
+    $ swift test --filter BubblePhysicsRuntimeTests.ContactLawReferenceTests
+    Executed 19 tests, with 0 failures (0 unexpected)
+    exit=0
+    ```
+
 2. `PhysicsMaterial` dla `.bubble` z K_c i γ oraz `PhysicsParameter.contactStiffness` w modelu, z dostosowaniem wszystkich wywołań i testów (podatność przejściowo c = r / K_c), covering [P-B-1](#p-b-1), [P-B-3](#p-b-3) · verify: `swift build --build-tests && swift test --filter BubblePhysicsPublicTests.BubbleMaterialTests`
+
+    ```text
+    $ swift build --build-tests && swift test --filter BubblePhysicsPublicTests.BubbleMaterialTests
+    Build complete!
+    Executed 9 tests, with 0 failures (0 unexpected)
+    exit=0
+    ```
+
 3. Walidacja w stagerze i w `validate(change)`: bryła nad bańką, bańka z bryłą dynamiczną, próg gumki 0,25, stała tolerancja położenia, bez walidacji α, covering [P-B-35](#p-b-35)–[P-B-38](#p-b-38), [P-B-15](#p-b-15) (stager) · verify: `swift test --filter "RigidPlacementTests|DynamicRigidExclusionTests|BandStabilityThresholdTests"`
+
+    ```text
+    $ swift test --filter "RigidPlacementTests|DynamicRigidExclusionTests|BandStabilityThresholdTests"
+    Executed 25 tests, with 0 failures (0 unexpected)
+    exit=0
+    ```
+
 4. Powierzchnia bez działania: szew `makeBenchmarkWorld(configuration:device:native:)`, przełączniki pakietowe, nowe przyczyny `worldFailed` z `WorldFailureDetail` i pola telemetrii · verify: `swift build --build-tests && grep -q "substepSplitMultiplier" Sources/BubblePhysicsNativeMetal/NativeMetalBackend.swift`
+
+    ```text
+    $ swift build --build-tests && grep -q "substepSplitMultiplier" Sources/BubblePhysicsNativeMetal/NativeMetalBackend.swift
+    Build complete!
+    exit=0
+    ```
+
 5. Czerwone testy świata w klasach z „Where”, covering [P-B-4](#p-b-4)–[P-B-27](#p-b-27) · verify: `swift build --build-tests && ! swift test --filter "ContactLawStaticsTests|ForceIntegrationTests|NoCrossingTests|SubstepCountTests|GridRebuildTests|SubstepForceTests|RigidContactTests|ContactAssertionTests|ContourChordTests|SubstepTelemetryTests|CrowdStabilityTests"`
+
+    ```text
+    $ swift build --build-tests && ! swift test --filter "ContactLawStaticsTests|…|CrowdStabilityTests"
+    @fccba27 (faza czerwona, raport porcji): 61 testów, 236 błędów → verify exit 0
+    @e03ccb2 (po wycinku): Executed 67 tests, with 0 failures (0 unexpected)
+    exit=1 — oczekiwane: negacja dowodziła czerwonej fazy; testy są teraz zielone
+    ```
+
 6. Host i rekordy: `MotionControllers.prepare` tylko z prędkością ról kinematycznych, rekordy bańki, gumki, pól, motoru i pozy brył w `NativeForceRecords.swift` · verify: `swift test --filter "MotionControllersPrepareTests|NativeMetalShaderABITests"` z nowym przypadkiem ABI dla `NativeMetalBandDrive`
+
+    ```text
+    $ swift test --filter "MotionControllersPrepareTests|NativeMetalShaderABITests"
+    Executed 16 tests, with 0 failures (0 unexpected)
+    exit=0
+    ```
+
 7. `NativeForceKernels` z prawem kontaktu dla ściany, wierzchołka i pary, redukcja h (1/ω_max z Gershgorina, d / 4 w obu kierunkach) i zapis `captureSubsteps` w pętli podkroków w miejsce XPBD, przejściowo w jednym buforze z 1024 podkrokami, z solverem brył na stałych 8 iteracjach, covering [P-B-4](#p-b-4)–[P-B-6](#p-b-6), [P-B-12](#p-b-12), [P-B-13](#p-b-13) · verify: `swift test --filter "ContactLawStaticsTests|ForceIntegrationTests|RigidPolygonRuntimeTests"`
+
+    ```text
+    $ swift test --filter "ContactLawStaticsTests|ForceIntegrationTests|RigidPolygonRuntimeTests"
+    Executed 13 tests, with 0 failures (0 unexpected) in 47.154 seconds
+    exit=0
+    ```
+
 8. Pary buforów w `NativeMetalSubstepLoop` (2 × poprzednia klatka, podwajanie) w miejsce przejściowego bufora, render po końcu kroku i limit 1024 z obiektem wyznaczającym h, covering [P-B-9](#p-b-9), [P-B-10](#p-b-10), [P-B-18](#p-b-18), [P-B-19](#p-b-19), [P-B-39](#p-b-39) · verify: `swift test --filter "NoCrossingTests|SubstepCountTests|NativeMetalRenderHandoffTests|RenderHookTests"`
+
+    ```text
+    $ swift test --filter "NoCrossingTests|SubstepCountTests|NativeMetalRenderHandoffTests|RenderHookTests"
+    Executed 18 tests, with 0 failures (0 unexpected)
+    exit=0
+    ```
+
 9. Zapas obwiedni, h_zapasu i przebudowa siatki w tej samej klatce z przełącznikiem `minimumMarginOnly`, z promieniem z przejścia ustalonym raz na krok przed broadphase, covering [P-B-20](#p-b-20) · verify: `swift test --filter GridRebuildTests`
+
+    ```text
+    $ swift test --filter GridRebuildTests
+    Executed 4 tests, with 0 failures (0 unexpected)
+    exit=0
+    ```
+
 10. Gumka, siła globalna, pola i motor w każdym podkroku z przełącznikiem `substepSplitMultiplier`, covering [P-B-14](#p-b-14)–[P-B-16](#p-b-16) · verify: `swift test --filter "SubstepForceTests|BandDriveTests|MotionDampingTests"`
+
+    ```text
+    $ swift test --filter "SubstepForceTests|BandDriveTests|MotionDampingTests"
+    Executed 22 tests, with 0 failures (0 unexpected)
+    exit=0
+    ```
+
 11. Kandydaci bańka–bryła w broadphase i kontakt ze statycznym kołem, kapsułą i bryłą kinematyczną z pozą interpolowaną, bez gałęzi baniek w solverze brył i przegubach, covering [P-B-7](#p-b-7), [P-B-11](#p-b-11), [P-B-17](#p-b-17) · verify: `swift test --filter "RigidContactTests|KinematicStagingTests"`
+
+    ```text
+    $ swift test --filter "RigidContactTests|KinematicStagingTests"
+    Executed 15 tests, with 0 failures (0 unexpected)
+    exit=0
+    ```
+
 12. Region przed asercjami, `nativeAssertContacts` ze znacznikiem strony krawędzi i wstrzyknięcie stanu, covering [P-B-22](#p-b-22)–[P-B-26](#p-b-26) · verify: `swift test --filter "ContactAssertionTests|RegionPolicyTests"`
+
+    ```text
+    $ swift test --filter "ContactAssertionTests|RegionPolicyTests"
+    Executed 32 tests, with 0 failures (0 unexpected)
+    exit=0
+    ```
+
 13. Cięciwa konturu r·(1 − ε) i telemetria podkroków, przebudów oraz czasów GPU fizyki i konturu, covering [P-B-8](#p-b-8), [P-B-27](#p-b-27) · verify: `swift test --filter "ContourChordTests|SubstepTelemetryTests|ContactContourTests"`
+
+    ```text
+    $ swift test --filter "ContourChordTests|SubstepTelemetryTests|ContactContourTests"
+    Executed 9 tests, with 0 failures (0 unexpected)
+    exit=0
+    ```
+
 14. Usunięcie kerneli i kodu Swift po XPBD, CCD, strażnikach, cache λ i zawarciu, pól publicznych `NativeMetalConfiguration`, `centerCrossing` i licznika zawartych par, z tabelą symboli w nowym `docs/MIGRATION-v4.md`, covering [P-B-2](#p-b-2) · verify: `swift package dump-symbol-graph && for m in BubblePhysicsModel BubblePhysics BubblePhysicsRuntime BubblePhysicsNativeMetal BubblePhysicsMetalRender; do ls .build/*/symbolgraph/$m.symbols.json >/dev/null || exit 1; done && ! grep -lE '"(BubbleContactCompliance|contactCompliance|contactDampingRatio|deformability|centerCrossing|solverIterationCount|cacheExpiryFrames|teleportDistanceMultiplier|ccdVelocityMultiplier)"' .build/*/symbolgraph/BubblePhysicsModel.symbols.json .build/*/symbolgraph/BubblePhysics.symbols.json .build/*/symbolgraph/BubblePhysicsRuntime.symbols.json .build/*/symbolgraph/BubblePhysicsNativeMetal.symbols.json .build/*/symbolgraph/BubblePhysicsMetalRender.symbols.json`
+
+    ```text
+    $ swift package dump-symbol-graph && … ! grep -lE '"(BubbleContactCompliance|…|ccdVelocityMultiplier)"' …
+    Build complete!
+    SYMBOLS-CLEAN
+    exit=0
+    ```
+
 15. Audyt testów według spec. 4 oraz dostosowanie modułu diagnostycznego, `BubblePhysicsReferenceBench`, stress i perf guard (bez brył dynamicznych z bańkami), covering [P-B-31](#p-b-31) · verify: `for f in Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalXPBDTests.swift Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalCenterGuardEdgeTests.swift Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalRestDampingTests.swift Tests/BubblePhysicsRuntimeTests/ContainmentResolutionTests.swift Tests/BubblePhysicsRuntimeTests/ContactDynamicsTests.swift; do test ! -e "$f" || exit 1; done && swift build --build-tests`
+
+    ```text
+    $ for f in …NativeMetalXPBDTests.swift …ContactDynamicsTests.swift; do test ! -e "$f" || exit 1; done && swift build --build-tests
+    Build complete!
+    exit=0
+    ```
+
 16. Showcase na `contactStiffness` z blokami kodu przewodnika zgodnymi z regionami Showcase oraz build benchmarku iOS, covering [P-B-32](#p-b-32) · verify: `swift test --filter IntegrationGuideTests && xcodebuild -project Examples/BubblePhysicsShowcase/BubblePhysicsShowcase.xcodeproj -scheme BubblePhysicsShowcase -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build && xcodebuild -project Benchmarks/iOS/BubblePhysicsBench/BubblePhysicsBench.xcodeproj -scheme BubblePhysicsBench -configuration Release -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build`
+
+    ```text
+    $ swift test --filter IntegrationGuideTests && xcodebuild … BubblePhysicsShowcase … && xcodebuild … BubblePhysicsBench -configuration Release …
+    Executed 4 tests, with 0 failures (0 unexpected)
+    ** BUILD SUCCEEDED **
+    ** BUILD SUCCEEDED **
+    exit=0
+    ```
+
 17. Pełny przebieg pakietu na Macu z GPU, covering [P-B-21](#p-b-21), [P-B-31](#p-b-31) i wszystkie zachowania wycinka · verify: `swift test`
+
+    ```text
+    $ swift test
+    Executed 1545 tests, with 1 test skipped and 0 failures (0 unexpected) in 751.784 seconds
+    exit=0
+    ```
+
 
 ## Deviations from Design
 
