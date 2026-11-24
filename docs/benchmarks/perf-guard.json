@@ -2,51 +2,51 @@
   "device" : "Apple M1 Pro",
   "scenes" : {
     "acceptance" : {
-      "note" : "silnik 4.0.0 (feature\/engine-4-0-0, zadanie 22): acceptance, 5 przebiegów po 30+300 klatek; Mac M1 Pro, load average 3-7 (nie bezczynny)",
-      "p95Milliseconds" : 15.706917,
-      "recordedAt" : "2026-11-24T07:19:45Z",
+      "note" : "silnik 4.0.0 (feature\/engine-4-0-0 @d9a812c, zadanie 42): acceptance, 5 przebiegów po 30+300 klatek; Mac M1 Pro, load average 3-6 (nie bezczynny, zgoda autora 2026-11-24)",
+      "p95Milliseconds" : 10.504875,
+      "recordedAt" : "2026-11-24T19:26:41Z",
       "runs" : [
-        15.444042,
-        16.047541,
-        15.695,
-        15.706917,
-        15.849125
+        10.743125,
+        10.509292,
+        10.336417,
+        10.362541,
+        10.504875
       ]
     },
     "decals" : {
-      "note" : "silnik 4.0.0 (feature\/engine-4-0-0, zadanie 22): decals, 5 przebiegów po 30+300 klatek; Mac M1 Pro, load average 3-7 (nie bezczynny)",
-      "p95Milliseconds" : 15.672916,
-      "recordedAt" : "2026-11-24T07:18:50Z",
+      "note" : "silnik 4.0.0 (feature\/engine-4-0-0 @d9a812c, zadanie 42): decals, 5 przebiegów po 30+300 klatek; Mac M1 Pro, load average 3-6 (nie bezczynny, zgoda autora 2026-11-24)",
+      "p95Milliseconds" : 10.299875,
+      "recordedAt" : "2026-11-24T19:26:03Z",
       "runs" : [
-        15.672916,
-        15.784458,
-        15.597917,
-        15.906292,
-        15.352084
+        10.875708,
+        10.318583,
+        10.076541,
+        10.206583,
+        10.299875
       ]
     },
     "mixed" : {
-      "note" : "silnik 4.0.0 (feature\/engine-4-0-0, zadanie 22): mixed, 5 przebiegów po 30+300 klatek; Mac M1 Pro, load average 3-7 (nie bezczynny)",
-      "p95Milliseconds" : 2.318875,
-      "recordedAt" : "2026-11-24T07:18:22Z",
+      "note" : "silnik 4.0.0 (feature\/engine-4-0-0 @d9a812c, zadanie 42): mixed, 5 przebiegów po 30+300 klatek; Mac M1 Pro, load average 3-6 (nie bezczynny, zgoda autora 2026-11-24)",
+      "p95Milliseconds" : 7.452167,
+      "recordedAt" : "2026-11-24T19:25:44Z",
       "runs" : [
-        2.276208,
-        2.318875,
-        3.975416,
-        3.805833,
-        2.3035
+        8.342959,
+        7.452167,
+        6.561083,
+        4.4995,
+        8.063917
       ]
     },
     "stress-300" : {
-      "note" : "silnik 4.0.0 (feature\/engine-4-0-0, zadanie 22): stress-300, 5 przebiegów po 30+300 klatek; Mac M1 Pro, load average 3-7 (nie bezczynny)",
-      "p95Milliseconds" : 15.188875,
-      "recordedAt" : "2026-11-24T07:18:15Z",
+      "note" : "silnik 4.0.0 (feature\/engine-4-0-0 @d9a812c, zadanie 42): stress-300, 5 przebiegów po 30+300 klatek; Mac M1 Pro, load average 3-6 (nie bezczynny, zgoda autora 2026-11-24)",
+      "p95Milliseconds" : 10.119333,
+      "recordedAt" : "2026-11-24T19:25:28Z",
       "runs" : [
-        15.182583,
-        15.385333,
-        15.188666,
-        15.378917,
-        15.188875
+        10.066209,
+        10.54125,
+        10.366792,
+        9.968,
+        10.119333
       ]
     }
   }

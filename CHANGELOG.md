@@ -24,6 +24,7 @@ Przejście z 3.x opisuje [docs/MIGRATION-v4.md](docs/MIGRATION-v4.md): tabelę u
 
 - Bryła dynamiczna nie ma kontaktu z bańkami, a bryły kinematyczne nie reagują na siły baniek.
 - Przy sztywnym K_c (rzędu 10⁵ i więcej) szybkie uderzenie wnosi do całkowania energię (odbicie ok. 4× szybsze), a tłum 150 baniek może przekroczyć limit podkroków. Zakres gry (K_c ≈ 229) jest daleko od tej granicy.
+- Na iPhonie X (A11) klatka szybkiego uderzenia przekracza budżet 16,67 ms: czołowe zderzenie baniek 128 ma p95 19,7 ms, a bańka „2” wystrzelona w tłum 39,2 ms; tłum w spoczynku (11,6 ms) i gumka do ściany (13,7 ms) mieszczą się w nim. Koszt rośnie z liczbą podkroków (ok. 0,59 ms na podkrok przy 150 bańkach w jednej grupie wątków). Pomiar: [docs/benchmarks/v4.0.0-iphone-x.md](docs/benchmarks/v4.0.0-iphone-x.md), dalsza droga: [propozycja 4.1.0](docs/sdlc/changes/2026-11-24-engine-4-1-0/proposal.md).
 - Scena stress-300 jest w 4.0.0 inna niż w 3.0.2 (trójkąt jedzie po torze, 287 baniek), więc wyniki benchmarku nie są porównywalne wprost.
 
 ## 3.0.2
