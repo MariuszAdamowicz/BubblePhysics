@@ -110,19 +110,29 @@ enum PathScene {
         })
     }
 
-    /// G5-AC3 ze ścianą: 128 uderza „2”, a ta mija ścianę ukrytą poza zapasem. Z `distractors` w klatce wybicia dochodzą dwie bańki
-    /// nad i pod „2”, lecące od niej z 1500 j/s: są kandydatami pierwszej budowy, a po przebudowie już nie (przepełnienie przed przebudową,
-    /// ale nie po niej, przy limicie kandydatów 2).
+    /// Odległość środków środkowej bańki gromady i bańk odlatujących od niej: dotyk (2 · 24) plus szczelina 50 j. Szczelina jest dobrana tak, żeby
+    /// odlatująca bańka (3000 j/s, zapas 1,05 · 3000 / 60 = 52,5 j plus r / 4 = 6 j środkowej) była kandydatem środkowej na początku klatki, a po
+    /// przesunięciu o niecałe 10 j (ok. 0,2 klatki) już nie.
+    static let clusterSpacing: Float = 98
+
+    /// G5-AC3 ze ścianą: 128 uderza „2”, a ta mija ścianę ukrytą poza zapasem. Z `distractors` na początku klatki wybicia dochodzi daleko od
+    /// wybicia gromada: bańka w spoczynku i cztery bańki wokół niej odlatujące od niej z 3000 j/s. Środkowa ma na początku klatki 5 kandydatów
+    /// (z sobą), więc limit kandydatów nad liczbą z samej sceny wybicia przepełnia pierwszą budowę klatki, a po przebudowie (bańki odleciały
+    /// poza zapas) już nie. Gromada nie sąsiaduje z 128, „2” ani ścianą, więc obcięcie jej kandydatów nie zmienia fizyki wybicia.
     static func kick(distractors: Bool, minimumMarginOnly: Bool) -> (scene: Scene, plan: KickScenePlanner.Plan) {
         let plan = KickScenePlanner.plan()
         let planned = KickScenePlanner.build(.wall, plan: plan)
-        let scene = Scene(name: "G5-AC3, ściana\(distractors ? ", z kandydatami" : "")", frames: plan.frame + 8,
+        let scene = Scene(name: "G5-AC3, ściana\(distractors ? ", z gromadą" : "")", frames: plan.frame + 8,
                           ids: [1, 2], minimumMarginOnly: minimumMarginOnly,
                           before: distractors ? { step in
                               guard step == plan.frame else { return nil }
-                              return try WorldTransaction()
-                                  .add(ForceScene.bubble(4, at: [300, 58], velocity: [0, 1500]))
-                                  .add(ForceScene.bubble(5, at: [300, -58], velocity: [0, -1500]))
+                              let center = WorldPoint(-600, 600), spacing = clusterSpacing, speed: Float = 3000
+                              var transaction = try WorldTransaction().add(ForceScene.bubble(4, at: center))
+                              for (index, direction) in [WorldPoint(1, 0), WorldPoint(-1, 0), WorldPoint(0, 1), WorldPoint(0, -1)].enumerated() {
+                                  transaction = try transaction.add(ForceScene.bubble(UInt64(5 + index), at: center + spacing * direction,
+                                                                                      velocity: speed * direction))
+                              }
+                              return transaction
                           } : nil,
                           build: planned.build)
         return (scene, plan)
@@ -273,25 +283,34 @@ enum PathScene {
         }
     }
 
-    /// P-B-42 (CD-D-26): sceny `kick(distractors:)` z limitem kandydatów 2 przepełniają pierwszą budowę klatki wybicia (128 i dwie bańki są
-    /// kandydatami „2”), a po przebudowie bańki odlatują, więc ostatnia budowa klatki nie przepełnia. Licznik klatki ma podać maksimum po budowach,
-    /// a nie wartość ostatniej. Bez limitu przepełnienia nie ma, a świat jest zdrowy w obu ścieżkach.
+    /// P-B-42 (CD-D-26): scena `kick(distractors:)` z limitem kandydatów równym największej liczbie kandydatów samej sceny wybicia (bez gromady)
+    /// przepełnia pierwszą budowę klatki wybicia (gromada), a po przebudowie bańki gromady są poza zapasem, więc ostatnia budowa klatki nie
+    /// przepełnia i żadna inna klatka też nie. Licznik klatki ma podać maksimum po budowach, a nie zero ani wartość ostatniej budowy. Bez limitu
+    /// przepełnienia nie ma, a świat jest zdrowy w obu ścieżkach.
     static func assertOverflowIsTheMaximumOverBuilds(forced: Bool, file: StaticString = #filePath, line: UInt = #line) async throws {
-        let (scene, plan) = kick(distractors: true, minimumMarginOnly: false)
         let context = forced ? "wiele dyspozycji" : "jedna dyspozycja"
-        let limited = try await run(scene, native: native(forced: forced, candidateLimit: 2), file: file, line: line)
+        let (baseScene, _) = kick(distractors: false, minimumMarginOnly: false)
+        let base = try await run(baseScene, native: native(forced: forced), file: file, line: line)
+        let limit = base.maximumCandidates.max() ?? 0
+        XCTAssertGreaterThan(limit, 0, "\(context): scena wybicia ma kandydatów", file: file, line: line)
+        let (scene, plan) = kick(distractors: true, minimumMarginOnly: false)
+        let free = try await run(scene, native: native(forced: forced), file: file, line: line)
+        XCTAssertEqual(free.recorded.count, scene.frames, "\(context): świat padł albo scena odrzucona", file: file, line: line)
+        guard free.recorded.count == scene.frames else { return }
+        XCTAssertEqual(free.overflow.reduce(0, +), 0, "\(context): limit 128 mieści wszystkich kandydatów", file: file, line: line)
+        XCTAssertGreaterThan(free.maximumCandidates[plan.frame], limit,
+                             "\(context): gromada ma przekroczyć limit \(limit) w klatce wybicia, kandydaci \(free.maximumCandidates)", file: file, line: line)
+        let limited = try await run(scene, native: native(forced: forced, candidateLimit: limit), file: file, line: line)
         XCTAssertEqual(limited.recorded.count, scene.frames, "\(context): świat padł albo scena odrzucona", file: file, line: line)
         guard limited.recorded.count == scene.frames else { return }
-        let kickRebuilds = limited.rebuilds[plan.frame]
-        XCTAssertGreaterThanOrEqual(kickRebuilds, 1, "\(context): klatka wybicia ma mieć przebudowę po pierwszej budowie, przebudowy \(limited.rebuilds)", file: file, line: line)
+        XCTAssertGreaterThanOrEqual(limited.rebuilds[plan.frame], 1,
+                                    "\(context): klatka wybicia ma mieć przebudowę po pierwszej budowie, przebudowy \(limited.rebuilds)", file: file, line: line)
         XCTAssertGreaterThan(limited.overflow[plan.frame], 0,
                              "\(context): klatka wybicia ma podać maksimum przepełnienia po budowach, przepełnienie klatek \(limited.overflow)", file: file, line: line)
-        for index in (plan.frame + 2)..<limited.overflow.count {
-            guard ForceScene.check(limited.overflow[index] == 0, "\(context), klatka \(index): przepełnienie \(limited.overflow[index]) po odlocie baniek",
+        for index in limited.overflow.indices where index != plan.frame {
+            guard ForceScene.check(limited.overflow[index] == 0, "\(context), klatka \(index): przepełnienie \(limited.overflow[index]) poza klatką wybicia",
                                    file: file, line: line) else { return }
         }
-        let free = try await run(scene, native: native(forced: forced), file: file, line: line)
-        XCTAssertEqual(free.overflow.reduce(0, +), 0, "\(context): limit 128 mieści wszystkich kandydatów", file: file, line: line)
         XCTAssertNil(free.diagnostics.failureReason, context, file: file, line: line)
         XCTAssertNil(limited.diagnostics.failureReason, context, file: file, line: line)
     }
