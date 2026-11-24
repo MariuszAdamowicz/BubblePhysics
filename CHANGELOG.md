@@ -1,6 +1,29 @@
 # Changelog
 
-Zmiany w wydaniach `BubblePhysics`. Przejście z 1.x na 2.0.0 opisuje [docs/MIGRATION-v2.md](docs/MIGRATION-v2.md), a z 2.x na 3.0.0 [docs/MIGRATION-v3.md](docs/MIGRATION-v3.md).
+Zmiany w wydaniach `BubblePhysics`. Przejście z 1.x na 2.0.0 opisuje [docs/MIGRATION-v2.md](docs/MIGRATION-v2.md), a z 2.x na 3.0.0 [docs/MIGRATION-v3.md](docs/MIGRATION-v3.md), a z 3.x na 4.0.0 [docs/MIGRATION-v4.md](docs/MIGRATION-v4.md).
+
+## 4.0.0
+
+Przejście z 3.x opisuje [docs/MIGRATION-v4.md](docs/MIGRATION-v4.md): tabelę usuniętych symboli, nowy materiał bańki, zmiany zachowania prostymi słowami i znane ograniczenia.
+
+### Zmienione (łamiące)
+
+- Kontakt bańki ma granicę na promieniu: siła F = K_c · ε / (1 − ε)² rośnie bez ograniczeń, zanim środek bańki dojdzie do ściany albo do środka drugiej bańki. Materiał `.bubble` to sztywność `contactStiffness` (K_c) i opór `damping` (γ). Znikają `BubbleContactCompliance`, `contactCompliance` (materiał, `BubbleDescriptor`, `BubbleResult`), `contactDampingRatio` i `deformability` wraz z `PhysicsParameter.deformability`; w przejściach jest `PhysicsParameter.contactStiffness`.
+- Ruch liczą same siły, w podkrokach leapfrog dobranych do prędkości i sztywności (limit 1024 podkroków w klatce). Znikają XPBD, CCD, strażniki środka, rozsuwanie par „bańka w bańce”, tłumienie kontaktu, cache λ i `SolverGuardCause.centerCrossing`. Gumka, opór, siła globalna, pola i motor działają w każdym podkroku, a gumka wymaga K_band ≤ m / (16 · dt²).
+- `NativeMetalConfiguration` nie ma pól publicznych, a telemetria klatki ma `substepCount`, `gridRebuildCount`, `physicsGPUMilliseconds` i `contourGPUMilliseconds` zamiast pól XPBD, CCD i cache.
+- Materiał `.bubble` nie przyjmuje tarcia, restytucji ani limitów prędkości. Przejście `friction` albo `restitution` na bańce jest odrzucane.
+- Transakcje, po których świat miałby bańkę i bryłę dynamiczną, są odrzucane (`unsupportedBubbleWithDynamicRigidBody`), tak samo przeguby z bańkami (`unsupportedJointBody`). Bryła nad środkiem bańki jest odrzucana jako `invalidPlacement(…, .insideRigidBody)`.
+
+### Dodane
+
+- Dwa nowe stany „zawiódł”: `contactViolation` (naruszenie geometrii kontaktu to błąd silnika) i `substepLimitExceeded`, ze szczegółami w `diagnostics.failureDetail` (`WorldFailureDetail`).
+- Raport benchmarku stress ma histogram podkroków, najdłuższą klatkę, czas GPU fizyki osobno od konturu i czekanie CPU na bufor renderu (`substep_histogram`, `longest_frame_ms`, `telemetry_physics_gpu_p95_ms`, `telemetry_contour_gpu_p95_ms`, `host_render_wait_p95_ms`) oraz cztery sceny po 150 baniek: tłum w spoczynku, gumka do ściany, czołowe zderzenie baniek 128 i bańka „2” wystrzelona w tłum.
+
+### Znane ograniczenia
+
+- Bryła dynamiczna nie ma kontaktu z bańkami, a bryły kinematyczne nie reagują na siły baniek.
+- Przy sztywnym K_c (rzędu 10⁵ i więcej) szybkie uderzenie wnosi do całkowania energię (odbicie ok. 4× szybsze), a tłum 150 baniek może przekroczyć limit podkroków. Zakres gry (K_c ≈ 229) jest daleko od tej granicy.
+- Scena stress-300 jest w 4.0.0 inna niż w 3.0.2 (trójkąt jedzie po torze, 287 baniek), więc wyniki benchmarku nie są porównywalne wprost.
 
 ## 3.0.2
 

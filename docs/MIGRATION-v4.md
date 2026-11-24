@@ -85,6 +85,8 @@ Silnik kończy świat błędem tylko wtedy, gdy sam się pomylił, a nie gdy sce
 
 ## Znane ograniczenia
 
+- **Przegub z bańką jest odrzucany.** `TransactionStager` odrzuca każdy przegub, którego koniec jest bańką, błędem `unsupportedJointBody`. W 3.x stager go przyjmował, a GPU po cichu pomijał, więc przegub nic nie robił. W 4.0.0 przeguby łączą tylko bryły.
+- **Sztywny `contactStiffness`.** Dla bardzo sztywnych materiałów (K_c rzędu 10⁵ i więcej) szybkie uderzenie wnosi do całkowania energię: dojazd kandydata bez członu 1/ω w długości podkroku pozwala leapfrogowi oddać więcej energii, niż wziął (odbicie ok. 4× szybsze niż w prawie), a tłum 150 baniek przy B = 2,5 i K_c ≈ 5 · 10⁵ kończy się `substepLimitExceeded`. Zakres gry (K_c ≈ 229) jest daleko od tej granicy; przy twardszych materiałach sprawdź swoją scenę w laboratorium i trzymaj K_c w okolicach setek.
 - **Bryła dynamiczna z bańką** nie jest obsługiwana w 4.0.0 (opisane wyżej). Bryły dynamiczne zostają poza podkrokami, więc bańka ich nie czuje.
 - **Bryła kinematyczna wciskająca bańkę w ścianę.** Ruch zadany ignoruje siły, a bańki nie da się zgnieść do zera, więc taki stan jest błędem sceny, a nie fizyki. Skutkiem jest `substepLimitExceeded`: podkroki skracają się bez końca i klatka przekracza limit 1024. Nie dodajemy obcinania ruchu bryły.
 - **Granica prędkości z rozdzielczości `Float`.** Przy bardzo szybkim uderzeniu minimalna odległość d spada do rzędu ulp współrzędnej (przyjmujemy d_min = 4 ulp). Z bilansu energii d_min ≈ 2 · K_c · r² / (m · v²), więc v_max ≈ √(K_c · r² / (2 · m · ulp)), około 4,6 · 10⁴ j/s przy współrzędnych rzędu 360 dla bańki „2”. Testy sięgają 3 · 10³ j/s. Powyżej granicy możliwe jest `contactViolation`. Współrzędne względne i `Double` na GPU nie wchodzą w 4.0.0.

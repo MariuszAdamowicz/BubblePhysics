@@ -2,7 +2,7 @@
 
 `BubblePhysics` to pakiet Swift z silnikiem fizycznym GPU dla deformowalnych baniek 2D, sztywnych brył (wielokąty, koła, kapsuły), więzów, sensorów i pól sił. Działa na iOS 16+ i macOS 13+ (GPU Apple z Metal).
 
-**Wersja 3.0.2.** Zmiany w kolejnych wydaniach opisuje [CHANGELOG.md](CHANGELOG.md). Wersja 3.0.0 zmieniła model podatności kontaktu, tłumienie ruchu, napęd chwytu i krawędzie ścian statycznych, a przejście z 2.x opisuje [docs/MIGRATION-v3.md](docs/MIGRATION-v3.md). Wersja 2.0.0 zmieniła publiczne API względem 1.x, a przejście z `v1.0.0` opisuje [docs/MIGRATION-v2.md](docs/MIGRATION-v2.md). Integrację z `MTKView`, rejestrację zasobów, zapytania i zdarzenia opisuje [docs/integration-guide.md](docs/integration-guide.md).
+**Wersja 4.0.0.** Zmiany w kolejnych wydaniach opisuje [CHANGELOG.md](CHANGELOG.md). Wersja 4.0.0 zmieniła prawo kontaktu baniek (granica na promieniu, materiał to sztywność K_c i opór γ) i sposób liczenia ruchu (siły w podkrokach), a przejście z 3.x opisuje [docs/MIGRATION-v4.md](docs/MIGRATION-v4.md). Wersja 3.0.0 zmieniła model podatności kontaktu, tłumienie ruchu, napęd chwytu i krawędzie ścian statycznych, a przejście z 2.x opisuje [docs/MIGRATION-v3.md](docs/MIGRATION-v3.md). Wersja 2.0.0 zmieniła publiczne API względem 1.x, a przejście z `v1.0.0` opisuje [docs/MIGRATION-v2.md](docs/MIGRATION-v2.md). Integrację z `MTKView`, rejestrację zasobów, zapytania i zdarzenia opisuje [docs/integration-guide.md](docs/integration-guide.md).
 
 ## Produkty
 
@@ -14,7 +14,7 @@
 | `BubblePhysicsBenchmarkSupport` | Wyłącznie moduły diagnostyczne (solvery referencyjne, historyczne eksperymenty). Nie są częścią API gry. |
 | `BubblePhysicsReferenceBench` | Runner benchmarków dla macOS z linii poleceń. |
 
-Produkty dla gry działają na backendzie `native-metal` (trwały stan na GPU, trwały cache kontaktów, solver XPBD/PBD Jacobi). Referencyjny solver CPU (`BubblePhysicsReference`) jest wyrocznią poprawności dla testów i benchmarków; nie jest fallbackiem `BubbleWorld` w czasie działania. Na ścieżce gry nie ma `ReferenceWorld`, a pamięć kontaktów rośnie jak O(n·k) zamiast O(n²); kernele kontroli zawierania baniek pozostają O(n²), co jest pomijalne do kilkuset baniek.
+Produkty dla gry działają na backendzie `native-metal` (trwały stan na GPU, kontakt z granicą na promieniu, ruch liczony siłami w podkrokach leapfrog). Referencyjny solver CPU (`BubblePhysicsReference`) jest wyrocznią poprawności dla testów i benchmarków; nie jest fallbackiem `BubbleWorld` w czasie działania. Na ścieżce gry nie ma `ReferenceWorld`, a pamięć kontaktów rośnie jak O(n·k) zamiast O(n²).
 
 ## Szybki start
 
