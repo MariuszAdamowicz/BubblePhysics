@@ -719,9 +719,12 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         gateGroups[NativeMetalSubstep.EndGate.buildAdjacency.rawValue] = groups("nativeBuildAdjacency", count)
         gateGroups[NativeMetalSubstep.EndGate.contactPressure.rawValue] = groups("nativeAccumulateContactPressure", count * state.contourStride)
         gateGroups[NativeMetalSubstep.EndGate.structuralContours.rawValue] = groups("nativeSeedStructuralContours", count * state.contourStride)
-        // Kontur i przygotowanie renderu: jedna grupa na bańkę (ścieżki zgrupowane); zapasowe wątek-na-bańkę biegną bez bramki.
-        gateGroups[NativeMetalSubstep.EndGate.contour.rawValue] = UInt32(count)
-        gateGroups[NativeMetalSubstep.EndGate.renderPreparation.rawValue] = UInt32(count)
+        // Kontur i przygotowanie renderu: jedna grupa na bańkę w ścieżkach zgrupowanych, a w zapasowych (zbyt szeroki stride) grupy wątków
+        // z ich kodera; obie bramkowane, więc para niekońcowa nie liczy konturu ani danych renderu.
+        gateGroups[NativeMetalSubstep.EndGate.contour.rawValue] = NativeMetalContourSmoothing.gateGroups(
+            pipelines: pipelines, bubbleCount: count, stride: state.contourStride, fused: true)
+        gateGroups[NativeMetalSubstep.EndGate.renderPreparation.rawValue] = NativeMetalRenderPreparation.gateGroups(
+            pipelines: pipelines, bubbleCount: count, stride: state.contourStride, grouped: true)
         gateGroups[NativeMetalSubstep.EndGate.hitTest.rawValue] = groups("nativeHitTest", snapshot.hitTests.count)
         func dispatchGate(_ pipeline: MTLComputePipelineState, _ gate: NativeMetalSubstep.EndGate) {
             encoder.dispatchThreadgroups(indirectBuffer: state.endGates, indirectBufferOffset: gate.rawValue * MemoryLayout<SIMD4<UInt32>>.stride,
@@ -775,7 +778,7 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
                 }
             }
         }
-        // Początek każdej pary: a₀, zapas obwiedni i x₀, potem siatka i kandydaci z zapasem (kolejna para zaczyna od przebudowy).
+        // Początek każdej pary: a₀, zapas obwiedni i x₀, potem siatka i kandydaci z zapasem (kolejna para przebudowuje siatkę tylko po znaczniku przebudowy).
         func encodeBroadphase() {
             NativeMetalSubstepLoop.encodeBroadphaseInputs(encoder, pipelines: pipelines, state: state, forces: forceBuffers, count: count,
                                                           minimumMarginOnly: configuration.minimumMarginOnly)
