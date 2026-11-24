@@ -10,13 +10,24 @@ uint nativeScanLength(constant NativeControl &control, device NativeContactContr
 // z early-outem (bez zerowych wymiarów indirect dispatchu).
 kernel void nativePrepareIndirectArguments(constant NativeControl &control [[buffer(0)]],
     device NativeContactControl &contacts [[buffer(1)]], device uint4 *arguments [[buffer(2)]],
-    constant uint &levels [[buffer(3)]], uint index [[thread_position_in_grid]]) {
+    constant uint &levels [[buffer(3)]], constant uint &endMode [[buffer(4)]], uint index [[thread_position_in_grid]]) {
     if (index) return;
     uint candidates = contacts.counts.x;
     uint active = contacts.counts.y;
     uint merged = contacts.limits.w + contacts.counts.y;
     uint cache = contacts.counts.z;
     uint lengths[5] = { candidates, active, merged, cache, max(1u, max(cache, max(control.counts.x, control.counts.y))) };
+    if (endMode != 0) {
+        // Tryb końca kroku (CD-D-29): tylko sloty `EndArgument` za slotami pętli, w kolejności enum: kontakty, flagi i kompaktowanie
+        // idą po kandydatach, sąsiedztwo i impulsy po cache'u, skończoność po największej długości.
+        uint base = 5 + levels * 2;
+        uint selected[6] = { 0, 0, 0, 3, 3, 4 };
+        for (uint i = 0; i < 6; ++i) {
+            uint length = lengths[selected[i]];
+            arguments[base + i] = uint4(max(1u, (length + 31) / 32), 1, 1, length);
+        }
+        return;
+    }
     for (uint i = 0; i < 5; ++i) arguments[i] = uint4(max(1u, (lengths[i] + 31) / 32), 1, 1, lengths[i]);
     for (uint mode = 1; mode <= 2; ++mode) {
         uint length = mode == 1 ? candidates : merged;

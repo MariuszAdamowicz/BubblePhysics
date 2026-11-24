@@ -58,6 +58,8 @@ final class NativeMetalPersistentState {
     let scanCapacity: Int
     let dispatchStatistics: MTLBuffer
     let indirectArguments: MTLBuffer
+    /// Indeks pierwszego slotu `NativeMetalSubstep.EndArgument` w `indirectArguments` (za slotami pętli i skanu).
+    let endArgumentBase: Int
     var contactCache: MTLBuffer { publishedIsPing ? cachePing : cachePong }
     var workingCache: MTLBuffer { publishedIsPing ? cachePong : cachePing }
     var publishedCacheCount = 0
@@ -180,7 +182,9 @@ final class NativeMetalPersistentState {
         } while scanCount > 1
         scanBlockSums = sums
         scanBlockOffsets = offsets
-        indirectArguments = try buffer("indirectArguments", 5 + sums.count * 2, MemoryLayout<SIMD4<UInt32>>.stride)
+        endArgumentBase = 5 + sums.count * 2
+        indirectArguments = try buffer("indirectArguments", endArgumentBase + NativeMetalSubstep.EndArgument.allCases.count,
+                                       MemoryLayout<SIMD4<UInt32>>.stride)
         dispatchStatistics = try buffer("dispatchStatistics", 3, MemoryLayout<SIMD4<UInt32>>.stride)
         adjacency = try buffer("solver.adjacency", rowCapacity, MemoryLayout<SIMD4<UInt32>>.stride)
         candidateOverflow = try buffer("candidateOverflow", 1, MemoryLayout<SIMD4<UInt32>>.stride)
@@ -642,8 +646,26 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
                 encoder.setBuffer(buffer, offset: 0, index: index)
             }
             var levels = UInt32(state.scanBlockSums.count)
+            var endMode = UInt32(0)
             encoder.setBytes(&levels, length: MemoryLayout<UInt32>.stride, index: 3)
+            encoder.setBytes(&endMode, length: MemoryLayout<UInt32>.stride, index: 4)
             encoder.dispatchThreads(.init(width: 1, height: 1, depth: 1),
+                threadsPerThreadgroup: .init(width: 1, height: 1, depth: 1))
+        }
+        // Argumenty dyspozycji pośrednich końca kroku (`EndArgument`) w trybie końca kroku, za bramką: w parze niekońcowej bez grup, więc
+        // sloty zostają wyzerowane przez `nativePrepareEndGates`, a sloty pętli podkroków nie są ruszane.
+        func prepareEndArguments() {
+            encoder.memoryBarrier(scope: .buffers)
+            encoder.setComputePipelineState(pipelines["nativePrepareIndirectArguments"]!)
+            for (index, buffer) in [state.control, state.contactControl, state.indirectArguments].enumerated() {
+                encoder.setBuffer(buffer, offset: 0, index: index)
+            }
+            var levels = UInt32(state.scanBlockSums.count)
+            var endMode = UInt32(1)
+            encoder.setBytes(&levels, length: MemoryLayout<UInt32>.stride, index: 3)
+            encoder.setBytes(&endMode, length: MemoryLayout<UInt32>.stride, index: 4)
+            encoder.dispatchThreadgroups(indirectBuffer: state.endGates,
+                indirectBufferOffset: NativeMetalSubstep.EndGate.indirectArguments.rawValue * MemoryLayout<SIMD4<UInt32>>.stride,
                 threadsPerThreadgroup: .init(width: 1, height: 1, depth: 1))
         }
         func dispatchContacts(_ name: String, buffers: [MTLBuffer], argument: Int) {
@@ -653,12 +675,24 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
             encoder.dispatchThreadgroups(indirectBuffer: state.indirectArguments, indirectBufferOffset: argument * 16,
                 threadsPerThreadgroup: .init(width: 32, height: 1, depth: 1))
         }
+        // Dyspozycja pośrednia końca kroku: liczbę grup bierze ze slotu `EndArgument`, który w parze niekońcowej jest zerem.
+        func dispatchEndContacts(_ name: String, buffers: [MTLBuffer], argument: NativeMetalSubstep.EndArgument) {
+            encoder.memoryBarrier(scope: .buffers)
+            encoder.setComputePipelineState(pipelines[name]!)
+            for (index, buffer) in buffers.enumerated() { encoder.setBuffer(buffer, offset: 0, index: index) }
+            encoder.dispatchThreadgroups(indirectBuffer: state.indirectArguments,
+                indirectBufferOffset: (state.endArgumentBase + argument.rawValue) * MemoryLayout<SIMD4<UInt32>>.stride,
+                threadsPerThreadgroup: .init(width: 32, height: 1, depth: 1))
+        }
+        func endGate(_ gate: NativeMetalSubstep.EndGate) -> NativeMetalDispatchGate {
+            NativeMetalDispatchGate(buffer: state.endGates, offset: gate.rawValue * MemoryLayout<SIMD4<UInt32>>.stride)
+        }
         let scanBuffers = NativeMetalScanBuffers(values: state.scanValues, offsets: state.scanOffsets,
             blockSums: state.scanBlockSums, blockOffsets: state.scanBlockOffsets, control: state.control,
             contacts: state.contactControl, indirectArguments: state.indirectArguments, overflow: state.candidateOverflow)
-        func scan(mode: UInt32, maximum: Int) {
+        func scan(mode: UInt32, maximum: Int, gate: NativeMetalDispatchGate? = nil) {
             NativeMetalScan.encode(encoder, pipelines: pipelines, buffers: scanBuffers, mode: mode, maximum: maximum,
-                                   singleGroup: true)
+                                   singleGroup: true, gate: gate)
         }
         // Gotowe liczby grup bramek końca kroku (`nativePrepareEndGates`): CPU zna rozmiar każdej dyspozycji.
         func groups(_ name: String, _ threads: Int) -> UInt32 {
@@ -675,6 +709,17 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         gateGroups[NativeMetalSubstep.EndGate.rigidFinish.rawValue] = groups("nativeRigidFinish", rigidState.count)
         gateGroups[NativeMetalSubstep.EndGate.polygonSensors.rawValue] = groups("nativeCompactPolygonSensorEvents", polygonPairCount)
         gateGroups[NativeMetalSubstep.EndGate.missingPolygonSensors.rawValue] = groups("nativeCompactMissingSensorEvents", previousPolygonSensorPairCount)
+        gateGroups[NativeMetalSubstep.EndGate.bubbleBodyContacts.rawValue] = groups("nativeBubbleBodyContacts", rigidState.rowCapacity)
+        gateGroups[NativeMetalSubstep.EndGate.contactScan.rawValue] = 1
+        gateGroups[NativeMetalSubstep.EndGate.indirectArguments.rawValue] = 1
+        gateGroups[NativeMetalSubstep.EndGate.clearAdjacency.rawValue] = groups("nativeClearAdjacency", count)
+        gateGroups[NativeMetalSubstep.EndGate.buildAdjacency.rawValue] = groups("nativeBuildAdjacency", count)
+        gateGroups[NativeMetalSubstep.EndGate.contactPressure.rawValue] = groups("nativeAccumulateContactPressure", count * state.contourStride)
+        gateGroups[NativeMetalSubstep.EndGate.structuralContours.rawValue] = groups("nativeSeedStructuralContours", count * state.contourStride)
+        // Kontur i przygotowanie renderu: jedna grupa na bańkę (ścieżki zgrupowane); zapasowe wątek-na-bańkę biegną bez bramki.
+        gateGroups[NativeMetalSubstep.EndGate.contour.rawValue] = UInt32(count)
+        gateGroups[NativeMetalSubstep.EndGate.renderPreparation.rawValue] = UInt32(count)
+        gateGroups[NativeMetalSubstep.EndGate.hitTest.rawValue] = groups("nativeHitTest", snapshot.hitTests.count)
         func dispatchGate(_ pipeline: MTLComputePipelineState, _ gate: NativeMetalSubstep.EndGate) {
             encoder.dispatchThreadgroups(indirectBuffer: state.endGates, indirectBufferOffset: gate.rawValue * MemoryLayout<SIMD4<UInt32>>.stride,
                 threadsPerThreadgroup: .init(width: min(pipeline.threadExecutionWidth, pipeline.maxTotalThreadsPerThreadgroup), height: 1, depth: 1))
@@ -765,6 +810,8 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         // zakończenie brył, asercja) idą bramkami, więc biegną raz na krok, w ostatnim buforze końca kroku.
         func encodeEndOfStep() {
             dispatchPrepareEndGates()
+            // Sloty argumentów dyspozycji pośrednich z liczników kandydatów (nie zmieniają się do końca kroku); w parze niekońcowej bez grup.
+            prepareEndArguments()
             // Region (zawinięcie `.wrap`) jako pierwszy, za bramką: to jedyne przesunięcie środka bańki poza siłami (CD-D-19). Rekordy kontaktów,
             // asercja i kontur liczą się więc już z położenia po regionie.
             if snapshot.publicSettings != nil {
@@ -773,59 +820,60 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
             // Rekordy kontaktów końca kroku z końcowych położeń (zdarzenia, scalanie i kontur czytają je dalej): kandydaci → kontakty w
             // zasięgu rozdzielenia → rekordy bez historii (`limits.w` = 0, więc dopasowanie do poprzedniego cache niczego nie znajduje).
             if hasRigidBodies && count > 0 {
-                dispatch("nativeBubbleBodyContacts", buffers: [state.workingBubbles, rigidState.bodies, rigidState.vertices, rigidState.triangles,
-                    rigidState.bubbleCandidates, rigidState.bubbleRowCounts, rigidState.bubbleControl, state.control, rigidState.bubbleContacts],
-                    threads: rigidState.rowCapacity)
+                dispatchGated("nativeBubbleBodyContacts", buffers: [state.workingBubbles, rigidState.bodies, rigidState.vertices,
+                    rigidState.triangles, rigidState.bubbleCandidates, rigidState.bubbleRowCounts, rigidState.bubbleControl, state.control,
+                    rigidState.bubbleContacts], gate: .bubbleBodyContacts)
             }
-            dispatchContacts("nativeBuildContacts", buffers: [state.workingBubbles, state.workingSegments, state.contactControl,
-                state.candidates, state.contacts], argument: 0)
-            dispatchContacts("nativePrepareContactFlags", buffers: [state.contacts, state.contactControl, state.scanValues], argument: 0)
-            scan(mode: 1, maximum: state.contactCapacity)
-            prepareIndirectArguments()
-            dispatchContacts("nativeCompactActiveContacts", buffers: [state.contacts, state.workingCache, state.contactControl, state.scanOffsets], argument: 0)
-            prepareIndirectArguments()
+            dispatchEndContacts("nativeBuildContacts", buffers: [state.workingBubbles, state.workingSegments, state.contactControl,
+                state.candidates, state.contacts], argument: .buildContacts)
+            dispatchEndContacts("nativePrepareContactFlags", buffers: [state.contacts, state.contactControl, state.scanValues],
+                                argument: .prepareContactFlags)
+            scan(mode: 1, maximum: state.contactCapacity, gate: endGate(.contactScan))
+            dispatchEndContacts("nativeCompactActiveContacts", buffers: [state.contacts, state.workingCache, state.contactControl, state.scanOffsets],
+                                argument: .compactActiveContacts)
+            prepareEndArguments()
             // Sąsiedztwo z rekordów kontaktów (kontur ciśnienia) liczy odrzucenia do osobnego licznika: kandydat odrzucony przy budowie siatki
             // jest już policzony w `candidateOverflow`.
-            dispatch("nativeClearAdjacency", buffers: [state.control, state.adjacencyCounts], threads: count)
-            dispatchContacts("nativeEmitAdjacency", buffers: [state.workingBubbles, state.workingSegments, state.workingCache,
+            dispatchGated("nativeClearAdjacency", buffers: [state.control, state.adjacencyCounts], gate: .clearAdjacency)
+            dispatchEndContacts("nativeEmitAdjacency", buffers: [state.workingBubbles, state.workingSegments, state.workingCache,
                 state.control, state.contactControl, state.adjacency, state.contactEndpoints, state.dispatchStatistics,
-                state.adjacencyCounts, state.endAdjacencyOverflow], argument: 3)
-            dispatch("nativeBuildAdjacency", buffers: [state.control, state.contactControl,
-                state.adjacency, state.adjacencyCounts, state.endAdjacencyOverflow], threads: count)
+                state.adjacencyCounts, state.endAdjacencyOverflow], argument: .emitAdjacency)
+            dispatchGated("nativeBuildAdjacency", buffers: [state.control, state.contactControl,
+                state.adjacency, state.adjacencyCounts, state.endAdjacencyOverflow], gate: .buildAdjacency)
             // Impuls siły kontaktu w rekordach końca kroku (`response.x`): zdarzenie kontaktu czyta go z rekordu.
-            dispatchContacts("nativeContactImpulses", buffers: [state.workingBubbles, state.workingSegments, state.workingCache,
-                state.control, state.contactControl], argument: 3)
+            dispatchEndContacts("nativeContactImpulses", buffers: [state.workingBubbles, state.workingSegments, state.workingCache,
+                state.control, state.contactControl], argument: .contactImpulses)
             if snapshot.publicSettings != nil {
                 dispatchGated("nativeCompactMergeEvents", buffers: [state.workingBubbles, state.workingCache, state.control,
                     state.contactControl, state.eventCount, state.eventRecords], gate: .mergeEvents) {
                     setBytes($0, UInt32(requestedEventCapacity), index: 6)
                 }
             }
-            dispatchContacts("nativeCheckFinite", buffers: [state.workingBubbles, state.workingSegments, state.workingCache,
+            dispatchEndContacts("nativeCheckFinite", buffers: [state.workingBubbles, state.workingSegments, state.workingCache,
                 state.control, state.contactControl, state.safetyControl],
-                argument: 4)
+                argument: .checkFinite)
             // Asercja kontaktu po regionie i skończoności, za bramką; zgłasza naruszenie w rekordzie, nie odrzuca kroku (G6-AC2).
             NativeMetalSubstepLoop.bindAssertContacts(encoder, pipelines: pipelines, state: state, rigid: rigidState, bodyCount: rigidState.count)
             dispatchGate(pipelines["nativeAssertContacts"]!, .contactAssertion)
-            dispatch("nativeAccumulateContactPressure", buffers: [state.workingBubbles, state.workingSegments,
+            dispatchGated("nativeAccumulateContactPressure", buffers: [state.workingBubbles, state.workingSegments,
                 state.workingCache, state.control, state.contactControl, state.contourControl, state.contourScratch,
-                state.workingContourCounts, state.adjacency, state.adjacencyCounts, state.safetyControl],
-                threads: count * state.contourStride)
+                state.workingContourCounts, state.adjacency, state.adjacencyCounts, state.safetyControl], gate: .contactPressure)
             if !structuralSources.isEmpty {
-                dispatch("nativeSeedStructuralContours", buffers: [state.workingBubbles, structuralHeaderBuffer,
+                dispatchGated("nativeSeedStructuralContours", buffers: [state.workingBubbles, structuralHeaderBuffer,
                     structuralSourceBuffer, structuralClipBuffer, state.contourScratch, state.workingContourCounts,
                     state.control, state.contourControl, state.publishedBubbles,
-                    state.publishedDeformation, state.publishedContourCounts], threads: count * state.contourStride)
+                    state.publishedDeformation, state.publishedContourCounts], gate: .structuralContours)
             }
             // Liczba przejść jest nieparzysta: wynik pozostaje w roboczym buforze deformacji.
             NativeMetalContourSmoothing.encode(encoder, pipelines: pipelines, input: state.contourScratch,
                 output: state.workingDeformation, counts: state.workingContourCounts, control: state.control,
                 contour: state.contourControl, safety: state.safetyControl, bubbleCount: count,
-                stride: state.contourStride, fused: true)
+                stride: state.contourStride, fused: true, gate: endGate(.contour))
             NativeMetalRenderPreparation.encode(encoder, pipelines: pipelines, bubbles: state.workingBubbles,
                 deformation: state.workingDeformation, counts: state.workingContourCounts, points: state.workingContourPoints,
                 packets: state.renderPackets, control: state.control, contour: state.contourControl,
-                safety: state.safetyControl, bubbleCount: count, stride: state.contourStride, grouped: true)
+                safety: state.safetyControl, bubbleCount: count, stride: state.contourStride, grouped: true,
+                gate: endGate(.renderPreparation))
             if snapshot.publicSettings != nil {
                 if pairCount > 0 {
                     dispatchGated("nativeCompactSensorEvents", buffers: [state.workingBubbles, state.control, sensorRecordBuffer,
@@ -862,11 +910,11 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
             }
             if !snapshot.hitTests.isEmpty {
                 // Na buforach roboczych tego kroku, po ostatnim kernelu, który zmienia kontury i pozy brył.
-                dispatch("nativeHitTest", buffers: [hitTestPoints, state.workingContourPoints, state.workingContourCounts,
+                dispatchGated("nativeHitTest", buffers: [hitTestPoints, state.workingContourPoints, state.workingContourCounts,
                     state.workingBubbles, rigidState.count > 0 ? rigidState.bodies : state.eventRecords,
                     rigidState.count > 0 ? rigidState.vertices : state.eventRecords,
                     rigidState.count > 0 ? rigidState.triangles : state.eventRecords, state.control,
-                    hitTestCounts, hitTestResultBuffer], threads: snapshot.hitTests.count)
+                    hitTestCounts, hitTestResultBuffer], gate: .hitTest)
             }
         }
         func dispatchPrepareEndGates() {
@@ -876,9 +924,12 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
             encoder.setBuffer(state.endGates, offset: 0, index: 1)
             gateGroups.withUnsafeBytes { encoder.setBytes($0.baseAddress!, length: $0.count, index: 2) }
             var gateCount = UInt32(gateGroups.count)
+            var endCount = UInt32(NativeMetalSubstep.EndArgument.allCases.count)
             encoder.setBytes(&gateCount, length: MemoryLayout<UInt32>.stride, index: 3)
-            encoder.dispatchThreads(.init(width: gateGroups.count, height: 1, depth: 1),
-                threadsPerThreadgroup: .init(width: gateGroups.count, height: 1, depth: 1))
+            encoder.setBuffer(state.indirectArguments, offset: state.endArgumentBase * MemoryLayout<SIMD4<UInt32>>.stride, index: 4)
+            encoder.setBytes(&endCount, length: MemoryLayout<UInt32>.stride, index: 5)
+            let width = max(gateGroups.count, Int(endCount))
+            encoder.dispatchThreads(.init(width: width, height: 1, depth: 1), threadsPerThreadgroup: .init(width: width, height: 1, depth: 1))
         }
         let encodingEnd = DispatchTime.now().uptimeNanoseconds
         let loop = try await NativeMetalSubstepLoop.run(state: state, previousFrameSubsteps: previousFrameSubstepCount,

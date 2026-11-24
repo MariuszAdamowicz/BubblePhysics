@@ -374,8 +374,9 @@ final class NativeMetalChainKernelTests: XCTestCase {
         let dispatches = try run(device: device) { encoder in
             encoder.setComputePipelineState(pipelines["nativePrepareIndirectArguments"]!)
             for (index, buffer) in [control, contacts, indirect].enumerated() { encoder.setBuffer(buffer, offset: 0, index: index) }
-            var levels = UInt32(sums.count)
+            var levels = UInt32(sums.count), endMode = UInt32(0)
             encoder.setBytes(&levels, length: MemoryLayout<UInt32>.stride, index: 3)
+            encoder.setBytes(&endMode, length: MemoryLayout<UInt32>.stride, index: 4)
             encoder.dispatchThreads(.init(width: 1, height: 1, depth: 1), threadsPerThreadgroup: .init(width: 1, height: 1, depth: 1))
             return NativeMetalScan.encode(encoder, pipelines: pipelines, buffers: buffers, mode: mode,
                                           maximum: mode == 0 ? max(1, length) : capacity, singleGroup: singleGroup)

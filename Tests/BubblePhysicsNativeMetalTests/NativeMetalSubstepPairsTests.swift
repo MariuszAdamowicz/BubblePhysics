@@ -110,6 +110,115 @@ final class NativeMetalSubstepPairsTests: XCTestCase {
         XCTAssertEqual(frame.eventOverflow.droppedCount, 0)
     }
 
+    // MARK: argumenty końca kroku w parach niekońcowych (CD-D-29)
+
+    private func gpuRun(_ device: MTLDevice, _ body: (MTLComputeCommandEncoder) throws -> Void) throws {
+        let queue = try XCTUnwrap(device.makeCommandQueue())
+        let command = try XCTUnwrap(queue.makeCommandBuffer())
+        let encoder = try XCTUnwrap(command.makeComputeCommandEncoder())
+        try body(encoder)
+        encoder.endEncoding()
+        command.commit()
+        command.waitUntilCompleted()
+        XCTAssertEqual(command.status, .completed, "\(String(describing: command.error))")
+    }
+
+    private func uint4Buffer(_ values: [SIMD4<UInt32>], _ device: MTLDevice) throws -> MTLBuffer {
+        try XCTUnwrap(values.withUnsafeBytes { device.makeBuffer(bytes: $0.baseAddress!, length: $0.count, options: .storageModeShared) })
+    }
+
+    private func read(_ buffer: MTLBuffer, count: Int) -> [SIMD4<UInt32>] {
+        Array(UnsafeBufferPointer(start: buffer.contents().bindMemory(to: SIMD4<UInt32>.self, capacity: count), count: count))
+    }
+
+    /// `nativePrepareEndGates` zeruje bramki i sloty `EndArgument` dyspozycji pośrednich, dopóki krok trwa; po końcu kroku zostawia sloty
+    /// (wypełni je bramkowany `nativePrepareIndirectArguments`), a bramki dostają nominalne liczby grup.
+    func testPrepareEndGatesZeroesGatesAndEndArgumentsWhileTheStepIsRunning() throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let pipeline = try XCTUnwrap(NativeMetalPipelineCache.pipelines(for: device).stages["nativePrepareEndGates"])
+        let endCount = NativeMetalSubstep.EndArgument.allCases.count
+        let gateCount = NativeMetalSubstep.EndGate.allCases.count
+        let nominal = (0..<gateCount).map { UInt32($0 + 3) }
+        for finished in [false, true] {
+            var control = NativeMetalSubstepControl()
+            control.time = SIMD4(1.0 / 60, finished ? 1.0 / 60 : 0.004, 0, 1)
+            let controlBuffer = try XCTUnwrap(device.makeBuffer(bytes: &control, length: MemoryLayout<NativeMetalSubstepControl>.stride,
+                                                                options: .storageModeShared))
+            let gates = try uint4Buffer([SIMD4<UInt32>](repeating: SIMD4(9, 9, 9, 9), count: gateCount), device)
+            let arguments = try uint4Buffer([SIMD4<UInt32>](repeating: SIMD4(7, 7, 7, 7), count: endCount), device)
+            try gpuRun(device) { encoder in
+                encoder.setComputePipelineState(pipeline)
+                encoder.setBuffer(controlBuffer, offset: 0, index: 0)
+                encoder.setBuffer(gates, offset: 0, index: 1)
+                nominal.withUnsafeBytes { encoder.setBytes($0.baseAddress!, length: $0.count, index: 2) }
+                var gateTotal = UInt32(gateCount), endTotal = UInt32(endCount)
+                encoder.setBytes(&gateTotal, length: MemoryLayout<UInt32>.stride, index: 3)
+                encoder.setBuffer(arguments, offset: 0, index: 4)
+                encoder.setBytes(&endTotal, length: MemoryLayout<UInt32>.stride, index: 5)
+                let width = max(gateCount, endCount)
+                encoder.dispatchThreads(.init(width: width, height: 1, depth: 1), threadsPerThreadgroup: .init(width: width, height: 1, depth: 1))
+            }
+            let context = finished ? "krok skończony" : "krok trwa"
+            XCTAssertEqual(read(gates, count: gateCount).map(\.x), finished ? nominal : [UInt32](repeating: 0, count: gateCount), context)
+            XCTAssertEqual(read(arguments, count: endCount),
+                           [SIMD4<UInt32>](repeating: finished ? SIMD4(7, 7, 7, 7) : SIMD4(0, 1, 1, 0), count: endCount), context)
+        }
+    }
+
+    /// Tryb końca kroku `nativePrepareIndirectArguments` pisze tylko sloty `EndArgument` (z liczb kandydatów, kontaktów i cache'u), a sloty
+    /// pętli podkroków zostawia, bo kolejna para bez przebudowy ich nie liczy od nowa.
+    func testEndModeOfPrepareIndirectArgumentsWritesOnlyTheEndArgumentSlots() throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let pipeline = try XCTUnwrap(NativeMetalPipelineCache.pipelines(for: device).stages["nativePrepareIndirectArguments"])
+        var control = NativeMetalControl(counts: SIMD4(40, 0, 0, 0), physics: .zero, contactDamping: .zero)
+        var contacts = NativeMetalContactControl(limits: .zero, counts: SIMD4(100, 70, 33, 0), cache: .zero, thresholds: .zero, cellWidth: .zero)
+        let controlBuffer = try XCTUnwrap(device.makeBuffer(bytes: &control, length: MemoryLayout<NativeMetalControl>.stride, options: .storageModeShared))
+        let contactBuffer = try XCTUnwrap(device.makeBuffer(bytes: &contacts, length: MemoryLayout<NativeMetalContactControl>.stride,
+                                                            options: .storageModeShared))
+        let levels = 2, base = 5 + levels * 2, endCount = NativeMetalSubstep.EndArgument.allCases.count
+        let arguments = try uint4Buffer([SIMD4<UInt32>](repeating: SIMD4(5, 5, 5, 5), count: base + endCount), device)
+        try gpuRun(device) { encoder in
+            encoder.setComputePipelineState(pipeline)
+            for (index, buffer) in [controlBuffer, contactBuffer, arguments].enumerated() { encoder.setBuffer(buffer, offset: 0, index: index) }
+            var levelCount = UInt32(levels), endMode = UInt32(1)
+            encoder.setBytes(&levelCount, length: MemoryLayout<UInt32>.stride, index: 3)
+            encoder.setBytes(&endMode, length: MemoryLayout<UInt32>.stride, index: 4)
+            encoder.dispatchThreads(.init(width: 1, height: 1, depth: 1), threadsPerThreadgroup: .init(width: 1, height: 1, depth: 1))
+        }
+        let values = read(arguments, count: base + endCount)
+        XCTAssertEqual(Array(values[0..<base]), [SIMD4<UInt32>](repeating: SIMD4(5, 5, 5, 5), count: base), "sloty pętli bez zmian")
+        func slot(_ argument: NativeMetalSubstep.EndArgument) -> SIMD4<UInt32> { values[base + argument.rawValue] }
+        // Kandydaci 100 → 4 grupy po 32; cache 33 → 2 grupy; największy z cache'u i liczb obiektów (40) to 40 → 2 grupy.
+        for argument in [NativeMetalSubstep.EndArgument.buildContacts, .prepareContactFlags, .compactActiveContacts] {
+            XCTAssertEqual(slot(argument), SIMD4(4, 1, 1, 100), "\(argument)")
+        }
+        for argument in [NativeMetalSubstep.EndArgument.emitAdjacency, .contactImpulses] {
+            XCTAssertEqual(slot(argument), SIMD4(2, 1, 1, 33), "\(argument)")
+        }
+        XCTAssertEqual(slot(.checkFinite), SIMD4(2, 1, 1, 40))
+    }
+
+    /// Klatka z wieloma parami kończy się w ostatnim buforze końca kroku, który ma sloty `EndArgument` policzone z rzeczywistych liczników:
+    /// długość dyspozycji impulsów to licznik cache'u końca kroku, a grup jest co najmniej jedna.
+    func testFinalPairOfASeveralPairFrameHasEndArgumentsFromTheRealCounters() async throws {
+        let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
+        var frame = try await step(world, [bubble(1, at: [wallX - 24 - 100, 0], velocity: [1000, 0]), wall()])
+        var checked = 0
+        for _ in 0..<30 {
+            frame = try await step(world, Array(frame.objects.values))
+            guard frame.profile.commandBufferCount > 2 else { continue }
+            let state = try XCTUnwrap(world.persistentState)
+            let base = 5 + state.scanBlockSums.count * 2
+            let arguments = read(state.indirectArguments, count: base + NativeMetalSubstep.EndArgument.allCases.count)
+            let cache = state.contactControl.contents().load(as: NativeMetalContactControl.self).counts.z
+            let impulses = arguments[base + NativeMetalSubstep.EndArgument.contactImpulses.rawValue]
+            XCTAssertEqual(impulses.w, cache, "długość dyspozycji z licznika cache'u końca kroku")
+            XCTAssertGreaterThanOrEqual(impulses.x, 1)
+            checked += 1
+        }
+        XCTAssertGreaterThan(checked, 0, "uderzenie 10³ j/s ma dać klatkę z wieloma parami")
+    }
+
     // MARK: render po końcu kroku (P-B-39)
 
     /// Hak renderu dostaje uchwyt ze stanem końca kroku: w chwili wywołania kontury roboczego uchwytu są już policzone i równe

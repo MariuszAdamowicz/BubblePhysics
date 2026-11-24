@@ -1,5 +1,13 @@
 import Metal
 
+/// Bramka dyspozycji końca kroku (CD-D-29): liczbę grup czyta z wpisu `nativePrepareEndGates`, więc dyspozycja z bramką ma zero grup, dopóki
+/// krok trwa. Wpis niesie liczbę grup przy zadanej szerokości grupy, dlatego tylko ścieżki o stałej liczbie grup (zwykle jedna grupa
+/// na bańkę) przyjmują bramkę; zapasowe ścieżki wątek-na-bańkę biegną bez niej (zbędna, ale idempotentna praca w parze niekońcowej).
+struct NativeMetalDispatchGate {
+    var buffer: MTLBuffer
+    var offset: Int
+}
+
 /// Kodowanie sortowania siatki. Kolejność wpisów jest jednoznaczna (remis rozstrzyga indeks bańki),
 /// więc wynik nie zależy od sieci porównań.
 enum NativeMetalGridSort {
@@ -61,7 +69,8 @@ enum NativeMetalContourSmoothing {
     /// `NativeMetalChainKernelTests`; produkcja zawsze przekazuje `fused: true`.
     static func encode(_ encoder: MTLComputeCommandEncoder, pipelines: [String: MTLComputePipelineState],
                        input: MTLBuffer, output: MTLBuffer, counts: MTLBuffer, control: MTLBuffer,
-                       contour: MTLBuffer, safety: MTLBuffer, bubbleCount: Int, stride: Int, fused: Bool) -> Int {
+                       contour: MTLBuffer, safety: MTLBuffer, bubbleCount: Int, stride: Int, fused: Bool,
+                       gate: NativeMetalDispatchGate? = nil) -> Int {
         let fusedPipeline = pipelines["nativeGenerateContoursFused"]!
         if fused, stride <= fusedPipeline.maxTotalThreadsPerThreadgroup, bubbleCount > 0 {
             encoder.memoryBarrier(scope: .buffers)
@@ -70,8 +79,13 @@ enum NativeMetalContourSmoothing {
                 encoder.setBuffer(buffer, offset: 0, index: index)
             }
             encoder.setThreadgroupMemoryLength(stride * MemoryLayout<Float>.stride, index: 0)
-            encoder.dispatchThreadgroups(.init(width: bubbleCount, height: 1, depth: 1),
-                threadsPerThreadgroup: .init(width: stride, height: 1, depth: 1))
+            if let gate {
+                encoder.dispatchThreadgroups(indirectBuffer: gate.buffer, indirectBufferOffset: gate.offset,
+                    threadsPerThreadgroup: .init(width: stride, height: 1, depth: 1))
+            } else {
+                encoder.dispatchThreadgroups(.init(width: bubbleCount, height: 1, depth: 1),
+                    threadsPerThreadgroup: .init(width: stride, height: 1, depth: 1))
+            }
             return 1
         }
         let pipeline = pipelines["nativeGenerateContours"]!
@@ -147,7 +161,7 @@ enum NativeMetalRenderPreparation {
     static func encode(_ encoder: MTLComputeCommandEncoder, pipelines: [String: MTLComputePipelineState],
                        bubbles: MTLBuffer, deformation: MTLBuffer, counts: MTLBuffer, points: MTLBuffer,
                        packets: MTLBuffer, control: MTLBuffer, contour: MTLBuffer, safety: MTLBuffer,
-                       bubbleCount: Int, stride: Int, grouped: Bool) -> Int {
+                       bubbleCount: Int, stride: Int, grouped: Bool, gate: NativeMetalDispatchGate? = nil) -> Int {
         guard bubbleCount > 0 else { return 0 }
         let groupedPipeline = pipelines["nativePrepareRenderDataGrouped"]!
         let useGroups = grouped && stride <= groupedPipeline.maxTotalThreadsPerThreadgroup
@@ -168,8 +182,13 @@ enum NativeMetalRenderPreparation {
                               MemoryLayout<SIMD4<Float>>.stride, MemoryLayout<SIMD2<Float>>.stride].enumerated() {
             encoder.setThreadgroupMemoryLength(stride * size, index: index)
         }
-        encoder.dispatchThreadgroups(.init(width: bubbleCount, height: 1, depth: 1),
-                                     threadsPerThreadgroup: .init(width: stride, height: 1, depth: 1))
+        if let gate {
+            encoder.dispatchThreadgroups(indirectBuffer: gate.buffer, indirectBufferOffset: gate.offset,
+                                         threadsPerThreadgroup: .init(width: stride, height: 1, depth: 1))
+        } else {
+            encoder.dispatchThreadgroups(.init(width: bubbleCount, height: 1, depth: 1),
+                                         threadsPerThreadgroup: .init(width: stride, height: 1, depth: 1))
+        }
         return 1
     }
 }
@@ -201,7 +220,8 @@ enum NativeMetalScan {
     /// Zwraca liczbę zakodowanych dispatchy.
     @discardableResult
     static func encode(_ encoder: MTLComputeCommandEncoder, pipelines: [String: MTLComputePipelineState],
-                       buffers: NativeMetalScanBuffers, mode: UInt32, maximum: Int, singleGroup: Bool) -> Int {
+                       buffers: NativeMetalScanBuffers, mode: UInt32, maximum: Int, singleGroup: Bool,
+                       gate: NativeMetalDispatchGate? = nil) -> Int {
         if singleGroup {
             let pipeline = pipelines["nativeScanSingleGroup"]!
             let width = min(singleGroupWidth, pipeline.maxTotalThreadsPerThreadgroup)
@@ -214,8 +234,13 @@ enum NativeMetalScan {
             encoder.setBytes(&parameters, length: MemoryLayout<SIMD2<UInt32>>.stride, index: 4)
             encoder.setBuffer(buffers.overflow, offset: 0, index: 5)
             encoder.setThreadgroupMemoryLength(2 * width * MemoryLayout<SIMD4<UInt32>>.stride, index: 0)
-            encoder.dispatchThreadgroups(.init(width: 1, height: 1, depth: 1),
-                                         threadsPerThreadgroup: .init(width: width, height: 1, depth: 1))
+            if let gate {
+                encoder.dispatchThreadgroups(indirectBuffer: gate.buffer, indirectBufferOffset: gate.offset,
+                                             threadsPerThreadgroup: .init(width: width, height: 1, depth: 1))
+            } else {
+                encoder.dispatchThreadgroups(.init(width: 1, height: 1, depth: 1),
+                                             threadsPerThreadgroup: .init(width: width, height: 1, depth: 1))
+            }
             return 1
         }
         // Trzystopniowy skan blokowy (dla obecnej pojemności): każdy blok ma 256 work-itemów.

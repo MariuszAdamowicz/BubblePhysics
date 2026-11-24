@@ -78,9 +78,18 @@ enum NativeMetalSubstep {
     enum Term: UInt64 {
         case remainingTime = 0, stiffness = 1, distance = 2, margin = 3
     }
-    /// Bramki jąder końca kroku z efektem ubocznym (`nativePrepareEndGates`): indeks w `NativeMetalPersistentState.endGates`.
+    /// Bramki dyspozycji końca kroku (`nativePrepareEndGates`): indeks w `NativeMetalPersistentState.endGates`. Pierwsze osiem to jądra z
+    /// efektem ubocznym, reszta to dyspozycje bezpośrednie, które w parze niekońcowej przepisałyby sąsiedztwo i liczniki kontaktów
+    /// czytane przez kontynuację pętli albo liczyłyby kontur zbędnie (CD-D-29).
     enum EndGate: Int, CaseIterable {
         case region, mergeEvents, sensors, missingSensors, rigidFinish, polygonSensors, missingPolygonSensors, contactAssertion
+        case bubbleBodyContacts, contactScan, indirectArguments, clearAdjacency, buildAdjacency, contactPressure, structuralContours,
+             contour, renderPreparation, hitTest
+    }
+    /// Sloty argumentów dyspozycji pośrednich końca kroku, za slotami pętli w `NativeMetalPersistentState.indirectArguments`
+    /// (`endArgumentBase`). Osobne, żeby bramka pary niekońcowej nie zerowała slotów pętli podkroków (CD-D-29).
+    enum EndArgument: Int, CaseIterable {
+        case buildContacts, prepareContactFlags, compactActiveContacts, emitAdjacency, contactImpulses, checkFinite
     }
     /// Fazy `nativeIntegrateSubstep`: ½ impulsu i ruch; siły z nowego stanu i ½ impulsu; przyspieszenie początku kroku.
     enum Phase: UInt32 {

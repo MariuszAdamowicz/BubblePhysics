@@ -764,14 +764,18 @@ kernel void nativeIntegrateSubstep(device NativeBubble *bubbles [[buffer(0)]], c
         capture[(substep.counts.y - 1) * control.counts.x + index] = float4(position, velocity);
 }
 
-// Bramka końca kroku (CD-D-18): bufor końca kroku commituje się zaraz po buforze podkroków, bez czekania, więc jądra z efektem ubocznym
-// (region, zdarzenia, czujniki, zakończenie brył) idą pośrednią dyspozycją, która ma zero grup, dopóki czas kroku nie minął albo
-// klatka przekroczyła limit podkroków. `nominal[i]` to liczba grup bramki i przy skończonym kroku (CPU zna rozmiar każdej dyspozycji).
+// Bramka końca kroku (CD-D-18, CD-D-29): bufor końca kroku commituje się zaraz po buforze podkroków, bez czekania, więc jego dyspozycje
+// idą pośrednią dyspozycją (bramką), która ma zero grup, dopóki czas kroku nie minął albo klatka przekroczyła limit podkroków. Para
+// niekońcowa ma więc na GPU tylko to jądro: kontynuacja pętli bez przebudowy czyta `adjacency` i `contactControl`, których koniec kroku
+// by nie przepisał. `nominal[i]` to liczba grup bramki i przy skończonym kroku (CPU zna rozmiar każdej dyspozycji). Dyspozycje pośrednie
+// końca kroku (`NativeMetalSubstep.EndArgument`) mają osobne sloty argumentów: przy trwającym kroku dostają zero grup, a po końcu kroku
+// wypełnia je bramkowany `nativePrepareIndirectArguments` w trybie końca kroku (sloty pętli podkroków zostają nietknięte).
 kernel void nativePrepareEndGates(device NativeSubstepControl &substep [[buffer(0)]], device uint4 *gates [[buffer(1)]],
-    constant uint *nominal [[buffer(2)]], constant uint &count [[buffer(3)]], uint index [[thread_position_in_grid]]) {
-    if (index >= count) return;
+    constant uint *nominal [[buffer(2)]], constant uint &count [[buffer(3)]], device uint4 *endArguments [[buffer(4)]],
+    constant uint &endCount [[buffer(5)]], uint index [[thread_position_in_grid]]) {
     bool finished = substep.counts.w == 0 && !(substep.time.x - substep.time.y > 0);
-    gates[index] = uint4(finished ? nominal[index] : 0, 1, 1, 0);
+    if (index < count) gates[index] = uint4(finished ? nominal[index] : 0, 1, 1, 0);
+    if (index < endCount && !finished) endArguments[index] = uint4(0, 1, 1, 0);
 }
 
 // MARK: Asercje kontaktu (G6)
