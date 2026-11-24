@@ -1,0 +1,1327 @@
+# Review: 2026-11-24-iphone-x-world-failure — run 1
+
+**Date:** 2026-11-24
+**Artifact:** review
+**Verdict:** APPROVED — no blocking findings
+**Rounds:** 1
+**Feature artifacts:** bugfix.md
+**Base:** origin/main
+**Base SHA:** 74c35038bafe7732a2743dc57c62255bde68027b
+**Head SHA:** 82dd83be0c987109a7d1c01d95172bdd7fc904ae
+**Reviewer model:** sonnet
+**Challenger model:** opus
+**Brief-writer model:** opus
+**Template version:** default/0.2.0
+
+**Plugin version:** 0.7.11
+**Agent Sessions:** claude-code: 2d10caac-0015-48e9-8e18-6f53e54b4689
+
+---
+
+## What changed
+
+<!-- brief:what-changed -->
+The single-group kernel `nativeSubstepLoopSingleGroup` failed on iPhone X (A11, argument buffers tier 1) because it received 38 buffers through a struct of raw `gpuAddress` pointers (`bugfix.md:17`). The fix merges seven step-control buffers and six force-record buffers into two shared buffers with offsets and binds plain slots, 29 bindings in total (`bugfix.md:56-61`, `bugfix.md:100`). Path selection now also checks threadgroup memory (BF-D-3). The benchmark report now prints a `failure_reason=` line (BF-D-4).
+<!-- /brief:what-changed -->
+
+## Where human judgement is needed
+
+<!-- brief:human-judgement -->
+- BF-D-3 (`bugfix.md:90`) gates the path on threadgroup memory instead of the argument-buffer tier agreed in grilling; you decide whether that departure stands.
+- The 38-pointer struct now lives in `thread` space and may raise register pressure on A11 (`bugfix.md:101`); only the device run against 8ef9d87 can settle it.
+- F-2 and F-5 (`NativeMetalBufferSlice.swift:22`, `:58`): `[Any]` bindings with a runtime `preconditionFailure` were kept on purpose (`bugfix.md:97`); you decide whether a compile-time check is worth the change.
+- F-6 (`NativeMetalSolver.swift:359`): the device-to-flag wiring has no test; you decide whether tests of the pure function are enough.
+- F-9 (`docs/MIGRATION-v4.md:85`): the docs name only the 1024-bubble threshold; you decide whether the memory condition belongs in public docs.
+<!-- /brief:human-judgement -->
+
+## What was not verified
+
+<!-- brief:not-verified -->
+The diagnosis and fix never ran on an iPhone X (`bugfix.md:30`); the device benchmark is still a manual task (`bugfix.md:82`). The security dimension wrote no findings file (`Gaps`, `Coverage`). `bugfix.md` was withheld from read sets (`Gaps`). F-2 to F-10 reached you unchallenged (`Findings`); only F-1 was challenged and refuted.
+<!-- /brief:not-verified -->
+
+---
+
+## Rounds
+
+| Round | Critical | Major | Minor | Action | Fix commits |
+|-------|----------|-------|-------|--------|-------------|
+| 1 | 0 | 0 | 9 | stop | 0 |
+
+## Findings
+
+Round 1.
+
+| ID | Severity | Verdict | Dimension | Also flagged by | Site | Summary | Effect | Evidence |
+|----|----------|---------|-----------|-----------------|------|---------|--------|----------|
+| F-9 | minor | not challenged | conventions | docs-coherence | `docs/MIGRATION-v4.md:85` | executionPath docs (here, README line 62, CHANGELOG line 19) say single dispatch is chosen by the 1024-bubble threshold only, but the diff adds supportsSingleDispatch (group memory must fit the single-group kernel, BF-D-3), so devices with small group memory take multipleDispatches below 1024 bubbles; this is not documented. | A developer reading telemetry on an older device sees multipleDispatches for a small world and has no documented explanation. |  |
+| F-10 | minor | not challenged | conventions | docs-coherence | `CHANGELOG.md:20` | The 4.0.0 entry lists new stress-report keys but omits the new failure_reason= line (failure_reason=unknown/none) added to the report; no doc in README or docs/*.md describes it. | Readers of the stress report have no documentation for the new failure_reason line. |  |
+| F-2 | minor | not challenged | design |  | `Sources/BubblePhysicsNativeMetal/NativeMetalBufferSlice.swift:22` | Bindings are typed \[Any\] and resolved by a runtime switch ending in preconditionFailure; a protocol (MTLBuffer and NativeMetalBufferSlice conforming) would keep this checked at compile time, and the Any erasure now spreads through every dispatch helper in the solver, chain kernels and substep loop. | a wrong argument type passed to a dispatch helper crashes the app at the first dispatch instead of failing to compile. |  |
+| F-3 | minor | not challenged | design |  | `Sources/BubblePhysicsNativeMetal/NativeMetalSubstepLoop.swift:143` | Slice order is encoded positionally in three places (lengths array and stepSlices\[0..6\] in NativeMetalSolver, offsets(\[...\]) here, and the SIMD4 offset tails read by the shader) and likewise for force records (slices\[0..5\] in NativeForceRecords vs forceOffsets here); no single named layout owns it, so a reorder in one place silently mis-offsets the kernel. | a future edit that reorders one list makes the single-dispatch kernel read the wrong control or force data, producing wrong physics or a failed world rather than a build error. |  |
+| F-4 | minor | not challenged | design |  | `Sources/BubblePhysicsPublic/BubbleWorld.swift:455` | The contactViolation/substepLimitExceeded to .failed mapping is now written twice: in the NativeMetalSafetyFailure branch (with detail) and again in outcome(of: NativeMetalWorldError) (without detail), with a default: break fallthrough connecting them; the knowledge that these reasons end the world lives in two places. | none |  |
+| F-5 | minor | not challenged | performance |  | `Sources/BubblePhysicsNativeMetal/NativeMetalBufferSlice.swift:58` | setBindings takes \[Any\] and every binding goes through a dynamic cast in NativeMetalBufferSlice(binding:); the encoder paths (SubstepLoop.bind, the solver dispatch closures) build a fresh heap array per dispatch, repeated for each kernel of each substep in the multi-dispatch path (up to 1024 substeps per frame). | Slightly more CPU time per frame spent encoding on worlds above 1024 bubbles or on devices using the multi-dispatch path; unlikely to be visible against Metal encoder cost. |  |
+| F-6 | minor | not challenged | testability |  | `Sources/BubblePhysicsNativeMetal/NativeMetalSolver.swift:359` | The device-to-flag wiring (supportsSingleDispatch(device:pipeline:) stored at init and passed to executionPath at line 962) has no test: tests cover only the numeric overload and the pure executionPath function, so passing a wrong/constant value or dropping the argument would not fail any test. | A regression in the wiring would make a device with too little threadgroup memory (iPhone X class) fall back into the single-group kernel and fail the world, with no test failing beforehand. |  |
+| F-7 | minor | not challenged | conventions |  | `Sources/BubblePhysicsMetalRenderBenchmark/PublicWorldStressBenchmark.swift:214` | reportPathHeader still prints 'same command buffer' while the README, the iOS view text and the integration guide changed here say physics runs in the world's own buffers and render in the caller's buffer; docs/benchmarks/v4.0.0-iphone-x.md already notes the header is stale. | Benchmark reports from the device keep a header that contradicts the documented execution model, which misleads whoever reads them. |  |
+| F-8 | minor | not challenged | conventions |  | `Sources/BubblePhysicsMetalRenderBenchmark/PublicWorldStressBenchmark.swift:18` | Doc comments on gpuP95Milliseconds ('Czas GPU całego command buffera: solver, kontury i bezpośredni renderer') and hostWaitingP95Milliseconds ('tego samego command buffera') describe a single shared buffer, which the changed README says no longer exists (physics has its own buffers). | none |  |
+
+## Refuted findings
+
+- Round 1, F-1 (major, `Sources/BubblePhysicsNativeMetal/NativeJointState.swift:83`): Bubble-body joints skipped here still append collideConnected==false partners, but when no other joint produces a row the later `guard count > 0 else { return }` (line 120) exits before ranges/exclusions are written, and the `ranges` getter then returns zeroRanges, so the exclusion list the comment promises is never read.
+  - Evidence: Already guarded: Sources/BubblePhysicsRuntime/TransactionStager.swift:466 rejects any joint whose end is a bubble (jointBodiesAreSupported, line 475 `if case .bubble = body.descriptor { return false }`), and validateJoints(attachedTo:) at :485-488 re-checks on kind/role changes; the only producer of snapshot joints in the runtime is state.joints (NativeCompleteStepper.swift:152), filled solely by stager add at :467. So no bubble-endpoint joint reaches NativeJointState.prepare; the skipped branch at NativeJointState.swift:83 only sees joints from package-level test callers of NativePublicWorld.step.
+  - Repro: `swift test --filter JointStagingTests` → Executed 13 tests, with 0 failures, including testJointWithABubbleIsRejectedForEveryKind (bubble-body, bubble-world, bubble-bubble hinge/weld/distance all rejected with unsupportedJointBody)
+
+## Dimensions that produced no findings
+
+- correctness
+- dependencies
+- tools-verify
+
+## Coverage
+
+| Dimension | State | Reason | Model | Findings |
+|-----------|-------|--------|-------|----------|
+| correctness | reviewed |  | sonnet | 0 |
+| contracts | reviewed |  | sonnet | 1 |
+| design | reviewed |  | sonnet | 3 |
+| security | gap | no findings file was written at agents/security/findings.json | sonnet | 0 |
+| performance | reviewed |  | sonnet | 1 |
+| testability | reviewed |  | sonnet | 1 |
+| conventions | reviewed |  | sonnet | 4 |
+| docs-coherence | reviewed |  | sonnet | 2 |
+| dependencies | reviewed |  | sonnet | 0 |
+| infra | not applicable | no .tf or .tfvars file changed | none | 0 |
+| tools-verify | reviewed |  | none | 0 |
+
+**correctness** checked:
+- NativeMetalBufferSlice.swift: layout/alignment math, setBinding/setBindings, indirect slice dispatch, binding(Any) cast paths
+- NativeMetalSubstepLoop.encodeSingleDispatch and run: slot count vs kernel buffer(0..28) signature, stepControl/forceRecord offsets vs nativeSingleGroupBuffers, overflow.z/.w readback, single vs multi path termination
+- nativeSubstepLoopSingleGroup, nativeReduceSubstepInGroup and nativeBroadphaseInGroup shaders: non-power-of-two width reductions, threadgroup memory layout vs 16384-byte allocation, early-exit uniformity
+- NativeMetalSolver stepControl slices, memset/length use, supportsSingleDispatch fallback; NativeForceBuffers.upload slice copies
+- PublicWorldStressBenchmark failureReason/failureLine and telemetry aggregation (empty-series guards, p95); NativeCompleteStepper bubble-with-dynamic-body validation vs Stress300Scene kinematic triangle
+**contracts** checked:
+- NativeMetalBufferSlice.swift: 256-byte slice alignment against setBuffer offsets, indirectBufferOffset (multiple of 4) and constant-space bindings
+- NativeMetalSubstepLoop.encodeSingleDispatch vs nativeSubstepLoopSingleGroup in NativeForceKernels.metal-source: slot order, 28 buffers + params at 28, byte offsets from slices, threadgroup memory 16384 vs 8 KB use
+- NativeMetalSolver stepControl slices and NativeForceBuffers.upload: slice lengths vs kernel writes (statistics +16/+32, overflow lanes 0..3, dispatch args), memset on slice.length, reuse of NativeMetalReusableBuffer
+- supportsSingleDispatch / executionPath selection and singleGroupWidth for non-power-of-two width
+- NativeJointState.prepare bubble-joint skip branch against ranges/exclusions getters and kernel consumers in NativeMetalSolver
+- PublicWorldStressBenchmark failureLine/failureReason aggregation and BubbleWorld failureDetail propagation
+**design** checked:
+- NativeMetalBufferSlice.swift in full plus its callers (grep setBinding/setBindings/\[Any\] across Sources and Tests)
+- NativeMetalSubstepLoop.encodeSingleDispatch and offsets(_:in:) against NativeMetalSolver stepControl slicing and NativeForceRecords upload slicing
+- BubbleWorld.outcome(of:) and worldFailureDetail versus NativeMetalWorldError mapping; precedent for (stepper as? NativeCompleteStepper) casts in BubbleWorld.swift (already used at several sites, so dropped)
+- PublicWorldStressBenchmark failureLine and report text formatting
+- executionPath/supportsSingleDispatch plumbing between NativeMetalSolver and NativeMetalSubstepLoop
+**performance** checked:
+- NativeMetalSubstepLoop.run: pair loop growth (pairSize doubling bounded by frameLimit 1024), waitForCompletion after awaited end buffer (steps buffer already finished, returns at once)
+- NativeMetalForceBuffers.upload and NativeMetalReusableBuffer.reserve in NativeMetalSolver.swift: shared buffer reused across frames, geometric growth, no per-frame allocation
+- NativeForceInput.init(objects:) in NativeForceRecords.swift: one sort per step, linear record build; violationDetail filter runs only on a contact violation
+- TransactionStager/NativeCompleteStepper/PlacementGeometry: rejectBubbleWithDynamicRigidBody and bubbleInside are linear scans per transaction, same pattern as existing bubbleIssue
+- NativeMetalBufferSlice.setBindings and SubstepLoop.bind: \[Any\] binding arrays with dynamic casts per dispatch
+- PublicWorldStressBenchmark.swift appends: fixed frame counts, bounded
+**testability** checked:
+- NativeMetalSingleDispatchSupportTests: boundary equal / one byte less / static length, assertions can fail
+- ExecutionPathThresholdTests.testDeviceWithoutSingleGroupMemoryUsesMultipleDispatches: tests only the pure executionPath function
+- NativeMetalSolver.swift lines 310-359 and 962: grep for supportsSingleDispatch in Tests shows only the static-number overload and executionPath called directly
+- NativeMetalResourceReuseTests slice tests (alignment, disjointness, lengths) and NativeMetalShaderABITests testSingleGroupKernelFitsTier1ArgumentTable (reflection, 31 buffers, no pointers)
+- StressSubstepReportTests failure_reason tests (none / unknown / real injected world failure)
+**conventions** checked:
+- README.md, CHANGELOG.md, integration-guide.md, MIGRATION-v4.md hunks vs. the new device-memory fallback to multi-dispatch (BF-D-3) and failure_reason report line
+- PublicWorldStressBenchmark.swift header string and doc comments vs. updated README/iOS view text about separate command buffers
+- NativeMetalBufferSlice.swift naming and doc style vs. neighbours in NativeForceRecords.swift and NativeMetalSubstepLoop.swift
+- grep for internal ids (BF-D-, G8-AC, CD-D-) in Sources on main: precedent exists, so not reported
+- git log main..HEAD commit message pattern (type(scope): Polish text, task reference): consistent
+- grep for stale XPBD / command buffer wording in Public, Runtime, README, guide
+**docs-coherence** checked:
+- README.md:62 and docs/integration-guide.md:17 against supportsSingleDispatch in NativeMetalSubstepLoop.executionPath (diff 363d7d7)
+- docs/MIGRATION-v4.md lines 66 and 85 and CHANGELOG.md:19 on the single-dispatch threshold versus the new device-memory condition
+- kernel comments in NativeForceKernels.metal-source (plain slots, 31-buffer limit, slice offsets) against NativeForceRecords.swift and NativeMetalSubstepLoop.swift
+- docs/benchmarks/v4.0.0-iphone-x.md and PublicWorldStressBenchmark.swift (failure_reason key, report header) plus grep of docs for stress report keys
+- NativeMetalExecutionPath and singleDispatchBubbleLimit doc comments; grep for stale gpuAddress/argument-buffer wording in Sources and docs
+**dependencies** checked:
+- Package.swift diff: resource list swaps NativeXPBDKernels for NativeContactKernels and NativeForceKernels; all five listed files exist in Shaders/
+- grep for leftover NativeXPBDKernels references outside docs: none; solverFiles in NativeMetalSolver.swift matches the new resource names
+- Package.swift: no external .package dependencies, no version ranges, no Package.resolved present so no lockfile drift
+- Test target BubblePhysicsMetalRenderTests gains BubblePhysicsNativeMetal; StressSubstepReportTests imports it, no cycle
+- diff file list: no manifests, lockfiles, project.yml or pbxproj touched besides Package.swift
+**tools-verify** checked:
+- ran `swift test --filter ExecutionPathThresholdTests` in the checkout root; exit 0
+
+## What each reviewer was given
+
+Diff: `origin/main...HEAD` (74c35038..82dd83be).
+
+**correctness**:
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Benchmarks/iOS/BubblePhysicsBench/App/PublicWorldStressView.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Benchmarks/macOS/BubblePhysicsReferenceBench/main.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Examples/BubblePhysicsShowcase/App/BubbleScene.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Examples/BubblePhysicsShowcase/App/MetalHostView.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsMetalRenderBenchmark/PublicWorldStressBenchmark.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeForceRecords.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeJointState.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeMetalBackend.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeMetalBufferLayout.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeMetalBufferSlice.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeMetalChainKernels.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeMetalSolver.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeMetalSubstepLoop.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativePublicWorld.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeRigidPolygonState.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeSolverInput.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/Shaders/NativeContactKernels.metal-source`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/Shaders/NativeForceKernels.metal-source`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/Shaders/NativeGeometryKernels.metal-source`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/Shaders/NativePostSolveKernels.metal-source`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/Shaders/NativeXPBDKernels.metal-source`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetalDiagnostics/NativeMetalBenchmarkRunner.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetalDiagnostics/NativeMetalVisualReplay.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetalDiagnostics/NativeMetalWorldRunner.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetalDiagnostics/ReferenceSolverInputAdapter.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetalDiagnostics/VisualSimulationDriver.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsPublic/BubbleWorld.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsPublic/Diagnostics.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsPublic/Model/Objects.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsPublic/Model/Resources.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsPublic/Model/Transitions.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsPublic/Model/WorldFrame.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsPublic/Model/WorldTransaction.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsRuntime/CompleteStep.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsRuntime/MotionControllers.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsRuntime/NativeCompleteStepper.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsRuntime/PlacementGeometry.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsRuntime/TransactionStager.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/AcceptanceEquivalenceTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/AcceptanceRenderEquivalenceTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/AcceptanceSceneTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/BudgetSceneTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/CapacityMeasurementTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/CollisionFilterWorldTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/ContactCandidateMarginTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/ContactEventTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/DecalRenderTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/DecalsSceneTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/HitTestTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/JointWorldTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/MaterialTextureRenderTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/MetalRenderIntegrationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/ObjectStateTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/PublishedStateDeterminismTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/RigidShapeContactTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/StressSubstepReportTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/Support/PhysicsSceneBuilders.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/VelocityLimitTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalBenchmarkTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalBroadPhaseTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalCenterGuardEdgeTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalContactCacheTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalContactPipelineTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalContainmentParallelTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalContourTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalParallelCacheProfileTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalPerceptualProbeTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalRestDampingTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalSafetyTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalSolverLifecycleTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalStageDiagnosticsTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalVisualReplayTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalWorldRunnerTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalXPBDTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/VisualSimulationDriverTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/ContactLawReference.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeForceRecordsTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeJointStateEmptyTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalBoundsPublicationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalChainKernelTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalContactLawTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalContactMemoryTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalEventCompactionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalHitTestTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalMotionRoleTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalPreviousContourTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalPublicObjectTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalRenderHandoffTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalResourceReuseTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalRigidPolygonTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalShaderABITests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalSingleDispatchSupportTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalSingleGroupBarrierTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalStructuralOperationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalSubstepKernelTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalSubstepPairsTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalSubstepPipelineTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalSubstepSurfaceTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/RigidContactMemoryTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/AssetWorldCreationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/BubbleMaterialTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/EventInterestTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/IntegrationGuideTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/MigrationGuideTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/ModelValidationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/MotionCommandTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/TransitionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/BandDriveTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/BandStabilityThresholdTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/BubbleWorldCompletionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/CollisionFilterTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactAssertionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactComplianceTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactContourTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactDynamicsTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactLawReference.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactLawReferenceTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactLawStaticsTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactVelocityCorrectionProbeTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContainmentResolutionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContourChordTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContourIsDrawOnlyTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/CrowdCompressionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/CrowdSceneSupport.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/CrowdStabilityTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/DecalStagingTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/DeepSqueezeWallTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/DynamicRigidExclusionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ExecutionPathSupport.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ExecutionPathThresholdTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ExecutionPathTwinTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ForceIntegrationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ForceSceneSupport.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/GridRebuildTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/InGroupGridCollisionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/JointStagingTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/KickScenePlanner.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/KinematicStagingTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/MotionControllersPrepareTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/MotionDampingTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/MultiDispatchContinuationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/NoCrossingTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/PairLambdaCeilingProbeTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/PlacementValidationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/QueryIndexTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/RegionPolicyTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/RenderMaterialStagingTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/RigidContactTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/RigidPlacementTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/SingleDispatchLoopTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/SolverGuardCauseTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/StaticPolygonEdgeTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/SubstepCountTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/SubstepForceTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/SubstepSeamTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/SubstepTelemetryTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/TransactionStagerTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/WallImpactTests.swift`
+
+**contracts**:
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Benchmarks/iOS/BubblePhysicsBench/App/PublicWorldStressView.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Benchmarks/macOS/BubblePhysicsReferenceBench/main.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Examples/BubblePhysicsShowcase/App/BubbleScene.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Examples/BubblePhysicsShowcase/App/MetalHostView.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsMetalRenderBenchmark/PublicWorldStressBenchmark.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeForceRecords.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeJointState.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeMetalBackend.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeMetalBufferLayout.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeMetalBufferSlice.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeMetalChainKernels.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeMetalSolver.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeMetalSubstepLoop.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativePublicWorld.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeRigidPolygonState.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeSolverInput.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/Shaders/NativeContactKernels.metal-source`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/Shaders/NativeForceKernels.metal-source`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/Shaders/NativeGeometryKernels.metal-source`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/Shaders/NativePostSolveKernels.metal-source`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/Shaders/NativeXPBDKernels.metal-source`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetalDiagnostics/NativeMetalBenchmarkRunner.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetalDiagnostics/NativeMetalVisualReplay.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetalDiagnostics/NativeMetalWorldRunner.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetalDiagnostics/ReferenceSolverInputAdapter.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetalDiagnostics/VisualSimulationDriver.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsPublic/BubbleWorld.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsPublic/Diagnostics.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsPublic/Model/Objects.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsPublic/Model/Resources.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsPublic/Model/Transitions.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsPublic/Model/WorldFrame.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsPublic/Model/WorldTransaction.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsRuntime/CompleteStep.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsRuntime/MotionControllers.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsRuntime/NativeCompleteStepper.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsRuntime/PlacementGeometry.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsRuntime/TransactionStager.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/AcceptanceEquivalenceTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/AcceptanceRenderEquivalenceTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/AcceptanceSceneTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/BudgetSceneTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/CapacityMeasurementTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/CollisionFilterWorldTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/ContactCandidateMarginTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/ContactEventTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/DecalRenderTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/DecalsSceneTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/HitTestTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/JointWorldTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/MaterialTextureRenderTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/MetalRenderIntegrationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/ObjectStateTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/PublishedStateDeterminismTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/RigidShapeContactTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/StressSubstepReportTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/Support/PhysicsSceneBuilders.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/VelocityLimitTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalBenchmarkTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalBroadPhaseTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalCenterGuardEdgeTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalContactCacheTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalContactPipelineTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalContainmentParallelTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalContourTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalParallelCacheProfileTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalPerceptualProbeTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalRestDampingTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalSafetyTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalSolverLifecycleTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalStageDiagnosticsTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalVisualReplayTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalWorldRunnerTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalXPBDTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/VisualSimulationDriverTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/ContactLawReference.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeForceRecordsTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeJointStateEmptyTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalBoundsPublicationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalChainKernelTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalContactLawTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalContactMemoryTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalEventCompactionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalHitTestTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalMotionRoleTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalPreviousContourTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalPublicObjectTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalRenderHandoffTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalResourceReuseTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalRigidPolygonTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalShaderABITests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalSingleDispatchSupportTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalSingleGroupBarrierTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalStructuralOperationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalSubstepKernelTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalSubstepPairsTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalSubstepPipelineTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalSubstepSurfaceTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/RigidContactMemoryTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/AssetWorldCreationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/BubbleMaterialTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/EventInterestTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/IntegrationGuideTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/MigrationGuideTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/ModelValidationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/MotionCommandTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/TransitionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/BandDriveTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/BandStabilityThresholdTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/BubbleWorldCompletionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/CollisionFilterTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactAssertionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactComplianceTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactContourTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactDynamicsTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactLawReference.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactLawReferenceTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactLawStaticsTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactVelocityCorrectionProbeTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContainmentResolutionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContourChordTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContourIsDrawOnlyTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/CrowdCompressionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/CrowdSceneSupport.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/CrowdStabilityTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/DecalStagingTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/DeepSqueezeWallTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/DynamicRigidExclusionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ExecutionPathSupport.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ExecutionPathThresholdTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ExecutionPathTwinTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ForceIntegrationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ForceSceneSupport.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/GridRebuildTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/InGroupGridCollisionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/JointStagingTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/KickScenePlanner.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/KinematicStagingTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/MotionControllersPrepareTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/MotionDampingTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/MultiDispatchContinuationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/NoCrossingTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/PairLambdaCeilingProbeTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/PlacementValidationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/QueryIndexTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/RegionPolicyTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/RenderMaterialStagingTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/RigidContactTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/RigidPlacementTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/SingleDispatchLoopTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/SolverGuardCauseTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/StaticPolygonEdgeTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/SubstepCountTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/SubstepForceTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/SubstepSeamTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/SubstepTelemetryTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/TransactionStagerTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/WallImpactTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/docs/benchmarks/perf-guard.json`
+
+**design**:
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Benchmarks/iOS/BubblePhysicsBench/App/PublicWorldStressView.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Benchmarks/macOS/BubblePhysicsReferenceBench/main.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Examples/BubblePhysicsShowcase/App/BubbleScene.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Examples/BubblePhysicsShowcase/App/MetalHostView.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsMetalRenderBenchmark/PublicWorldStressBenchmark.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeForceRecords.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeJointState.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeMetalBackend.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeMetalBufferLayout.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeMetalBufferSlice.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeMetalChainKernels.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeMetalSolver.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeMetalSubstepLoop.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativePublicWorld.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeRigidPolygonState.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeSolverInput.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/Shaders/NativeContactKernels.metal-source`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/Shaders/NativeForceKernels.metal-source`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/Shaders/NativeGeometryKernels.metal-source`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/Shaders/NativePostSolveKernels.metal-source`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/Shaders/NativeXPBDKernels.metal-source`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetalDiagnostics/NativeMetalBenchmarkRunner.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetalDiagnostics/NativeMetalVisualReplay.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetalDiagnostics/NativeMetalWorldRunner.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetalDiagnostics/ReferenceSolverInputAdapter.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetalDiagnostics/VisualSimulationDriver.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsPublic/BubbleWorld.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsPublic/Diagnostics.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsPublic/Model/Objects.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsPublic/Model/Resources.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsPublic/Model/Transitions.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsPublic/Model/WorldFrame.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsPublic/Model/WorldTransaction.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsRuntime/CompleteStep.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsRuntime/MotionControllers.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsRuntime/NativeCompleteStepper.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsRuntime/PlacementGeometry.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsRuntime/TransactionStager.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/AcceptanceEquivalenceTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/AcceptanceRenderEquivalenceTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/AcceptanceSceneTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/BudgetSceneTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/CapacityMeasurementTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/CollisionFilterWorldTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/ContactCandidateMarginTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/ContactEventTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/DecalRenderTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/DecalsSceneTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/HitTestTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/JointWorldTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/MaterialTextureRenderTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/MetalRenderIntegrationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/ObjectStateTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/PublishedStateDeterminismTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/RigidShapeContactTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/StressSubstepReportTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/Support/PhysicsSceneBuilders.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/VelocityLimitTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalBenchmarkTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalBroadPhaseTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalCenterGuardEdgeTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalContactCacheTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalContactPipelineTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalContainmentParallelTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalContourTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalParallelCacheProfileTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalPerceptualProbeTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalRestDampingTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalSafetyTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalSolverLifecycleTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalStageDiagnosticsTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalVisualReplayTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalWorldRunnerTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalXPBDTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/VisualSimulationDriverTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/ContactLawReference.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeForceRecordsTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeJointStateEmptyTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalBoundsPublicationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalChainKernelTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalContactLawTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalContactMemoryTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalEventCompactionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalHitTestTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalMotionRoleTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalPreviousContourTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalPublicObjectTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalRenderHandoffTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalResourceReuseTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalRigidPolygonTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalShaderABITests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalSingleDispatchSupportTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalSingleGroupBarrierTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalStructuralOperationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalSubstepKernelTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalSubstepPairsTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalSubstepPipelineTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalSubstepSurfaceTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/RigidContactMemoryTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/AssetWorldCreationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/BubbleMaterialTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/EventInterestTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/IntegrationGuideTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/MigrationGuideTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/ModelValidationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/MotionCommandTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/TransitionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/BandDriveTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/BandStabilityThresholdTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/BubbleWorldCompletionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/CollisionFilterTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactAssertionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactComplianceTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactContourTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactDynamicsTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactLawReference.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactLawReferenceTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactLawStaticsTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactVelocityCorrectionProbeTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContainmentResolutionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContourChordTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContourIsDrawOnlyTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/CrowdCompressionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/CrowdSceneSupport.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/CrowdStabilityTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/DecalStagingTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/DeepSqueezeWallTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/DynamicRigidExclusionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ExecutionPathSupport.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ExecutionPathThresholdTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ExecutionPathTwinTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ForceIntegrationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ForceSceneSupport.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/GridRebuildTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/InGroupGridCollisionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/JointStagingTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/KickScenePlanner.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/KinematicStagingTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/MotionControllersPrepareTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/MotionDampingTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/MultiDispatchContinuationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/NoCrossingTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/PairLambdaCeilingProbeTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/PlacementValidationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/QueryIndexTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/RegionPolicyTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/RenderMaterialStagingTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/RigidContactTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/RigidPlacementTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/SingleDispatchLoopTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/SolverGuardCauseTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/StaticPolygonEdgeTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/SubstepCountTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/SubstepForceTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/SubstepSeamTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/SubstepTelemetryTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/TransactionStagerTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/WallImpactTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/docs/benchmarks/perf-guard.json`
+
+**security**:
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Benchmarks/iOS/BubblePhysicsBench/App/PublicWorldStressView.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Benchmarks/macOS/BubblePhysicsReferenceBench/main.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Examples/BubblePhysicsShowcase/App/BubbleScene.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Examples/BubblePhysicsShowcase/App/MetalHostView.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Package.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsMetalRenderBenchmark/PublicWorldStressBenchmark.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeForceRecords.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeJointState.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeMetalBackend.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeMetalBufferLayout.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeMetalBufferSlice.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeMetalChainKernels.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeMetalSolver.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeMetalSubstepLoop.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativePublicWorld.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeRigidPolygonState.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeSolverInput.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/Shaders/NativeContactKernels.metal-source`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/Shaders/NativeForceKernels.metal-source`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/Shaders/NativeGeometryKernels.metal-source`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/Shaders/NativePostSolveKernels.metal-source`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/Shaders/NativeXPBDKernels.metal-source`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetalDiagnostics/NativeMetalBenchmarkRunner.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetalDiagnostics/NativeMetalVisualReplay.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetalDiagnostics/NativeMetalWorldRunner.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetalDiagnostics/ReferenceSolverInputAdapter.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetalDiagnostics/VisualSimulationDriver.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsPublic/BubbleWorld.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsPublic/Diagnostics.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsPublic/Model/Objects.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsPublic/Model/Resources.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsPublic/Model/Transitions.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsPublic/Model/WorldFrame.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsPublic/Model/WorldTransaction.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsRuntime/CompleteStep.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsRuntime/MotionControllers.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsRuntime/NativeCompleteStepper.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsRuntime/PlacementGeometry.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsRuntime/TransactionStager.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/AcceptanceEquivalenceTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/AcceptanceRenderEquivalenceTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/AcceptanceSceneTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/BudgetSceneTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/CapacityMeasurementTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/CollisionFilterWorldTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/ContactCandidateMarginTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/ContactEventTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/DecalRenderTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/DecalsSceneTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/HitTestTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/JointWorldTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/MaterialTextureRenderTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/MetalRenderIntegrationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/ObjectStateTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/PublishedStateDeterminismTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/RigidShapeContactTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/StressSubstepReportTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/Support/PhysicsSceneBuilders.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/VelocityLimitTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalBenchmarkTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalBroadPhaseTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalCenterGuardEdgeTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalContactCacheTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalContactPipelineTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalContainmentParallelTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalContourTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalParallelCacheProfileTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalPerceptualProbeTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalRestDampingTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalSafetyTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalSolverLifecycleTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalStageDiagnosticsTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalVisualReplayTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalWorldRunnerTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalXPBDTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/VisualSimulationDriverTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/ContactLawReference.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeForceRecordsTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeJointStateEmptyTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalBoundsPublicationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalChainKernelTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalContactLawTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalContactMemoryTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalEventCompactionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalHitTestTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalMotionRoleTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalPreviousContourTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalPublicObjectTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalRenderHandoffTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalResourceReuseTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalRigidPolygonTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalShaderABITests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalSingleDispatchSupportTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalSingleGroupBarrierTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalStructuralOperationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalSubstepKernelTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalSubstepPairsTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalSubstepPipelineTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalSubstepSurfaceTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/RigidContactMemoryTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/AssetWorldCreationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/BubbleMaterialTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/EventInterestTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/IntegrationGuideTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/MigrationGuideTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/ModelValidationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/MotionCommandTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/TransitionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/BandDriveTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/BandStabilityThresholdTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/BubbleWorldCompletionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/CollisionFilterTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactAssertionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactComplianceTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactContourTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactDynamicsTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactLawReference.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactLawReferenceTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactLawStaticsTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactVelocityCorrectionProbeTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContainmentResolutionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContourChordTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContourIsDrawOnlyTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/CrowdCompressionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/CrowdSceneSupport.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/CrowdStabilityTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/DecalStagingTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/DeepSqueezeWallTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/DynamicRigidExclusionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ExecutionPathSupport.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ExecutionPathThresholdTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ExecutionPathTwinTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ForceIntegrationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ForceSceneSupport.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/GridRebuildTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/InGroupGridCollisionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/JointStagingTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/KickScenePlanner.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/KinematicStagingTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/MotionControllersPrepareTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/MotionDampingTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/MultiDispatchContinuationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/NoCrossingTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/PairLambdaCeilingProbeTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/PlacementValidationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/QueryIndexTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/RegionPolicyTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/RenderMaterialStagingTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/RigidContactTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/RigidPlacementTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/SingleDispatchLoopTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/SolverGuardCauseTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/StaticPolygonEdgeTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/SubstepCountTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/SubstepForceTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/SubstepSeamTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/SubstepTelemetryTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/TransactionStagerTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/WallImpactTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/docs/benchmarks/perf-guard.json`
+
+**performance**:
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Benchmarks/iOS/BubblePhysicsBench/App/PublicWorldStressView.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Benchmarks/macOS/BubblePhysicsReferenceBench/main.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Examples/BubblePhysicsShowcase/App/BubbleScene.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Examples/BubblePhysicsShowcase/App/MetalHostView.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsMetalRenderBenchmark/PublicWorldStressBenchmark.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeForceRecords.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeJointState.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeMetalBackend.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeMetalBufferLayout.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeMetalBufferSlice.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeMetalChainKernels.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeMetalSolver.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeMetalSubstepLoop.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativePublicWorld.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeRigidPolygonState.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeSolverInput.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/Shaders/NativeContactKernels.metal-source`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/Shaders/NativeForceKernels.metal-source`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/Shaders/NativeGeometryKernels.metal-source`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/Shaders/NativePostSolveKernels.metal-source`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/Shaders/NativeXPBDKernels.metal-source`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetalDiagnostics/NativeMetalBenchmarkRunner.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetalDiagnostics/NativeMetalVisualReplay.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetalDiagnostics/NativeMetalWorldRunner.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetalDiagnostics/ReferenceSolverInputAdapter.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetalDiagnostics/VisualSimulationDriver.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsPublic/BubbleWorld.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsPublic/Diagnostics.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsPublic/Model/Objects.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsPublic/Model/Resources.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsPublic/Model/Transitions.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsPublic/Model/WorldFrame.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsPublic/Model/WorldTransaction.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsRuntime/CompleteStep.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsRuntime/MotionControllers.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsRuntime/NativeCompleteStepper.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsRuntime/PlacementGeometry.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsRuntime/TransactionStager.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/AcceptanceEquivalenceTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/AcceptanceRenderEquivalenceTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/AcceptanceSceneTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/BudgetSceneTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/CapacityMeasurementTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/CollisionFilterWorldTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/ContactCandidateMarginTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/ContactEventTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/DecalRenderTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/DecalsSceneTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/HitTestTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/JointWorldTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/MaterialTextureRenderTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/MetalRenderIntegrationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/ObjectStateTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/PublishedStateDeterminismTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/RigidShapeContactTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/StressSubstepReportTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/Support/PhysicsSceneBuilders.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/VelocityLimitTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalBenchmarkTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalBroadPhaseTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalCenterGuardEdgeTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalContactCacheTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalContactPipelineTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalContainmentParallelTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalContourTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalParallelCacheProfileTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalPerceptualProbeTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalRestDampingTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalSafetyTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalSolverLifecycleTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalStageDiagnosticsTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalVisualReplayTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalWorldRunnerTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalXPBDTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/VisualSimulationDriverTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/ContactLawReference.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeForceRecordsTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeJointStateEmptyTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalBoundsPublicationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalChainKernelTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalContactLawTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalContactMemoryTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalEventCompactionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalHitTestTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalMotionRoleTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalPreviousContourTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalPublicObjectTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalRenderHandoffTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalResourceReuseTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalRigidPolygonTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalShaderABITests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalSingleDispatchSupportTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalSingleGroupBarrierTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalStructuralOperationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalSubstepKernelTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalSubstepPairsTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalSubstepPipelineTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalSubstepSurfaceTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/RigidContactMemoryTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/AssetWorldCreationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/BubbleMaterialTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/EventInterestTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/IntegrationGuideTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/MigrationGuideTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/ModelValidationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/MotionCommandTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/TransitionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/BandDriveTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/BandStabilityThresholdTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/BubbleWorldCompletionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/CollisionFilterTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactAssertionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactComplianceTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactContourTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactDynamicsTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactLawReference.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactLawReferenceTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactLawStaticsTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactVelocityCorrectionProbeTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContainmentResolutionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContourChordTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContourIsDrawOnlyTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/CrowdCompressionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/CrowdSceneSupport.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/CrowdStabilityTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/DecalStagingTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/DeepSqueezeWallTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/DynamicRigidExclusionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ExecutionPathSupport.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ExecutionPathThresholdTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ExecutionPathTwinTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ForceIntegrationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ForceSceneSupport.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/GridRebuildTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/InGroupGridCollisionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/JointStagingTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/KickScenePlanner.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/KinematicStagingTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/MotionControllersPrepareTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/MotionDampingTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/MultiDispatchContinuationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/NoCrossingTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/PairLambdaCeilingProbeTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/PlacementValidationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/QueryIndexTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/RegionPolicyTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/RenderMaterialStagingTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/RigidContactTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/RigidPlacementTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/SingleDispatchLoopTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/SolverGuardCauseTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/StaticPolygonEdgeTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/SubstepCountTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/SubstepForceTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/SubstepSeamTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/SubstepTelemetryTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/TransactionStagerTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/WallImpactTests.swift`
+
+**testability**:
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Benchmarks/iOS/BubblePhysicsBench/App/PublicWorldStressView.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Benchmarks/macOS/BubblePhysicsReferenceBench/main.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Examples/BubblePhysicsShowcase/App/BubbleScene.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Examples/BubblePhysicsShowcase/App/MetalHostView.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsMetalRenderBenchmark/PublicWorldStressBenchmark.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeForceRecords.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeJointState.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeMetalBackend.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeMetalBufferLayout.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeMetalBufferSlice.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeMetalChainKernels.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeMetalSolver.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeMetalSubstepLoop.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativePublicWorld.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeRigidPolygonState.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeSolverInput.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/Shaders/NativeContactKernels.metal-source`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/Shaders/NativeForceKernels.metal-source`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/Shaders/NativeGeometryKernels.metal-source`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/Shaders/NativePostSolveKernels.metal-source`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/Shaders/NativeXPBDKernels.metal-source`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetalDiagnostics/NativeMetalBenchmarkRunner.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetalDiagnostics/NativeMetalVisualReplay.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetalDiagnostics/NativeMetalWorldRunner.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetalDiagnostics/ReferenceSolverInputAdapter.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetalDiagnostics/VisualSimulationDriver.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsPublic/BubbleWorld.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsPublic/Diagnostics.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsPublic/Model/Objects.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsPublic/Model/Resources.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsPublic/Model/Transitions.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsPublic/Model/WorldFrame.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsPublic/Model/WorldTransaction.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsRuntime/CompleteStep.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsRuntime/MotionControllers.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsRuntime/NativeCompleteStepper.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsRuntime/PlacementGeometry.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsRuntime/TransactionStager.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/AcceptanceEquivalenceTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/AcceptanceRenderEquivalenceTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/AcceptanceSceneTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/BudgetSceneTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/CapacityMeasurementTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/CollisionFilterWorldTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/ContactCandidateMarginTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/ContactEventTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/DecalRenderTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/DecalsSceneTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/HitTestTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/JointWorldTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/MaterialTextureRenderTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/MetalRenderIntegrationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/ObjectStateTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/PublishedStateDeterminismTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/RigidShapeContactTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/StressSubstepReportTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/Support/PhysicsSceneBuilders.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/VelocityLimitTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalBenchmarkTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalBroadPhaseTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalCenterGuardEdgeTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalContactCacheTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalContactPipelineTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalContainmentParallelTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalContourTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalParallelCacheProfileTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalPerceptualProbeTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalRestDampingTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalSafetyTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalSolverLifecycleTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalStageDiagnosticsTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalVisualReplayTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalWorldRunnerTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalXPBDTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/VisualSimulationDriverTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/ContactLawReference.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeForceRecordsTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeJointStateEmptyTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalBoundsPublicationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalChainKernelTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalContactLawTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalContactMemoryTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalEventCompactionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalHitTestTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalMotionRoleTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalPreviousContourTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalPublicObjectTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalRenderHandoffTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalResourceReuseTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalRigidPolygonTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalShaderABITests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalSingleDispatchSupportTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalSingleGroupBarrierTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalStructuralOperationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalSubstepKernelTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalSubstepPairsTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalSubstepPipelineTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalSubstepSurfaceTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/RigidContactMemoryTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/AssetWorldCreationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/BubbleMaterialTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/EventInterestTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/IntegrationGuideTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/MigrationGuideTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/ModelValidationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/MotionCommandTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/TransitionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/BandDriveTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/BandStabilityThresholdTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/BubbleWorldCompletionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/CollisionFilterTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactAssertionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactComplianceTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactContourTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactDynamicsTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactLawReference.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactLawReferenceTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactLawStaticsTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactVelocityCorrectionProbeTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContainmentResolutionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContourChordTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContourIsDrawOnlyTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/CrowdCompressionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/CrowdSceneSupport.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/CrowdStabilityTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/DecalStagingTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/DeepSqueezeWallTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/DynamicRigidExclusionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ExecutionPathSupport.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ExecutionPathThresholdTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ExecutionPathTwinTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ForceIntegrationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ForceSceneSupport.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/GridRebuildTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/InGroupGridCollisionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/JointStagingTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/KickScenePlanner.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/KinematicStagingTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/MotionControllersPrepareTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/MotionDampingTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/MultiDispatchContinuationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/NoCrossingTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/PairLambdaCeilingProbeTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/PlacementValidationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/QueryIndexTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/RegionPolicyTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/RenderMaterialStagingTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/RigidContactTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/RigidPlacementTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/SingleDispatchLoopTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/SolverGuardCauseTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/StaticPolygonEdgeTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/SubstepCountTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/SubstepForceTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/SubstepSeamTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/SubstepTelemetryTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/TransactionStagerTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/WallImpactTests.swift`
+
+**conventions**:
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Benchmarks/iOS/BubblePhysicsBench/App/PublicWorldStressView.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Benchmarks/macOS/BubblePhysicsReferenceBench/main.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/CHANGELOG.md`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Examples/BubblePhysicsShowcase/App/BubbleScene.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Examples/BubblePhysicsShowcase/App/MetalHostView.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Package.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/README.md`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsMetalRenderBenchmark/PublicWorldStressBenchmark.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeForceRecords.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeJointState.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeMetalBackend.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeMetalBufferLayout.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeMetalBufferSlice.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeMetalChainKernels.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeMetalSolver.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeMetalSubstepLoop.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativePublicWorld.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeRigidPolygonState.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/NativeSolverInput.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/Shaders/NativeContactKernels.metal-source`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/Shaders/NativeForceKernels.metal-source`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/Shaders/NativeGeometryKernels.metal-source`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/Shaders/NativePostSolveKernels.metal-source`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/Shaders/NativeXPBDKernels.metal-source`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetalDiagnostics/NativeMetalBenchmarkRunner.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetalDiagnostics/NativeMetalVisualReplay.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetalDiagnostics/NativeMetalWorldRunner.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetalDiagnostics/ReferenceSolverInputAdapter.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetalDiagnostics/VisualSimulationDriver.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsPublic/BubbleWorld.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsPublic/Diagnostics.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsPublic/Model/Objects.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsPublic/Model/Resources.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsPublic/Model/Transitions.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsPublic/Model/WorldFrame.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsPublic/Model/WorldTransaction.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsRuntime/CompleteStep.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsRuntime/MotionControllers.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsRuntime/NativeCompleteStepper.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsRuntime/PlacementGeometry.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsRuntime/TransactionStager.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/AcceptanceEquivalenceTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/AcceptanceRenderEquivalenceTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/AcceptanceSceneTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/BudgetSceneTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/CapacityMeasurementTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/CollisionFilterWorldTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/ContactCandidateMarginTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/ContactEventTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/DecalRenderTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/DecalsSceneTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/HitTestTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/JointWorldTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/MaterialTextureRenderTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/MetalRenderIntegrationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/ObjectStateTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/PublishedStateDeterminismTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/RigidShapeContactTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/StressSubstepReportTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/Support/PhysicsSceneBuilders.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsMetalRenderTests/VelocityLimitTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalBenchmarkTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalBroadPhaseTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalCenterGuardEdgeTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalContactCacheTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalContactPipelineTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalContainmentParallelTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalContourTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalParallelCacheProfileTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalPerceptualProbeTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalRestDampingTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalSafetyTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalSolverLifecycleTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalStageDiagnosticsTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalVisualReplayTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalWorldRunnerTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/NativeMetalXPBDTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalDiagnosticsTests/VisualSimulationDriverTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/ContactLawReference.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeForceRecordsTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeJointStateEmptyTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalBoundsPublicationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalChainKernelTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalContactLawTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalContactMemoryTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalEventCompactionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalHitTestTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalMotionRoleTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalPreviousContourTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalPublicObjectTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalRenderHandoffTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalResourceReuseTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalRigidPolygonTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalShaderABITests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalSingleDispatchSupportTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalSingleGroupBarrierTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalStructuralOperationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalSubstepKernelTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalSubstepPairsTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalSubstepPipelineTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/NativeMetalSubstepSurfaceTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsNativeMetalTests/RigidContactMemoryTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/AssetWorldCreationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/BubbleMaterialTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/EventInterestTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/IntegrationGuideTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/MigrationGuideTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/ModelValidationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/MotionCommandTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsPublicTests/TransitionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/BandDriveTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/BandStabilityThresholdTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/BubbleWorldCompletionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/CollisionFilterTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactAssertionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactComplianceTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactContourTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactDynamicsTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactLawReference.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactLawReferenceTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactLawStaticsTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContactVelocityCorrectionProbeTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContainmentResolutionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContourChordTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ContourIsDrawOnlyTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/CrowdCompressionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/CrowdSceneSupport.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/CrowdStabilityTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/DecalStagingTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/DeepSqueezeWallTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/DynamicRigidExclusionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ExecutionPathSupport.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ExecutionPathThresholdTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ExecutionPathTwinTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ForceIntegrationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/ForceSceneSupport.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/GridRebuildTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/InGroupGridCollisionTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/JointStagingTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/KickScenePlanner.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/KinematicStagingTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/MotionControllersPrepareTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/MotionDampingTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/MultiDispatchContinuationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/NoCrossingTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/PairLambdaCeilingProbeTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/PlacementValidationTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/QueryIndexTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/RegionPolicyTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/RenderMaterialStagingTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/RigidContactTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/RigidPlacementTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/SingleDispatchLoopTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/SolverGuardCauseTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/StaticPolygonEdgeTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/SubstepCountTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/SubstepForceTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/SubstepSeamTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/SubstepTelemetryTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/TransactionStagerTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Tests/BubblePhysicsRuntimeTests/WallImpactTests.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/docs/MIGRATION-v4.md`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/docs/benchmarks/perf-guard.json`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/docs/benchmarks/v4.0.0-iphone-x.md`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/docs/benchmarks/v4.0.0-mac-ab-2026-11-24.md`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/docs/integration-guide.md`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/docs/sdlc/changes/2026-11-23-engine-4-0-0/change-design.md`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/docs/sdlc/changes/2026-11-23-engine-4-0-0/plan.md`
+
+**docs-coherence**:
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/CHANGELOG.md`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/README.md`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/Shaders/NativeContactKernels.metal-source`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/Shaders/NativeForceKernels.metal-source`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/Shaders/NativeGeometryKernels.metal-source`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/Shaders/NativePostSolveKernels.metal-source`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/Shaders/NativeXPBDKernels.metal-source`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/docs/MIGRATION-v4.md`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/docs/benchmarks/v4.0.0-iphone-x.md`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/docs/benchmarks/v4.0.0-mac-ab-2026-11-24.md`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/docs/integration-guide.md`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/docs/sdlc/changes/2026-11-23-engine-4-0-0/change-design.md`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/docs/sdlc/changes/2026-11-23-engine-4-0-0/plan.md`
+
+**dependencies**:
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Package.swift`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/Shaders/NativeContactKernels.metal-source`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/Shaders/NativeForceKernels.metal-source`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/Shaders/NativeGeometryKernels.metal-source`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/Shaders/NativePostSolveKernels.metal-source`
+- `/Users/adamowim/priv/ios/bubble_phisics/.claude/worktrees/engine-4-0-0/Sources/BubblePhysicsNativeMetal/Shaders/NativeXPBDKernels.metal-source`
+
+Withheld (under `docs/sdlc/changes/2026-11-24-iphone-x-world-failure/`):
+- `docs/sdlc/changes/2026-11-24-iphone-x-world-failure/bugfix.md`
+
+Sent to every dimension (matched no routing rule):
+- `Sources/BubblePhysicsNativeMetal/Shaders/NativeContactKernels.metal-source`
+- `Sources/BubblePhysicsNativeMetal/Shaders/NativeForceKernels.metal-source`
+- `Sources/BubblePhysicsNativeMetal/Shaders/NativeGeometryKernels.metal-source`
+- `Sources/BubblePhysicsNativeMetal/Shaders/NativePostSolveKernels.metal-source`
+- `Sources/BubblePhysicsNativeMetal/Shaders/NativeXPBDKernels.metal-source`
+
+## Fixes
+
+No fix wave ran.
+
+## Gaps
+
+- Withheld from every read set: `docs/sdlc/changes/2026-11-24-iphone-x-world-failure/bugfix.md` — they are part of the change, so they remain visible in the diff every reviewer reads.
+- security is gap: no findings file was written at agents/security/findings.json
