@@ -74,4 +74,35 @@ final class NativeMetalResourceReuseTests: XCTestCase {
             MemoryLayout<SIMD4<UInt32>>.stride, MemoryLayout<NativeMetalSubstepControl>.stride, 3 * MemoryLayout<UInt32>.stride,
             NativeMetalSubstep.frameLimit * MemoryLayout<Float>.stride, MemoryLayout<NativeMetalContactAssertion>.stride])
     }
+
+    /// Bugfix iPhone X (BF-D-2): sześć buforów rekordów sił to jeden `MTLBuffer` wgrywany jednym `upload`; każdy wycinek niesie
+    /// swoje rekordy, a pusta tablica (tu motory) zajmuje jeden rekord, jak dawny osobny bufor.
+    func testForceRecordsShareOneBufferWithAlignedSlices() throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        var input = NativeForceInput()
+        input.globalForce = SIMD2(1, -2)
+        input.fields = [NativeMetalForceField(identity: SIMD2(7, 0), pose: SIMD4(1, 2, 0, 0), strength: SIMD4(3, 4, 0, 50),
+                                              shape: .zero, filter: .zero),
+                        NativeMetalForceField(identity: SIMD2(9, 0), pose: SIMD4(5, 6, 0, 1), strength: SIMD4(0, 0, 8, 20),
+                                              shape: SIMD4(NativeMetalForceField.radialKind, 0, 3, 0), filter: SIMD4(0, 2, 1, 0))]
+        input.fieldVertices = [SIMD2(0, 0), SIMD2(1, 0), SIMD2(0, 1)]
+        input.fieldObjectIDs = [3, 5]
+        input.bandDrives = [NativeMetalBandDrive(identity: SIMD2(3, 0), band: SIMD4(10, 20, 100, 0))]
+        let forces = NativeMetalForceBuffers()
+        try forces.upload(input, device: device)
+        let slices = try [forces.control, forces.fields, forces.fieldVertices, forces.fieldObjectIDs, forces.bands, forces.motors]
+            .map { try XCTUnwrap($0) }
+        assertDisjointAlignedSlices(slices, in: try XCTUnwrap(forces.records))
+        XCTAssertEqual(slices.map(\.length), [MemoryLayout<NativeMetalForceControl>.stride, 2 * MemoryLayout<NativeMetalForceField>.stride,
+            3 * MemoryLayout<SIMD2<Float>>.stride, 2 * MemoryLayout<UInt64>.stride, MemoryLayout<NativeMetalBandDrive>.stride,
+            MemoryLayout<NativeMetalMotor>.stride])
+        let control = slices[0].contents().load(as: NativeMetalForceControl.self)
+        XCTAssertEqual(control.global, SIMD4(1, -2, 0, 0))
+        XCTAssertEqual(control.counts, SIMD4(2, 1, 0, 0))
+        XCTAssertEqual(slices[1].contents().load(fromByteOffset: MemoryLayout<NativeMetalForceField>.stride, as: NativeMetalForceField.self),
+                       input.fields[1])
+        XCTAssertEqual(slices[2].contents().load(fromByteOffset: 16, as: SIMD2<Float>.self), SIMD2(0, 1))
+        XCTAssertEqual(slices[3].contents().load(fromByteOffset: 8, as: UInt64.self), 5)
+        XCTAssertEqual(slices[4].contents().load(as: NativeMetalBandDrive.self), input.bandDrives[0])
+    }
 }

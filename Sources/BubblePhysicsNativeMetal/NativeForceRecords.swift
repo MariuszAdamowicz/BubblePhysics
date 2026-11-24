@@ -113,31 +113,52 @@ enum NativeMetalSubstep {
     }
 }
 
-/// Bufory rekordów sił jednego kroku na GPU; rosną razem z liczbą rekordów i są używane ponownie między klatkami.
+/// Bufory rekordów sił jednego kroku na GPU: wycinki jednego wspólnego bufora (jeden slot jądra jednej grupy zamiast sześciu,
+/// bugfix iPhone X, BF-D-2), który rośnie razem z liczbą rekordów i jest używany ponownie między klatkami.
 @MainActor
 final class NativeMetalForceBuffers {
-    private let controlBuffer = NativeMetalReusableBuffer()
-    private let fieldBuffer = NativeMetalReusableBuffer()
-    private let vertexBuffer = NativeMetalReusableBuffer()
-    private let objectIDBuffer = NativeMetalReusableBuffer()
-    private let bandBuffer = NativeMetalReusableBuffer()
-    private let motorBuffer = NativeMetalReusableBuffer()
-    private(set) var control: MTLBuffer?
-    private(set) var fields: MTLBuffer?
-    private(set) var fieldVertices: MTLBuffer?
-    private(set) var fieldObjectIDs: MTLBuffer?
-    private(set) var bands: MTLBuffer?
-    private(set) var motors: MTLBuffer?
+    private let recordBuffer = NativeMetalReusableBuffer()
+    /// Wspólny bufor wycinków `control`, `fields`, `fieldVertices`, `fieldObjectIDs`, `bands` i `motors`; nil przed pierwszym `upload`.
+    var records: MTLBuffer? { recordBuffer.buffer }
+    private(set) var control: NativeMetalBufferSlice?
+    private(set) var fields: NativeMetalBufferSlice?
+    private(set) var fieldVertices: NativeMetalBufferSlice?
+    private(set) var fieldObjectIDs: NativeMetalBufferSlice?
+    private(set) var bands: NativeMetalBufferSlice?
+    private(set) var motors: NativeMetalBufferSlice?
 
     func upload(_ input: NativeForceInput, device: MTLDevice) throws {
         let counts = SIMD4(UInt32(input.fields.count), UInt32(input.bandDrives.count), UInt32(input.motors.count), 0)
-        control = try controlBuffer.upload([NativeMetalForceControl(global: SIMD4(input.globalForce.x, input.globalForce.y, 0, 0),
-                                                                    counts: counts)], device: device)
-        fields = try fieldBuffer.upload(input.fields, device: device)
-        fieldVertices = try vertexBuffer.upload(input.fieldVertices, device: device)
-        fieldObjectIDs = try objectIDBuffer.upload(input.fieldObjectIDs, device: device)
-        bands = try bandBuffer.upload(input.bandDrives, device: device)
-        motors = try motorBuffer.upload(input.motors, device: device)
+        let controlRecords = [NativeMetalForceControl(global: SIMD4(input.globalForce.x, input.globalForce.y, 0, 0), counts: counts)]
+        let lengths = try [Self.length(controlRecords), Self.length(input.fields), Self.length(input.fieldVertices),
+                           Self.length(input.fieldObjectIDs), Self.length(input.bandDrives), Self.length(input.motors)]
+        let buffer = try recordBuffer.reserve(count: NativeMetalBufferSlice.layout(lengths).length, stride: 1, device: device)
+        let slices = NativeMetalBufferSlice.slices(of: buffer, lengths: lengths)
+        Self.copy(controlRecords, to: slices[0])
+        Self.copy(input.fields, to: slices[1])
+        Self.copy(input.fieldVertices, to: slices[2])
+        Self.copy(input.fieldObjectIDs, to: slices[3])
+        Self.copy(input.bandDrives, to: slices[4])
+        Self.copy(input.motors, to: slices[5])
+        control = slices[0]
+        fields = slices[1]
+        fieldVertices = slices[2]
+        fieldObjectIDs = slices[3]
+        bands = slices[4]
+        motors = slices[5]
+    }
+
+    /// Długość wycinka: pusta tablica zajmuje jeden rekord, żeby wiązanie zawsze wskazywało pamięć.
+    private static func length<T>(_ values: [T]) throws -> Int {
+        let (length, overflow) = max(1, values.count).multipliedReportingOverflow(by: MemoryLayout<T>.stride)
+        guard !overflow else { throw NativeMetalSolverError.allocationFailed }
+        return length
+    }
+
+    private static func copy<T>(_ values: [T], to slice: NativeMetalBufferSlice) {
+        values.withUnsafeBytes { bytes in
+            if let base = bytes.baseAddress { memcpy(slice.contents(), base, bytes.count) }
+        }
     }
 }
 

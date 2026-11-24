@@ -55,8 +55,8 @@ enum NativeMetalSubstepLoop {
             state.substepControl, state.substepCapture ?? state.acceleration])
         var mode = SIMD4<UInt32>(phase.rawValue, capture ? 1 : 0, 0, 0)
         encoder.setBytes(&mode, length: MemoryLayout<SIMD4<UInt32>>.stride, index: 11)
-        encoder.setBuffer(forces.bands!, offset: 0, index: 12)
-        encoder.setBuffer(forces.motors!, offset: 0, index: 13)
+        encoder.setBinding(forces.bands!, index: 12)
+        encoder.setBinding(forces.motors!, index: 13)
         if indirect { dispatchIndirect(encoder, state: state) } else { dispatch(encoder, count: count) }
     }
 
