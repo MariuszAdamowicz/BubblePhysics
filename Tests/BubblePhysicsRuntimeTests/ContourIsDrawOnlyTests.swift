@@ -1,16 +1,15 @@
 @testable import BubblePhysics
 import XCTest
 
-/// P-B-25 (G5-AC1): kontur jest tylko rysowany. Dwa światy z tą samą sceną różnią się wyłącznie `deformability` materiału baniek
-/// (0 i 0,65), a jeden z nich czyta kontur (`debugContourSnapshot()`) w każdym kroku. Pozycje, prędkości, obroty i promienie fizyki
-/// (`targetRadius`, `collisionRadius`) wszystkich baniek mają być identyczne bit w bit przez 600 kroków.
-/// Obwiednia (`ObjectState.bounds`) pochodzi z konturu, więc w obu światach musi się różnić (inaczej test niczego by nie rozróżniał).
-/// `effectiveRadius` nie służy do tego: kernel liczy go z geometrii kontaktów, bez udziału `deformability`.
+/// P-B-25 (G5-AC1): kontur jest tylko rysowany. Dwa światy z tą samą sceną i tym samym K_c; jeden z nich czyta kontur
+/// (`debugContourSnapshot()`, kopia z pamięci GPU) w każdym kroku. Pozycje, prędkości, obroty, prędkości kątowe i obwiednie wszystkich
+/// obiektów oraz promienie fizyki baniek (`targetRadius`, `collisionRadius`) mają być identyczne bit w bit przez 600 kroków, także
+/// po scaleniu i podziale bańki. Kontur nie ma sprzężenia zwrotnego do fizyki: gdyby odczyt go zmieniał albo kontur wpływał na siły,
+/// światy by się rozeszły.
 @MainActor
 final class ContourIsDrawOnlyTests: XCTestCase {
-    private func material(deformability: Float) throws -> PhysicsMaterial {
-        // Kontakty twarde: tylko one czytają `deformability` w kernelu konturu (kontakt miękki omija bramkę deformowalności).
-        try PhysicsMaterial(kind: .bubble, contactStiffness: 1e9, damping: 0.5)
+    private func material() throws -> PhysicsMaterial {
+        try PhysicsMaterial(kind: .bubble, contactStiffness: 5195, damping: 0.5)
     }
 
     private func length(_ vector: WorldPoint) -> Float { (vector.x * vector.x + vector.y * vector.y).squareRoot() }
@@ -33,11 +32,11 @@ final class ContourIsDrawOnlyTests: XCTestCase {
         return placed
     }
 
-    private func makeWorld(deformability: Float) async throws -> BubbleWorld {
+    private func makeWorld() async throws -> BubbleWorld {
         let placed = layout()
         XCTAssertGreaterThanOrEqual(placed.count, 20, "scena ma mieć co najmniej 20 baniek")
         let policy = try BubbleDrivePolicy(bandStiffness: 20, maximumForce: 600)
-        return try await CrowdScene.makeWorld(bubble: material(deformability: deformability)) { setup in
+        return try await CrowdScene.makeWorld(bubble: material()) { setup in
             var transaction = setup
             for bubble in placed {
                 transaction = transaction.add(try CrowdScene.bubble(bubble.id, at: bubble.position, radius: bubble.radius,
@@ -62,5 +61,50 @@ final class ContourIsDrawOnlyTests: XCTestCase {
     }
 
     private func bits(_ point: WorldPoint) -> [UInt32] { [point.x.bitPattern, point.y.bitPattern] }
+
+    /// Jeden krok obu światów z tą samą transakcją przed krokiem; zwraca klatki.
+    private func advance(_ worlds: (reading: BubbleWorld, plain: BubbleWorld), submit transaction: WorldTransaction?) async
+        -> (reading: WorldFrame, plain: WorldFrame) {
+        if let transaction {
+            _ = worlds.reading.submit(transaction)
+            _ = worlds.plain.submit(transaction)
+        }
+        let reading = await worlds.reading.advance(by: CrowdScene.step)
+        _ = worlds.reading.debugContourSnapshot()
+        let plain = await worlds.plain.advance(by: CrowdScene.step)
+        return (reading, plain)
+    }
+
+    func testReadingTheContourEveryStepDoesNotChangePhysicsForSixHundredSteps() async throws {
+        let worlds = (reading: try await makeWorld(), plain: try await makeWorld())
+        var compared = 0
+        for step in 0..<600 {
+            let transaction: WorldTransaction? = step == 150 ? mergeTransaction() : step == 300 ? splitTransaction() : nil
+            let frames = await advance(worlds, submit: transaction)
+            XCTAssertNil(worlds.reading.diagnostics.lastAdvanceIssue, "krok \(step), świat z odczytem konturu")
+            XCTAssertNil(worlds.plain.diagnostics.lastAdvanceIssue, "krok \(step), świat bez odczytu")
+            XCTAssertEqual(Set(frames.reading.objects.keys), Set(frames.plain.objects.keys), "krok \(step): zbiory obiektów")
+            for (id, state) in frames.reading.objects {
+                guard let other = frames.plain.objects[id] else { continue }
+                compared += 1
+                guard bits(state.position) == bits(other.position), bits(state.velocity) == bits(other.velocity),
+                      state.rotation.bitPattern == other.rotation.bitPattern,
+                      state.angularVelocity.bitPattern == other.angularVelocity.bitPattern,
+                      bits(state.bounds.min) == bits(other.bounds.min), bits(state.bounds.max) == bits(other.bounds.max) else {
+                    return XCTFail("krok \(step), obiekt \(id.rawValue): stan fizyki różni się między światami (\(state) kontra \(other))")
+                }
+            }
+            let radii = worlds.reading.debugBubbleRadii, otherRadii = worlds.plain.debugBubbleRadii
+            guard radii.count == otherRadii.count, radii.allSatisfy({ id, value in
+                otherRadii[id].map { $0.target.bitPattern == value.target.bitPattern && $0.collision.bitPattern == value.collision.bitPattern } == true
+            }) else { return XCTFail("krok \(step): promienie fizyki różnią się między światami") }
+        }
+        XCTAssertGreaterThan(compared, 600 * 20, "porównano stany co najmniej 20 obiektów przez 600 kroków")
+        let contours = worlds.reading.debugContourSnapshot()
+        XCTAssertGreaterThanOrEqual(contours.count, 20, "odczyt konturu nie jest pusty")
+        XCTAssertTrue(contours.values.allSatisfy { $0.count >= 32 })
+        XCTAssertNotNil(worlds.reading.debugBubbleRadii[CrowdScene.id(100)], "scalenie z kroku 150 weszło do obu światów")
+        XCTAssertNotNil(worlds.reading.debugBubbleRadii[CrowdScene.id(101)], "podział z kroku 300 weszło do obu światów")
+    }
 
 }

@@ -31,13 +31,6 @@ struct NativeMetalMotor: Equatable, Sendable {
     var drive: SIMD4<Float> // siła.xy, moment, bezwładność
 }
 
-/// Poza bryły kinematycznej na początku kroku i jej prędkość; w podkroku w chwili t bryła jest w start + prędkość · t.
-struct NativeMetalKinematicPose: Equatable, Sendable {
-    var identity: SIMD2<UInt64> // ID bryły, reserved
-    var pose: SIMD4<Float> // położenie.xy, obrót, reserved
-    var velocity: SIMD4<Float> // prędkość liniowa.xy, prędkość kątowa, reserved
-}
-
 /// Sterowanie pętlą podkroków na GPU: czasy, liczniki i obiekt wyznaczający h w ostatnim podkroku.
 struct NativeMetalSubstepControl: Equatable, Sendable {
     var time = SIMD4<Float>.zero // czas kroku, czas upłynięty, h, mnożnik wymuszonego podziału h (substepSplitMultiplier; < 1 znaczy 1)
@@ -66,7 +59,7 @@ struct NativeMetalSubstepDiagnostics {
 /// Stałe jąder sił poza rekordami: siła globalna i liczby rekordów w buforach `NativeMetalForceBuffers`.
 struct NativeMetalForceControl: Equatable, Sendable {
     var global = SIMD4<Float>.zero // siła globalna.xy, reserved
-    var counts = SIMD4<UInt32>.zero // pola, gumki, motory, pozy brył kinematycznych
+    var counts = SIMD4<UInt32>.zero // pola, gumki, motory, reserved
 }
 
 /// Stałe pętli podkroków wspólne dla Swift i MSL (`NativeForceKernels.metal-source`).
@@ -104,18 +97,15 @@ final class NativeMetalForceBuffers {
     private let objectIDBuffer = NativeMetalReusableBuffer()
     private let bandBuffer = NativeMetalReusableBuffer()
     private let motorBuffer = NativeMetalReusableBuffer()
-    private let poseBuffer = NativeMetalReusableBuffer()
     private(set) var control: MTLBuffer?
     private(set) var fields: MTLBuffer?
     private(set) var fieldVertices: MTLBuffer?
     private(set) var fieldObjectIDs: MTLBuffer?
     private(set) var bands: MTLBuffer?
     private(set) var motors: MTLBuffer?
-    private(set) var kinematicPoses: MTLBuffer?
 
     func upload(_ input: NativeForceInput, device: MTLDevice) throws {
-        let counts = SIMD4(UInt32(input.fields.count), UInt32(input.bandDrives.count), UInt32(input.motors.count),
-                           UInt32(input.kinematicPoses.count))
+        let counts = SIMD4(UInt32(input.fields.count), UInt32(input.bandDrives.count), UInt32(input.motors.count), 0)
         control = try controlBuffer.upload([NativeMetalForceControl(global: SIMD4(input.globalForce.x, input.globalForce.y, 0, 0),
                                                                     counts: counts)], device: device)
         fields = try fieldBuffer.upload(input.fields, device: device)
@@ -123,7 +113,6 @@ final class NativeMetalForceBuffers {
         fieldObjectIDs = try objectIDBuffer.upload(input.fieldObjectIDs, device: device)
         bands = try bandBuffer.upload(input.bandDrives, device: device)
         motors = try motorBuffer.upload(input.motors, device: device)
-        kinematicPoses = try poseBuffer.upload(input.kinematicPoses, device: device)
     }
 }
 
@@ -136,7 +125,6 @@ struct NativeForceInput: Equatable, Sendable {
     var fieldVertices: [SIMD2<Float>] = []
     var fieldObjectIDs: [UInt64] = []
     var motors: [NativeMetalMotor] = []
-    var kinematicPoses: [NativeMetalKinematicPose] = []
 
     init() {}
 
@@ -158,14 +146,9 @@ struct NativeForceInput: Equatable, Sendable {
                                                    drive: SIMD4(motor.force.x, motor.force.y, motor.torque, inertia)))
                 case .static, .dynamic, .kinematic, .pathDriven: break
                 }
-            case .rigidBody:
-                guard object.motionRole == .kinematic else { break }
-                kinematicPoses.append(NativeMetalKinematicPose(identity: SIMD2(id, 0),
-                    pose: SIMD4(object.position.x, object.position.y, object.rotation, 0),
-                    velocity: SIMD4(object.velocity.x, object.velocity.y, object.angularVelocity, 0)))
             case .forceField(let field):
                 appendField(field, id: id)
-            case .sensor: break
+            case .rigidBody, .sensor: break
             }
         }
     }

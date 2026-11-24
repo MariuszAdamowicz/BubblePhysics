@@ -75,6 +75,41 @@ final class NativeMetalSubstepPairsTests: XCTestCase {
         XCTAssertLessThan(try XCTUnwrap(frame.objects[ObjectID(rawValue: 1)]).velocity.x, 0, "bańka ma się odbić")
     }
 
+    // MARK: bramki końca kroku
+
+    /// Zdarzenia (scalanie, sensor kołowy, sensor wielokątny) i zakończenie brył mają efekt uboczny, więc w klatce z wieloma parami
+    /// buforów biegną tylko w ostatnim buforze końca kroku (bramki `nativePrepareEndGates`). Pierwsza klatka z uderzeniem 10³ j/s ma
+    /// wiele par (para startowa ma 2 podkroki), a każde zdarzenie ma się pojawić dokładnie raz.
+    func testEndOfStepEventsFireOnceInAFrameWithSeveralPairs() async throws {
+        let world = try NativePublicWorld(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
+        let group = MergeGroupSet(rawValue: 1)
+        func merging(_ value: UInt64, x: Float) throws -> NativePublicObject {
+            NativePublicObject(descriptor: .bubble(try BubbleDescriptor(id: ObjectID(rawValue: value), position: [x, 500],
+                targetRadius: 24, mass: 1, physicsMaterialID: bubbleMaterial, renderMaterialID: style,
+                mergeGroups: group, eventInterest: .mergeContact)))
+        }
+        let circle = NativePublicObject(descriptor: .sensor(try SensorDescriptor(id: ObjectID(rawValue: 9),
+            position: [wallX - 32, 0], geometry: RangeGeometry.circle(radius: 60), eventInterest: [.enteredSensor, .exitedSensor])))
+        let polygon = NativePublicObject(descriptor: .sensor(try SensorDescriptor(id: ObjectID(rawValue: 10),
+            position: [wallX, 0], geometry: RangeGeometry.polygon(vertices: [[-20, -20], [20, -20], [20, 20], [-20, 20]]),
+            eventInterest: [.enteredSensor, .exitedSensor])))
+        let objects = try [bubble(1, at: [wallX - 24 - 8, 0], velocity: [1000, 0]), wall(), merging(5, x: 0), merging(6, x: 30), circle, polygon]
+        let frame = try await step(world, objects)
+        XCTAssertGreaterThan(frame.profile.commandBufferCount, 2, "pierwsza klatka z uderzeniem ma mieć kilka par buforów")
+        var entered: [String] = [], merged = 0
+        for event in frame.events {
+            switch event {
+            case .enteredSensor(let sensor, let object): entered.append("\(sensor.rawValue)<-\(object.rawValue)")
+            case .mergeContact: merged += 1
+            default: XCTFail("nieoczekiwane zdarzenie \(event)")
+            }
+        }
+        // Oba sensory obejmują bańkę 1 i ścianę 2 (sensor nie filtruje obiektów).
+        XCTAssertEqual(entered.sorted(), ["10<-1", "10<-2", "9<-1", "9<-2"], "każde wejście do sensora dokładnie raz: \(frame.events)")
+        XCTAssertEqual(merged, 1, "scalenie 5 i 6 dokładnie raz: \(frame.events)")
+        XCTAssertEqual(frame.eventOverflow.droppedCount, 0)
+    }
+
     // MARK: render po końcu kroku (P-B-39)
 
     /// Hak renderu dostaje uchwyt ze stanem końca kroku: w chwili wywołania kontury roboczego uchwytu są już policzone i równe

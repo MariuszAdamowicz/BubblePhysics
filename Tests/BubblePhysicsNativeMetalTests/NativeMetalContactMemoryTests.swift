@@ -102,4 +102,26 @@ final class NativeMetalContactMemoryTests: XCTestCase {
         let sparse = try await memory(bubbles: 300, boxes: 0)
         XCTAssertEqual(world.contactMemoryBytes, sparse, "pamięć nie zależy od gęstości sceny")
     }
+
+    private func squeezedCluster() throws -> [NativePublicObject] {
+        var random = LCG()
+        return try (0..<300).map {
+            try bubble(UInt64($0 + 1), [100 + random.next() * 6, 100 + random.next() * 6], radius: 2, role: .static)
+        }
+    }
+
+    // CD-D-26: licznik to odrzuceni kandydaci jednej budowy siatki, każdy raz, więc kilka par buforów w klatce (każda para przebudowuje siatkę)
+    // nie mnoży go. Ta sama ściśnięta gromada daje tę samą liczbę z jedną parą i w klatce z kilkoma parami (uderzenie 10³ j/s w pierwszej klatce).
+    func testOverflowCountDoesNotGrowWithTheNumberOfPairsInTheFrame() async throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let single = try await step(NativePublicWorld(device: device), squeezedCluster())
+        XCTAssertGreaterThan(single.contactCandidateOverflowCount, 0)
+        XCTAssertEqual(single.profile.commandBufferCount, 2, "gromada statycznych baniek to jedna para buforów")
+        let kicked = try bubble(1000, [955 - 5 - 8, 500], radius: 5)
+        var moving = kicked
+        moving.velocity = [1000, 0]
+        let multi = try await step(NativePublicWorld(device: device), squeezedCluster() + [moving, box(2000, [1005, 500], half: 50)])
+        XCTAssertGreaterThan(multi.profile.commandBufferCount, 2, "uderzenie w pierwszej klatce ma dać kilka par buforów")
+        XCTAssertEqual(multi.contactCandidateOverflowCount, single.contactCandidateOverflowCount)
+    }
 }

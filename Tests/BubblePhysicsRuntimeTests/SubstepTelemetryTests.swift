@@ -64,8 +64,7 @@ final class SubstepTelemetryTests: XCTestCase {
     }
 }
 
-/// Pola po XPBD, CCD i strażnikach baniek znikają z telemetrii (G8-AC1). Dopóki zadanie 14 ich nie usunie, ten test jest czerwony: to część
-/// P-B-27, osobna klasa, żeby `SubstepTelemetryTests` była zielona po zadaniu 13.
+/// Pola po XPBD, CCD i strażnikach baniek zniknęły z telemetrii (G8-AC1, P-B-27); osobna klasa od `SubstepTelemetryTests`, bo sprawdza brak pól.
 final class ObsoleteSolverTelemetryTests: XCTestCase {
     func testTelemetryHasNoXPBDCCDOrGuardFields() {
         let labels = Set(Mirror(reflecting: NativeMetalFrameTelemetry()).children.compactMap(\.label))

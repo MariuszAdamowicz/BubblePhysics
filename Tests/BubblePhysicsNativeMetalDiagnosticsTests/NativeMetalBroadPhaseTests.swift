@@ -71,7 +71,14 @@ final class NativeMetalBroadPhaseTests: XCTestCase {
         }
         XCTAssertGreaterThan(dropped, 0, "scena musi przepełniać wiersze")
         XCTAssertEqual(solver.candidateKeys, expected.sorted())
-        XCTAssertGreaterThan(frame.contactCandidateOverflowCount, 0)
+        // CD-D-26: licznik to liczba odrzuconych kandydatów w kroku, każdy raz. Wiersz kandydatów odrzuca `dropped` par, a wiersz sąsiedztwa
+        // obiektu (k miejsc, wpisy z obu końców zachowanych par) odrzuca stopień ponad k; ten sam kandydat nie liczy się drugi raz
+        // przy końcowym budowaniu sąsiedztwa z kontaktów.
+        var degrees = [Int](repeating: 0, count: count)
+        for i in 0..<count { for j in (i + 1)..<max(i + 1, min(count, i + 1 + limit)) { degrees[i] += 1; degrees[j] += 1 } }
+        let adjacencyDropped = degrees.reduce(0) { $0 + max(0, $1 - limit) }
+        XCTAssertGreaterThan(adjacencyDropped, 0, "scena musi przepełniać także wiersze sąsiedztwa")
+        XCTAssertEqual(frame.contactCandidateOverflowCount, dropped + adjacencyDropped)
         XCTAssertGreaterThanOrEqual(frame.maximumContactCandidatesPerObject, limit)
     }
 

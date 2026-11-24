@@ -161,6 +161,17 @@ final class ContactAssertionTests: XCTestCase {
         assertContactViolation(try await runUntilIssue(world, frames: 5), objects: [1, 2], "zawinięcie w bryłę")
     }
 
+    /// Zawinięcie dokładnie na środek innej bańki (d = 0): położenie lądowania daje przebieg bez drugiej bańki, a w drugim świecie stoi tam
+    /// bańka 2, więc para ma środki w tym samym punkcie bit w bit i asercja po regionie zgłasza naruszenie.
+    func testWrapExactlyOntoTheCenterOfAnotherBubbleFailsTheWorldWithContactViolation() async throws {
+        let free = try wrapScene { $0 }
+        let firstFrame = try await ForceScene.run(free, frames: 1).first
+        let landing = try XCTUnwrap(firstFrame?.position(1))
+        XCTAssertLessThan(landing.y, -900, "bańka ma być zawinięta na dół")
+        let world = try wrapScene { try $0.add(ForceScene.bubble(2, at: landing)) }
+        assertContactViolation(try await runUntilIssue(world, frames: 5), objects: [1, 2], "zawinięcie na środek bańki (d = 0)")
+    }
+
     // MARK: P-B-25 i P-B-26 (G6-AC5)
 
     /// Bryła kinematyczna jedzie 100 j/s prostopadle do ściany i wciska w nią „2” przy współrzędnych rzędu 360 j. W ciągu 1 s od pierwszego
@@ -178,7 +189,7 @@ final class ContactAssertionTests: XCTestCase {
         XCTAssertEqual(diagnostics.lastAdvanceIssue, .worldFailed, "świat ma paść z limitu podkroków, ostatni krok \(recorded.count - 1)")
         XCTAssertEqual(diagnostics.failureReason, .substepLimitExceeded)
         let detail = try XCTUnwrap(diagnostics.failureDetail)
-        XCTAssertFalse(detail.objects.isEmpty, "diagnostyka podaje obiekt, który wyznaczał h")
+        XCTAssertTrue(detail.objects.contains(ForceScene.id(1)), "diagnostyka wskazuje zgniataną bańkę 1 jako obiekt wyznaczający h, jest \(detail.objects)")
         XCTAssertNotNil(detail.limitingTerm, "diagnostyka podaje człon h z ostatniego podkroku")
         for item in recorded.dropLast() {
             XCTAssertLessThanOrEqual(item.telemetry?.substepCount ?? 0, 1024, "krok \(item.step) przekracza limit podkroków")

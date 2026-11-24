@@ -102,7 +102,7 @@ struct NativePublicSettings: Equatable, Sendable {
     var structuralShapes: [ObjectID: NativeStructuralShape] = [:]
     var staticPolygonMaterials: [ObjectID: PhysicsMaterial] = [:]
     var joints: [Joint] = []
-    /// Dane sił kroku dla GPU (gumka, siła globalna, pola, motor, pozy brył kinematycznych); budowane w `NativePublicWorld.step`.
+    /// Dane sił kroku dla GPU (gumka, siła globalna, pola, motor); budowane w `NativePublicWorld.step`.
     var forces = NativeForceInput()
 }
 

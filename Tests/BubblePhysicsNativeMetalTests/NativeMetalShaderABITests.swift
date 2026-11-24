@@ -240,7 +240,7 @@ final class NativeMetalShaderABITests: XCTestCase {
     }
 
     /// P-B-71: warstwa w `filter.w` to Int32 z odwróconym bitem znaku, więc porządek uint zgadza się z porządkiem Int32.
-    /// Rekordy sił silnika 4.0.0: gumka, pole, motor, poza bryły kinematycznej i sterowanie podkrokami mają ten sam układ w Swift i w shaderze.
+    /// Rekordy sił silnika 4.0.0: gumka, pole, motor i sterowanie podkrokami mają ten sam układ w Swift i w shaderze.
     func testForceRecordsMatchShaderLayouts() throws {
         let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
         let sources = try NativeMetalShaderSource.solverFiles.map(source)
@@ -257,10 +257,6 @@ final class NativeMetalShaderABITests: XCTestCase {
             Probe(name: "motor", mslSize: "NativeMotor", swiftSize: MemoryLayout<NativeMetalMotor>.stride, fields: [
                 ("identity", MemoryLayout<NativeMetalMotor>.offset(of: \.identity)),
                 ("drive", MemoryLayout<NativeMetalMotor>.offset(of: \.drive))]),
-            Probe(name: "kinematicPose", mslSize: "NativeKinematicPose", swiftSize: MemoryLayout<NativeMetalKinematicPose>.stride, fields: [
-                ("identity", MemoryLayout<NativeMetalKinematicPose>.offset(of: \.identity)),
-                ("pose", MemoryLayout<NativeMetalKinematicPose>.offset(of: \.pose)),
-                ("velocity", MemoryLayout<NativeMetalKinematicPose>.offset(of: \.velocity))]),
             Probe(name: "forceControl", mslSize: "NativeForceControl", swiftSize: MemoryLayout<NativeMetalForceControl>.stride, fields: [
                 ("global", MemoryLayout<NativeMetalForceControl>.offset(of: \.global)),
                 ("counts", MemoryLayout<NativeMetalForceControl>.offset(of: \.counts))]),
@@ -277,7 +273,6 @@ final class NativeMetalShaderABITests: XCTestCase {
         XCTAssertEqual(MemoryLayout<NativeMetalBandDrive>.stride, 32)
         XCTAssertEqual(MemoryLayout<NativeMetalForceField>.stride, 80)
         XCTAssertEqual(MemoryLayout<NativeMetalMotor>.stride, 32)
-        XCTAssertEqual(MemoryLayout<NativeMetalKinematicPose>.stride, 48)
         XCTAssertEqual(MemoryLayout<NativeMetalSubstepControl>.stride, 48)
         XCTAssertEqual(MemoryLayout<NativeMetalForceControl>.stride, 32)
         XCTAssertEqual(MemoryLayout<NativeMetalContactAssertion>.stride, 48)

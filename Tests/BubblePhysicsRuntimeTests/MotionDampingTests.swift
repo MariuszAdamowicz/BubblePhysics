@@ -23,7 +23,7 @@ final class MotionDampingTests: XCTestCase {
 
     // MARK: sceny
 
-    /// Materiał baniek z podatnością c₀ · r / r_ref, `deformability` 0 (kontur czysto geometryczny) i tłumieniem γ.
+    /// Materiał baniek z K_c = r_ref / c₀ (c₀ to dawna podatność kontaktu) i tłumieniem γ.
     private func bubbleMaterial(damping: Float, maximumLinearSpeed: Float? = 600) throws -> PhysicsMaterial {
         try PhysicsMaterial(kind: .bubble, contactStiffness: referenceRadius / baseCompliance, damping: damping)
     }

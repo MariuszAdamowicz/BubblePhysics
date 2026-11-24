@@ -124,13 +124,11 @@ final class GridRebuildTests: XCTestCase {
             }
         }
         XCTAssertGreaterThan(checked, 0, "\(context): zapis podkroków jest pusty")
-        let rebuilds = recorded.map { $0.telemetry?.gridRebuildCount ?? 0 }
-        if minimumMarginOnly {
-            XCTAssertGreaterThanOrEqual(rebuilds.reduce(0, +), 1, "\(context): przebudowy \(rebuilds)")
-        } else {
-            let around = rebuilds[max(0, plan.frame - 1)...min(rebuilds.count - 1, plan.frame + 1)].reduce(0, +)
-            XCTAssertGreaterThanOrEqual(around, 1, "\(context): klatka wybicia ma dać co najmniej jedną przebudowę, przebudowy \(rebuilds)")
-        }
+        // Przebudowa wymuszona zapasem obwiedni (znacznik `h_zapasu`), nie każda para po pierwszej: para, która tylko wyczerpała swoje podkroki,
+        // też zaczyna od przebudowy, ale nie dowodzi, że zapas działa. Klatka wybicia ma ją mieć sama, bez okna ±1 klatki.
+        let margin = recorded.map { $0.telemetry?.marginRebuildCount ?? 0 }
+        guard ForceScene.check(plan.frame < margin.count, "\(context): zapisano tylko \(margin.count) klatek") else { return }
+        XCTAssertGreaterThanOrEqual(margin[plan.frame], 1, "\(context): klatka wybicia ma dać przebudowę z powodu zapasu, przebudowy z zapasu \(margin)")
     }
 
     func testLightBubbleKickedIntoAThinWallDoesNotCrossItAndTheGridIsRebuilt() async throws {

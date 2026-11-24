@@ -19,12 +19,6 @@ struct NativeMotor {
     ulong2 identity; // ID bańki, reserved
     float4 drive;    // siła.xy, moment, bezwładność
 };
-// Poza bryły kinematycznej na początku kroku; w podkroku w chwili t: start + prędkość · t.
-struct NativeKinematicPose {
-    ulong2 identity; // ID bryły, reserved
-    float4 pose;     // położenie.xy, obrót, reserved
-    float4 velocity; // prędkość liniowa.xy, prędkość kątowa, reserved
-};
 struct NativeSubstepControl {
     float4 time;     // czas kroku, czas upłynięty, h, mnożnik wymuszonego podziału h (przełącznik pakietowy; < 1 znaczy 1)
     uint4 counts;    // podkroki pary buforów, podkroki klatki, znacznik przebudowy, znacznik limitu
@@ -356,7 +350,7 @@ kernel void nativeBubbleBodyContacts(device NativeBubble *bubbles [[buffer(0)]],
 
 struct NativeForceControl {
     float4 global;  // siła globalna.xy, reserved
-    uint4 counts;   // pola, gumki, motory, pozy brył kinematycznych
+    uint4 counts;   // pola, gumki, motory, reserved
 };
 
 // Człony wyznaczające h (NativeSubstepControl.limiter.y); odpowiada NativeMetalSubstep.Term.

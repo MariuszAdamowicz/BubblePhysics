@@ -64,6 +64,9 @@ public struct NativeMetalFrameTelemetry: Equatable, Sendable {
     public let substepCount: Int
     /// Liczba przebudów siatki w klatce (G8-AC1).
     public let gridRebuildCount: Int
+    /// Przebudowy siatki wymuszone zapasem obwiedni (człon `h_zapasu`, CD-D-23), bez par, które skończyły się samym wyczerpaniem podkroków.
+    /// Pole pakietowe: testy G5-AC3 sprawdzają nim, że klatka wybicia przebudowała siatkę z powodu zapasu.
+    package var marginRebuildCount = 0
     /// Czas GPU fizyki: suma buforów podkroków. Osobno od konturu (G8-AC1).
     public let physicsGPUMilliseconds: Double
     /// Czas GPU konturu: bufor końca kroku (G8-AC1).

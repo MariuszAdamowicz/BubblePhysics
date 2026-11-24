@@ -71,7 +71,7 @@ Silnik kończy świat błędem tylko wtedy, gdy sam się pomylił, a nie gdy sce
 
 | Przyczyna | Kiedy |
 |-----------|-------|
-| `contactViolation` | Po podkroku para kolidująca według filtrów ma d ≤ 0, środek bańki leży w kolidującej bryle albo bańka zmieniła stronę krawędzi jednostronnej. To błąd silnika. |
+| `contactViolation` | Na końcu kroku (po regionie `.wrap`) para kolidująca według filtrów ma d ≤ 0, środek bańki leży w kolidującej bryle albo bańka zmieniła stronę krawędzi jednostronnej. To błąd silnika. Po każdym podkroku silnik sprawdza to tylko z pakietowym przełącznikiem diagnostycznym `assertEverySubstep` (testy). |
 | `substepLimitExceeded` | Klatka potrzebowała ponad 1024 podkroków. `failureDetail.objects` wskazuje obiekt, który wyznaczał h, a `limitingTerm` człon (`remainingTime`, `stiffness`, `distance`, `margin`). |
 
 ## Nowa diagnostyka

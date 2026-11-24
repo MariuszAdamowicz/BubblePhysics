@@ -2,8 +2,8 @@ import BubblePhysicsModel
 @testable import BubblePhysicsNativeMetal
 import XCTest
 
-/// Rekordy sił silnika 4.0.0 (plan, zadanie 6): host przekazuje GPU gumkę, siłę globalną, opisy pól z filtrami, motor i pozy brył
-/// kinematycznych jako dane wejściowe kroku (CD-D-5). Tu tylko zawartość rekordów budowanych z obiektów świata; ich użycie w
+/// Rekordy sił silnika 4.0.0 (plan, zadanie 6): host przekazuje GPU gumkę, siłę globalną, opisy pól z filtrami i motor
+/// jako dane wejściowe kroku (CD-D-5). Tu tylko zawartość rekordów budowanych z obiektów świata; ich użycie w
 /// podkrokach dodają kolejne zadania.
 final class NativeForceRecordsTests: XCTestCase {
     private let physics = PhysicsMaterialID(rawValue: 1), style = RenderMaterialID(rawValue: 1)
@@ -29,7 +29,6 @@ final class NativeForceRecordsTests: XCTestCase {
         XCTAssertTrue(input.bandDrives.isEmpty)
         XCTAssertTrue(input.fields.isEmpty)
         XCTAssertTrue(input.motors.isEmpty)
-        XCTAssertTrue(input.kinematicPoses.isEmpty)
     }
 
     // G4-AC4: gumka niesie cel, K_band i opcjonalny `maximumForce` (0 = bez limitu); bańka bez celu albo polityki nie ma gumki.
@@ -101,20 +100,6 @@ final class NativeForceRecordsTests: XCTestCase {
                        [[-3, -4], [3, -4], [3, 4], [-3, 4]])
         XCTAssertEqual(Array(input.fieldVertices[Int(second.shape.y)..<Int(second.shape.y + second.shape.z)]),
                        [[0, 0], [10, 0], [0, 10]])
-    }
-
-    // G3-AC3: poza kinematyczna na początku kroku i prędkość liniowa i kątowa; tylko brył w roli `.kinematic`.
-    func testKinematicPoseRecordCarriesStartPoseAndVelocities() throws {
-        func body(_ id: UInt64, role: MotionRole) throws -> NativePublicObject {
-            var object = NativePublicObject(descriptor: .rigidBody(try RigidBodyDescriptor(id: ObjectID(rawValue: id),
-                vertices: [[0, 0], [2, 0], [2, 2], [0, 2]], motionRole: role, physicsMaterialID: physics, renderMaterialID: style)))
-            object.position = [100, 360]; object.rotation = 0.25; object.velocity = [1000, -5]; object.angularVelocity = 20
-            return object
-        }
-        let input = NativeForceInput(objects: [try body(5, role: .kinematic), try body(4, role: .static), try body(3, role: .dynamic)],
-                                     globalForce: .zero)
-        XCTAssertEqual(input.kinematicPoses, [NativeMetalKinematicPose(identity: SIMD2(5, 0), pose: SIMD4(100, 360, 0.25, 0),
-                                                                       velocity: SIMD4(1000, -5, 20, 0))])
     }
 
     // Rekord bańki niesie K_c, a oznaczenie bańki napędzanej siłami (siła globalna, pola, γ) nie obejmuje ról torowych.

@@ -31,8 +31,7 @@ public enum NativeMetalVisualReplayError: Error, Equatable {
 /// Uruchamia oba backendy od identycznego stanu i podaje im tę samą trajektorię przeszkody.
 @MainActor
 public enum NativeMetalVisualReplay {
-    public static func compare(density: ReferenceVisualDensity, frameCount: Int,
-                               solverIterationCount: Int = 4) async throws -> NativeMetalVisualReplayReport {
+    public static func compare(density: ReferenceVisualDensity, frameCount: Int) async throws -> NativeMetalVisualReplayReport {
         guard frameCount > 0,
               let nativeRunner = NativeMetalWorldRunner(configuration: .init())
         else { throw NativeMetalVisualReplayError.unavailable }

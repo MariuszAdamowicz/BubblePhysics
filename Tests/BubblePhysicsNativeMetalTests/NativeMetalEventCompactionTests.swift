@@ -14,8 +14,10 @@ final class NativeMetalEventCompactionTests: XCTestCase {
             mergeGroups: groups, eventInterest: interest)))
     }
 
+    /// K_c = 1: bańki o d = 1 < 2 zostają w kontakcie do końca kroku. Zdarzenie scalenia powstaje raz, z rekordów kontaktów końca kroku (bramka
+    /// `mergeEvents`), więc przy K_c = 1e9 (rozlot baniek w jednym kroku) kontaktu na końcu kroku już nie ma.
     private func step(_ world: NativePublicWorld, _ objects: [NativePublicObject], capacity: Int = 8) async throws -> NativePublicFrame {
-        try await world.step(objects: objects, materials: [material: PhysicsMaterial(kind: .bubble, contactStiffness: 1e9)],
+        try await world.step(objects: objects, materials: [material: PhysicsMaterial(kind: .bubble, contactStiffness: 1)],
             region: WorldRectangle(min: [-20, -20], max: [20, 20]),
             duration: 1.0 / 60.0, eventBufferCapacity: capacity)
     }

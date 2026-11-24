@@ -85,7 +85,7 @@ final class NativeMetalSolverLifecycleTests: XCTestCase {
         let ping = state.bubblesPing
         let pong = state.bubblesPong
         let cache = state.cachePing
-        let scratch = state.scratch
+        let contacts = state.contacts
         let secondInput = NativeMetalSnapshot(world: try makeWorld(), previous: firstInput)
         XCTAssertTrue(secondInput.bubbleChanges.isEmpty)
         let second = try await solver.executeFrame(snapshot: secondInput, scenarioStep: 2)
@@ -93,7 +93,7 @@ final class NativeMetalSolverLifecycleTests: XCTestCase {
         XCTAssertTrue(state.bubblesPing === ping)
         XCTAssertTrue(state.bubblesPong === pong)
         XCTAssertTrue(state.cachePing === cache)
-        XCTAssertTrue(state.scratch === scratch)
+        XCTAssertTrue(state.contacts === contacts)
         XCTAssertEqual(first.bubbles[0].center.x, 0.5, accuracy: 1e-6)
         XCTAssertEqual(second.bubbles[0].center.x, 1, accuracy: 1e-6)
         XCTAssertEqual(second.bubbles[0].previousCenter.x, 0.5, accuracy: 1e-6)
