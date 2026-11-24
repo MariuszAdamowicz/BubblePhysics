@@ -38,7 +38,8 @@ struct PublicWorldStressView: View {
                 Picker("Scena", selection: $selectedIndex) {
                     ForEach(scenes.indices, id: \.self) { Text(scenes[$0].title).tag($0) }
                 }
-                .pickerStyle(.segmented)
+                // Menu zamiast segmentów: na 375 pt dziewięć segmentów obcinało nazwy do pierwszej litery i „…”.
+                .pickerStyle(.menu)
                 .disabled(isRunning)
                 ProgressView(value: Double(completed), total: Double(totalFrames))
                 if isRunning {
