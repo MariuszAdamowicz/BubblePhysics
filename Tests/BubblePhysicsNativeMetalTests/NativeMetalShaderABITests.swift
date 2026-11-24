@@ -298,6 +298,25 @@ final class NativeMetalShaderABITests: XCTestCase {
         XCTAssertEqual(MemoryLayout<NativeMetalSingleGroupParameters>.stride, 64)
     }
 
+    /// A11 (rodzina Apple4) ma argument buffers tier 1: struktura wskaźników z adresami GPU tam nie działa, a każdy bufor jądra
+    /// liczy się do limitu 31 wpisów tablicy buforów funkcji. Jądro jednej grupy musi więc wiązać bufory zwykłymi slotami
+    /// i mieścić się w tym limicie (bugfix iPhone X, BF-D-2).
+    func testSingleGroupKernelFitsTier1ArgumentTable() throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let options = MTLCompileOptions()
+        options.fastMathEnabled = false
+        let library = try device.makeLibrary(source: NativeMetalShaderSource.solverSource(), options: options)
+        let function = try XCTUnwrap(library.makeFunction(name: "nativeSubstepLoopSingleGroup"))
+        var reflection: MTLComputePipelineReflection?
+        _ = try device.makeComputePipelineState(function: function, options: [.bindingInfo], reflection: &reflection)
+        let buffers = try XCTUnwrap(reflection).bindings.compactMap { $0 as? MTLBufferBinding }
+        XCTAssertLessThanOrEqual(buffers.count, 31, "tier 1 liczy każdy bufor jądra do limitu 31 wpisów tablicy buforów")
+        for binding in buffers {
+            let pointers = binding.bufferStructType?.members.filter { $0.dataType == .pointer }.count ?? 0
+            XCTAssertEqual(pointers, 0, "argument \(binding.name) ma wskaźniki GPU, a tier 1 ich nie obsługuje")
+        }
+    }
+
     func testLayerEncodingKeepsSignedOrderAndRoundTrips() {
         let layers: [Int32] = [.min, -70_000, -2, -1, 0, 1, 2, 70_000, .max - 1, .max]
         let encoded = layers.map(NativeMetalFilter.encodeLayer)
