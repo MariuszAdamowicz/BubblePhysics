@@ -46,4 +46,32 @@ final class NativeMetalResourceReuseTests: XCTestCase {
         let second = try NativeMetalPipelineCache.pipelines(for: device)
         XCTAssertEqual(Set(first.stages.keys), Set(NativeMetalPipelineCache.stageNames))
     }
+
+    /// Wycinki leżą w jednym buforze, każdy od przesunięcia wyrównanego do 256 B, bez nakładania i w granicach bufora.
+    private func assertDisjointAlignedSlices(_ slices: [NativeMetalBufferSlice], in buffer: MTLBuffer,
+                                             file: StaticString = #filePath, line: UInt = #line) {
+        for slice in slices {
+            XCTAssertTrue(slice.buffer === buffer, "wycinek poza wspólnym buforem", file: file, line: line)
+            XCTAssertEqual(slice.offset % NativeMetalBufferSlice.alignment, 0, "przesunięcie \(slice.offset)", file: file, line: line)
+            XCTAssertEqual(slice.contents(), buffer.contents().advanced(by: slice.offset), file: file, line: line)
+        }
+        let sorted = slices.sorted { $0.offset < $1.offset }
+        for (previous, next) in zip(sorted, sorted.dropFirst()) {
+            XCTAssertLessThanOrEqual(previous.offset + previous.length, next.offset, "wycinki nachodzą na siebie", file: file, line: line)
+        }
+        if let last = sorted.last { XCTAssertLessThanOrEqual(last.offset + last.length, buffer.length, file: file, line: line) }
+    }
+
+    /// Bugfix iPhone X (BF-D-2): siedem małych buforów sterowania kroku to jeden `MTLBuffer`, więc jądro jednej grupy wiąże je
+    /// jednym slotem; każdy wycinek ma dawną długość.
+    func testStepControlBlockSharesOneBufferWithAlignedSlices() throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let state = try NativeMetalPersistentState(device: device, bubbleCount: 4, segmentCount: 0)
+        let slices = [state.contactControl, state.dispatchStatistics, state.candidateOverflow, state.substepControl,
+                      state.substepDispatch, state.substepSteps, state.contactAssertion]
+        assertDisjointAlignedSlices(slices, in: state.stepControl)
+        XCTAssertEqual(slices.map(\.length), [MemoryLayout<NativeMetalContactControl>.stride, 3 * MemoryLayout<SIMD4<UInt32>>.stride,
+            MemoryLayout<SIMD4<UInt32>>.stride, MemoryLayout<NativeMetalSubstepControl>.stride, 3 * MemoryLayout<UInt32>.stride,
+            NativeMetalSubstep.frameLimit * MemoryLayout<Float>.stride, MemoryLayout<NativeMetalContactAssertion>.stride])
+    }
 }

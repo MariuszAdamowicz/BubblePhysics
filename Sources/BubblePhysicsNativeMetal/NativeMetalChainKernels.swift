@@ -146,7 +146,7 @@ enum NativeMetalRigidCandidates {
     @discardableResult
     static func encode(_ encoder: MTLComputeCommandEncoder, pipelines: [String: MTLComputePipelineState],
                        bodies: MTLBuffer, bubbles: MTLBuffer, margins: MTLBuffer, control: MTLBuffer,
-                       rows: MTLBuffer, rowCounts: MTLBuffer, overflow: MTLBuffer,
+                       rows: MTLBuffer, rowCounts: MTLBuffer, overflow: NativeMetalBufferSlice,
                        jointRanges: MTLBuffer, jointPartners: MTLBuffer, bodyCount: Int,
                        groupWidth: Int = defaultGroupWidth) -> Int {
         guard bodyCount > 0 else { return 0 }
@@ -154,10 +154,7 @@ enum NativeMetalRigidCandidates {
         let width = max(1, min(groupWidth, pipeline.maxTotalThreadsPerThreadgroup))
         encoder.memoryBarrier(scope: .buffers)
         encoder.setComputePipelineState(pipeline)
-        for (index, buffer) in [bodies, bubbles, margins, control, rows, rowCounts, overflow,
-                                jointRanges, jointPartners].enumerated() {
-            encoder.setBuffer(buffer, offset: 0, index: index)
-        }
+        encoder.setBindings([bodies, bubbles, margins, control, rows, rowCounts, overflow, jointRanges, jointPartners])
         // Pamięć grupy ma długość będącą wielokrotnością 16 bajtów (wymóg Metala); jądro używa `width` bajtów.
         encoder.setThreadgroupMemoryLength((width + 15) / 16 * 16, index: 0)
         encoder.dispatchThreadgroups(.init(width: bodyCount, height: 1, depth: 1),
@@ -244,9 +241,10 @@ struct NativeMetalScanBuffers {
     let blockSums: [MTLBuffer]
     let blockOffsets: [MTLBuffer]
     let control: MTLBuffer
-    let contacts: MTLBuffer
+    /// Wycinki bloku sterowania kroku (`NativeMetalPersistentState.stepControl`): sterowanie kontaktów i liczniki odrzuceń.
+    let contacts: NativeMetalBufferSlice
     let indirectArguments: MTLBuffer
-    let overflow: MTLBuffer
+    let overflow: NativeMetalBufferSlice
 }
 
 enum NativeMetalScan {
@@ -265,12 +263,10 @@ enum NativeMetalScan {
             let width = min(singleGroupWidth, pipeline.maxTotalThreadsPerThreadgroup)
             encoder.memoryBarrier(scope: .buffers)
             encoder.setComputePipelineState(pipeline)
-            for (index, buffer) in [buffers.values, buffers.offsets, buffers.control, buffers.contacts].enumerated() {
-                encoder.setBuffer(buffer, offset: 0, index: index)
-            }
+            encoder.setBindings([buffers.values, buffers.offsets, buffers.control, buffers.contacts])
             var parameters = SIMD2(mode, UInt32(0))
             encoder.setBytes(&parameters, length: MemoryLayout<SIMD2<UInt32>>.stride, index: 4)
-            encoder.setBuffer(buffers.overflow, offset: 0, index: 5)
+            encoder.setBinding(buffers.overflow, index: 5)
             encoder.setThreadgroupMemoryLength(2 * width * MemoryLayout<SIMD4<UInt32>>.stride, index: 0)
             if let gate {
                 encoder.dispatchThreadgroups(indirectBuffer: gate.buffer, indirectBufferOffset: gate.offset,
@@ -292,9 +288,7 @@ enum NativeMetalScan {
             encoder.setComputePipelineState(pipelines["nativeScanBlocks"]!)
             let input = level == 0 ? buffers.values : buffers.blockSums[level - 1]
             let output = level == 0 ? buffers.offsets : buffers.blockOffsets[level - 1]
-            for (i, b) in [input, output, buffers.blockSums[level], buffers.control, buffers.contacts].enumerated() {
-                encoder.setBuffer(b, offset: 0, index: i)
-            }
+            encoder.setBindings([input, output, buffers.blockSums[level], buffers.control, buffers.contacts])
             var parameters = SIMD2(mode, UInt32(level))
             encoder.setBytes(&parameters, length: MemoryLayout<SIMD2<UInt32>>.stride, index: 5)
             if mode == 0 {
@@ -312,9 +306,7 @@ enum NativeMetalScan {
                 encoder.memoryBarrier(scope: .buffers)
                 encoder.setComputePipelineState(pipelines["nativeAddScanBlockOffsets"]!)
                 let output = level == 0 ? buffers.offsets : buffers.blockOffsets[level - 1]
-                for (i, b) in [output, buffers.blockOffsets[level], buffers.control, buffers.contacts].enumerated() {
-                    encoder.setBuffer(b, offset: 0, index: i)
-                }
+                encoder.setBindings([output, buffers.blockOffsets[level], buffers.control, buffers.contacts])
                 var parameters = SIMD2(mode, UInt32(level))
                 encoder.setBytes(&parameters, length: MemoryLayout<SIMD2<UInt32>>.stride, index: 4)
                 if mode == 0 {
@@ -330,10 +322,10 @@ enum NativeMetalScan {
         }
         encoder.memoryBarrier(scope: .buffers)
         encoder.setComputePipelineState(pipelines["nativeFinishScan"]!)
-        for (i, b) in [buffers.offsets, buffers.control, buffers.contacts].enumerated() { encoder.setBuffer(b, offset: 0, index: i) }
+        encoder.setBindings([buffers.offsets, buffers.control, buffers.contacts])
         var parameters = SIMD2(mode, UInt32(0))
         encoder.setBytes(&parameters, length: MemoryLayout<SIMD2<UInt32>>.stride, index: 3)
-        encoder.setBuffer(buffers.overflow, offset: 0, index: 4)
+        encoder.setBinding(buffers.overflow, index: 4)
         encoder.dispatchThreads(.init(width: 1, height: 1, depth: 1), threadsPerThreadgroup: .init(width: 1, height: 1, depth: 1))
         return dispatches + 1
     }

@@ -6,10 +6,11 @@ import Metal
 /// podkrok pusty (czas kroku minął, znacznik przebudowy albo limitu) kosztuje tylko wyjście z `nativeReduceSubstep`.
 @MainActor
 enum NativeMetalSubstepLoop {
-    private static func bind(_ encoder: MTLComputeCommandEncoder, _ pipeline: MTLComputePipelineState, _ buffers: [MTLBuffer]) {
+    /// `buffers`: `MTLBuffer` albo `NativeMetalBufferSlice` (wycinki bloku sterowania kroku) pod kolejnymi indeksami.
+    private static func bind(_ encoder: MTLComputeCommandEncoder, _ pipeline: MTLComputePipelineState, _ buffers: [Any]) {
         encoder.memoryBarrier(scope: .buffers)
         encoder.setComputePipelineState(pipeline)
-        for (index, buffer) in buffers.enumerated() { encoder.setBuffer(buffer, offset: 0, index: index) }
+        encoder.setBindings(buffers)
     }
 
     private static func dispatch(_ encoder: MTLComputeCommandEncoder, count: Int) {
@@ -19,7 +20,7 @@ enum NativeMetalSubstepLoop {
     }
 
     private static func dispatchIndirect(_ encoder: MTLComputeCommandEncoder, state: NativeMetalPersistentState) {
-        encoder.dispatchThreadgroups(indirectBuffer: state.substepDispatch, indirectBufferOffset: 0,
+        encoder.dispatchThreadgroups(indirectSlice: state.substepDispatch,
             threadsPerThreadgroup: .init(width: NativeMetalSubstep.groupWidth, height: 1, depth: 1))
     }
 
@@ -129,7 +130,7 @@ extension NativeMetalSubstepLoop {
                                      joints: NativeJointState, configuration: NativeMetalConfiguration, hasRigidBodies: Bool, count: Int) {
         guard count > 0 else { return }
         let pipeline = pipelines["nativeSubstepLoopSingleGroup"]!
-        let buffers: [MTLBuffer] = [state.workingBubbles, state.control, state.contactControl, state.grid, state.workingSegments,
+        let bindings: [Any] = [state.workingBubbles, state.control, state.contactControl, state.grid, state.workingSegments,
             state.candidateRows, state.candidateRowCounts, state.candidateOverflow, joints.ranges, joints.exclusions,
             state.broadphaseMargin, state.referencePositions, state.nonContactAcceleration, forces.control!, forces.fields!,
             forces.fieldVertices!, forces.fieldObjectIDs!, forces.bands!, forces.motors!, state.substepControl,
@@ -137,8 +138,9 @@ extension NativeMetalSubstepLoop {
             state.scanOffsets, state.candidates, state.dispatchStatistics, state.adjacency, state.adjacencyCounts,
             state.acceleration, state.contactForces, state.substepSteps, state.substepDispatch, rigid.vertices, rigid.triangles,
             state.substepCapture ?? state.acceleration, state.contactAssertion]
-        precondition(buffers.count == NativeMetalSubstep.broadphaseBufferCount, "tablica adresów jądra jednej grupy to układ NativeBroadphaseBuffers")
-        var table = buffers.map(\.gpuAddress)
+        precondition(bindings.count == NativeMetalSubstep.broadphaseBufferCount, "tablica adresów jądra jednej grupy to układ NativeBroadphaseBuffers")
+        let slices = bindings.map(NativeMetalBufferSlice.init(binding:))
+        var table = slices.map { $0.buffer.gpuAddress + UInt64($0.offset) }
         let injection = configuration.injectedSubstepState
         var parameters = NativeMetalSingleGroupParameters(
             flags: SIMD4(configuration.minimumMarginOnly ? 1 : 0, UInt32(configuration.gridHashBucketCount), hasRigidBodies ? 1 : 0,
@@ -152,7 +154,9 @@ extension NativeMetalSubstepLoop {
         encoder.setBytes(&table, length: table.count * MemoryLayout<UInt64>.stride, index: 0)
         encoder.setBytes(&parameters, length: MemoryLayout<NativeMetalSingleGroupParameters>.stride, index: 1)
         var seen = Set<ObjectIdentifier>()
-        for buffer in buffers where seen.insert(ObjectIdentifier(buffer)).inserted { encoder.useResource(buffer, usage: [.read, .write]) }
+        for buffer in slices.map(\.buffer) where seen.insert(ObjectIdentifier(buffer)).inserted {
+            encoder.useResource(buffer, usage: [.read, .write])
+        }
         encoder.setThreadgroupMemoryLength(NativeMetalSubstep.singleGroupMemoryLength, index: 0)
         let width = NativeMetalSolver.singleGroupWidth(pipeline)
         encoder.dispatchThreadgroups(.init(width: 1, height: 1, depth: 1), threadsPerThreadgroup: .init(width: width, height: 1, depth: 1))

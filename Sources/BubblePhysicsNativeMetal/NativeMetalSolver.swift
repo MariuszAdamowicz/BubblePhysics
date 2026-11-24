@@ -49,14 +49,14 @@ final class NativeMetalPersistentState {
     let candidateRows: MTLBuffer
     let candidateRowCounts: MTLBuffer
     let grid: MTLBuffer
-    let contactControl: MTLBuffer
+    let contactControl: NativeMetalBufferSlice
     let scanValues: MTLBuffer
     let scanOffsets: MTLBuffer
     /// Tylko dla dawnego skanu blokowego (wzorzec testowy); `scanBlockSums.count` wyznacza też rozmiar `indirectArguments`.
     let scanBlockSums: [MTLBuffer]
     let scanBlockOffsets: [MTLBuffer]
     let scanCapacity: Int
-    let dispatchStatistics: MTLBuffer
+    let dispatchStatistics: NativeMetalBufferSlice
     let indirectArguments: MTLBuffer
     /// Indeks pierwszego slotu `NativeMetalSubstep.EndArgument` w `indirectArguments` (za slotami pętli i skanu).
     let endArgumentBase: Int
@@ -65,7 +65,7 @@ final class NativeMetalPersistentState {
     var publishedCacheCount = 0
     let adjacency: MTLBuffer
     /// uint4 na krok: x = pary odrzucone przez limit k lub pojemność, y = największe zapotrzebowanie na obiekt.
-    let candidateOverflow: MTLBuffer
+    let candidateOverflow: NativeMetalBufferSlice
     /// Licznik wyrzucany: sąsiedztwo końca kroku (z rekordów kontaktów) liczy do niego, więc ten sam odrzucony kandydat nie wchodzi drugi raz
     /// do `candidateOverflow` (CD-D-26).
     let endAdjacencyOverflow: MTLBuffer
@@ -86,13 +86,16 @@ final class NativeMetalPersistentState {
     let referencePositions: MTLBuffer
     let broadphaseMargin: MTLBuffer
     /// Jeden `NativeMetalSubstepControl`; czasy, liczniki i obiekt wyznaczający h.
-    let substepControl: MTLBuffer
+    let substepControl: NativeMetalBufferSlice
     /// Argumenty pośredniej dyspozycji jąder podkroku (trzy uint: liczba grup, 1, 1); zero grup dla podkroku pustego.
-    let substepDispatch: MTLBuffer
+    let substepDispatch: NativeMetalBufferSlice
     /// h każdego podkroku klatki (`NativeMetalSubstep.frameLimit` wpisów).
-    let substepSteps: MTLBuffer
+    let substepSteps: NativeMetalBufferSlice
     /// Jeden `NativeMetalContactAssertion`: pierwsze naruszenie asercji kontaktu w klatce, zerowany przed kodowaniem.
-    let contactAssertion: MTLBuffer
+    let contactAssertion: NativeMetalBufferSlice
+    /// Blok sterowania kroku: jeden bufor z wycinkami `contactControl`, `dispatchStatistics`, `candidateOverflow`, `substepControl`,
+    /// `substepDispatch`, `substepSteps` i `contactAssertion` (jeden slot jądra jednej grupy zamiast siedmiu, BF-D-2).
+    let stepControl: MTLBuffer
     /// Argumenty pośrednich dyspozycji jąder końca kroku (uint4 na bramkę: liczba grup, 1, 1, 0); zero grup, dopóki krok trwa.
     let endGates: MTLBuffer
     /// Przy `captureSubsteps`: float4 (x.xy, v.xy) na bańkę na podkrok, indeks podkroku · liczba baniek kroku + indeks bańki. Bez przełącznika nil.
@@ -167,7 +170,18 @@ final class NativeMetalPersistentState {
         candidateRows = try buffer("candidateRows", rowCapacity, MemoryLayout<NativeMetalCandidate>.stride)
         candidateRowCounts = try buffer("candidateRowCounts", bubbleCapacity * 2, MemoryLayout<UInt32>.stride)
         grid = try buffer("grid", bubbleCapacity, MemoryLayout<NativeMetalGridEntry>.stride)
-        contactControl = try buffer("contactControl", 1, MemoryLayout<NativeMetalContactControl>.stride)
+        let stepControlLengths = [MemoryLayout<NativeMetalContactControl>.stride, 3 * MemoryLayout<SIMD4<UInt32>>.stride,
+            MemoryLayout<SIMD4<UInt32>>.stride, MemoryLayout<NativeMetalSubstepControl>.stride, 3 * MemoryLayout<UInt32>.stride,
+            NativeMetalSubstep.frameLimit * MemoryLayout<Float>.stride, MemoryLayout<NativeMetalContactAssertion>.stride]
+        stepControl = try buffer("stepControl", NativeMetalBufferSlice.layout(stepControlLengths).length, 1)
+        let stepSlices = NativeMetalBufferSlice.slices(of: stepControl, lengths: stepControlLengths)
+        contactControl = stepSlices[0]
+        dispatchStatistics = stepSlices[1]
+        candidateOverflow = stepSlices[2]
+        substepControl = stepSlices[3]
+        substepDispatch = stepSlices[4]
+        substepSteps = stepSlices[5]
+        contactAssertion = stepSlices[6]
         let (mergedCapacity, mergedOverflow) = contactCapacity.multipliedReportingOverflow(by: 2)
         guard !mergedOverflow, mergedCapacity <= Int(UInt32.max) else { throw NativeMetalSolverError.allocationFailed }
         scanCapacity = max(mergedCapacity, bubbleCapacity * 2)
@@ -185,9 +199,7 @@ final class NativeMetalPersistentState {
         endArgumentBase = 5 + sums.count * 2
         indirectArguments = try buffer("indirectArguments", endArgumentBase + NativeMetalSubstep.EndArgument.allCases.count,
                                        MemoryLayout<SIMD4<UInt32>>.stride)
-        dispatchStatistics = try buffer("dispatchStatistics", 3, MemoryLayout<SIMD4<UInt32>>.stride)
         adjacency = try buffer("solver.adjacency", rowCapacity, MemoryLayout<SIMD4<UInt32>>.stride)
-        candidateOverflow = try buffer("candidateOverflow", 1, MemoryLayout<SIMD4<UInt32>>.stride)
         endAdjacencyOverflow = try buffer("endAdjacencyOverflow", 1, MemoryLayout<SIMD4<UInt32>>.stride)
         adjacencyCounts = try buffer("solver.adjacencyCounts", bubbleCapacity, MemoryLayout<UInt32>.stride)
         contactEndpoints = try buffer("solver.endpoints", contactCapacity, MemoryLayout<SIMD4<UInt32>>.stride)
@@ -209,10 +221,6 @@ final class NativeMetalPersistentState {
         contactForces = try buffer("substep.contactForces", bubbleCapacity, MemoryLayout<SIMD2<Float>>.stride)
         referencePositions = try buffer("substep.referencePositions", bubbleCapacity, MemoryLayout<SIMD2<Float>>.stride)
         broadphaseMargin = try buffer("substep.broadphaseMargin", bubbleCapacity, MemoryLayout<Float>.stride)
-        substepControl = try buffer("substep.control", 1, MemoryLayout<NativeMetalSubstepControl>.stride)
-        substepDispatch = try buffer("substep.dispatch", 1, 3 * MemoryLayout<UInt32>.stride)
-        substepSteps = try buffer("substep.steps", NativeMetalSubstep.frameLimit, MemoryLayout<Float>.stride)
-        contactAssertion = try buffer("substep.contactAssertion", 1, MemoryLayout<NativeMetalContactAssertion>.stride)
         endGates = try buffer("substep.endGates", NativeMetalSubstep.EndGate.allCases.count, MemoryLayout<SIMD4<UInt32>>.stride)
         let (captureCount, captureOverflow) = bubbleCapacity.multipliedReportingOverflow(by: NativeMetalSubstep.frameLimit)
         guard !captureOverflow else { throw NativeMetalSolverError.allocationFailed }
@@ -625,29 +633,27 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
             rigidState.encodeInputs(blit)
             blit.endEncoding()
         }
-        func dispatch(_ name: String, buffers: [MTLBuffer], threads: Int) {
+        func dispatch(_ name: String, buffers: [Any], threads: Int) {
             let pipeline = pipelines[name]!
             encoder.memoryBarrier(scope: .buffers)
             encoder.setComputePipelineState(pipeline)
-            for (index, buffer) in buffers.enumerated() { encoder.setBuffer(buffer, offset: 0, index: index) }
+            encoder.setBindings(buffers)
             if threads > 0 {
                 encoder.dispatchThreads(.init(width: threads, height: 1, depth: 1),
                     threadsPerThreadgroup: .init(width: min(pipeline.threadExecutionWidth, pipeline.maxTotalThreadsPerThreadgroup), height: 1, depth: 1))
             }
         }
-        func dispatchReduction(_ name: String, buffers: [MTLBuffer]) {
+        func dispatchReduction(_ name: String, buffers: [Any]) {
             encoder.memoryBarrier(scope: .buffers)
             encoder.setComputePipelineState(pipelines[name]!)
-            for (index, buffer) in buffers.enumerated() { encoder.setBuffer(buffer, offset: 0, index: index) }
+            encoder.setBindings(buffers)
             encoder.dispatchThreadgroups(.init(width: 1, height: 1, depth: 1),
                 threadsPerThreadgroup: .init(width: 256, height: 1, depth: 1))
         }
         func prepareIndirectArguments() {
             encoder.memoryBarrier(scope: .buffers)
             encoder.setComputePipelineState(pipelines["nativePrepareIndirectArguments"]!)
-            for (index, buffer) in [state.control, state.contactControl, state.indirectArguments].enumerated() {
-                encoder.setBuffer(buffer, offset: 0, index: index)
-            }
+            encoder.setBindings([state.control, state.contactControl, state.indirectArguments])
             var levels = UInt32(state.scanBlockSums.count)
             var endMode = UInt32(0)
             encoder.setBytes(&levels, length: MemoryLayout<UInt32>.stride, index: 3)
@@ -660,9 +666,7 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         func prepareEndArguments() {
             encoder.memoryBarrier(scope: .buffers)
             encoder.setComputePipelineState(pipelines["nativePrepareIndirectArguments"]!)
-            for (index, buffer) in [state.control, state.contactControl, state.indirectArguments].enumerated() {
-                encoder.setBuffer(buffer, offset: 0, index: index)
-            }
+            encoder.setBindings([state.control, state.contactControl, state.indirectArguments])
             var levels = UInt32(state.scanBlockSums.count)
             var endMode = UInt32(1)
             encoder.setBytes(&levels, length: MemoryLayout<UInt32>.stride, index: 3)
@@ -671,18 +675,18 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
                 indirectBufferOffset: NativeMetalSubstep.EndGate.indirectArguments.rawValue * MemoryLayout<SIMD4<UInt32>>.stride,
                 threadsPerThreadgroup: .init(width: 1, height: 1, depth: 1))
         }
-        func dispatchContacts(_ name: String, buffers: [MTLBuffer], argument: Int) {
+        func dispatchContacts(_ name: String, buffers: [Any], argument: Int) {
             encoder.memoryBarrier(scope: .buffers)
             encoder.setComputePipelineState(pipelines[name]!)
-            for (index, buffer) in buffers.enumerated() { encoder.setBuffer(buffer, offset: 0, index: index) }
+            encoder.setBindings(buffers)
             encoder.dispatchThreadgroups(indirectBuffer: state.indirectArguments, indirectBufferOffset: argument * 16,
                 threadsPerThreadgroup: .init(width: 32, height: 1, depth: 1))
         }
         // Dyspozycja pośrednia końca kroku: liczbę grup bierze ze slotu `EndArgument`, który w parze niekońcowej jest zerem.
-        func dispatchEndContacts(_ name: String, buffers: [MTLBuffer], argument: NativeMetalSubstep.EndArgument) {
+        func dispatchEndContacts(_ name: String, buffers: [Any], argument: NativeMetalSubstep.EndArgument) {
             encoder.memoryBarrier(scope: .buffers)
             encoder.setComputePipelineState(pipelines[name]!)
-            for (index, buffer) in buffers.enumerated() { encoder.setBuffer(buffer, offset: 0, index: index) }
+            encoder.setBindings(buffers)
             encoder.dispatchThreadgroups(indirectBuffer: state.indirectArguments,
                 indirectBufferOffset: (state.endArgumentBase + argument.rawValue) * MemoryLayout<SIMD4<UInt32>>.stride,
                 threadsPerThreadgroup: .init(width: 32, height: 1, depth: 1))
@@ -732,12 +736,12 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         }
         // Jądro z efektem ubocznym za bramką końca kroku: bufory i bajty wiąże wywołujący, a liczba grup pochodzi z `nativePrepareEndGates`
         // (zero, dopóki czas kroku nie minął albo klatka przekroczyła limit podkroków).
-        func dispatchGated(_ name: String, buffers: [MTLBuffer], gate: NativeMetalSubstep.EndGate,
+        func dispatchGated(_ name: String, buffers: [Any], gate: NativeMetalSubstep.EndGate,
                            bytes: (MTLComputeCommandEncoder) -> Void = { _ in }) {
             let pipeline = pipelines[name]!
             encoder.memoryBarrier(scope: .buffers)
             encoder.setComputePipelineState(pipeline)
-            for (index, buffer) in buffers.enumerated() { encoder.setBuffer(buffer, offset: 0, index: index) }
+            encoder.setBindings(buffers)
             bytes(encoder)
             dispatchGate(pipeline, gate)
         }
@@ -927,7 +931,7 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         func dispatchPrepareEndGates() {
             encoder.memoryBarrier(scope: .buffers)
             encoder.setComputePipelineState(pipelines["nativePrepareEndGates"]!)
-            encoder.setBuffer(state.substepControl, offset: 0, index: 0)
+            encoder.setBinding(state.substepControl, index: 0)
             encoder.setBuffer(state.endGates, offset: 0, index: 1)
             gateGroups.withUnsafeBytes { encoder.setBytes($0.baseAddress!, length: $0.count, index: 2) }
             var gateCount = UInt32(gateGroups.count)
@@ -1234,6 +1238,70 @@ struct NativeMetalCopyRun: Equatable {
             }
         }
         return runs
+    }
+}
+
+/// Wycinek wspólnego bufora. Małe bufory jednej grupy (sterowanie kroku, rekordy sił) leżą w jednym `MTLBuffer`, żeby jądro jednej
+/// grupy mieściło się w 31 wiązaniach buforów argument buffers tier 1 (A11, bugfix iPhone X, BF-D-2); jądra wiążą wycinek z przesunięciem.
+struct NativeMetalBufferSlice {
+    /// Wyrównanie przesunięcia wycinka: wystarcza dla `setBuffer` w każdej przestrzeni adresowej i dla `indirectBufferOffset`.
+    static let alignment = 256
+    let buffer: MTLBuffer
+    let offset: Int
+    let length: Int
+
+    /// Cały bufor jako wycinek (bufory testowe jąder, które w produkcji dostają wycinek wspólnego bufora).
+    init(_ buffer: MTLBuffer) { self.init(buffer, offset: 0, length: buffer.length) }
+
+    init(_ buffer: MTLBuffer, offset: Int, length: Int) {
+        self.buffer = buffer
+        self.offset = offset
+        self.length = length
+    }
+
+    /// Wycinek z wiązania jądra: `NativeMetalBufferSlice` bez zmian, `MTLBuffer` jako cały bufor.
+    init(binding: Any) {
+        switch binding {
+        case let slice as NativeMetalBufferSlice: self = slice
+        case let buffer as MTLBuffer: self.init(buffer)
+        default: preconditionFailure("wiązanie nie jest ani MTLBuffer, ani NativeMetalBufferSlice")
+        }
+    }
+
+    func contents() -> UnsafeMutableRawPointer { buffer.contents().advanced(by: offset) }
+
+    /// Przesunięcia kolejnych wycinków o długościach `lengths`, każde wyrównane do `alignment`, i długość wspólnego bufora.
+    static func layout(_ lengths: [Int]) -> (offsets: [Int], length: Int) {
+        var offsets: [Int] = []
+        var end = 0
+        for length in lengths {
+            let offset = (end + alignment - 1) / alignment * alignment
+            offsets.append(offset)
+            end = offset + length
+        }
+        return (offsets, end)
+    }
+
+    /// Wycinki bufora `buffer` w układzie `layout(lengths)`, w kolejności `lengths`.
+    static func slices(of buffer: MTLBuffer, lengths: [Int]) -> [NativeMetalBufferSlice] {
+        zip(layout(lengths).offsets, lengths).map { NativeMetalBufferSlice(buffer, offset: $0, length: $1) }
+    }
+}
+
+extension MTLComputeCommandEncoder {
+    /// Wiąże `MTLBuffer` (od początku) albo `NativeMetalBufferSlice` (jego bufor z przesunięciem) pod `index`.
+    func setBinding(_ binding: Any, index: Int) {
+        let slice = NativeMetalBufferSlice(binding: binding)
+        setBuffer(slice.buffer, offset: slice.offset, index: index)
+    }
+
+    /// Wiąże kolejne bufory i wycinki pod indeksami od zera.
+    func setBindings(_ bindings: [Any]) {
+        for (index, binding) in bindings.enumerated() { setBinding(binding, index: index) }
+    }
+
+    func dispatchThreadgroups(indirectSlice slice: NativeMetalBufferSlice, threadsPerThreadgroup: MTLSize) {
+        dispatchThreadgroups(indirectBuffer: slice.buffer, indirectBufferOffset: slice.offset, threadsPerThreadgroup: threadsPerThreadgroup)
     }
 }
 

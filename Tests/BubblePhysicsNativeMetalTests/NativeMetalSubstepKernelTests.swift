@@ -132,22 +132,18 @@ final class NativeMetalSubstepKernelTests: XCTestCase {
                     threads(encoder)
                 case .margin:
                     encoder.setComputePipelineState(pipelines["nativeBroadphaseMargin"]!)
-                    for (index, buffer) in [state.workingBubbles, state.control, state.nonContactAcceleration, state.substepControl,
-                                            state.broadphaseMargin, state.referencePositions].enumerated() {
-                        encoder.setBuffer(buffer, offset: 0, index: index)
-                    }
+                    encoder.setBindings([state.workingBubbles, state.control, state.nonContactAcceleration, state.substepControl,
+                                         state.broadphaseMargin, state.referencePositions])
                     var minimumOnly: UInt32 = minimumMarginOnly ? 1 : 0
                     encoder.setBytes(&minimumOnly, length: MemoryLayout<UInt32>.stride, index: 6)
                     threads(encoder)
                 case .reduce:
                     let pipeline = pipelines["nativeReduceSubstep"]!
                     encoder.setComputePipelineState(pipeline)
-                    for (index, buffer) in [state.workingBubbles, state.workingSegments, state.control, state.contactControl,
-                                            state.adjacency, state.adjacencyCounts, state.acceleration, state.substepControl,
-                                            state.substepDispatch, state.substepSteps, state.broadphaseMargin,
-                                            state.referencePositions, forces.control!, forces.bands!].enumerated() {
-                        encoder.setBuffer(buffer, offset: 0, index: index)
-                    }
+                    encoder.setBindings([state.workingBubbles, state.workingSegments, state.control, state.contactControl,
+                                         state.adjacency, state.adjacencyCounts, state.acceleration, state.substepControl,
+                                         state.substepDispatch, state.substepSteps, state.broadphaseMargin,
+                                         state.referencePositions, forces.control!, forces.bands!])
                     encoder.dispatchThreadgroups(.init(width: 1, height: 1, depth: 1),
                         threadsPerThreadgroup: .init(width: reductionWidthOverride ?? NativeMetalSubstep.reductionWidth(pipeline),
                                                      height: 1, depth: 1))
@@ -156,14 +152,14 @@ final class NativeMetalSubstepKernelTests: XCTestCase {
                     threads(encoder)
                 case .indirectContactForces:
                     bindContactForces(encoder)
-                    encoder.dispatchThreadgroups(indirectBuffer: state.substepDispatch, indirectBufferOffset: 0,
+                    encoder.dispatchThreadgroups(indirectSlice: state.substepDispatch,
                                                  threadsPerThreadgroup: .init(width: width, height: 1, depth: 1))
                 case .integrate(let phase):
                     bindIntegrate(encoder, phase)
                     threads(encoder)
                 case .indirectIntegrate(let phase):
                     bindIntegrate(encoder, phase)
-                    encoder.dispatchThreadgroups(indirectBuffer: state.substepDispatch, indirectBufferOffset: 0,
+                    encoder.dispatchThreadgroups(indirectSlice: state.substepDispatch,
                                                  threadsPerThreadgroup: .init(width: width, height: 1, depth: 1))
                 }
             }
@@ -179,27 +175,21 @@ final class NativeMetalSubstepKernelTests: XCTestCase {
         }
 
         private func bindForces(_ encoder: MTLComputeCommandEncoder, output: MTLBuffer) {
-            for (index, buffer) in [state.workingBubbles, state.control, forces.control!, forces.fields!, forces.fieldVertices!,
-                                    forces.fieldObjectIDs!, output, forces.bands!, forces.motors!].enumerated() {
-                encoder.setBuffer(buffer, offset: 0, index: index)
-            }
+            encoder.setBindings([state.workingBubbles, state.control, forces.control!, forces.fields!, forces.fieldVertices!,
+                                 forces.fieldObjectIDs!, output, forces.bands!, forces.motors!])
         }
 
         private func bindContactForces(_ encoder: MTLComputeCommandEncoder) {
             encoder.setComputePipelineState(pipelines["nativeContactForces"]!)
-            for (index, buffer) in [state.workingBubbles, state.workingSegments, state.control, state.contactControl, state.adjacency,
-                                    state.adjacencyCounts, state.contactForces].enumerated() {
-                encoder.setBuffer(buffer, offset: 0, index: index)
-            }
+            encoder.setBindings([state.workingBubbles, state.workingSegments, state.control, state.contactControl, state.adjacency,
+                                 state.adjacencyCounts, state.contactForces])
         }
 
         private func bindIntegrate(_ encoder: MTLComputeCommandEncoder, _ phase: NativeMetalSubstep.Phase) {
             encoder.setComputePipelineState(pipelines["nativeIntegrateSubstep"]!)
-            for (index, buffer) in [state.workingBubbles, state.control, forces.control!, forces.fields!, forces.fieldVertices!,
-                                    forces.fieldObjectIDs!, state.acceleration, state.nonContactAcceleration, state.contactForces,
-                                    state.substepControl, state.substepCapture ?? state.acceleration].enumerated() {
-                encoder.setBuffer(buffer, offset: 0, index: index)
-            }
+            encoder.setBindings([state.workingBubbles, state.control, forces.control!, forces.fields!, forces.fieldVertices!,
+                                 forces.fieldObjectIDs!, state.acceleration, state.nonContactAcceleration, state.contactForces,
+                                 state.substepControl, state.substepCapture ?? state.acceleration])
             var mode = SIMD4<UInt32>(phase.rawValue, capture ? 1 : 0, 0, 0)
             encoder.setBytes(&mode, length: MemoryLayout<SIMD4<UInt32>>.stride, index: 11)
             encoder.setBuffer(forces.bands!, offset: 0, index: 12)

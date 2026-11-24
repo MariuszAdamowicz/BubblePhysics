@@ -270,7 +270,7 @@ final class NativeMetalChainKernelTests: XCTestCase {
         let dispatches = try run(device: device) {
             NativeMetalRigidCandidates.encode($0, pipelines: pipelines, bodies: try! makeBuffer(bodies, device: device),
                 bubbles: try! makeBuffer(bubbles, device: device), margins: try! makeBuffer(margins, device: device),
-                control: control, rows: rows, rowCounts: rowCounts, overflow: overflow,
+                control: control, rows: rows, rowCounts: rowCounts, overflow: NativeMetalBufferSlice(overflow),
                 jointRanges: try! makeBuffer(ranges, device: device), jointPartners: try! makeBuffer(partners, device: device),
                 bodyCount: bodyCount, groupWidth: groupWidth)
         }
@@ -451,7 +451,8 @@ final class NativeMetalChainKernelTests: XCTestCase {
         let indirect = try XCTUnwrap(device.makeBuffer(length: (5 + sums.count * 2) * stride, options: .storageModeShared))
         let overflow = try makeBuffer([UInt32](repeating: 0, count: 4), device: device)
         let buffers = NativeMetalScanBuffers(values: values, offsets: output, blockSums: sums, blockOffsets: offsets,
-                                             control: control, contacts: contacts, indirectArguments: indirect, overflow: overflow)
+                                             control: control, contacts: NativeMetalBufferSlice(contacts), indirectArguments: indirect,
+                                             overflow: NativeMetalBufferSlice(overflow))
         let dispatches = try run(device: device) { encoder in
             encoder.setComputePipelineState(pipelines["nativePrepareIndirectArguments"]!)
             for (index, buffer) in [control, contacts, indirect].enumerated() { encoder.setBuffer(buffer, offset: 0, index: index) }
