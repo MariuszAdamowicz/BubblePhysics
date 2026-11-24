@@ -57,12 +57,21 @@ struct NativeMetalSubstepDiagnostics {
 }
 
 /// Stałe jądra `nativeSubstepLoopSingleGroup` (lustro `NativeSingleGroupParameters`): zapas tylko r / 4, liczba kubełków siatki, bryły jako kandydaci,
-/// zapis podkroków; wstrzyknięcie stanu, asercja po podkroku, liczba brył asercji i podkrok wstrzyknięcia; obiekt i położenie wstrzyknięcia.
+/// zapis podkroków; wstrzyknięcie stanu, asercja po podkroku, liczba brył asercji i podkrok wstrzyknięcia; obiekt i położenie wstrzyknięcia;
+/// przesunięcia wycinków bloku sterowania kroku i rekordów sił we wspólnych buforach (bugfix iPhone X, BF-D-2).
 struct NativeMetalSingleGroupParameters: Equatable, Sendable {
     var flags: SIMD4<UInt32>
     var diagnostics: SIMD4<UInt32>
     var injectionObject: SIMD2<UInt64>
     var injectionPosition: SIMD4<Float>
+    /// Sterowanie kontaktów, statystyki dyspozycji, liczniki odrzuceń, sterowanie podkroków.
+    var stepControlOffsets: SIMD4<UInt32>
+    /// Argumenty dyspozycji pośredniej, historia h, rekord asercji, reserved.
+    var stepControlOffsetsTail: SIMD4<UInt32>
+    /// Pola, wierzchołki pól, ID obiektów pól, gumki.
+    var forceRecordOffsets: SIMD4<UInt32>
+    /// Motory, reserved.
+    var forceRecordOffsetsTail: SIMD4<UInt32>
 }
 
 /// Stałe jąder sił poza rekordami: siła globalna i liczby rekordów w buforach `NativeMetalForceBuffers`.
@@ -79,8 +88,9 @@ enum NativeMetalSubstep {
     static let singleDispatchBubbleLimit = 1024
     /// Pamięć grupy jądra jednej grupy w bajtach: jedna tablica współdzielona przez fazy (kubełki siatki 8 KB, sumy częściowe i skan nad nią).
     static let singleGroupMemoryLength = 16_384
-    /// Liczba adresów GPU w tablicy `nativeSubstepLoopSingleGroup`: pola `NativeBroadphaseBuffers`, osiem bajtów każde (sonda ABI).
-    static let broadphaseBufferCount = 38
+    /// Liczba slotów buforów `nativeSubstepLoopSingleGroup`; parametry idą w następnym slocie. Z parametrami mieści się w limicie
+    /// 31 wpisów tablicy buforów funkcji na A11 (bugfix iPhone X, BF-D-2).
+    static let singleGroupBufferCount = 28
     /// Szerokość grupy jąder podkroku; `nativeReduceSubstep` zapisuje liczbę grup dla tej szerokości.
     static let groupWidth = 64
     /// Szerokość grupy `nativeReduceSubstep` (jedna grupa na świat) w ścieżce wielu dyspozycji: największa potęga dwójki, którą pipeline pomieści, do 1024.

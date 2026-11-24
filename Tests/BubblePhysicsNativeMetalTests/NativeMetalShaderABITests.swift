@@ -278,8 +278,8 @@ final class NativeMetalShaderABITests: XCTestCase {
         XCTAssertEqual(MemoryLayout<NativeMetalContactAssertion>.stride, 48)
     }
 
-    /// Jądro `nativeSubstepLoopSingleGroup` czyta bufory ze struktury wskaźników (`NativeBroadphaseBuffers`) i stałe ze struktury
-    /// `NativeSingleGroupParameters`: oba układy muszą zgadzać się z tym, co koduje `NativeMetalSubstepLoop.encodeSingleDispatch`.
+    /// Jądro `nativeSubstepLoopSingleGroup` czyta stałe i przesunięcia wycinków ze struktury `NativeSingleGroupParameters`: układ musi
+    /// zgadzać się z tym, co koduje `NativeMetalSubstepLoop.encodeSingleDispatch`.
     func testSingleGroupKernelStructsMatchShaderLayouts() throws {
         let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
         let sources = try NativeMetalShaderSource.solverFiles.map(source)
@@ -289,13 +289,14 @@ final class NativeMetalShaderABITests: XCTestCase {
                 ("flags", MemoryLayout<NativeMetalSingleGroupParameters>.offset(of: \.flags)),
                 ("diagnostics", MemoryLayout<NativeMetalSingleGroupParameters>.offset(of: \.diagnostics)),
                 ("injectionObject", MemoryLayout<NativeMetalSingleGroupParameters>.offset(of: \.injectionObject)),
-                ("injectionPosition", MemoryLayout<NativeMetalSingleGroupParameters>.offset(of: \.injectionPosition))]),
-            // Wskaźniki GPU mają po 8 bajtów, więc rozmiar struktury to liczba wpisów tablicy adresów razy osiem.
-            Probe(name: "broadphaseBuffers", mslSize: "NativeBroadphaseBuffers",
-                  swiftSize: NativeMetalSubstep.broadphaseBufferCount * MemoryLayout<UInt64>.stride, fields: [])
+                ("injectionPosition", MemoryLayout<NativeMetalSingleGroupParameters>.offset(of: \.injectionPosition)),
+                ("stepControlOffsets", MemoryLayout<NativeMetalSingleGroupParameters>.offset(of: \.stepControlOffsets)),
+                ("stepControlOffsetsTail", MemoryLayout<NativeMetalSingleGroupParameters>.offset(of: \.stepControlOffsetsTail)),
+                ("forceRecordOffsets", MemoryLayout<NativeMetalSingleGroupParameters>.offset(of: \.forceRecordOffsets)),
+                ("forceRecordOffsetsTail", MemoryLayout<NativeMetalSingleGroupParameters>.offset(of: \.forceRecordOffsetsTail))])
         ]
         assertMatches(probes, try measure(probes, sources: sources, device: device))
-        XCTAssertEqual(MemoryLayout<NativeMetalSingleGroupParameters>.stride, 64)
+        XCTAssertEqual(MemoryLayout<NativeMetalSingleGroupParameters>.stride, 128)
     }
 
     /// A11 (rodzina Apple4) ma argument buffers tier 1: struktura wskaźników z adresami GPU tam nie działa, a każdy bufor jądra
@@ -311,6 +312,9 @@ final class NativeMetalShaderABITests: XCTestCase {
         _ = try device.makeComputePipelineState(function: function, options: [.bindingInfo], reflection: &reflection)
         let buffers = try XCTUnwrap(reflection).bindings.compactMap { $0 as? MTLBufferBinding }
         XCTAssertLessThanOrEqual(buffers.count, 31, "tier 1 liczy każdy bufor jądra do limitu 31 wpisów tablicy buforów")
+        XCTAssertEqual(buffers.count, NativeMetalSubstep.singleGroupBufferCount + 1, "sloty buforów i slot parametrów")
+        let parameters = try XCTUnwrap(buffers.first { $0.index == NativeMetalSubstep.singleGroupBufferCount })
+        XCTAssertEqual(parameters.bufferDataSize, MemoryLayout<NativeMetalSingleGroupParameters>.stride)
         for binding in buffers {
             let pointers = binding.bufferStructType?.members.filter { $0.dataType == .pointer }.count ?? 0
             XCTAssertEqual(pointers, 0, "argument \(binding.name) ma wskaźniki GPU, a tier 1 ich nie obsługuje")

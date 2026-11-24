@@ -122,25 +122,26 @@ enum NativeMetalSubstepLoop {
 
 extension NativeMetalSubstepLoop {
     /// Ścieżka jednej dyspozycji (CD-D-27): cały krok baniek (broadphase, siły początkowe, pętla podkroków z przebudową siatki) w jądrze
-    /// `nativeSubstepLoopSingleGroup`, jedną grupą wątków i jedną dyspozycją. Wskaźniki idą jedną strukturą (bufor argumentów), bo jądro ma
-    /// ponad 31 buforów; adresy GPU w kolejności pól struktury `NativeBroadphaseBuffers`, a `useResource` udostępnia każdy bufor.
-    /// Bryły są kandydatami tylko przy `hasRigidBodies`.
+    /// `nativeSubstepLoopSingleGroup`, jedną grupą wątków i jedną dyspozycją. Bufory idą zwykłymi slotami w kolejności argumentów jądra,
+    /// bez bufora argumentów, bo A11 (tier 1) liczy każdy bufor do limitu 31 wpisów (bugfix iPhone X, BF-D-2). Blok sterowania kroku
+    /// i rekordy sił wiąże się raz jako całe bufory, a przesunięcia ich wycinków idą w parametrach; stała siła globalna ma osobny slot
+    /// w przestrzeni `constant`. Bryły są kandydatami tylko przy `hasRigidBodies`.
     static func encodeSingleDispatch(_ encoder: MTLComputeCommandEncoder, pipelines: [String: MTLComputePipelineState],
                                      state: NativeMetalPersistentState, forces: NativeMetalForceBuffers, rigid: NativeRigidPolygonState,
                                      joints: NativeJointState, configuration: NativeMetalConfiguration, hasRigidBodies: Bool, count: Int) {
         guard count > 0 else { return }
         let pipeline = pipelines["nativeSubstepLoopSingleGroup"]!
-        let bindings: [Any] = [state.workingBubbles, state.control, state.contactControl, state.grid, state.workingSegments,
-            state.candidateRows, state.candidateRowCounts, state.candidateOverflow, joints.ranges, joints.exclusions,
-            state.broadphaseMargin, state.referencePositions, state.nonContactAcceleration, forces.control!, forces.fields!,
-            forces.fieldVertices!, forces.fieldObjectIDs!, forces.bands!, forces.motors!, state.substepControl,
-            rigid.bodies, rigid.bubbleControl, rigid.bubbleCandidates, rigid.bubbleRowCounts, state.scanValues,
-            state.scanOffsets, state.candidates, state.dispatchStatistics, state.adjacency, state.adjacencyCounts,
-            state.acceleration, state.contactForces, state.substepSteps, state.substepDispatch, rigid.vertices, rigid.triangles,
-            state.substepCapture ?? state.acceleration, state.contactAssertion]
-        precondition(bindings.count == NativeMetalSubstep.broadphaseBufferCount, "tablica adresów jądra jednej grupy to układ NativeBroadphaseBuffers")
-        let slices = bindings.map(NativeMetalBufferSlice.init(binding:))
-        var table = slices.map { $0.buffer.gpuAddress + UInt64($0.offset) }
+        let bindings: [Any] = [state.workingBubbles, state.control, state.grid, state.workingSegments, state.candidateRows,
+            state.candidateRowCounts, joints.ranges, joints.exclusions, state.broadphaseMargin, state.referencePositions,
+            state.nonContactAcceleration, forces.control!, forces.records!, rigid.bodies, rigid.bubbleControl, rigid.bubbleCandidates,
+            rigid.bubbleRowCounts, state.scanValues, state.scanOffsets, state.candidates, state.adjacency, state.adjacencyCounts,
+            state.acceleration, state.contactForces, rigid.vertices, rigid.triangles, state.substepCapture ?? state.acceleration,
+            state.stepControl]
+        precondition(bindings.count == NativeMetalSubstep.singleGroupBufferCount, "sloty jądra jednej grupy to jego argumenty buforów")
+        let stepOffsets = offsets([state.contactControl, state.dispatchStatistics, state.candidateOverflow, state.substepControl,
+                                   state.substepDispatch, state.substepSteps, state.contactAssertion], in: state.stepControl)
+        let forceOffsets = offsets([forces.fields!, forces.fieldVertices!, forces.fieldObjectIDs!, forces.bands!, forces.motors!],
+                                   in: forces.records!)
         let injection = configuration.injectedSubstepState
         var parameters = NativeMetalSingleGroupParameters(
             flags: SIMD4(configuration.minimumMarginOnly ? 1 : 0, UInt32(configuration.gridHashBucketCount), hasRigidBodies ? 1 : 0,
@@ -148,18 +149,27 @@ extension NativeMetalSubstepLoop {
             diagnostics: SIMD4(injection == nil ? 0 : 1, configuration.assertEverySubstep ? 1 : 0, UInt32(rigid.count),
                                UInt32(max(injection?.afterSubstep ?? 0, 0))),
             injectionObject: SIMD2(injection?.objectID ?? 0, 0),
-            injectionPosition: SIMD4(injection?.position.x ?? 0, injection?.position.y ?? 0, 0, 0))
+            injectionPosition: SIMD4(injection?.position.x ?? 0, injection?.position.y ?? 0, 0, 0),
+            stepControlOffsets: SIMD4(stepOffsets[0], stepOffsets[1], stepOffsets[2], stepOffsets[3]),
+            stepControlOffsetsTail: SIMD4(stepOffsets[4], stepOffsets[5], stepOffsets[6], 0),
+            forceRecordOffsets: SIMD4(forceOffsets[0], forceOffsets[1], forceOffsets[2], forceOffsets[3]),
+            forceRecordOffsetsTail: SIMD4(forceOffsets[4], 0, 0, 0))
         encoder.memoryBarrier(scope: .buffers)
         encoder.setComputePipelineState(pipeline)
-        encoder.setBytes(&table, length: table.count * MemoryLayout<UInt64>.stride, index: 0)
-        encoder.setBytes(&parameters, length: MemoryLayout<NativeMetalSingleGroupParameters>.stride, index: 1)
-        var seen = Set<ObjectIdentifier>()
-        for buffer in slices.map(\.buffer) where seen.insert(ObjectIdentifier(buffer)).inserted {
-            encoder.useResource(buffer, usage: [.read, .write])
-        }
+        encoder.setBindings(bindings)
+        encoder.setBytes(&parameters, length: MemoryLayout<NativeMetalSingleGroupParameters>.stride,
+                         index: NativeMetalSubstep.singleGroupBufferCount)
         encoder.setThreadgroupMemoryLength(NativeMetalSubstep.singleGroupMemoryLength, index: 0)
         let width = NativeMetalSolver.singleGroupWidth(pipeline)
         encoder.dispatchThreadgroups(.init(width: 1, height: 1, depth: 1), threadsPerThreadgroup: .init(width: width, height: 1, depth: 1))
+    }
+
+    /// Przesunięcia wycinków `slices` we wspólnym buforze `buffer`, który jądro wiąże od zera.
+    private static func offsets(_ slices: [NativeMetalBufferSlice], in buffer: MTLBuffer) -> [UInt32] {
+        slices.map { slice in
+            precondition(slice.buffer === buffer, "wycinek jądra jednej grupy spoza wspólnego bufora")
+            return UInt32(slice.offset)
+        }
     }
 }
 

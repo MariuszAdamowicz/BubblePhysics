@@ -941,8 +941,10 @@ kernel void nativeInjectSubstepState(device NativeBubble *bubbles [[buffer(0)]],
 // Te same funkcje urządzenia co jądra ścieżki wielu dyspozycji, ale jedna grupa wątków robi całą budowę: a₀, zapas, siatka haszowana
 // w pamięci grupy (zliczanie w kubełkach, suma prefiksowa, rozpisanie), kandydaci, skan, kompaktowanie i sąsiedztwo. Fazy rozdziela
 // `threadgroup_barrier(mem_flags::mem_device | mem_flags::mem_threadgroup)`, bo wynik jednej fazy leży w buforach urządzenia.
-// Jądro ma więcej buforów niż tablica argumentów Metala (31), więc wskaźniki idą jedną strukturą (bufor argumentów); host zapisuje
-// adresy GPU w kolejności pól i woła `useResource` dla każdego bufora.
+// Jądro wiąże bufory zwykłymi slotami `[[buffer(n)]]`, bez buforów argumentów: A11 (tier 1) liczy każdy bufor do limitu 31 wpisów
+// tablicy buforów funkcji (bugfix iPhone X, BF-D-2). Siedem małych buforów sterowania kroku i pięć tablic rekordów sił to wycinki dwóch
+// wspólnych buforów, a ich przesunięcia podaje `NativeSingleGroupParameters`. Na wejściu jądro składa z argumentów lokalną strukturę
+// wskaźników `NativeBroadphaseBuffers` (przestrzeń `thread`), którą biorą funkcje urządzenia.
 #define NATIVE_GROUP_BARRIER threadgroup_barrier(mem_flags::mem_device | mem_flags::mem_threadgroup)
 
 struct NativeBroadphaseBuffers {
@@ -1005,7 +1007,7 @@ uint2 nativeGroupBucketRange(threadgroup uint *ends, uint bucket) {
 }
 
 // Wiersz kandydatów bańki z siatki haszowanej: dziewięć komórek wokół bańki, wpis liczy się tylko z własnej komórki.
-void nativeEmitBubbleCandidatesHashed(uint index, constant NativeBroadphaseBuffers &b, threadgroup uint *ends, uint bucketCount) {
+void nativeEmitBubbleCandidatesHashed(uint index, thread const NativeBroadphaseBuffers &b,threadgroup uint *ends, uint bucketCount) {
     NativeBubble a = b.bubbles[index];
     device NativeContactControl &contacts = *b.contacts;
     if (!all(isfinite(a.position))) {
@@ -1035,7 +1037,7 @@ void nativeEmitBubbleCandidatesHashed(uint index, constant NativeBroadphaseBuffe
 // Cała budowa siatki i kandydatów jednej grupy. `parameters`: zapas tylko r / 4 (1 = tak), liczba kubełków, liczba brył (0 = bez kandydatów
 // bańka–bryła), reserved. Zakłada wyzerowane liczniki kontaktów i kandydatów (`contactControl`, `candidateOverflow`), jak jądra ścieżki
 // wielu dyspozycji; czas pozostały w kroku bierze z `substep.time`, więc przebudowa w tej samej klatce liczy zapas z pozostałego czasu.
-void nativeBroadphaseInGroup(constant NativeBroadphaseBuffers &b, uint4 parameters, threadgroup uint *shared, uint lane, uint width) {
+void nativeBroadphaseInGroup(thread const NativeBroadphaseBuffers &b,uint4 parameters, threadgroup uint *shared, uint lane, uint width) {
     uint count = b.control->counts.x;
     uint bucketCount = clamp(parameters.y, 1u, nativeGroupBucketLimit);
     device NativeContactControl &contacts = *b.contacts;
@@ -1133,16 +1135,74 @@ void nativeBroadphaseInGroup(constant NativeBroadphaseBuffers &b, uint4 paramete
 
 // Stałe jądra pętli: `flags` to zapas tylko r / 4 (1 = tak), liczba kubełków siatki, liczba brył (0 = bez kandydatów bańka–bryła) i zapis
 // podkroków (1 = tak); `diagnostics` to wstrzyknięcie stanu (1 = tak), asercja po podkroku (1 = tak), liczba brył asercji i podkrok wstrzyknięcia
-// liczony od zera (jak w `nativeInjectSubstepState`); `injectionObject.x` i `injectionPosition.xy` mówią, kogo i dokąd.
+// liczony od zera (jak w `nativeInjectSubstepState`); `injectionObject.x` i `injectionPosition.xy` mówią, kogo i dokąd. Przesunięcia
+// w bajtach: `stepControlOffsets` to sterowanie kontaktów, statystyki dyspozycji, liczniki odrzuceń, sterowanie podkroków, a
+// `stepControlOffsetsTail` argumenty dyspozycji pośredniej, historia h, rekord asercji (reserved) w buforze sterowania kroku;
+// `forceRecordOffsets` to pola, wierzchołki pól, ID obiektów pól, gumki, a `forceRecordOffsetsTail.x` motory w buforze rekordów sił.
 struct NativeSingleGroupParameters {
     uint4 flags;
     uint4 diagnostics;
     ulong2 injectionObject;
     float4 injectionPosition;
+    uint4 stepControlOffsets;
+    uint4 stepControlOffsetsTail;
+    uint4 forceRecordOffsets;
+    uint4 forceRecordOffsetsTail;
 };
 
+// Lokalna struktura wskaźników jądra jednej grupy z jego argumentów i przesunięć wycinków (bugfix iPhone X, BF-D-2).
+NativeBroadphaseBuffers nativeSingleGroupBuffers(device NativeBubble *bubbles, constant NativeControl *control, device NativeGridEntry *grid,
+    device NativeSegment *segments, device NativeCandidate *candidateRows, device uint *candidateRowCounts, device uint4 *jointRanges,
+    device ulong *jointPartners, device float *margins, device float2 *references, device float2 *nonContactAcceleration,
+    constant NativeForceControl *forces, device uchar *forceRecords, device NativeRigidBody *bodies, device uint4 *bubbleControl,
+    device NativeCandidate *bubbleCandidates, device uint2 *bubbleRowCounts, device uint4 *scanValues, device uint4 *scanOffsets,
+    device NativeCandidate *candidates, device uint4 *adjacency, device atomic_uint *degrees, device float2 *acceleration,
+    device float2 *contactForces, device float2 *rigidVertices, device uint4 *rigidTriangles, device float4 *capture,
+    device uchar *stepControl, constant NativeSingleGroupParameters &p) {
+    NativeBroadphaseBuffers b;
+    b.bubbles = bubbles;
+    b.control = control;
+    b.contacts = (device NativeContactControl *)(stepControl + p.stepControlOffsets.x);
+    b.grid = grid;
+    b.segments = segments;
+    b.candidateRows = candidateRows;
+    b.candidateRowCounts = candidateRowCounts;
+    b.overflow = (device atomic_uint *)(stepControl + p.stepControlOffsets.z);
+    b.jointRanges = jointRanges;
+    b.jointPartners = jointPartners;
+    b.margins = margins;
+    b.references = references;
+    b.nonContactAcceleration = nonContactAcceleration;
+    b.forces = forces;
+    b.fields = (device NativeForceField *)(forceRecords + p.forceRecordOffsets.x);
+    b.fieldVertices = (device float2 *)(forceRecords + p.forceRecordOffsets.y);
+    b.fieldObjectIDs = (device ulong *)(forceRecords + p.forceRecordOffsets.z);
+    b.bands = (device NativeBandDrive *)(forceRecords + p.forceRecordOffsets.w);
+    b.motors = (device NativeMotor *)(forceRecords + p.forceRecordOffsetsTail.x);
+    b.substep = (device NativeSubstepControl *)(stepControl + p.stepControlOffsets.w);
+    b.bodies = bodies;
+    b.bubbleControl = bubbleControl;
+    b.bubbleCandidates = bubbleCandidates;
+    b.bubbleRowCounts = bubbleRowCounts;
+    b.scanValues = scanValues;
+    b.scanOffsets = scanOffsets;
+    b.candidates = candidates;
+    b.statistics = (device atomic_uint *)(stepControl + p.stepControlOffsets.y);
+    b.adjacency = adjacency;
+    b.degrees = degrees;
+    b.acceleration = acceleration;
+    b.contactForces = contactForces;
+    b.stepHistory = (device float *)(stepControl + p.stepControlOffsetsTail.y);
+    b.dispatchArguments = (device uint *)(stepControl + p.stepControlOffsetsTail.x);
+    b.rigidVertices = rigidVertices;
+    b.rigidTriangles = rigidTriangles;
+    b.capture = capture;
+    b.assertion = (device NativeContactAssertion *)(stepControl + p.stepControlOffsetsTail.z);
+    return b;
+}
+
 // Siły kontaktu z sąsiedztwa w bieżących położeniach: zapis do `contactForces`, bez dodawania (jak `nativeContactForces`).
-void nativeSingleGroupContactForces(constant NativeBroadphaseBuffers &b, uint lane, uint width) {
+void nativeSingleGroupContactForces(thread const NativeBroadphaseBuffers &b,uint lane, uint width) {
     uint count = b.control->counts.x, limit = b.contacts->cache.w;
     float fraction = nativeStepFraction(*b.substep);
     for (uint i = lane; i < count; i += width)
@@ -1150,7 +1210,7 @@ void nativeSingleGroupContactForces(constant NativeBroadphaseBuffers &b, uint la
                                                       b.rigidVertices, b.rigidTriangles, fraction);
 }
 
-void nativeSingleGroupIntegrate(constant NativeBroadphaseBuffers &b, uint phase, uint capture, uint lane, uint width) {
+void nativeSingleGroupIntegrate(thread const NativeBroadphaseBuffers &b,uint phase, uint capture, uint lane, uint width) {
     uint count = b.control->counts.x;
     for (uint i = lane; i < count; i += width)
         nativeIntegratePhase(i, phase, capture, b.bubbles, *b.control, *b.forces, b.fields, b.fieldVertices, b.fieldObjectIDs, b.acceleration,
@@ -1158,7 +1218,7 @@ void nativeSingleGroupIntegrate(constant NativeBroadphaseBuffers &b, uint phase,
 }
 
 // Siły pełne po budowie siatki i przyspieszenie początkowe (faza 2): to samo, co para buforów ścieżki wielu dyspozycji robi po broadphase.
-void nativeSingleGroupInitialForces(constant NativeBroadphaseBuffers &b, uint lane, uint width) {
+void nativeSingleGroupInitialForces(thread const NativeBroadphaseBuffers &b,uint lane, uint width) {
     nativeSingleGroupContactForces(b, lane, width);
     NATIVE_GROUP_BARRIER;
     nativeSingleGroupIntegrate(b, 2, 0, lane, width);
@@ -1172,9 +1232,26 @@ void nativeSingleGroupInitialForces(constant NativeBroadphaseBuffers &b, uint la
 // buforów. Liczniki dla hosta leżą w `overflow`: [2] to największy licznik odrzuconych kandydatów z jednej budowy siatki (każda budowa liczy
 // od zera, jak kolejne pary buforów), [3] to liczba przebudów wymuszonych zapasem. Wszystkie wątki czytają stan sterujący do rejestrów, zanim
 // wątek 0 go zmieni, bo decyzja musi być jednakowa w całej grupie.
-kernel void nativeSubstepLoopSingleGroup(constant NativeBroadphaseBuffers &b [[buffer(0)]], constant NativeSingleGroupParameters &p [[buffer(1)]],
+// Sloty buforów w kolejności `NativeMetalSubstepLoop.encodeSingleDispatch`; parametry w ostatnim slocie (`singleGroupBufferCount`).
+kernel void nativeSubstepLoopSingleGroup(device NativeBubble *bubbles [[buffer(0)]], constant NativeControl *control [[buffer(1)]],
+    device NativeGridEntry *grid [[buffer(2)]], device NativeSegment *segments [[buffer(3)]],
+    device NativeCandidate *candidateRows [[buffer(4)]], device uint *candidateRowCounts [[buffer(5)]],
+    device uint4 *jointRanges [[buffer(6)]], device ulong *jointPartners [[buffer(7)]], device float *margins [[buffer(8)]],
+    device float2 *references [[buffer(9)]], device float2 *nonContactAcceleration [[buffer(10)]],
+    constant NativeForceControl *forces [[buffer(11)]], device uchar *forceRecords [[buffer(12)]],
+    device NativeRigidBody *bodies [[buffer(13)]], device uint4 *bubbleControl [[buffer(14)]],
+    device NativeCandidate *bubbleCandidates [[buffer(15)]], device uint2 *bubbleRowCounts [[buffer(16)]],
+    device uint4 *scanValues [[buffer(17)]], device uint4 *scanOffsets [[buffer(18)]], device NativeCandidate *candidates [[buffer(19)]],
+    device uint4 *adjacency [[buffer(20)]], device atomic_uint *degrees [[buffer(21)]], device float2 *acceleration [[buffer(22)]],
+    device float2 *contactForces [[buffer(23)]], device float2 *rigidVertices [[buffer(24)]], device uint4 *rigidTriangles [[buffer(25)]],
+    device float4 *capture [[buffer(26)]], device uchar *stepControl [[buffer(27)]],
+    constant NativeSingleGroupParameters &p [[buffer(28)]],
     threadgroup uint *shared [[threadgroup(0)]], uint lane [[thread_position_in_threadgroup]],
     uint width [[threads_per_threadgroup]]) {
+    const NativeBroadphaseBuffers b = nativeSingleGroupBuffers(bubbles, control, grid, segments, candidateRows, candidateRowCounts,
+        jointRanges, jointPartners, margins, references, nonContactAcceleration, forces, forceRecords, bodies, bubbleControl,
+        bubbleCandidates, bubbleRowCounts, scanValues, scanOffsets, candidates, adjacency, degrees, acceleration, contactForces,
+        rigidVertices, rigidTriangles, capture, stepControl, p);
     device NativeSubstepControl &substep = *b.substep;
     uint count = b.control->counts.x;
     nativeBroadphaseInGroup(b, p.flags, shared, lane, width);
