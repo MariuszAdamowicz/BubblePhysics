@@ -61,11 +61,40 @@ enum NativeMetalSubstepLoop {
         if indirect { dispatchIndirect(encoder, state: state) } else { dispatch(encoder, count: count) }
     }
 
+    /// Wiąże `nativeAssertContacts` z jego buforami i liczbą brył; wywołujący dyspozytuje (po podkroku zwykłą dyspozycją, na końcu kroku
+    /// przez bramkę). Rekord naruszenia jest lepki w klatce, więc asercja po podkroku i na końcu kroku piszą do tego samego rekordu.
+    static func bindAssertContacts(_ encoder: MTLComputeCommandEncoder, pipelines: [String: MTLComputePipelineState],
+                                   state: NativeMetalPersistentState, rigid: NativeRigidPolygonState, bodyCount: Int) {
+        bind(encoder, pipelines["nativeAssertContacts"]!, [state.workingBubbles, state.workingSegments, state.control,
+            rigid.bodies, rigid.vertices, rigid.triangles, state.substepControl, state.contactAssertion, state.contactAssertion])
+        var counts = SIMD4<UInt32>(UInt32(bodyCount), 0, 0, 0)
+        encoder.setBytes(&counts, length: MemoryLayout<SIMD4<UInt32>>.stride, index: 9)
+    }
+
+    /// Wstrzyknięcie stanu i asercja po podkroku (tylko przełączniki diagnostyczne; bez nich nic się nie koduje).
+    private static func encodeSubstepDiagnostics(_ encoder: MTLComputeCommandEncoder, pipelines: [String: MTLComputePipelineState],
+                                                 state: NativeMetalPersistentState, rigid: NativeRigidPolygonState, count: Int,
+                                                 diagnostics: NativeMetalSubstepDiagnostics) {
+        if let injection = diagnostics.injection {
+            bind(encoder, pipelines["nativeInjectSubstepState"]!, [state.workingBubbles, state.control, state.substepControl])
+            var selection = SIMD2<UInt64>(injection.objectID, UInt64(max(injection.afterSubstep, 0)))
+            var position = injection.position
+            encoder.setBytes(&selection, length: MemoryLayout<SIMD2<UInt64>>.stride, index: 3)
+            encoder.setBytes(&position, length: MemoryLayout<SIMD2<Float>>.stride, index: 4)
+            dispatch(encoder, count: count)
+        }
+        if diagnostics.assertEverySubstep {
+            bindAssertContacts(encoder, pipelines: pipelines, state: state, rigid: rigid, bodyCount: diagnostics.bodyCount)
+            dispatch(encoder, count: count)
+        }
+    }
+
     /// Siły pełne (z kontaktami) w położeniach początku kroku i przyspieszenie początku kroku, potem `substeps` podkroków.
     /// Zakłada zbudowane sąsiedztwo (`adjacency`, `adjacencyCounts`) i `substepControl` z czasem kroku.
     static func encode(_ encoder: MTLComputeCommandEncoder, pipelines: [String: MTLComputePipelineState],
                        state: NativeMetalPersistentState, forces: NativeMetalForceBuffers, rigid: NativeRigidPolygonState, count: Int,
-                       capture: Bool, substeps: Int = NativeMetalSubstep.frameLimit) {
+                       capture: Bool, substeps: Int = NativeMetalSubstep.frameLimit,
+                       diagnostics: NativeMetalSubstepDiagnostics = NativeMetalSubstepDiagnostics()) {
         guard count > 0 else { return }
         contactForces(encoder, pipelines: pipelines, state: state, rigid: rigid, count: count, indirect: false)
         integrate(encoder, pipelines: pipelines, state: state, forces: forces, phase: .initialAcceleration, capture: capture,
@@ -83,6 +112,7 @@ enum NativeMetalSubstepLoop {
             contactForces(encoder, pipelines: pipelines, state: state, rigid: rigid, count: count, indirect: true)
             integrate(encoder, pipelines: pipelines, state: state, forces: forces, phase: .forcesAndKick, capture: capture,
                       count: count, indirect: true)
+            encodeSubstepDiagnostics(encoder, pipelines: pipelines, state: state, rigid: rigid, count: count, diagnostics: diagnostics)
         }
     }
 }

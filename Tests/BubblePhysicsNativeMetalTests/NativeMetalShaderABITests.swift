@@ -269,7 +269,11 @@ final class NativeMetalShaderABITests: XCTestCase {
             Probe(name: "substepControl", mslSize: "NativeSubstepControl", swiftSize: MemoryLayout<NativeMetalSubstepControl>.stride, fields: [
                 ("time", MemoryLayout<NativeMetalSubstepControl>.offset(of: \.time)),
                 ("counts", MemoryLayout<NativeMetalSubstepControl>.offset(of: \.counts)),
-                ("limiter", MemoryLayout<NativeMetalSubstepControl>.offset(of: \.limiter))])
+                ("limiter", MemoryLayout<NativeMetalSubstepControl>.offset(of: \.limiter))]),
+            Probe(name: "contactAssertion", mslSize: "NativeContactAssertion", swiftSize: MemoryLayout<NativeMetalContactAssertion>.stride, fields: [
+                ("state", MemoryLayout<NativeMetalContactAssertion>.offset(of: \.state)),
+                ("objects", MemoryLayout<NativeMetalContactAssertion>.offset(of: \.objects)),
+                ("detail", MemoryLayout<NativeMetalContactAssertion>.offset(of: \.detail))])
         ]
         assertMatches(probes, try measure(probes, sources: sources, device: device))
         XCTAssertEqual(MemoryLayout<NativeMetalBandDrive>.stride, 32)
@@ -278,6 +282,7 @@ final class NativeMetalShaderABITests: XCTestCase {
         XCTAssertEqual(MemoryLayout<NativeMetalKinematicPose>.stride, 48)
         XCTAssertEqual(MemoryLayout<NativeMetalSubstepControl>.stride, 48)
         XCTAssertEqual(MemoryLayout<NativeMetalForceControl>.stride, 32)
+        XCTAssertEqual(MemoryLayout<NativeMetalContactAssertion>.stride, 48)
     }
 
     func testLayerEncodingKeepsSignedOrderAndRoundTrips() {

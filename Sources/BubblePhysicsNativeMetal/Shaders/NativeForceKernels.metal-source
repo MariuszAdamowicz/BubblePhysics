@@ -754,3 +754,99 @@ kernel void nativePrepareEndGates(device NativeSubstepControl &substep [[buffer(
     bool finished = substep.counts.w == 0 && !(substep.time.x - substep.time.y > 0);
     gates[index] = uint4(finished ? nominal[index] : 0, 1, 1, 0);
 }
+
+// MARK: Asercje kontaktu (G6)
+//
+// Silnik nie koryguje stanu: kontakt to wyłącznie siła, więc stan z d ≤ 0 w parze, ze środkiem w bryle albo ze środkiem po drugiej stronie
+// jednostronnej krawędzi jest błędem silnika, który zgłasza host (`worldFailed`, bez powtórki kroku). Pierwsze naruszenie wygrywa i zostaje do
+// końca klatki (rekord jest lepki, więc asercja po podkroku nie gubi naruszenia, które potem zniknie). Kolejność kroku: region, potem asercja.
+
+// Rodzaje naruszenia w `state.x`; zero oznacza brak. Odpowiada NativeMetalContactAssertion.Kind.
+constant uint nativeViolationPair = 1;
+constant uint nativeViolationInsideBody = 2;
+constant uint nativeViolationEdgeSide = 3;
+
+struct NativeContactAssertion {
+    uint4 state;    // rodzaj naruszenia, ID odcinka (rodzaj 3), reserved, reserved
+    ulong2 objects; // bańka i drugi koniec: bańka, bryła albo właściciel odcinka
+    float4 detail;  // d (para: odległość środków; krawędź: strona środka po ruchu, względem prostej), reserved
+};
+
+// Pierwsze naruszenie zajmuje rekord (compare-and-swap rodzaju z zera), pozostałe wątki wychodzą bez zapisu.
+bool nativeClaimViolation(device atomic_uint &claim, uint kind) {
+    uint expected = 0;
+    while (!atomic_compare_exchange_weak_explicit(&claim, &expected, kind, memory_order_relaxed, memory_order_relaxed)) {
+        if (expected != 0) return false;
+    }
+    return true;
+}
+
+// Asercje jednej bańki względem wszystkich pozostałych obiektów (bez list kandydatów: asercja nie może zależeć od tego, co broadphase zdążył
+// zobaczyć, a wstrzyknięty stan i zawinięcie regionu stawiają bańkę poza zasięgiem zapasu). `counts.x` to liczba brył.
+// 1. Para kolidująca według filtrów ma d > 0 (liczy bańka o mniejszym indeksie); bańka usunięta przez region (publicFlags.w = 1) nie liczy się.
+// 2. Środek nie leży w bryle nieruchomej (statycznej ani kinematycznej) kolidującej według filtrów, w pozie z bieżącej chwili kroku;
+//    brzeg liczy się jako wnętrze (koło, kapsuła i wielokąt z trójkątów).
+// 3. Strona jednostronnej krawędzi (krawędź statycznego wielokąta): środek, który na początku kroku leżał po stronie zewnętrznej prostej
+//    krawędzi, nie leży po wewnętrznej, a droga środka od początku kroku do dziś przecina krawędź w jej zasięgu. Przejście obok końca krawędzi
+//    (prosta przecięta poza odcinkiem) nie jest naruszeniem. `position.zw` to środek z początku kroku, a zawinięcie regionu przesuwa oba końce.
+kernel void nativeAssertContacts(device NativeBubble *bubbles [[buffer(0)]], device NativeSegment *segments [[buffer(1)]],
+    constant NativeControl &control [[buffer(2)]], device NativeRigidBody *bodies [[buffer(3)]], device float2 *vertices [[buffer(4)]],
+    device uint4 *triangles [[buffer(5)]], device NativeSubstepControl &substep [[buffer(6)]],
+    device NativeContactAssertion &record [[buffer(7)]], device atomic_uint &claim [[buffer(8)]], constant uint4 &counts [[buffer(9)]],
+    uint index [[thread_position_in_grid]]) {
+    if (index >= control.counts.x) return;
+    NativeBubble bubble = bubbles[index];
+    float2 center = bubble.position.xy, start = bubble.position.zw;
+    if (!all(isfinite(center)) || bubble.publicFlags.w == 1) return;
+    ulong id = ulong(bubble.identity.x);
+    for (uint other = index + 1; other < control.counts.x; ++other) {
+        NativeBubble neighbor = bubbles[other];
+        if (neighbor.publicFlags.w == 1 || !nativeFilterAccepts(bubble.filter, neighbor.filter)) continue;
+        float d = length(neighbor.position.xy - center);
+        if (d <= 0) {
+            if (nativeClaimViolation(claim, nativeViolationPair)) {
+                record.objects = ulong2(id, ulong(neighbor.identity.x)); record.detail = float4(d, 0, 0, 0);
+            }
+            return;
+        }
+    }
+    float fraction = nativeStepFraction(substep);
+    for (uint b = 0; b < counts.x; ++b) {
+        NativeRigidBody body = bodies[b];
+        if (!nativeRigidImmovable(body) || !nativeFilterAccepts(bubble.filter, body.filter)) continue;
+        if (nativeRigidInside(center, nativeBodyAtFraction(body, fraction), vertices, triangles)) {
+            if (nativeClaimViolation(claim, nativeViolationInsideBody)) {
+                record.objects = ulong2(id, body.identity.x); record.detail = float4(0);
+            }
+            return;
+        }
+    }
+    for (uint e = 0; e < control.counts.y; ++e) {
+        NativeSegment s = segments[e];
+        if (!(s.flags.w & 1) || !nativeFilterAccepts(bubble.filter, s.filter)) continue;
+        float2 edge = s.current.zw - s.current.xy;
+        float lengthSquared = dot(edge, edge);
+        if (!(lengthSquared > 0)) continue;
+        float2 outward = float2(-edge.y, edge.x) / sqrt(lengthSquared) * s.region.z;
+        float before = dot(start - s.current.xy, outward), after = dot(center - s.current.xy, outward);
+        if (!(before > 0) || !(after <= 0)) continue;
+        float2 crossing = start + (center - start) * (before / (before - after));
+        float along = dot(crossing - s.current.xy, edge) / lengthSquared;
+        if (along < 0 || along > 1) continue;
+        if (nativeClaimViolation(claim, nativeViolationEdgeSide)) {
+            record.state = uint4(nativeViolationEdgeSide, uint(s.identity.x), 0, 0); // x już zajęte tą samą wartością
+            record.objects = ulong2(id, ulong(s.identity.y)); record.detail = float4(after, 0, 0, 0);
+        }
+        return;
+    }
+}
+
+// Stan wstrzykiwany diagnostycznie (przełącznik pakietowy injectedSubstepState): po podkroku `selection.y` klatki (liczonym od zera) środek
+// bańki `selection.x` przechodzi na `position`. `counts.y` to liczba wykonanych podkroków klatki, więc warunek `selection.y + 1` zachodzi
+// po tym podkroku i po następnych podkrokach pustych, w których powtórzenie niczego nie zmienia. Początek kroku (`position.zw`) zostaje.
+kernel void nativeInjectSubstepState(device NativeBubble *bubbles [[buffer(0)]], constant NativeControl &control [[buffer(1)]],
+    device NativeSubstepControl &substep [[buffer(2)]], constant ulong2 &selection [[buffer(3)]], constant float2 &position [[buffer(4)]],
+    uint index [[thread_position_in_grid]]) {
+    if (index >= control.counts.x || substep.counts.y != uint(selection.y) + 1) return;
+    if (ulong(bubbles[index].identity.x) == selection.x) bubbles[index].position.xy = position;
+}

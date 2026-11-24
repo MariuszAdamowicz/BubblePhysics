@@ -131,13 +131,18 @@ final class ContactAssertionTests: XCTestCase {
         let recorded = try await ForceScene.run(world, frames: 30)
         ForceScene.assertHealthy(world, "zawinięcie na nakładającą się bańkę")
         XCTAssertEqual(recorded.count, 30)
-        let b = try XCTUnwrap(recorded.dropFirst(3).first?.position(2))
-        XCTAssertGreaterThan(b.x, 30.5, "bańka stojąca ma być odepchnięta od zawiniętej, jest w \(b)")
+        // Zawinięta bańka mija stojącą z prędkością 3600 j/s, więc kontakt trwa ok. 0,01 s, a jego impuls (całka siły K·δ·R/d², w poprzek
+        // toru d rośnie od 30 do R = 48) to ok. 1,1 pędu stojącej bańki o masie 1: odepchnięta w +x z prędkością rzędu 1 j/s.
+        let item = try XCTUnwrap(recorded.dropFirst(3).first)
+        let b = try XCTUnwrap(item.position(2)), v = try XCTUnwrap(item.velocity(2))
+        XCTAssertGreaterThan(b.x, 30.05, "bańka stojąca ma być odepchnięta od zawiniętej, jest w \(b)")
+        XCTAssertGreaterThan(v.x, 0.5, "pęd z siły kontaktu pary, prędkość \(v)")
+        XCTAssertLessThan(v.x, 3, "impuls ograniczony czasem kontaktu, prędkość \(v)")
     }
 
     /// Asercja biegnie po regionie: bańka zawinięta tak, że jej środek trafia do wnętrza bryły, przełącza świat w `worldFailed`.
     func testWrapIntoARigidBodyFailsTheWorldWithContactViolation() async throws {
-        let world = try wrapScene { try $0.add(ForceScene.square(2, at: [0, -988], side: 40)) }
+        let world = try wrapScene { try $0.add(ForceScene.square(2, at: [0, -988], side: 20)) }
         assertContactViolation(try await runUntilIssue(world, frames: 5), objects: [1, 2], "zawinięcie w bryłę")
     }
 

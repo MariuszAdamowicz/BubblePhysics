@@ -106,6 +106,8 @@ final class NativeMetalPersistentState {
     let substepDispatch: MTLBuffer
     /// h każdego podkroku klatki (`NativeMetalSubstep.frameLimit` wpisów).
     let substepSteps: MTLBuffer
+    /// Jeden `NativeMetalContactAssertion`: pierwsze naruszenie asercji kontaktu w klatce, zerowany przed kodowaniem.
+    let contactAssertion: MTLBuffer
     /// Argumenty pośrednich dyspozycji jąder końca kroku (uint4 na bramkę: liczba grup, 1, 1, 0); zero grup, dopóki krok trwa.
     let endGates: MTLBuffer
     /// Przy `captureSubsteps`: float4 (x.xy, v.xy) na bańkę na podkrok, indeks podkroku · liczba baniek kroku + indeks bańki. Bez przełącznika nil.
@@ -239,6 +241,7 @@ final class NativeMetalPersistentState {
         substepControl = try buffer("substep.control", 1, MemoryLayout<NativeMetalSubstepControl>.stride)
         substepDispatch = try buffer("substep.dispatch", 1, 3 * MemoryLayout<UInt32>.stride)
         substepSteps = try buffer("substep.steps", NativeMetalSubstep.frameLimit, MemoryLayout<Float>.stride)
+        contactAssertion = try buffer("substep.contactAssertion", 1, MemoryLayout<NativeMetalContactAssertion>.stride)
         endGates = try buffer("substep.endGates", NativeMetalSubstep.EndGate.allCases.count, MemoryLayout<SIMD4<UInt32>>.stride)
         let (captureCount, captureOverflow) = bubbleCapacity.multipliedReportingOverflow(by: NativeMetalSubstep.frameLimit)
         guard !captureOverflow else { throw NativeMetalSolverError.allocationFailed }
@@ -320,6 +323,19 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
 
     /// Limit k kandydatów kontaktu na obiekt, wspólny dla baniek, odcinków i brył (zadanie 14: k = 48; zadanie 32: k = 128, bo wiersz statycznej ściany scena mieszana wypełnia wszystkimi bryłami w zasięgu).
     package static let candidateLimitPerObject = 128
+
+    /// Szczegóły naruszenia asercji kontaktu z rekordu GPU: obiekty (bańka i drugi koniec), odległość i dla zmiany strony krawędzi numer krawędzi
+    /// w wielokącie właściciela (kolejność identyfikatorów jego odcinków; krawędzie współliniowe są scalone).
+    static func violationDetail(_ record: NativeMetalContactAssertion, kind: NativeMetalContactAssertion.Kind,
+                                segments: [NativeSolverSegment]) -> NativeMetalFailureDetail {
+        var edge: Int?
+        if kind == .edgeSide {
+            let owner = Int(truncatingIfNeeded: record.objects.y)
+            edge = segments.filter { $0.ownerID == owner }.map(\.id).sorted().firstIndex(of: Int(record.state.y))
+        }
+        return NativeMetalFailureDetail(objectIDs: [record.objects.x, record.objects.y], edgeIndex: edge,
+                                        distance: kind == .insideBody ? nil : record.detail.x)
+    }
 
     /// Iteracje solvera brył raz na krok (silnik 4.0.0: stała, dawna wartość domyślna `solverIterationCount`).
     static let rigidSolverIterationCount = 8
@@ -492,6 +508,7 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         try forceBuffers.upload(snapshot.publicSettings?.forces ?? NativeForceInput(), device: device)
         memset(state.dispatchStatistics.contents(), 0, state.dispatchStatistics.length)
         memset(state.candidateOverflow.contents(), 0, state.candidateOverflow.length)
+        memset(state.contactAssertion.contents(), 0, state.contactAssertion.length)
         state.eventCount.contents().storeBytes(of: UInt32(0), as: UInt32.self)
         state.dispatchStatistics.contents().advanced(by: 16).storeBytes(of: SIMD4<UInt32>(collectDispatchStatistics ? 1 : 0, 0, 0, 0), as: SIMD4<UInt32>.self)
 
@@ -698,6 +715,7 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         }
         var gateGroups = [UInt32](repeating: 0, count: NativeMetalSubstep.EndGate.allCases.count)
         gateGroups[NativeMetalSubstep.EndGate.region.rawValue] = groups("nativeApplyPublicRegion", count)
+        gateGroups[NativeMetalSubstep.EndGate.contactAssertion.rawValue] = groups("nativeAssertContacts", count)
         gateGroups[NativeMetalSubstep.EndGate.mergeEvents.rawValue] = groups("nativeCompactMergeEvents", state.contactCapacity)
         gateGroups[NativeMetalSubstep.EndGate.sensors.rawValue] = groups("nativeCompactSensorEvents", pairCount)
         gateGroups[NativeMetalSubstep.EndGate.missingSensors.rawValue] = groups("nativeCompactMissingSensorEvents", previousSensorPairCount)
@@ -788,6 +806,11 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         // zakończenie brył) idą bramkami z zerem grup, dopóki czas kroku nie minął.
         func encodeEndOfStep() {
             dispatchPrepareEndGates()
+        // Region (zawinięcie `.wrap`) jako pierwszy, za bramką: to jedyne przesunięcie środka bańki poza siłami (CD-D-19). Rekordy kontaktów,
+        // asercja i kontur liczą się więc już z położenia po regionie.
+        if snapshot.publicSettings != nil {
+            dispatchGated("nativeApplyPublicRegion", buffers: [state.workingBubbles, state.control, state.safetyControl], gate: .region)
+        }
         // Rekordy kontaktów końca kroku z końcowych położeń (zdarzenia, scalanie i kontur czytają je dalej): kandydaci → kontakty w
         // zasięgu rozdzielenia → rekordy bez historii (`limits.w` = 0, więc dopasowanie do poprzedniego cache niczego nie znajduje).
         if hasRigidBodies && count > 0 {
@@ -831,6 +854,9 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
         dispatchContacts("nativeCheckFinite", buffers: [state.workingBubbles, state.workingSegments, state.workingCache,
             state.control, state.contactControl, state.solverControl, state.safetyControl],
             argument: 4)
+        // Asercja kontaktu po regionie i skończoności, za bramką; zgłasza naruszenie w rekordzie, nie odrzuca kroku (G6-AC2).
+        NativeMetalSubstepLoop.bindAssertContacts(encoder, pipelines: pipelines, state: state, rigid: rigidState, bodyCount: rigidState.count)
+        dispatchGate(pipelines["nativeAssertContacts"]!, .contactAssertion)
         dispatch("nativeAccumulateContactPressure", buffers: [state.workingBubbles, state.workingSegments,
             state.workingCache, state.control, state.contactControl, state.contourControl, state.contourScratch,
             state.workingContourCounts, state.adjacency, state.adjacencyCounts, state.safetyControl],
@@ -851,8 +877,6 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
             packets: state.renderPackets, control: state.control, contour: state.contourControl,
             safety: state.safetyControl, bubbleCount: count, stride: state.contourStride, grouped: true)
         if snapshot.publicSettings != nil {
-            dispatch("nativeApplyPublicRegion", buffers: [state.workingBubbles, state.workingContourPoints,
-                state.renderPackets, state.workingContourCounts, state.control, state.contourControl, state.safetyControl], threads: count)
             if pairCount > 0 {
                 encoder.memoryBarrier(scope: .buffers)
                 let pipeline = pipelines["nativeCompactSensorEvents"]!
@@ -954,7 +978,9 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
                 if first { encodeStepPrefix() }
                 encodeBroadphase()
                 NativeMetalSubstepLoop.encode(encoder, pipelines: pipelines, state: state, forces: forceBuffers, rigid: rigidState, count: count,
-                                              capture: configuration.captureSubsteps, substeps: substeps)
+                                              capture: configuration.captureSubsteps, substeps: substeps,
+                                              diagnostics: NativeMetalSubstepDiagnostics(injection: configuration.injectedSubstepState,
+                                                  assertEverySubstep: configuration.assertEverySubstep, bodyCount: rigidState.count))
                 encoder.endEncoding()
                 let endCommand = try makeCommand("native.frame.step.\(scenarioStep).end.\(pair)")
                 try beginCompute(endCommand, label: "native.end")
@@ -1003,6 +1029,11 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
                 limitingTerm: NativeMetalSubstep.Term(rawValue: substepResult.limiter.y).map(Self.term)))
         }
         guard safetyResult.counts.w & 1 == 0 else { throw rejectSafety(.nonFinite) }
+        // Asercja kontaktu biegnie po regionie i nie odrzuca kroku: świat przechodzi w `worldFailed` (G6-AC2, G6-AC4).
+        let assertion = state.contactAssertion.contents().load(as: NativeMetalContactAssertion.self)
+        if let kind = NativeMetalContactAssertion.Kind(rawValue: assertion.state.x) {
+            throw rejectSafety(.contactViolation, detail: Self.violationDetail(assertion, kind: kind, segments: snapshot.sourceSegments))
+        }
         guard safetyResult.counts.w & 2 == 0 else {
             // Bity przyczyny zapalają się zawsze razem z bitem 2; oba w jednej klatce: wygrywa centerCrossing.
             let cause: NativeMetalGuardCause? = safetyResult.counts.w & 8 != 0 ? .centerCrossing
@@ -1316,7 +1347,7 @@ enum NativeMetalPipelineCache {
         "nativePrepareSolverContacts", "nativeApplyWarmStart", "nativeUpdateContactMultipliers",
         "nativeSolveJacobi", "nativeMeasureResidual", "nativeReduceSolverResidual",
         "nativeCapturePositions", "nativeContactForces", "nativeAccelerationWithoutContacts", "nativeBroadphaseMargin",
-        "nativeReduceSubstep", "nativeIntegrateSubstep", "nativePrepareEndGates", "nativeBeginStep", "nativeEmitCandidateAdjacency", "nativeEmitRigidAdjacency", "nativeBubbleBodyContacts",
+        "nativeReduceSubstep", "nativeIntegrateSubstep", "nativeAssertContacts", "nativeInjectSubstepState", "nativePrepareEndGates", "nativeBeginStep", "nativeEmitCandidateAdjacency", "nativeEmitRigidAdjacency", "nativeBubbleBodyContacts",
         "nativeUpdateVelocities", "nativeDampContactNormalMotion", "nativeFinalizeSolverContacts", "nativeFindFastCandidates",
         "nativeResolveCCD", "nativeApplyCenterGuards", "nativeValidateBubbleContainment", "nativeInvalidateSafetyCache", "nativeCheckFinite",
         "nativeAccumulateContactPressure", "nativeSeedStructuralContours", "nativeGenerateContours", "nativeGenerateContoursFused", "nativePrepareRenderData", "nativePrepareRenderDataGrouped",

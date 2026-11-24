@@ -45,6 +45,24 @@ struct NativeMetalSubstepControl: Equatable, Sendable {
     var limiter = SIMD2<UInt64>.zero // obiekt wyznaczający h, człon h
 }
 
+/// Pierwsze naruszenie asercji kontaktu w klatce (`nativeAssertContacts`): lepki rekord, który host czyta po kroku i zeruje przed następnym.
+struct NativeMetalContactAssertion: Equatable, Sendable {
+    /// Rodzaj w `state.x`; zero oznacza brak naruszenia.
+    enum Kind: UInt32 {
+        case pair = 1, insideBody = 2, edgeSide = 3
+    }
+    var state = SIMD4<UInt32>.zero // rodzaj naruszenia, ID odcinka (rodzaj edgeSide), reserved, reserved
+    var objects = SIMD2<UInt64>.zero // bańka i drugi koniec: bańka, bryła albo właściciel odcinka
+    var detail = SIMD4<Float>.zero // d (para: odległość środków; krawędź: strona środka po ruchu), reserved
+}
+
+/// Przełączniki diagnostyczne kodowania podkroków (G6-AC2): stan wstrzykiwany po wskazanym podkroku i asercja po każdym podkroku.
+struct NativeMetalSubstepDiagnostics {
+    var injection: NativeMetalInjectedSubstepState?
+    var assertEverySubstep = false
+    var bodyCount = 0
+}
+
 /// Stałe jąder sił poza rekordami: siła globalna i liczby rekordów w buforach `NativeMetalForceBuffers`.
 struct NativeMetalForceControl: Equatable, Sendable {
     var global = SIMD4<Float>.zero // siła globalna.xy, reserved
@@ -69,7 +87,7 @@ enum NativeMetalSubstep {
     }
     /// Bramki jąder końca kroku z efektem ubocznym (`nativePrepareEndGates`): indeks w `NativeMetalPersistentState.endGates`.
     enum EndGate: Int, CaseIterable {
-        case region, mergeEvents, sensors, missingSensors, rigidFinish, polygonSensors, missingPolygonSensors
+        case region, mergeEvents, sensors, missingSensors, rigidFinish, polygonSensors, missingPolygonSensors, contactAssertion
     }
     /// Fazy `nativeIntegrateSubstep`: ½ impulsu i ruch; siły z nowego stanu i ½ impulsu; przyspieszenie początku kroku.
     enum Phase: UInt32 {

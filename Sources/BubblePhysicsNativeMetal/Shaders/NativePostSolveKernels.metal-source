@@ -927,10 +927,10 @@ kernel void nativePrepareRenderDataGrouped(device NativeBubble *bubbles [[buffer
 
 // Region nie jest ścianą. Test koła dotyczy collidera używanego przez narrow phase,
 // nie wyłącznie środka ani wizualnego konturu. Styczność nadal oznacza obecność.
+// Silnik 4.0.0: region biegnie pierwszy w końcu kroku (za bramką), przed rekordami kontaktów, asercją i konturem, więc przesuwa tylko bańkę;
+// kontur i pakiety renderu powstają dalej z zawiniętego położenia.
 kernel void nativeApplyPublicRegion(device NativeBubble *bubbles [[buffer(0)]],
-    device float2 *points [[buffer(1)]], device NativeRenderPacket *packets [[buffer(2)]],
-    device uint *counts [[buffer(3)]], constant NativeControl &control [[buffer(4)]],
-    constant NativeContourControl &contour [[buffer(5)]], device atomic_uint *safety [[buffer(6)]],
+    constant NativeControl &control [[buffer(1)]], device atomic_uint *safety [[buffer(2)]],
     uint index [[thread_position_in_grid]]) {
     if (index >= control.counts.x) return;
     NativeBubble b = bubbles[index];
@@ -959,11 +959,6 @@ kernel void nativeApplyPublicRegion(device NativeBubble *bubbles [[buffer(0)]],
     if (!all(isfinite(b.position))) { nativeSafetyFailure(safety, 1); return; }
     b.publicFlags.w = 2;
     bubbles[index] = b;
-    packets[index].geometry.xy += delta;
-    for (uint point = 0; point < counts[index]; ++point) {
-        uint address = index * contour.counts.x + point;
-        points[address] += delta;
-    }
 }
 
 kernel void nativeInvalidateRegionCache(device NativeBubble *bubbles [[buffer(0)]],
