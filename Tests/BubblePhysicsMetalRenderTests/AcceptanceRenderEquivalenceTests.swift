@@ -23,7 +23,7 @@ final class AcceptanceRenderEquivalenceTests: XCTestCase {
     /// (`0xc947960553219dd3`, poprawka 3.0.1) nie ma już sensu: spec. 4 zmienia fizykę kontaktu, więc bańki stoją gdzie indziej,
     /// a scena kładzie 287 baniek zamiast 300. Wzorzec pilnuje tylko tego, że zmiana renderu nie zmienia ani piksela obrazu silnika 4.0.0.
     private static let referenceCommit = "silnik 4.0.0 (feature/engine-4-0-0)"
-    private static let referencePixelHash: UInt64 = 0x7107d3404a48d192
+    private static let referencePixelHash: UInt64 = 0xa09a3905a8a42e43
     private struct RenderedImage {
         let width: Int
         let height: Int

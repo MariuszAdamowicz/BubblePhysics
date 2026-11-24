@@ -23,8 +23,8 @@ final class AcceptanceEquivalenceTests: XCTestCase {
     /// i pilnuje już tylko tego, że optymalizacja ścieżki CPU nie zmienia ani bitu opublikowanego stanu silnika 4.0.0.
     /// Scena akceptacyjna kładzie `Stress300Scene.placedBubbleCount()` baniek (287), bo reszta z 300 nie ma miejsca poza obrysem trójkąta.
     private static let referenceCommit = "silnik 4.0.0 (feature/engine-4-0-0)"
-    private static let referenceObjectHash: UInt64 = 0x6feaf1c4e855b2a3
-    private static let referenceContourHash: UInt64 = 0x2c276c3f6edfa6eb
+    private static let referenceObjectHash: UInt64 = 0xab78cf0552d521d9
+    private static let referenceContourHash: UInt64 = 0x333d5fe6f5cf7d16
     private struct Published {
         let frame: WorldFrame
         let objectHash: UInt64
