@@ -88,6 +88,9 @@ public struct NativeMetalFrameTelemetry: Equatable, Sendable {
     public let executionPath: NativeMetalExecutionPath
     /// Szerokość grupy wątków jądra pętli podkroków; 0 w ścieżce wielu dyspozycji (A11 może dać mniej niż Mac).
     public let singleGroupWidth: Int
+    /// Skompaktowani kandydaci kontaktu z ostatniej budowy siatki w klatce (`contactControl.counts.x`; każda przebudowa liczy od zera):
+    /// wszystkie wiersze razem, nie tylko największy. Szew testów broadphase (suma kandydatów niezależna od liczby kubełków siatki).
+    public let candidatePairCount: Int
     /// Czas GPU fizyki: suma buforów podkroków. Osobno od konturu (G8-AC1).
     public let physicsGPUMilliseconds: Double
     /// Czas GPU konturu: bufor końca kroku (G8-AC1).
@@ -99,7 +102,7 @@ public struct NativeMetalFrameTelemetry: Equatable, Sendable {
                 fallbackReason: String? = nil, gpuMilliseconds: Double = 0,
                 substepCount: Int = 0, gridRebuildCount: Int = 0, physicsGPUMilliseconds: Double = 0,
                 contourGPUMilliseconds: Double = 0, substepBufferCount: Int = 0,
-                executionPath: NativeMetalExecutionPath = .multipleDispatches, singleGroupWidth: Int = 0) {
+                executionPath: NativeMetalExecutionPath = .multipleDispatches, singleGroupWidth: Int = 0, candidatePairCount: Int = 0) {
         self.backend = backend
         self.commandBufferCount = commandBufferCount
         self.encoderCount = encoderCount
@@ -114,5 +117,6 @@ public struct NativeMetalFrameTelemetry: Equatable, Sendable {
         self.substepBufferCount = substepBufferCount
         self.executionPath = executionPath
         self.singleGroupWidth = singleGroupWidth
+        self.candidatePairCount = candidatePairCount
     }
 }

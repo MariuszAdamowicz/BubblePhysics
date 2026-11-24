@@ -24,7 +24,13 @@ final class MultiDispatchContinuationTests: XCTestCase {
         let first = try XCTUnwrap(run.telemetry.first, "\(context): brak telemetrii")
         XCTAssertGreaterThanOrEqual(first.substepBufferCount, 2, "\(context): klatka 0 ma mieć co najmniej 2 pary buforów")
         XCTAssertEqual(first.gridRebuildCount, 0, "\(context): między parami nie ma przebudowy z zapasu")
-        XCTAssertLessThan(PathScene.Obstacle.gap, margin, "\(context): przeszkoda ma być kandydatem")
+        // Przeszkoda jest kandydatem: dla ściany to obserwacja silnika (w klatce 0 jedna budowa siatki, a w świecie jest jedna bańka, więc każdy
+        // skompaktowany kandydat to odcinek ściany). Bryła statyczna idzie osobnymi wierszami brył, których `candidatePairCount` nie liczy, więc dla
+        // koła zostaje warunek na stałych sceny (odstęp 36 j mniejszy niż zapas 52,5 j).
+        switch obstacle {
+        case .wall: XCTAssertGreaterThan(first.candidatePairCount, 0, "\(context): ściana ma być kandydatem w klatce 0")
+        case .circle: XCTAssertLessThan(PathScene.Obstacle.gap, margin, "\(context): przeszkoda ma być kandydatem")
+        }
         let samples = try XCTUnwrap(run.recorded.first?.samples)
         guard samples.count >= 3, let afterFirstPair = samples[1].bubbles[1]?.position else {
             XCTFail("\(context): zapis klatki 0 ma co najmniej 3 podkroki, jest \(samples.count)")
@@ -61,7 +67,15 @@ final class MultiDispatchContinuationTests: XCTestCase {
         let telemetry = try XCTUnwrap(run.telemetry.indices.contains(plan.frame) ? run.telemetry[plan.frame] : nil)
         // Pierwsza para buduje siatkę sama, a każda przebudowa z zapasu zaczyna nową parę: pary = 1 + przebudowy + pary kontynuowane bez przebudowy.
         XCTAssertGreaterThanOrEqual(telemetry.substepBufferCount, telemetry.gridRebuildCount + 1,
-                                    "pary: \(telemetry.substepBufferCount), przebudowy z zapasu: \(telemetry.gridRebuildCount); przebudowa jest tylko po znaczniku, nie przed każdą parą")
+                                    "pary: \(telemetry.substepBufferCount), przebudowy z zapasu: \(telemetry.gridRebuildCount)")
         XCTAssertGreaterThanOrEqual(telemetry.gridRebuildCount, 1, "klatka wybicia ma przebudowę z zapasu")
+        // Ścisła nierówność dowodzi, że istnieje para kontynuowana bez przebudowy (gdyby każda para po pierwszej przebudowywała siatkę, byłoby
+        // pary = 1 + przebudowy). W samej klatce wybicia pary i przebudowy zgadzają się co do jednej (3 pary, 2 przebudowy), a para bez przebudowy
+        // jest w klatce tuż po niej (długa klatka z 42 podkrokami: 2 pary, 0 przebudów), więc szukamy jej od klatki wybicia.
+        let continued = run.telemetry.indices.filter { index in
+            index >= plan.frame && run.telemetry[index].substepBufferCount > run.telemetry[index].gridRebuildCount + 1
+        }
+        XCTAssertFalse(continued.isEmpty,
+                       "od klatki wybicia ma być klatka z parą kontynuowaną bez przebudowy; pary / przebudowy: \(run.telemetry.map { "\($0.substepBufferCount)/\($0.gridRebuildCount)" })")
     }
 }

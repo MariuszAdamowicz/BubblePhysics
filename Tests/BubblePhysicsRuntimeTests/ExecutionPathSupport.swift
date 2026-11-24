@@ -35,6 +35,8 @@ enum PathScene {
         var telemetry: [NativeMetalFrameTelemetry] { recorded.compactMap(\.telemetry) }
         var substeps: [Int] { recorded.map { $0.telemetry?.substepCount ?? -1 } }
         var rebuilds: [Int] { recorded.map { $0.telemetry?.gridRebuildCount ?? -1 } }
+        /// Wszyscy skompaktowani kandydaci kontaktu z ostatniej budowy siatki w każdej klatce (suma po wierszach, nie maksimum na obiekt).
+        var candidatePairs: [Int] { recorded.map { $0.telemetry?.candidatePairCount ?? -1 } }
     }
 
     static func native(forced: Bool, minimumMarginOnly: Bool = false, candidateLimit: Int? = nil, buckets: Int? = nil,
@@ -311,6 +313,34 @@ enum PathScene {
             guard ForceScene.check(limited.overflow[index] == 0, "\(context), klatka \(index): przepełnienie \(limited.overflow[index]) poza klatką wybicia",
                                    file: file, line: line) else { return }
         }
+        // Warunek sceny „przepełnia budowę przed przebudową, a po niej nie”, jako asercje. Połowa „przed”: pierwsza budowa klatki wybicia ma gromadę
+        // w kandydatach (powyżej, `free.maximumCandidates` > limit). Połowa „po”: (1) ostatnia budowa klatki nie ma w sobie żadnej pary gromady, bo
+        // jej łączna liczba kandydatów (telemetria `candidatePairCount`, liczona od zera przy każdej budowie) jest taka jak w scenie samego wybicia
+        // bez gromady, i to bez limitu, i z limitem; (2) geometria: na końcu klatki każda bańka gromady (ID 5…8) jest od środkowej (ID 4) dalej niż
+        // r + r + zapas + zapas, z zapasami ograniczonymi z pełnego dt i największej prędkości w klatce (max(1,05 · |v| · dt, r / 4), bez sił w
+        // gromadzie). Odlatujące bańki oddalają się monotonicznie, więc to, że gromada wyszła z zasięgu, nie zależy od tego, kiedy dokładnie przebudowano.
+        // Wynik zwrócony jako ostatnia budowa zamiast maksimum nie przeszedłby bez (1): liczba kandydatów ostatniej budowy jest wtedy zerowa, a pierwsza nie.
+        let frame = limited.recorded[plan.frame]
+        XCTAssertFalse(frame.samples.isEmpty, "\(context): zapis podkroków klatki wybicia", file: file, line: line)
+        let dt = Float(ForceScene.step), radius = ForceScene.two.radius
+        func marginBound(_ id: UInt64) -> Float {
+            let speed = frame.samples.compactMap { $0.bubbles[id]?.velocity }.map { simd_length($0) }.max() ?? 0
+            return max(1.05 * speed * dt, radius / 4)
+        }
+        if let center = frame.position(4) {
+            for id in UInt64(5)...8 {
+                guard let position = frame.position(id) else { XCTFail("\(context): brak bańki \(id) gromady", file: file, line: line); continue }
+                let reach = 2 * radius + marginBound(4) + marginBound(id)
+                XCTAssertGreaterThan(simd_distance(position, center), reach,
+                                     "\(context): bańka \(id) na końcu klatki wybicia ma być poza zasięgiem kandydatów środkowej (\(reach))",
+                                     file: file, line: line)
+            }
+        } else { XCTFail("\(context): brak środkowej bańki gromady", file: file, line: line) }
+        XCTAssertGreaterThan(base.candidatePairs[plan.frame], 0, "\(context): scena wybicia ma kandydatów w ostatniej budowie", file: file, line: line)
+        XCTAssertEqual(free.candidatePairs[plan.frame], base.candidatePairs[plan.frame],
+                       "\(context): ostatnia budowa klatki wybicia (bez limitu) nie ma par gromady", file: file, line: line)
+        XCTAssertEqual(limited.candidatePairs[plan.frame], base.candidatePairs[plan.frame],
+                       "\(context): ostatnia budowa klatki wybicia (z limitem) nie ma par gromady", file: file, line: line)
         XCTAssertNil(free.diagnostics.failureReason, context, file: file, line: line)
         XCTAssertNil(limited.diagnostics.failureReason, context, file: file, line: line)
     }

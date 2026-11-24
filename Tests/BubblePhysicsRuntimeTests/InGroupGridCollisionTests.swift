@@ -6,6 +6,7 @@ import simd
 /// Siatka haszowana w grupie z kolizjami kubełków (P-B-46; G8-AC4): z `gridHashBucketCount` = 1 każda komórka koliduje ze wszystkimi, a mimo to żadna
 /// para nie trafia do wiersza kandydatów ani do sąsiedztwa dwa razy (wpis kubełka przechowuje swoją komórkę). Podwójna para podwoiłaby siłę kontaktu
 /// i zawyżyła liczbę kandydatów, więc test porównuje przebieg z jednym kubełkiem z przebiegiem z 2048 kubełkami: liczbę kandydatów na obiekt w każdej klatce
+/// łączną liczbę skompaktowanych kandydatów (telemetria `candidatePairCount`, suma po wszystkich wierszach, więc duplikat w wierszu niemaksymalnym też ją zmienia)
 /// oraz wynik w tolerancjach bliźniaka (P-B-44).
 @MainActor
 final class InGroupGridCollisionTests: XCTestCase {
@@ -19,6 +20,11 @@ final class InGroupGridCollisionTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(regular.maximumCandidates.max() ?? 0, 2, "\(scene.name): scena ma mieć kandydatów, inaczej test nic nie dowodzi")
         XCTAssertEqual(colliding.maximumCandidates, regular.maximumCandidates,
                        "\(scene.name): liczba kandydatów na obiekt w klatce nie zależy od liczby kubełków, \(colliding.maximumCandidates) / \(regular.maximumCandidates)")
+        // Maksimum na obiekt nie zdradza duplikatu w wierszu niemaksymalnym; suma skompaktowanych kandydatów tak.
+        XCTAssertGreaterThanOrEqual(regular.candidatePairs.min() ?? -1, 0, "\(scene.name): telemetria każdej klatki")
+        XCTAssertGreaterThanOrEqual(regular.candidatePairs.max() ?? 0, 2, "\(scene.name): scena ma mieć kandydatów w sumie")
+        XCTAssertEqual(colliding.candidatePairs, regular.candidatePairs,
+                       "\(scene.name): łączna liczba kandydatów w klatce nie zależy od liczby kubełków, \(colliding.candidatePairs) / \(regular.candidatePairs)")
         XCTAssertEqual(colliding.overflow, regular.overflow, "\(scene.name): przepełnienie klatek")
         XCTAssertEqual(colliding.overflow.reduce(0, +), 0, "\(scene.name): podwójne wpisy nie mogą zapełniać wierszy")
         PathScene.assertTwin(colliding, regular, scene, labels: ("1 kubełek", "2048 kubełków"))

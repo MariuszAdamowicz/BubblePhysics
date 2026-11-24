@@ -4,7 +4,7 @@ import XCTest
 import simd
 
 /// Granica progu ścieżek wykonania (P-B-45; G8-AC4, CD-D-27): uderzenie z P-B-41 z 1024 bańkami liczy się jedną dyspozycją, z 1025 wieloma, a transakcja
-/// usuwająca bańkę ze świata 1025 baniek przełącza ścieżkę od następnego kroku. W każdym wariancie środek „2” po każdym podkroku jest poza ścianą
+/// usuwająca bańkę ze świata 1025 baniek przełącza ścieżkę od kroku, który ją przyjął (transakcja wchodzi przed `advance` tego kroku). W każdym wariancie środek „2” po każdym podkroku jest poza ścianą
 /// i po stronie startowej, a świat nie przechodzi w `worldFailed`.
 @MainActor
 final class ExecutionPathThresholdTests: XCTestCase {
@@ -25,7 +25,8 @@ final class ExecutionPathThresholdTests: XCTestCase {
         try await assertStrike(crowd: 1024, path: .multipleDispatches, "1025 baniek")
     }
 
-    /// Transakcja usuwa bańkę ze świata 1025 baniek: kroki przed nią liczą się wieloma dyspozycjami, kroki od następnego po niej jedną.
+    /// Transakcja usuwa bańkę ze świata 1025 baniek: kroki przed nią liczą się wieloma dyspozycjami, kroki od niej (krok 2 dostaje transakcję
+    /// przed `advance`, więc ma już 1024 bańki) jedną.
     func testTransactionRemovingABubbleSwitchesThePathFromTheNextStep() async throws {
         let removalStep = 2
         var scene = PathScene.wallShot(crowd: 1024)
@@ -33,11 +34,12 @@ final class ExecutionPathThresholdTests: XCTestCase {
         let run = try await PathScene.run(scene, native: PathScene.native(forced: false))
         PathScene.assertHealthy(run, "usunięcie bańki")
         XCTAssertGreaterThan(run.recorded.count, removalStep + 2, "przebieg ma objąć kroki po transakcji")
+        XCTAssertEqual(run.telemetry[removalStep].executionPath, .singleDispatch, "krok transakcji liczy już 1024 bańki jedną dyspozycją")
         for (index, telemetry) in run.telemetry.enumerated() {
             if index < removalStep {
                 guard ForceScene.check(telemetry.executionPath == .multipleDispatches, "krok \(index) przed transakcją: ścieżka \(telemetry.executionPath)") else { return }
-            } else if index > removalStep {
-                guard ForceScene.check(telemetry.executionPath == .singleDispatch, "krok \(index) po transakcji: ścieżka \(telemetry.executionPath)") else { return }
+            } else {
+                guard ForceScene.check(telemetry.executionPath == .singleDispatch, "krok \(index) od transakcji: ścieżka \(telemetry.executionPath)") else { return }
             }
         }
         PathScene.assertNeverBeyond(run, { $0.x >= PathScene.wallX }, "usunięcie bańki")

@@ -1101,7 +1101,7 @@ package final class NativeMetalSolver: NativeMetalFrameExecuting {
                 substepCount: Int(substepResult.counts.y), gridRebuildCount: loop.rebuildCount,
                 physicsGPUMilliseconds: loop.substepGPUMilliseconds, contourGPUMilliseconds: loop.endGPUMilliseconds,
                 substepBufferCount: loop.pairCount, executionPath: loop.executionPath,
-                singleGroupWidth: singleGroupWidth),
+                singleGroupWidth: singleGroupWidth, candidatePairCount: Int(contactResult.counts.x)),
             profile: profile, contours: contours, renderData: renderData,
             bubbleEffectiveRadii: effectiveRadii, bubbleBoundsRecords: bubbleBounds, isComplete: true)
         if !snapshot.hitTests.isEmpty {

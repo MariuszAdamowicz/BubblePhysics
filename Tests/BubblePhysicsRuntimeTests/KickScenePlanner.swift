@@ -31,7 +31,7 @@ enum KickScenePlanner {
     /// położenie i prędkość „2” na jej początku oraz droga w klatce.
     static func simulate(phase: Double) -> [(frame: Int, x2: Double, v2: Double, path: Double)] {
         let r128 = 64.0, r2 = 24.0, m128 = Double(ForceScene.b128.mass), m2 = 1.0, speed = 1000.0, dt = 1.0 / 60
-        let radii = r128 + r2, stiffness = 229.0
+        let radii = r128 + r2
         var x128 = 0.0, v128 = speed
         var x2 = radii + speed * dt * phase, v2 = 0.0
         let h = dt / 4000
