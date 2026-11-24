@@ -175,4 +175,25 @@ final class StressSubstepReportTests: XCTestCase {
         try await advance()
         XCTAssertEqual(world.benchmarkFrameProfile?.renderWaitMilliseconds ?? 0, 0, "kolejny krok bez ciał")
     }
+
+    /// Bugfix iPhone X (BF-D-4): raport podaje przyczynę upadku świata w linii `failure_reason=`, a przebieg bez upadku ma `none`.
+    func testSuccessfulRunReportsNoFailureReason() async throws {
+        let report = try await run(warmup: 2, measured: 5).report
+        XCTAssertNil(report.failureReason)
+        XCTAssertNil(report.failureDetail)
+        XCTAssertEqual(try value(of: "failure_reason", in: report.text), "none")
+        XCTAssertNil(report.text.range(of: "failure_detail="), "bez upadku raport nie ma szczegółów")
+    }
+
+    /// Bugfix iPhone X (BF-D-4): powód upadku świata trafia do tekstu raportu; szczegóły tylko przy powodach, które je mają.
+    func testFailedRunReportsTheWorldFailureReason() async throws {
+        var report = try await run(warmup: 2, measured: 5).report
+        report.failureReason = .commandExecutionFailed
+        XCTAssertEqual(try value(of: "failure_reason", in: report.text), "commandExecutionFailed")
+        XCTAssertNil(report.text.range(of: "failure_detail="), "błąd wykonania GPU nie ma szczegółów")
+        report.failureReason = .substepLimitExceeded
+        report.failureDetail = WorldFailureDetail(objects: [ObjectID(rawValue: 7)], distance: 0.5, limitingTerm: .stiffness)
+        XCTAssertEqual(try value(of: "failure_reason", in: report.text), "substepLimitExceeded")
+        XCTAssertEqual(try value(of: "failure_detail", in: report.text), "objects:7 edge:none distance:0.5000 term:stiffness")
+    }
 }

@@ -72,6 +72,12 @@ public struct PublicWorldStressReport: Sendable {
     public let nonFiniteFrames: Int
     public let fallbackFrames: Int
     public let failedFrames: Int
+    /// Powód upadku świata (`WorldDiagnostics.failureReason`) z pierwszej serii przerwanej nieudaną klatką; nil, gdy świat nie padł
+    /// (bugfix iPhone X, BF-D-4).
+    public package(set) var failureReason: WorldFailureReason?
+    /// Szczegóły upadku tej samej serii (`WorldDiagnostics.failureDetail`); raport drukuje je przy `contactViolation`
+    /// i `substepLimitExceeded`.
+    public package(set) var failureDetail: WorldFailureDetail?
     public let contourCPUReadbacks: Int
     /// Rozmiar celu renderu w pikselach.
     public let renderWidth: Int
@@ -115,6 +121,21 @@ public struct PublicWorldStressReport: Sendable {
         }.joined(separator: ",")
     }
 
+    /// Linia przyczyny upadku świata: `failure_reason=` z powodem albo `none`, a przy `contactViolation` i `substepLimitExceeded`
+    /// także `failure_detail=` (obiekty, krawędź, odległość, człon h).
+    private var failureLine: String {
+        guard let failureReason else { return "failure_reason=none" }
+        var line = "failure_reason=\(failureReason)"
+        if failureReason == .contactViolation || failureReason == .substepLimitExceeded, let detail = failureDetail {
+            let objects = detail.objects.map { String($0.rawValue) }.joined(separator: ",")
+            let edge = detail.edgeIndex.map(String.init) ?? "none"
+            let distance = detail.distance.map { String(format: "%.4f", $0) } ?? "none"
+            let term = detail.limitingTerm.map { "\($0)" } ?? "none"
+            line += "; failure_detail=objects:\(objects) edge:\(edge) distance:\(distance) term:\(term)"
+        }
+        return line
+    }
+
     public var text: String {
         """
         \(PublicWorldStressBenchmark.reportPathHeader)
@@ -134,6 +155,7 @@ public struct PublicWorldStressReport: Sendable {
         telemetry_physics_gpu_p95_ms=\(String(format: "%.4f", telemetryPhysicsGPUP95Milliseconds)); telemetry_contour_gpu_p95_ms=\(String(format: "%.4f", telemetryContourGPUP95Milliseconds))
         \(renderSplitLine)non_finite_frames=\(nonFiniteFrames)
         fallback_frames=\(fallbackFrames); failed_frames=\(failedFrames)
+        \(failureLine)
         contour_cpu_readbacks=\(contourCPUReadbacks)
         contact_candidate_overflow=\(contactCandidateOverflow); max_candidates_per_object=\(maximumCandidatesPerObject); candidate_limit=\(candidateLimit)
         safety=\(safetyPassed ? "pass" : "fail")
@@ -460,6 +482,10 @@ public enum PublicWorldStressBenchmark {
         report.bubbleCountMismatchFrames = allSeries.reduce(0) { $0 + $1.bubbleCountMismatchFrames }
         report.allSeriesComplete = allSeries.allSatisfy { $0.frameMilliseconds.count == measuredFrames }
         report.worstThermalState = allSeries.map(\.worstThermalState).max { $0.rawValue < $1.rawValue } ?? .nominal
+        if let failed = allSeries.first(where: { $0.failureReason != nil }) {
+            report.failureReason = failed.failureReason
+            report.failureDetail = failed.failureDetail
+        }
         if let clear, let withoutDecals {
             report.hasRenderSplit = true
             report.gpuRenderClearEstimateMilliseconds = max(0, p95(clear.gpuMilliseconds) - p95(physics.gpuMilliseconds))
@@ -549,6 +575,9 @@ public enum PublicWorldStressBenchmark {
         var bubbleCountMismatchFrames = 0
         /// Najgorszy stan termiczny z klatek mierzonych serii.
         var worstThermalState = ProcessInfo.ThermalState.nominal
+        /// Powód i szczegóły upadku świata zapisane przy przerwaniu serii nieudaną klatką.
+        var failureReason: WorldFailureReason?
+        var failureDetail: WorldFailureDetail?
     }
 
     /// Jedna seria `totalFrames` klatek na `world`: transakcja kroku, `advance` z jednym buforem i pomiar składowych.
@@ -636,7 +665,11 @@ public enum PublicWorldStressBenchmark {
             // kooperacyjnego punktu SwiftUI nie może odmalować postępu ani
             // przyjąć żądania Stop między ukończonymi klatkami benchmarku.
             await Task.yield()
-            if result.failedFrames > 0 { break }
+            if result.failedFrames > 0 {
+                result.failureReason = world.diagnostics.failureReason
+                result.failureDetail = world.diagnostics.failureDetail
+                break
+            }
         }
         return result
     }
