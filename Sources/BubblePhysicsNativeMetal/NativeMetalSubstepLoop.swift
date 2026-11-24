@@ -41,9 +41,10 @@ enum NativeMetalSubstepLoop {
     }
 
     private static func contactForces(_ encoder: MTLComputeCommandEncoder, pipelines: [String: MTLComputePipelineState],
-                                      state: NativeMetalPersistentState, count: Int, indirect: Bool) {
+                                      state: NativeMetalPersistentState, rigid: NativeRigidPolygonState, count: Int, indirect: Bool) {
         bind(encoder, pipelines["nativeContactForces"]!, [state.workingBubbles, state.workingSegments, state.control,
-            state.contactControl, state.adjacency, state.adjacencyCounts, state.contactForces])
+            state.contactControl, state.adjacency, state.adjacencyCounts, state.contactForces,
+            rigid.bodies, rigid.vertices, rigid.triangles, state.substepControl])
         if indirect { dispatchIndirect(encoder, state: state) } else { dispatch(encoder, count: count) }
     }
 
@@ -63,10 +64,10 @@ enum NativeMetalSubstepLoop {
     /// Siły pełne (z kontaktami) w położeniach początku kroku i przyspieszenie początku kroku, potem `substeps` podkroków.
     /// Zakłada zbudowane sąsiedztwo (`adjacency`, `adjacencyCounts`) i `substepControl` z czasem kroku.
     static func encode(_ encoder: MTLComputeCommandEncoder, pipelines: [String: MTLComputePipelineState],
-                       state: NativeMetalPersistentState, forces: NativeMetalForceBuffers, count: Int, capture: Bool,
-                       substeps: Int = NativeMetalSubstep.frameLimit) {
+                       state: NativeMetalPersistentState, forces: NativeMetalForceBuffers, rigid: NativeRigidPolygonState, count: Int,
+                       capture: Bool, substeps: Int = NativeMetalSubstep.frameLimit) {
         guard count > 0 else { return }
-        contactForces(encoder, pipelines: pipelines, state: state, count: count, indirect: false)
+        contactForces(encoder, pipelines: pipelines, state: state, rigid: rigid, count: count, indirect: false)
         integrate(encoder, pipelines: pipelines, state: state, forces: forces, phase: .initialAcceleration, capture: capture,
                   count: count, indirect: false)
         let reduction = pipelines["nativeReduceSubstep"]!
@@ -74,11 +75,12 @@ enum NativeMetalSubstepLoop {
         for _ in 0..<substeps {
             bind(encoder, reduction, [state.workingBubbles, state.workingSegments, state.control, state.contactControl,
                 state.adjacency, state.adjacencyCounts, state.acceleration, state.substepControl, state.substepDispatch,
-                state.substepSteps, state.broadphaseMargin, state.referencePositions, forces.control!, forces.bands!])
+                state.substepSteps, state.broadphaseMargin, state.referencePositions, forces.control!, forces.bands!,
+                rigid.bodies, rigid.vertices, rigid.triangles])
             encoder.dispatchThreadgroups(.init(width: 1, height: 1, depth: 1), threadsPerThreadgroup: .init(width: width, height: 1, depth: 1))
             integrate(encoder, pipelines: pipelines, state: state, forces: forces, phase: .kickAndMove, capture: capture,
                       count: count, indirect: true)
-            contactForces(encoder, pipelines: pipelines, state: state, count: count, indirect: true)
+            contactForces(encoder, pipelines: pipelines, state: state, rigid: rigid, count: count, indirect: true)
             integrate(encoder, pipelines: pipelines, state: state, forces: forces, phase: .forcesAndKick, capture: capture,
                       count: count, indirect: true)
         }

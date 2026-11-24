@@ -78,6 +78,15 @@ final class NativeJointState {
             guard let first = entity[joint.bodyA] else { continue }
             var ends = (first, joint.bodyB.flatMap { entity[$0] } ?? NativeJointRecord.worldEnd)
             if joint.bodyB != nil && ends.1 == NativeJointRecord.worldEnd { continue }
+            // Silnik 4.0.0 nie ma przegubów z bańkami (bańki liczy pętla podkroków, nie solver więzów): taki więz nie trafia do GPU. Wykluczenie
+            // kolizji pary (collideConnected == false) zostaje, bo kontakt bańka–bryła to kandydaci z `nativeRigidEmitCandidates`.
+            if ends.0 < UInt32(bubbleIDs.count) || (ends.1 != NativeJointRecord.worldEnd && ends.1 < UInt32(bubbleIDs.count)) {
+                if !joint.collideConnected, let second = joint.bodyB {
+                    partners[Int(first)].append(second.rawValue)
+                    partners[Int(ends.1)].append(joint.bodyA.rawValue)
+                }
+                continue
+            }
             var anchors = (joint.anchorA, joint.anchorB)
             // Więz ze światem: świat jest końcem 0, ciało końcem 1. Względny kąt i prędkość kątowa (zakres, silnik)
             // to wtedy kąt i prędkość kątowa ciała względem świata.

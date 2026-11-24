@@ -145,19 +145,92 @@ bool nativeWallContact(NativeSegment s, float2 center, float radius, thread floa
     return nativeWallRegion(s, center, radius, normal, distanceValue) && distanceValue < radius;
 }
 
-// Siły kontaktu na bańkę: suma po wierszu sąsiedztwa bańki (uint4: indeks kontaktu, indeks sąsiada, rodzaj 0 para albo 1 odcinek, reserved),
-// jak buduje je nativeBuildAdjacency. Geometria liczy się od zera z bieżących położeń, nie z rekordu kontaktu, bo w podkroku środek już
+// MARK: Bryła jako przeszkoda bańki (statyczne koło i kapsuła, bryła kinematyczna)
+//
+// Statyczny wielokąt dla baniek to odcinki, więc przeszkodą-bryłą są tylko statyczne koło i kapsuła oraz każda bryła kinematyczna. Bryła
+// dynamiczna nie ma kontaktu z bańkami (CD-D-2): stager nie dopuszcza jej w świecie z bańkami.
+// Bryła ma już pozę końca kroku (solver brył biegnie raz na krok, a bryła kinematyczna nie reaguje na kontakty), a `previous` to poza początku
+// kroku. W chwili t kroku poza to interpolacja od początku do końca (CD-D-2), czyli start + prędkość · t. Kontakt liczy to samo prawo co dla
+// ściany, z d od środka bańki do powierzchni bryły (CD-D-10); bryła nie reaguje na siłę.
+
+// Część kroku, która upłynęła: poza bryły w chwili t = czas upłyniony / czas kroku.
+float nativeStepFraction(device NativeSubstepControl &substep) {
+    return substep.time.x > 0 ? clamp(substep.time.y / substep.time.x, 0.0f, 1.0f) : 1.0f;
+}
+
+NativeRigidBody nativeBodyAtFraction(NativeRigidBody body, float fraction) {
+    body.pose.xy = body.previous.xy + (body.pose.xy - body.previous.xy) * fraction;
+    body.pose.z = body.pose.w + (body.pose.z - body.pose.w) * fraction;
+    return body;
+}
+
+struct NativeBodyObstacle {
+    float2 normal;     // od powierzchni bryły do środka bańki
+    float distanceValue; // d: odległość środka od powierzchni (≤ 0: środek w bryle, naruszenie)
+    float2 velocity;   // prędkość punktu bryły najbliższego środkowi
+    float speedBound;  // |v| + |ω| · ρ: ograniczenie prędkości punktów bryły w kroku (warunek d / 4)
+};
+
+// Najbliższy punkt powierzchni bryły do `center` w chwili `fraction` kroku. Koło i kapsuła: rdzeń z promieniem. Wielokąt (kinematyczny):
+// najbliższa krawędź obrysu, wnętrze to unia trójkątów (d < 0, normalna zewnętrzna najbliższej krawędzi).
+NativeBodyObstacle nativeBodyObstacle(NativeRigidBody source, float fraction, device float2 *vertices, device uint4 *triangles, float2 center) {
+    NativeRigidBody body = nativeBodyAtFraction(source, fraction);
+    NativeBodyObstacle result;
+    float2 point, normal;
+    float distanceValue;
+    if (nativeRigidIsRound(body)) {
+        NativeRoundCore core = nativeRoundCoreOf(body, vertices);
+        point = nativeClosestPoint(center, float4(core.a, core.b));
+        float2 delta = center - point;
+        float away = length(delta);
+        // Środek na rdzeniu: oś najkrótszej drogi na zewnątrz to normalna odcinka (albo stała dla koła).
+        float2 axis = core.b - core.a;
+        float2 fallback = length(axis) > 1e-6f ? normalize(float2(-axis.y, axis.x)) : float2(0, 1);
+        normal = away > 1e-7f ? delta / away : fallback;
+        distanceValue = away - core.radius;
+        point += normal * core.radius;
+    } else {
+        float best = INFINITY;
+        float2 nearest = 0, outward = float2(0, 1);
+        for (uint e = 0; e < body.ranges.y; ++e) {
+            float2 p = nativeRigidVertex(body, vertices, e), q = nativeRigidVertex(body, vertices, (e + 1) % body.ranges.y);
+            float2 candidate = nativeClosestPoint(center, float4(p, q));
+            float d = distance(center, candidate);
+            if (d < best) {
+                best = d; nearest = candidate;
+                float2 edge = q - p; float size = length(edge);
+                outward = size > FLT_MIN ? float2(edge.y, -edge.x) / size : float2(0, 1);
+            }
+        }
+        bool inside = nativeRigidInside(center, body, vertices, triangles);
+        normal = inside ? outward : (best > 1e-7f ? (center - nearest) / best : outward);
+        distanceValue = inside ? -best : best;
+        point = nearest;
+    }
+    float2 arm = point - body.pose.xy;
+    result.normal = normal;
+    result.distanceValue = distanceValue;
+    result.velocity = body.motion.xy + body.motion.z * float2(-arm.y, arm.x);
+    result.speedBound = length(body.motion.xy) + abs(body.motion.z) * length(arm);
+    return result;
+}
+
+// Siły kontaktu na bańkę: suma po wierszu sąsiedztwa bańki (uint4: indeks kontaktu, indeks sąsiada, rodzaj 0 para, 1 odcinek albo 2 bryła, reserved),
+// jak buduje je nativeBuildAdjacency; sąsiad rodzaju 2 to indeks bryły. Geometria liczy się od zera z bieżących położeń, nie z rekordu kontaktu, bo w podkroku środek już
 // się przesunął. Siła pary liczy się w kolejności indeksów (mniejszy pierwszy), więc obie baniki dostają dokładnie przeciwne wektory.
 // Zapis, nie dodawanie: `forces[i]` to wyłącznie siła kontaktów.
 kernel void nativeContactForces(device NativeBubble *bubbles [[buffer(0)]],
     device NativeSegment *segments [[buffer(1)]], constant NativeControl &control [[buffer(2)]],
     device NativeContactControl &contacts [[buffer(3)]], device uint4 *adjacency [[buffer(4)]],
     device uint *degrees [[buffer(5)]], device float2 *forces [[buffer(6)]],
+    device NativeRigidBody *bodies [[buffer(7)]], device float2 *vertices [[buffer(8)]], device uint4 *triangles [[buffer(9)]],
+    device NativeSubstepControl &substep [[buffer(10)]],
     uint index [[thread_position_in_grid]]) {
     if (index >= control.counts.x) return;
     NativeBubble bubble = bubbles[index];
     float radius = bubble.physical.z, stiffness = bubble.contact.y;
     float2 total = 0;
+    float fraction = nativeStepFraction(substep);
     uint limit = contacts.cache.w, degree = min(degrees[index], limit);
     for (uint j = 0; j < degree; ++j) {
         uint4 edge = adjacency[index * limit + j];
@@ -169,10 +242,13 @@ kernel void nativeContactForces(device NativeBubble *bubbles [[buffer(0)]],
             float2 normal = distanceValue > 0 ? delta / distanceValue : float2(1, 0);
             NativeContactLaw law = nativePairContactLaw(first.contact.y, first.physical.z, second.contact.y, second.physical.z, distanceValue);
             total += (index == low ? -law.force : law.force) * normal;
-        } else {
+        } else if (edge.z == 1) {
             float2 normal; float distanceValue;
             if (!nativeWallContact(segments[edge.y], bubble.position.xy, radius, normal, distanceValue)) continue;
             total += nativeWallContactLaw(stiffness, radius, distanceValue).force * normal;
+        } else {
+            NativeBodyObstacle obstacle = nativeBodyObstacle(bodies[edge.y], fraction, vertices, triangles, bubble.position.xy);
+            total += nativeWallContactLaw(stiffness, radius, obstacle.distanceValue).force * obstacle.normal;
         }
     }
     forces[index] = total;
@@ -203,6 +279,47 @@ kernel void nativeEmitCandidateAdjacency(device NativeContactControl &contacts [
     uint limit = contacts.cache.w, a = candidate.metadata.y, b = candidate.metadata.z, kind = candidate.metadata.x;
     nativeAppendAdjacency(adjacency, degrees, limit, a, uint4(index + 1, b, kind, kind == 0 ? 0 : 1), overflow);
     if (kind == 0) nativeAppendAdjacency(adjacency, degrees, limit, b, uint4(index + 1, a, 0, 1), overflow);
+}
+
+// Kandydaci bańka–bryła (wiersze brył z nativeRigidEmitCandidates w trybie baniek, z zapasem obwiedni) trafiają do wiersza sąsiedztwa bańki
+// jako rodzaj 2: sąsiad to indeks bryły. Wątek na (bryła, miejsce w wierszu); `counts`: bryły, bańki, długość wiersza brył, reserved.
+// Wywoływany między nativeEmitCandidateAdjacency a nativeBuildAdjacency, który sortuje wiersz po (rodzaj, sąsiad).
+kernel void nativeEmitRigidAdjacency(device NativeCandidate *rows [[buffer(0)]], device uint2 *rowCounts [[buffer(1)]],
+    constant uint4 &counts [[buffer(2)]], device NativeContactControl &contacts [[buffer(3)]], device uint4 *adjacency [[buffer(4)]],
+    device atomic_uint *degrees [[buffer(5)]], device atomic_uint *overflow [[buffer(6)]],
+    uint index [[thread_position_in_grid]]) {
+    uint body = index / counts.z, slot = index % counts.z;
+    if (body >= counts.x || slot >= rowCounts[body].x) return;
+    NativeCandidate candidate = rows[index];
+    if (candidate.metadata.x != 2 || candidate.metadata.y >= counts.y) return;
+    nativeAppendAdjacency(adjacency, degrees, contacts.cache.w, candidate.metadata.y, uint4(1, body, 2, 1), overflow);
+}
+
+// Rekordy kontaktów bańka–bryła końca kroku (zdarzenia kontaktu i sprzężenie napędu kinematycznego czytają je na CPU): dla każdego kandydata
+// z wierszy brył, którego bańka w końcowym położeniu leży bliżej niż r od powierzchni bryły, zapis (normalna od bańki do bryły, punkt na
+// powierzchni, impuls siły kontaktu w kroku, d); poza kontaktem zera. Rekord leży na tym samym miejscu (bryła, miejsce w wierszu) co kandydat.
+// `counts`: bryły, bańki, długość wiersza brył, reserved. Poza pozy bryły to poza końca kroku (ułamek 1).
+kernel void nativeBubbleBodyContacts(device NativeBubble *bubbles [[buffer(0)]], device NativeRigidBody *bodies [[buffer(1)]],
+    device float2 *vertices [[buffer(2)]], device uint4 *triangles [[buffer(3)]], device NativeCandidate *rows [[buffer(4)]],
+    device uint2 *rowCounts [[buffer(5)]], constant uint4 &counts [[buffer(6)]], constant NativeControl &control [[buffer(7)]],
+    device float4 *records [[buffer(8)]], uint index [[thread_position_in_grid]]) {
+    uint body = index / counts.z, slot = index % counts.z;
+    if (body >= counts.x || slot >= rowCounts[body].x) return;
+    float4 first = 0, second = 0;
+    NativeCandidate candidate = rows[index];
+    if (candidate.metadata.x == 2 && candidate.metadata.y < counts.y) {
+        NativeBubble bubble = bubbles[candidate.metadata.y];
+        float radius = bubble.physical.z;
+        NativeBodyObstacle obstacle = nativeBodyObstacle(bodies[body], 1.0f, vertices, triangles, bubble.position.xy);
+        if (obstacle.distanceValue < radius) {
+            NativeContactLaw law = nativeWallContactLaw(bubble.contact.y, radius, obstacle.distanceValue);
+            float2 point = bubble.position.xy - obstacle.normal * obstacle.distanceValue;
+            first = float4(-obstacle.normal, point);
+            second = float4(law.force * control.physics.x, obstacle.distanceValue, 0, 0);
+        }
+    }
+    records[2 * index] = first;
+    records[2 * index + 1] = second;
 }
 
 // MARK: Podkrok (spec. zmiany 3 i 4)
@@ -345,7 +462,8 @@ kernel void nativeBroadphaseMargin(device NativeBubble *bubbles [[buffer(0)]], c
 // ω_i² z Gershgorina dla sztywności znormalizowanej masami: Σ_j k_j · (1/m_i + 1/√(m_i · m_j)) po kontaktach aktywnych bańki i, plus K_band / m_i
 // dla gumki; dla ściany i bryły m_j = ∞, więc człon partnera znika. k_j z prawa kontaktu (ściana: nativeWallContactLaw, para: nativePairContactLaw).
 float nativeBubbleOmegaSquared(uint index, device NativeBubble *bubbles, device NativeSegment *segments, device uint4 *adjacency,
-                               device uint *degrees, uint limit, constant NativeForceControl &forces, device NativeBandDrive *bands) {
+                               device uint *degrees, uint limit, constant NativeForceControl &forces, device NativeBandDrive *bands,
+                               device NativeRigidBody *bodies, device float2 *vertices, device uint4 *triangles, float fraction) {
     NativeBubble bubble = bubbles[index];
     float inverseMass = nativeInverseMass(bubble);
     if (!(inverseMass > 0)) return 0;
@@ -364,10 +482,13 @@ float nativeBubbleOmegaSquared(uint index, device NativeBubble *bubbles, device 
             float distanceValue = length(second.position.xy - first.position.xy);
             NativeContactLaw law = nativePairContactLaw(first.contact.y, first.physical.z, second.contact.y, second.physical.z, distanceValue);
             total += law.stiffness * (inverseMass + sqrt(inverseMass * nativeInverseMass(bubbles[edge.y])));
-        } else {
+        } else if (edge.z == 1) {
             float2 normal; float distanceValue;
             if (!nativeWallContact(segments[edge.y], bubble.position.xy, radius, normal, distanceValue)) continue;
             total += nativeWallContactLaw(stiffness, radius, distanceValue).stiffness * inverseMass;
+        } else {
+            NativeBodyObstacle obstacle = nativeBodyObstacle(bodies[edge.y], fraction, vertices, triangles, bubble.position.xy);
+            total += nativeWallContactLaw(stiffness, radius, obstacle.distanceValue).stiffness * inverseMass;
         }
     }
     return total;
@@ -378,9 +499,11 @@ float nativeBubbleOmegaSquared(uint index, device NativeBubble *bubbles, device 
 // Kontakt aktywny (d < r albo d < R) liczy się z |v| w obu kierunkach ruchu. Kandydat bez kontaktu liczy się z v zbliżania i wypada z
 // warunku tylko wtedy, gdy się oddala: v + A · h_max / 2 ≤ 0, gdzie h_max to minimum pozostałych członów. Nierówność kwadratowa ma
 // postać jawną h = d / (2 (s + v)), s = √(v² + A d / 2), która dla A = 0 daje d / (4 v). Nieskończoność oznacza brak ograniczenia.
-// Prędkość punktu ruchomej ściany (bryła kinematyczna) dochodzi w zadaniu 11.
+// Bryła (koło, kapsuła, bryła kinematyczna): d od powierzchni w chwili początku podkroku, a prędkość punktów bryły (|v| + |ω| · ρ) dochodzi
+// do prędkości zbliżania w obu kierunkach (bryła kinematyczna jedzie po torze znanym z góry, więc jej człon to stała graniczna, nie przyspieszenie).
 float nativeBubbleDistanceBound(uint index, float hMax, device NativeBubble *bubbles, device NativeSegment *segments,
-                                device uint4 *adjacency, device uint *degrees, device float2 *accelerations, uint limit) {
+                                device uint4 *adjacency, device uint *degrees, device float2 *accelerations, uint limit,
+                                device NativeRigidBody *bodies, device float2 *vertices, device uint4 *triangles, float fraction) {
     NativeBubble bubble = bubbles[index];
     if (!(nativeInverseMass(bubble) > 0)) return INFINITY;
     float2 velocity = bubble.motion.xy;
@@ -388,7 +511,7 @@ float nativeBubbleDistanceBound(uint index, float hMax, device NativeBubble *bub
     uint degree = min(degrees[index], limit);
     for (uint j = 0; j < degree; ++j) {
         uint4 edge = adjacency[index * limit + j];
-        float distanceValue, approach, accelerationSum, reach;
+        float distanceValue, approach, accelerationSum, reach, bodySpeed = 0;
         if (edge.z == 0) {
             NativeBubble other = bubbles[edge.y];
             float2 delta = other.position.xy - bubble.position.xy;
@@ -397,10 +520,17 @@ float nativeBubbleDistanceBound(uint index, float hMax, device NativeBubble *bub
             approach = dot(velocity - nativeEffectiveVelocity(other), normal);
             accelerationSum = length(accelerations[index]) + length(accelerations[edge.y]);
             reach = radius + other.physical.z;
-        } else {
+        } else if (edge.z == 1) {
             float2 normal;
             if (!nativeWallRegion(segments[edge.y], bubble.position.xy, radius, normal, distanceValue)) continue;
             approach = -dot(velocity, normal);
+            accelerationSum = length(accelerations[index]);
+            reach = radius;
+        } else {
+            NativeBodyObstacle obstacle = nativeBodyObstacle(bodies[edge.y], fraction, vertices, triangles, bubble.position.xy);
+            distanceValue = obstacle.distanceValue;
+            approach = -dot(velocity, obstacle.normal);
+            bodySpeed = obstacle.speedBound;
             accelerationSum = length(accelerations[index]);
             reach = radius;
         }
@@ -408,10 +538,10 @@ float nativeBubbleDistanceBound(uint index, float hMax, device NativeBubble *bub
         // d ≤ 0 (naruszenie) daje najmniejsze h, nie zero: limit podkroków kończy świat, a asercja kontaktu nazywa przyczynę.
         float d = max(distanceValue, reach * nativeContactDistanceFloor);
         float speed;
-        if (active) speed = abs(approach);
+        if (active) speed = abs(approach) + bodySpeed;
         else {
-            if (approach + accelerationSum * hMax * 0.5f <= 0) continue;
-            speed = approach;
+            if (approach + bodySpeed + accelerationSum * hMax * 0.5f <= 0) continue;
+            speed = approach + bodySpeed;
         }
         float s = sqrt(speed * speed + accelerationSum * d * 0.5f);
         float denominator = s + speed;
@@ -450,6 +580,7 @@ kernel void nativeReduceSubstep(device NativeBubble *bubbles [[buffer(0)]], devi
     device NativeSubstepControl &substep [[buffer(7)]], device uint *dispatchArguments [[buffer(8)]],
     device float *stepHistory [[buffer(9)]], device float *margins [[buffer(10)]], device float2 *references [[buffer(11)]],
     constant NativeForceControl &forces [[buffer(12)]], device NativeBandDrive *bands [[buffer(13)]],
+    device NativeRigidBody *bodies [[buffer(14)]], device float2 *vertices [[buffer(15)]], device uint4 *triangles [[buffer(16)]],
     uint local [[thread_position_in_threadgroup]], uint width [[threads_per_threadgroup]]) {
     threadgroup float values[1024];
     threadgroup uint owners[1024];
@@ -465,10 +596,11 @@ kernel void nativeReduceSubstep(device NativeBubble *bubbles [[buffer(0)]], devi
         return;
     }
     uint count = control.counts.x, limit = contacts.cache.w;
+    float fraction = nativeStepFraction(substep);
     // Przebieg 1: maksimum ω² (przy remisie mniejszy indeks).
     float best = -1; uint owner = 0;
     for (uint i = local; i < count; i += width) {
-        float value = nativeBubbleOmegaSquared(i, bubbles, segments, adjacency, degrees, limit, forces, bands);
+        float value = nativeBubbleOmegaSquared(i, bubbles, segments, adjacency, degrees, limit, forces, bands, bodies, vertices, triangles, fraction);
         if (value > best) { best = value; owner = i; }
     }
     values[local] = best; owners[local] = owner;
@@ -488,7 +620,7 @@ kernel void nativeReduceSubstep(device NativeBubble *bubbles [[buffer(0)]], devi
     // Przebieg 2: minimum członu d / 4 (przy remisie mniejszy indeks).
     best = INFINITY; owner = 0;
     for (uint i = local; i < count; i += width) {
-        float value = nativeBubbleDistanceBound(i, hMax, bubbles, segments, adjacency, degrees, accelerations, limit);
+        float value = nativeBubbleDistanceBound(i, hMax, bubbles, segments, adjacency, degrees, accelerations, limit, bodies, vertices, triangles, fraction);
         if (value < best) { best = value; owner = i; }
     }
     values[local] = best; owners[local] = owner;

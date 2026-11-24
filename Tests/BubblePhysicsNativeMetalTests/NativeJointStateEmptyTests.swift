@@ -29,10 +29,34 @@ final class NativeJointStateEmptyTests: XCTestCase {
         let state = NativeJointState(device: device)
         let ids = (1...3).map { ObjectID(rawValue: UInt64($0)) }
         let joint = try Joint(id: JointID(rawValue: 1), bodyA: ids[0], bodyB: ids[1], kind: .weld, collideConnected: true)
-        try state.prepare([joint], bubbleIDs: ids, bodyIDs: [], iterations: 4)
+        try state.prepare([joint], bubbleIDs: [], bodyIDs: ids, iterations: 4)
         XCTAssertEqual(state.count, 1)
-        try state.prepareWithoutJoints(bubbleCount: 3, bodyCount: 0, iterations: 4)
+        try state.prepareWithoutJoints(bubbleCount: 0, bodyCount: 3, iterations: 4)
         XCTAssertEqual(state.count, 0)
-        XCTAssertEqual(state.control.contents().load(as: SIMD4<UInt32>.self), SIMD4(0, 3, 0, 4))
+        XCTAssertEqual(state.control.contents().load(as: SIMD4<UInt32>.self), SIMD4(0, 0, 3, 4))
+    }
+
+    /// Silnik 4.0.0 nie ma przegubów z bańkami: więz z końcem w bańce nie trafia do GPU, a wykluczenie kolizji pary (collideConnected == false)
+    /// zostaje, więc bańka nie styka się z połączoną bryłą. Więz bryła–bryła i bryła–świat trafia do GPU jak dotąd.
+    func testJointsWithABubbleEndAreNotSentToTheGPUButKeepTheirCollisionExclusion() throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let state = NativeJointState(device: device)
+        let bubble = ObjectID(rawValue: 1), bodies = [ObjectID(rawValue: 20), ObjectID(rawValue: 21)]
+        let withBubble = try Joint(id: JointID(rawValue: 1), bodyA: bubble, bodyB: bodies[0], kind: .weld, collideConnected: false)
+        let bubbleToWorld = try Joint(id: JointID(rawValue: 2), bodyA: bubble, bodyB: nil, kind: .weld)
+        let bodyToBody = try Joint(id: JointID(rawValue: 3), bodyA: bodies[0], bodyB: bodies[1], kind: .weld, collideConnected: true)
+        try state.prepare([withBubble, bubbleToWorld, bodyToBody], bubbleIDs: [bubble], bodyIDs: bodies, iterations: 4)
+        XCTAssertEqual(state.count, 1, "do GPU trafia tylko więz bryła–bryła")
+        let record = state.records.contents().load(as: NativeJointRecord.self)
+        XCTAssertEqual(record.identity.x, 3)
+        XCTAssertEqual(state.control.contents().load(as: SIMD4<UInt32>.self), SIMD4(1, 1, 2, 4))
+        // Wykluczenie: wiersz bańki (encja 0) i bryły 20 (encja 1) niosą się nawzajem, bryła 21 (encja 2) nic.
+        let ranges = state.ranges.contents().bindMemory(to: SIMD4<UInt32>.self, capacity: 3)
+        let partners = state.exclusions.contents().bindMemory(to: UInt64.self, capacity: 2)
+        XCTAssertEqual(ranges[0].w, 1)
+        XCTAssertEqual(partners[Int(ranges[0].z)], 20)
+        XCTAssertEqual(ranges[1].w, 1)
+        XCTAssertEqual(partners[Int(ranges[1].z)], 1)
+        XCTAssertEqual(ranges[2].w, 0)
     }
 }

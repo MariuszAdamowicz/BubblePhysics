@@ -93,14 +93,26 @@ enum NativeMetalContourSmoothing {
     }
 }
 
+/// Tryb `nativeRigidEmitCandidates` (`counts.w`): bit 0 pomija kandydatów bańka–bryła, bit 1 pomija pary brył.
+enum NativeRigidCandidateMode: UInt32 {
+    /// Pary brył i kandydaci bańka–bryła w jednym wierszu (test determinizmu szerokości grupy).
+    case all = 0
+    /// Tylko pary brył: raz na krok, przed solverem brył.
+    case bodies = 1
+    /// Tylko kandydaci bańka–bryła z zapasem obwiedni bańki: przy każdej budowie siatki, w osobnych wierszach.
+    case bubbles = 2
+}
+
 /// Kodowanie kandydatów kontaktu brył. Jedna grupa na bryłę przegląda bańki w porcjach, a wiersz zapełnia w tej samej
 /// kolejności co pojedynczy wątek, więc wynik nie zależy od szerokości grupy (szerokość 1 to dawny przebieg szeregowy).
 enum NativeMetalRigidCandidates {
     static let defaultGroupWidth = 256
 
+    /// `margins` to zapas obwiedni bańki (`broadphaseMargin`): bańka jest kandydatem, gdy jej obwiednia (środek ± (r + zapas)) styka się
+    /// z drogą bryły w kroku. `control` niesie tryb (`NativeRigidCandidateMode`) w `counts.w`.
     @discardableResult
     static func encode(_ encoder: MTLComputeCommandEncoder, pipelines: [String: MTLComputePipelineState],
-                       bodies: MTLBuffer, bubbles: MTLBuffer, positions: MTLBuffer, control: MTLBuffer,
+                       bodies: MTLBuffer, bubbles: MTLBuffer, margins: MTLBuffer, control: MTLBuffer,
                        rows: MTLBuffer, rowCounts: MTLBuffer, overflow: MTLBuffer,
                        jointRanges: MTLBuffer, jointPartners: MTLBuffer, bodyCount: Int,
                        groupWidth: Int = defaultGroupWidth) -> Int {
@@ -109,7 +121,7 @@ enum NativeMetalRigidCandidates {
         let width = max(1, min(groupWidth, pipeline.maxTotalThreadsPerThreadgroup))
         encoder.memoryBarrier(scope: .buffers)
         encoder.setComputePipelineState(pipeline)
-        for (index, buffer) in [bodies, bubbles, positions, control, rows, rowCounts, overflow,
+        for (index, buffer) in [bodies, bubbles, margins, control, rows, rowCounts, overflow,
                                 jointRanges, jointPartners].enumerated() {
             encoder.setBuffer(buffer, offset: 0, index: index)
         }

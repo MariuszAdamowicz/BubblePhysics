@@ -343,11 +343,14 @@ kernel void nativeEmitCandidates(device NativeBubble *bubbles [[buffer(0)]],
 
 // Kandydaci kontaktów brył: jeden wiersz o stałej długości k (`counts.z`) na bryłę, posortowany po kluczu pary
 // (rodzaj 2 = bańka–bryła, rodzaj 3 = bryła–bryła; para brył trafia do wierszy obu brył z tą samą kolejnością a < b).
-// Testy zasięgu to dokładnie te z nativeRigidContacts, poszerzone o zapas, bo wiersze powstają raz na krok,
-// a poza listą nie ma już par, które kernel kontaktów sprawdzałby w każdej iteracji.
+// Tryb w `counts.w`: bit 0 pomija kandydatów bańka–bryła, bit 1 pomija pary brył. Silnik 4.0.0 koduje dwa wywołania: pary brył raz na krok
+// (tryb 1, solver brył bez baniek) i kandydatów bańka–bryła przy każdej budowie siatki (tryb 2, osobne wiersze), z zapasem obwiedni bańki.
+// Testy zasięgu par brył to dokładnie te z nativeRigidContacts, poszerzone o zapas, bo wiersze powstają raz na krok.
+// Bańka przechodzi przez kandydata, gdy jej obwiednia (środek ± (r + zapas)) styka się z obwiednią drogi bryły w kroku (środki z początku i końca
+// kroku ± promień otaczający, więc także obrót), bo bańka nie wychodzi poza zapas aż do przebudowy siatki.
 // `metadata.w` to bity float: suma normalnych Δλ z iteracji (zeruje ją ten kernel, dopisuje nativeRigidContacts).
 kernel void nativeRigidEmitCandidates(device NativeRigidBody *bodies [[buffer(0)]],
-    device NativeBubble *bubbles [[buffer(1)]], device float4 *positions [[buffer(2)]],
+    device NativeBubble *bubbles [[buffer(1)]], device float *margins [[buffer(2)]],
     constant uint4 &counts [[buffer(3)]], device NativeCandidate *rows [[buffer(4)]],
     device uint2 *rowCounts [[buffer(5)]], device atomic_uint *overflow [[buffer(6)]],
     device uint4 *jointRanges [[buffer(7)]], device ulong *jointPartners [[buffer(8)]],
@@ -360,10 +363,10 @@ kernel void nativeRigidEmitCandidates(device NativeRigidBody *bodies [[buffer(0)
     uint entity = counts.y + index; // bryły leżą w przestrzeni więzów za bańkami
     device NativeCandidate *row = rows + index * limit;
     uint count = 0, dropped = 0;
-    // Statyczny wielokąt dla baniek to odcinki; statyczne koło i kapsuła nie mają odcinków, więc bańki łapie solver brył.
-    // `counts.w != 0` wyłącza kandydatów bańka–bryła: w silniku 4.0.0 bańki nie wchodzą do solvera brył (zadanie 11 daje im kontakt z
-    // pętli podkroków), więc wiersze niosą tylko pary brył.
-    if ((!b.flags.x || nativeRigidIsRound(b)) && counts.w == 0) {
+    // Statyczny wielokąt dla baniek to odcinki; statyczne koło i kapsuła nie mają odcinków, więc bańki widzą je jako bryły, a bryła
+    // kinematyczna (dowolny kształt) ma ruch zadany z góry. Bryła dynamiczna nie ma kontaktu z bańkami (CD-D-2, G7-AC4).
+    bool bubbleObstacle = b.flags.x ? nativeRigidIsRound(b) : (b.filter.z != 0);
+    if (bubbleObstacle && (counts.w & 1) == 0) {
         float2 bodyLow = min(b.pose.xy, b.previous.xy) - b.physical.z;
         float2 bodyHigh = max(b.pose.xy, b.previous.xy) + b.physical.z;
         // Grupa sprawdza bańki w porcjach po `width`: każdy wątek jedną, a wątek 0 wpisuje trafienia do wiersza
@@ -376,9 +379,9 @@ kernel void nativeRigidEmitCandidates(device NativeRigidBody *bodies [[buffer(0)
                 hit = nativeFilterAccepts(a.filter, b.filter)
                     && !nativeJointExcluded(jointRanges, jointPartners, entity, ulong(a.identity.x));
                 if (hit) {
-                    float2 center = positions[ai].xy;
-                    float reach = 1.5f * a.physical.z;
-                    float2 bubbleLow = min(center, a.position.zw) - reach, bubbleHigh = max(center, a.position.zw) + reach;
+                    float2 center = a.position.xy;
+                    float reach = a.physical.z + max(margins[ai], 0.0f);
+                    float2 bubbleLow = center - reach, bubbleHigh = center + reach;
                     hit = !(any(bubbleHigh < bodyLow) || any(bodyHigh < bubbleLow));
                 }
             }
@@ -395,7 +398,7 @@ kernel void nativeRigidEmitCandidates(device NativeRigidBody *bodies [[buffer(0)
         }
     }
     if (lane != 0) return;
-    for (uint other = 0; other < counts.x; ++other) {
+    for (uint other = 0; other < counts.x && (counts.w & 2) == 0; ++other) {
         if (other == index) continue;
         uint low = min(index, other), high = max(index, other);
         NativeRigidBody a = bodies[low], c = bodies[high];

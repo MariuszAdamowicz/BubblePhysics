@@ -60,6 +60,84 @@ final class RigidContactTests: XCTestCase {
         for force: Float in [100, 1200, 10_000] { try await assertEquilibrium(.standingKinematic, force: force) }
     }
 
+    /// Obszar wierzchołka wielokąta kinematycznego: bańka dociśnięta po przekątnej do narożnika stojącego kwadratu 100 j trzyma to samo prawo,
+    /// z d liczonym od środka bańki do wierzchołka (powierzchnia bryły przy narożniku to łuk wokół wierzchołka, nie prosta krawędzi).
+    func testBubblePressedToAKinematicCornerHoldsTheLawDistanceFromTheVertex() async throws {
+        let diagonal = Float(0.5).squareRoot()
+        for force: Float in [100, 1200] {
+            let dStar = ContactLawReference.equilibriumDistance(force: Double(force), stiffness: stiffness, radius: 24)
+            let corner = WorldPoint(-50, -50)
+            let start = corner - WorldPoint(diagonal, diagonal) * Float(dStar)
+            let world = try ForceScene.makeWorld {
+                try $0.add(ForceScene.bubble(1, at: start)).add(ForceScene.square(2, at: .zero, side: 100, role: .kinematic))
+                    .setGlobalForce([force * diagonal, force * diagonal])
+            }
+            let recorded = try await ForceScene.run(world, frames: 600)
+            ForceScene.assertHealthy(world, "narożnik, F = \(force)")
+            XCTAssertEqual(recorded.count, 600)
+            for item in recorded {
+                guard let x = item.position(1) else { XCTFail("bańka zniknęła"); return }
+                let d = Double(ForceScene.length(x - corner))
+                guard ForceScene.check(abs(d - dStar) <= 0.005 * dStar + 1e-3, "F = \(force), krok \(item.step): d = \(d), d* = \(dStar)") else { return }
+            }
+        }
+    }
+
+    /// Filtr kolizji obustronny dla brył jak dla ścian: bańka z maską bez kategorii koła przelatuje przez statyczne koło, a bańka z filtrem
+    /// domyślnym odbija się od niego (środek nigdy nie dochodzi do środka koła).
+    func testCollisionFilterLetsABubblePassThroughAStaticCircleWhileTheDefaultBubbleBounces() async throws {
+        func run(filter: CollisionFilter) async throws -> [ForceScene.Recorded] {
+            let world = try ForceScene.makeWorld {
+                try $0.add(ForceScene.bubble(1, at: [-200, 0], velocity: [300, 0], filter: filter))
+                    .add(ForceScene.rigid(2, .circle(radius: 50), at: .zero))
+            }
+            let recorded = try await ForceScene.run(world, frames: 90)
+            ForceScene.assertHealthy(world)
+            return recorded
+        }
+        let blocked = try await run(filter: .default)
+        XCTAssertEqual(blocked.count, 90)
+        for item in blocked {
+            guard let x = item.position(1) else { XCTFail("bańka zniknęła"); return }
+            guard ForceScene.check(x.x < -50, "krok \(item.step): domyślna bańka weszła w koło, środek \(x)") else { return }
+        }
+        XCTAssertLessThan(try XCTUnwrap(blocked.last?.velocity(1)).x, 0, "domyślna bańka ma się odbić")
+        let passing = try await run(filter: CollisionFilter(category: 2, mask: 2))
+        XCTAssertEqual(passing.count, 90)
+        XCTAssertGreaterThan(try XCTUnwrap(passing.last?.position(1)).x, 50, "bańka z rozłączną maską ma minąć koło")
+        XCTAssertEqual(try XCTUnwrap(passing.last?.velocity(1)).x, 300, accuracy: 1e-3, "przelot bez kontaktu nie zmienia prędkości")
+    }
+
+    /// Zdarzenia kontaktu bańka–bryła (rekordy kontaktów końca kroku): bańka z zainteresowaniem `.contact` dociśnięta do statycznego koła daje
+    /// jedno `contactBegan` pary z normalną od mniejszego ID do większego (tu od bańki do koła) i dodatnim impulsem, a po odjeździe `contactEnded`.
+    func testBubbleBodyContactProducesBeganAndEndedEvents() async throws {
+        let world = try ForceScene.makeWorld {
+            try $0.add(ForceScene.bubble(1, at: [-120, 0], velocity: [200, 0], events: .contact))
+                .add(ForceScene.rigid(2, .circle(radius: 50), at: .zero))
+        }
+        let recorded = try await ForceScene.run(world, frames: 120)
+        ForceScene.assertHealthy(world)
+        var began: [(point: WorldPoint, normal: WorldPoint, impulse: Float, step: Int)] = [], ended: [Int] = []
+        for item in recorded {
+            for event in item.frame.events {
+                switch event {
+                case .contactBegan(let a, let b, let point, let normal, let impulse) where a == ForceScene.id(1) && b == ForceScene.id(2):
+                    began.append((point, normal, impulse, item.step))
+                case .contactEnded(let a, let b) where a == ForceScene.id(1) && b == ForceScene.id(2): ended.append(item.step)
+                default: break
+                }
+            }
+        }
+        XCTAssertEqual(began.count, 1, "contactBegan raz")
+        XCTAssertEqual(ended.count, 1, "contactEnded raz po odbiciu")
+        let first = try XCTUnwrap(began.first)
+        XCTAssertEqual(first.normal.x, 1, accuracy: 1e-3, "normalna od bańki do koła")
+        XCTAssertEqual(first.normal.y, 0, accuracy: 1e-3)
+        XCTAssertEqual(first.point.x, -50, accuracy: 1, "punkt na powierzchni koła")
+        XCTAssertGreaterThan(first.impulse, 0, "impuls siły kontaktu")
+        XCTAssertGreaterThan(ended.first ?? 0, first.step, "koniec po początku")
+    }
+
     // MARK: P-B-11 (G3-AC3)
 
     /// Kwadrat o boku 50 j (ρ ≈ 35 j) jedzie 10³ j/s i obraca się 20 rad/s, uderza w swobodną „2” (γ = 0) przy współrzędnych rzędu 360 j. Po każdym

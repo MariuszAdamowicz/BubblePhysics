@@ -36,11 +36,12 @@ final class RigidContactMemoryTests: XCTestCase {
         return (world.rigidContactMemoryBytes, world.rigidContactMemoryBytes + world.contactMemoryBytes)
     }
 
-    // 30 i 120 brył przy 300 bańkach: P·n + P² daje 9 900 i 50 400 slotów po 64 B, a O(P·k) najwyżej 128 B na (bryła, slot).
+    // 30 i 120 brył przy 300 bańkach: P·n + P² daje 9 900 i 50 400 slotów po 64 B, a O(P·k) najwyżej 192 B na (bryła, slot): korekta 64 B,
+    // klucz pary 32 B oraz (silnik 4.0.0) osobny wiersz kandydatów bańka–bryła 32 B i rekord kontaktu końca kroku 32 B, plus liczniki i ściany.
     func testRigidContactMemoryIsBoundedByBodiesTimesCandidateLimit() async throws {
         for bodies in [30, 120] {
             let bytes = try await measure(bodies: bodies).rigid
-            XCTAssertLessThanOrEqual(bytes, bodies * limit * 128,
+            XCTAssertLessThanOrEqual(bytes, bodies * limit * 192,
                 "\(bodies) brył: \(bytes) B pamięci kontaktów brył przekracza budżet O(P·k)")
         }
     }

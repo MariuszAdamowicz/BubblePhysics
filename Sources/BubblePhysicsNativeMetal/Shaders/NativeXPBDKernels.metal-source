@@ -672,14 +672,13 @@ bool nativeRigidPairContact(NativeRigidBody a, NativeRigidBody b, device float2 
     return found;
 }
 
-// Wiersze kandydatów z nativeRigidEmitCandidates: wątek (bryła, miejsce w wierszu) liczy jeden kontakt.
-// Wzory korekty bez zmian względem slotów par; zmienia się tylko skąd bierze się para.
+// Wiersze kandydatów z nativeRigidEmitCandidates (tryb par brył): wątek (bryła, miejsce w wierszu) liczy jeden kontakt bryła–bryła.
+// Bańki nie wchodzą do solvera brył: ich kontakt z bryłami statycznymi i kinematycznymi liczy pętla podkroków (NativeForceKernels).
 kernel void nativeRigidContacts(device NativeRigidBody *bodies [[buffer(0)]],
     device float2 *vertices [[buffer(1)]], device uint4 *triangles [[buffer(2)]],
-    device NativeBubble *bubbles [[buffer(3)]], device float4 *positions [[buffer(4)]],
-    constant uint4 &counts [[buffer(5)]], device NativeRigidCorrection *corrections [[buffer(6)]],
-    device atomic_uint *safety [[buffer(7)]], device NativeCandidate *rows [[buffer(8)]],
-    device uint2 *rowCounts [[buffer(9)]],
+    constant uint4 &counts [[buffer(3)]], device NativeRigidCorrection *corrections [[buffer(4)]],
+    device atomic_uint *safety [[buffer(5)]], device NativeCandidate *rows [[buffer(6)]],
+    device uint2 *rowCounts [[buffer(7)]],
     uint index [[thread_position_in_grid]]) {
     uint owner=index/counts.z,slot=index%counts.z;
     if(owner>=counts.x||slot>=rowCounts[owner].x)return;
@@ -689,96 +688,24 @@ kernel void nativeRigidContacts(device NativeRigidBody *bodies [[buffer(0)]],
         float4(0,0,0,previous.velocityFirst.w),float4(0,0,0,previous.velocitySecond.w)};
     float2 n=0,point=0,va=0,vb=0,ra=0,rb=0;
     float wa=0,wb=0,ia=0,ib=0,depth=0,spinA=0,spinB=0,frictionA=0,frictionB=0,restitutionA=0,restitutionB=0;
-    if(candidate.metadata.x==2) {
-        uint ai=candidate.metadata.y,bi=candidate.metadata.z;
-        NativeBubble a=bubbles[ai];NativeRigidBody b=bodies[bi];
-        bool round=nativeRigidIsRound(b);
-        // Statyczne polygony pozostają w istniejącym solverze segmentów; statyczne koło i kapsuła nie mają odcinków.
-        if(b.flags.x && !round){corrections[index]=result;return;}
-        float2 center=positions[ai].xy;
-        float2 bubbleLow=min(center,a.position.zw)-a.physical.z,bubbleHigh=max(center,a.position.zw)+a.physical.z;
-        float2 bodyLow=min(b.pose.xy,b.previous.xy)-b.physical.z,bodyHigh=max(b.pose.xy,b.previous.xy)+b.physical.z;
-        if(any(bubbleHigh<bodyLow)||any(bodyHigh<bubbleLow)){corrections[index]=result;return;}
-        if(round){
-            // Bańka to dysk o promieniu docelowym; rdzeń bryły z promieniem kształtu. Para bańka–bryła w stałym porządku ID.
-            NativeRoundCore bubbleCore;bubbleCore.a=center;bubbleCore.b=center;bubbleCore.radius=a.physical.z;
-            float2 fallback=ulong(a.identity.x)<b.identity.x ? float2(1,0) : float2(-1,0);
-            if(!nativeRoundContact(bubbleCore,nativeRoundCoreOf(b,vertices),fallback,n,depth,point)){corrections[index]=result;return;}
-        } else {
-            // Wielokąt: najbliższa krawędź obrysu, sweep obrotu i odrzucenie klatki przy możliwym tunelu (bez zmian).
-            float best=INFINITY;float2 outward=0;
-            for(uint i=0;i<b.ranges.y;++i){
-                float2 p=nativeRigidVertex(b,vertices,i),q=nativeRigidVertex(b,vertices,(i+1)%b.ranges.y);
-                float2 candidate=nativeClosestPoint(center,float4(p,q));float d=distance(center,candidate);
-                if(d<best){best=d;point=candidate;float2 edge=q-p;outward=normalize(float2(edge.y,-edge.x));}
-            }
-            bool inside=nativeRigidInside(center,b,vertices,triangles);
-            n=inside ? -outward : (best>1e-7f ? (point-center)/best : -outward);
-            depth=a.physical.z+(inside ? best : -best);
-            NativeRigidBody old=b;old.pose.xy=b.previous.xy;old.pose.z=b.pose.w;
-            if(!nativeRigidInside(a.position.zw,old,vertices,triangles)) {
-                float sweepDistance=INFINITY;
-                for(uint i=0;i<b.ranges.y;++i){
-                    NativeSegment edge;
-                    edge.previous=float4(nativeRigidVertex(old,vertices,i),nativeRigidVertex(old,vertices,(i+1)%b.ranges.y));
-                    edge.current=float4(nativeRigidVertex(b,vertices,i),nativeRigidVertex(b,vertices,(i+1)%b.ranges.y));
-                    float2 previousEdge=edge.previous.zw-edge.previous.xy;
-                    float2 oldOut=normalize(float2(previousEdge.y,-previousEdge.x));
-                    if(dot(a.position.zw-edge.previous.xy,oldOut)<0)continue;
-                    if(!nativeCenterCrossing(a.position.zw,center,edge))continue;
-                    float d=distance(a.position.zw,nativeClosestPoint(a.position.zw,edge.previous));
-                    if(d>=sweepDistance)continue;
-                    sweepDistance=d;float2 direction=edge.current.zw-edge.current.xy;
-                    float2 out=normalize(float2(direction.y,-direction.x));
-                    point=nativeClosestPoint(center,edge.current);n=-out;
-                    depth=a.physical.z-dot(center-point,out);
-                }
-            }
-            // Końcowe krawędzie nie opisują łuku obrotu. Jeśli pominięty sweep
-            // mógł dotknąć bańki, odrzucamy całą klatkę zamiast publikować tunel.
-            float angle=abs(b.pose.z-b.pose.w);
-            if(depth < -0.001f && angle > 0) {
-                uint steps=max(1u,uint(ceil(angle/0.05f)));
-                float2 travel=center-a.position.zw,bodyTravel=b.pose.xy-b.previous.xy;
-                float margin=(length(travel)+length(bodyTravel)+b.physical.z*angle)/(2.0f*float(steps))+1e-4f;
-                for(uint sample=0;sample<=steps;++sample) {
-                    float t=float(sample)/float(steps);
-                    float2 centerAt=mix(a.position.zw,center,t);
-                    NativeRigidBody poseAt=b;
-                    poseAt.pose.xy=mix(b.previous.xy,b.pose.xy,t);
-                    poseAt.pose.z=mix(b.pose.w,b.pose.z,t);
-                    bool possible=nativeRigidInside(centerAt,poseAt,vertices,triangles);
-                    for(uint i=0;i<b.ranges.y && !possible;++i) {
-                        float2 p=nativeRigidVertex(poseAt,vertices,i);
-                        float2 q=nativeRigidVertex(poseAt,vertices,(i+1)%b.ranges.y);
-                        possible=distance(centerAt,nativeClosestPoint(centerAt,float4(p,q)))<=a.physical.z+margin;
-                    }
-                    if(possible){atomic_fetch_or_explicit(safety+3,10u,memory_order_relaxed);break;}
-                }
-            }
-        }
-        wa=a.physical.y;wb=b.physical.x;ib=b.physical.y;rb=point-b.pose.xy;
-        va=a.motion.xy;vb=b.motion.xy;spinB=b.motion.z;
-        frictionA=a.material.w;frictionB=b.physical.w;restitutionA=as_type<float>(uint(a.resources.x));restitutionB=as_type<float>(b.flags.w);
-    } else {
-        uint ai=candidate.metadata.y,bi=candidate.metadata.z;
-        NativeRigidBody a=bodies[ai],b=bodies[bi];
-        // Kandydat bryła–bryła zawsze niesie ai<bi, więc ai>=bi jest tylko zabezpieczeniem, a nie deduplikacją:
-        // para jest rozwiązywana w wierszach obu ciał celowo (determinizm bez atomików).
-        if(ai>=bi || (nativeRigidImmovable(a)&&nativeRigidImmovable(b))){corrections[index]=result;return;}
-        float2 end=a.pose.xy-b.pose.xy;
-        float radius=a.physical.z+b.physical.z,radiusSquared=radius*radius;
-        // Tunelowanie pary brył zatrzymuje CCD (nativeRigidResolveCCD) jeszcze przed pętlą iteracji, więc przemijanie
-        // zasięgu bez nakładania kształtów nie odrzuca już klatki.
-        if(dot(end,end)>radiusSquared){corrections[index]=result;return;}
-        float2 pairNormal,pairPoint;float pairDepth;
-        bool found=nativeRigidPairContact(a,b,vertices,triangles,pairNormal,pairDepth,pairPoint);
-        if(!found){corrections[index]=result;return;}
-        depth=pairDepth;n=pairNormal;point=pairPoint;
-        wa=a.physical.x;wb=b.physical.x;ia=a.physical.y;ib=b.physical.y;
-        ra=point-a.pose.xy;rb=point-b.pose.xy;va=a.motion.xy;vb=b.motion.xy;spinA=a.motion.z;spinB=b.motion.z;
-        frictionA=a.physical.w;frictionB=b.physical.w;restitutionA=as_type<float>(a.flags.w);restitutionB=as_type<float>(b.flags.w);
-    }
+    if(candidate.metadata.x!=3){corrections[index]=result;return;}
+    uint ai=candidate.metadata.y,bi=candidate.metadata.z;
+    NativeRigidBody a=bodies[ai],b=bodies[bi];
+    // Kandydat bryła–bryła zawsze niesie ai<bi, więc ai>=bi jest tylko zabezpieczeniem, a nie deduplikacją:
+    // para jest rozwiązywana w wierszach obu ciał celowo (determinizm bez atomików).
+    if(ai>=bi || (nativeRigidImmovable(a)&&nativeRigidImmovable(b))){corrections[index]=result;return;}
+    float2 end=a.pose.xy-b.pose.xy;
+    float radius=a.physical.z+b.physical.z,radiusSquared=radius*radius;
+    // Tunelowanie pary brył zatrzymuje CCD (nativeRigidResolveCCD) jeszcze przed pętlą iteracji, więc przemijanie
+    // zasięgu bez nakładania kształtów nie odrzuca już klatki.
+    if(dot(end,end)>radiusSquared){corrections[index]=result;return;}
+    float2 pairNormal,pairPoint;float pairDepth;
+    bool found=nativeRigidPairContact(a,b,vertices,triangles,pairNormal,pairDepth,pairPoint);
+    if(!found){corrections[index]=result;return;}
+    depth=pairDepth;n=pairNormal;point=pairPoint;
+    wa=a.physical.x;wb=b.physical.x;ia=a.physical.y;ib=b.physical.y;
+    ra=point-a.pose.xy;rb=point-b.pose.xy;va=a.motion.xy;vb=b.motion.xy;spinA=a.motion.z;spinB=b.motion.z;
+    frictionA=a.physical.w;frictionB=b.physical.w;restitutionA=as_type<float>(a.flags.w);restitutionB=as_type<float>(b.flags.w);
     float ca=nativeCross(ra,n),cb=nativeCross(rb,n),denom=wa+wb+ia*ca*ca+ib*cb*cb;
     if(depth < -0.001f || denom<=FLT_MIN){corrections[index]=result;return;}
     float lambda=max(0.0f,depth)/denom*0.5f;
@@ -801,30 +728,6 @@ kernel void nativeRigidContacts(device NativeRigidBody *bodies [[buffer(0)]],
     corrections[index]=result;
 }
 
-// Korekty bryłowe sumuje wątek właściciela w kolejności wiersza (klucz pary), więc wynik nie zależy od planowania.
-// Bańka nie ma własnego wiersza: jej wpisy leżą w sekcjach rodzaju 2 wierszy brył, posortowanych po identyfikatorze.
-kernel void nativeRigidApplyBubbles(device NativeBubble *bubbles [[buffer(0)]],
-    device float4 *positions [[buffer(1)]], constant uint4 &counts [[buffer(2)]],
-    device NativeRigidCorrection *corrections [[buffer(3)]], device NativeSolverControl &solver [[buffer(4)]],
-    device NativeCandidate *rows [[buffer(5)]], device uint2 *rowCounts [[buffer(6)]],
-    uint index [[thread_position_in_grid]]) {
-    if(index>=counts.y)return;
-    long identity=bubbles[index].identity.x;
-    float2 delta=0,velocity=0;
-    for(uint j=0;j<counts.x;++j){
-        uint low=0,high=rowCounts[j].y;
-        while(low<high){
-            uint mid=low+(high-low)/2;
-            if(rows[j*counts.z+mid].participants.x<identity)low=mid+1;else high=mid;
-        }
-        if(low<rowCounts[j].y && rows[j*counts.z+low].participants.x==identity){
-            NativeRigidCorrection c=corrections[j*counts.z+low];delta+=c.first.xy;velocity+=c.velocityFirst.xy;
-        }
-    }
-    positions[index].xy+=delta;bubbles[index].position.xy+=delta;bubbles[index].motion.xy+=velocity;
-    if(index==0)solver.counts.x=1; // kontakty brył mogą reaktywować kontakty baniek
-}
-
 kernel void nativeRigidApplyBodies(device NativeRigidBody *bodies [[buffer(0)]],
     constant uint4 &counts [[buffer(1)]], device NativeRigidCorrection *corrections [[buffer(2)]],
     device NativeCandidate *rows [[buffer(3)]], device uint2 *rowCounts [[buffer(4)]],
@@ -841,25 +744,19 @@ kernel void nativeRigidApplyBodies(device NativeRigidBody *bodies [[buffer(0)]],
     bodies[index].pose.xyz+=delta;bodies[index].motion.xyz+=velocity;
 }
 
-// Więzy. Bryły nie są ciałami XPBD, więc korekta więzu to przesunięcie pozy i zmiana prędkości (Δpoza / krok, jak w PBD)
-// dla końca więzu, a bańka dostaje przesunięcie tylko w positions[] (jej kontur odtwarza się po pętli bez zmiany kształtu).
+// Więzy bryła–bryła i bryła–świat. Bryły nie są ciałami XPBD, więc korekta więzu to przesunięcie pozy i zmiana prędkości (Δpoza / krok,
+// jak w PBD) dla końca więzu. Przeguby z bańkami nie istnieją w silniku 4.0.0: host nie przekazuje takich więzów, a przestrzeń encji zostaje
+// (bańki za indeksami 0..<bubbleCount, bryły za nimi), bo wiersze brył i wykluczenia kolizji są indeksowane encjami.
 // Wątek na więz liczy korekty obu końców z jednego stanu; każde ciało zbiera korekty swojej listy w stałej kolejności.
 struct NativeJointEnd {
     float2 point; float2 arm; float2 velocity;
     float inverseMass; float inverseInertia; float angle; float omega;
 };
 
-NativeJointEnd nativeJointEnd(uint entity, float2 anchor, device NativeRigidBody *bodies, device NativeBubble *bubbles,
-                              device float4 *positions, uint bubbleCount) {
+NativeJointEnd nativeJointEnd(uint entity, float2 anchor, device NativeRigidBody *bodies, uint bubbleCount) {
     NativeJointEnd end;
     end.point = anchor; end.arm = 0; end.velocity = 0; end.inverseMass = 0; end.inverseInertia = 0; end.angle = 0; end.omega = 0;
     if (entity == 0xFFFFFFFFu) return end;
-    if (entity < bubbleCount) {
-        // Bańka jest zaczepiona w środku masy. Silnik 4.0.0 nie koryguje baniek w solverze więzów (nie ma XPBD, a ruch baniek liczą
-        // siły w podkrokach), więc koniec bańki jest kotwicą: jej bieżący środek, nieskończona masa. Przeguby z bańkami znikają w zadaniu 11.
-        end.point = bubbles[entity].position.xy; end.velocity = bubbles[entity].motion.xy; end.inverseMass = 0;
-        return end;
-    }
     NativeRigidBody b = bodies[entity - bubbleCount];
     // Kotwica leży w układzie początku geometrii; środek masy jest przesunięty o centroid (previous.zw).
     end.arm = nativeRotate(anchor - b.previous.zw, b.pose.z);
@@ -870,15 +767,14 @@ NativeJointEnd nativeJointEnd(uint entity, float2 anchor, device NativeRigidBody
 
 float2 nativePerpendicular(float2 v) { return float2(-v.y, v.x); }
 
-kernel void nativeSolveJoints(device NativeRigidBody *bodies [[buffer(0)]], device NativeBubble *bubbles [[buffer(1)]],
-    device float4 *positions [[buffer(2)]], device NativeJoint *joints [[buffer(3)]],
-    device NativeRigidCorrection *corrections [[buffer(4)]], constant uint4 &counts [[buffer(5)]],
-    constant NativeControl &control [[buffer(6)]], uint index [[thread_position_in_grid]]) {
+kernel void nativeSolveJoints(device NativeRigidBody *bodies [[buffer(0)]], device NativeJoint *joints [[buffer(1)]],
+    device NativeRigidCorrection *corrections [[buffer(2)]], constant uint4 &counts [[buffer(3)]],
+    constant NativeControl &control [[buffer(4)]], uint index [[thread_position_in_grid]]) {
     if (index >= counts.x) return;
     NativeJoint joint = joints[index];
     float dt = max(control.physics.x, 1e-6f);
-    NativeJointEnd a = nativeJointEnd(joint.ends.x, joint.anchors.xy, bodies, bubbles, positions, counts.y);
-    NativeJointEnd b = nativeJointEnd(joint.ends.y, joint.anchors.zw, bodies, bubbles, positions, counts.y);
+    NativeJointEnd a = nativeJointEnd(joint.ends.x, joint.anchors.xy, bodies, counts.y);
+    NativeJointEnd b = nativeJointEnd(joint.ends.y, joint.anchors.zw, bodies, counts.y);
     float2 moveA = 0, moveB = 0, speedA = 0, speedB = 0;
     float turnA = 0, turnB = 0, spinA = 0, spinB = 0;
     float2 pointA = nativePerpendicular(a.arm), pointB = nativePerpendicular(b.arm);
@@ -965,29 +861,6 @@ kernel void nativeApplyJointBodies(device NativeRigidBody *bodies [[buffer(0)]],
     float relax = 1.0f / float(range.y);
     bodies[index].pose.xyz += delta * relax;
     bodies[index].motion.xyz += velocity * relax;
-}
-
-// Bańka dostaje przesunięcie tylko w positions[]; zmiana pozycji w UpdateVelocities przechodzi w prędkość, a kontur
-// powstaje po pętli z nowego środka, więc korekta więzu nie zmienia jego kształtu. Prędkość korygujemy tu bezpośrednio.
-kernel void nativeApplyJointBubbles(device NativeBubble *bubbles [[buffer(0)]], device float4 *positions [[buffer(1)]],
-    device NativeRigidCorrection *corrections [[buffer(2)]], device uint2 *references [[buffer(3)]],
-    device uint4 *ranges [[buffer(4)]], constant uint4 &counts [[buffer(5)]],
-    device NativeSolverControl &solver [[buffer(6)]], uint index [[thread_position_in_grid]]) {
-    if (index >= counts.y) return;
-    uint4 range = ranges[index];
-    if (range.y == 0) return;
-    float2 delta = 0, velocity = 0;
-    for (uint i = 0; i < range.y; ++i) {
-        uint2 reference = references[range.x + i];
-        NativeRigidCorrection c = corrections[reference.x];
-        delta += reference.y ? c.second.xy : c.first.xy;
-        velocity += reference.y ? c.velocitySecond.xy : c.velocityFirst.xy;
-    }
-    float relax = 1.0f / float(range.y);
-    positions[index].xy += delta * relax;
-    bubbles[index].motion.xy += velocity * relax;
-    // Korekta więzu mogła uaktywnić kontakty baniek. Wiele wątków zapisuje tę samą wartość, więc zapis jest atomowy.
-    atomic_store_explicit((device atomic_uint *)&solver.counts, 1u, memory_order_relaxed); // counts.x to pierwszy element
 }
 
 kernel void nativeUpdateVelocities(device NativeBubble *bubbles [[buffer(0)]],

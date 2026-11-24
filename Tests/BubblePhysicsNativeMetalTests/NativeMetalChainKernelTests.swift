@@ -194,12 +194,14 @@ final class NativeMetalChainKernelTests: XCTestCase {
             if index % 7 == 3 { bubble.filter = SIMD4(1, 0, 0, NativeMetalFilter.encodeLayer(0)) }
             return bubble
         }
-        let positions: [SIMD4<Float>] = bubbles.map { SIMD4($0.position.x, $0.position.y, 0, 0) }
+        // Zapas obwiedni bańki: połowa promienia, więc zasięg r + zapas = 1,5 r, jak dawny zasięg kandydatów bańka–bryła.
+        let margins: [Float] = bubbles.map { 0.5 * $0.physical.z }
         let bodies: [NativeRigidBody] = (0..<bodyCount).map { index in
             var body = NativeRigidBody(identity: SIMD2(UInt64(5000 + index), 0),
                 pose: SIMD4(3 + Float(index), 4, 0, 0), previous: SIMD4(2.5 + Float(index), 4.2, 0, 0),
                 motion: .zero, physical: SIMD4(1, 1, 2.5, 0), ranges: .zero, flags: .zero,
-                filter: NativeMetalFilter.default, shape: SIMD4(index == 1 ? 1 : 0, 1, 0, 0), limits: .zero)
+                filter: NativeMetalFilter.pack(.default, kinematic: index != 2), shape: SIMD4(index == 1 ? 1 : 0, 1, 0, 0), limits: .zero)
+            // Bryły 0 i 1 są kinematyczne (kandydaci bańka–bryła); bryła 2 to statyczny wielokąt (dla baniek odcinki, bez kandydatów).
             body.flags = SIMD4(index == 2 ? 1 : 0, 0, 0, 0)
             return body
         }
@@ -215,7 +217,7 @@ final class NativeMetalChainKernelTests: XCTestCase {
         let control = try makeBuffer([SIMD4(UInt32(bodyCount), UInt32(bubbleCount), UInt32(limit), 0)], device: device)
         let dispatches = try run(device: device) {
             NativeMetalRigidCandidates.encode($0, pipelines: pipelines, bodies: try! makeBuffer(bodies, device: device),
-                bubbles: try! makeBuffer(bubbles, device: device), positions: try! makeBuffer(positions, device: device),
+                bubbles: try! makeBuffer(bubbles, device: device), margins: try! makeBuffer(margins, device: device),
                 control: control, rows: rows, rowCounts: rowCounts, overflow: overflow,
                 jointRanges: try! makeBuffer(ranges, device: device), jointPartners: try! makeBuffer(partners, device: device),
                 bodyCount: bodyCount, groupWidth: groupWidth)

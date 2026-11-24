@@ -165,11 +165,18 @@ final class NativeRigidPolygonState {
     var contacts: MTLBuffer { buffers["contacts"]! }
     var candidates: MTLBuffer { buffers["candidates"]! }
     var rowCounts: MTLBuffer { buffers["rowCounts"]! }
-    var walls: MTLBuffer { buffers["walls"]! }
+    /// Kandydaci bańka–bryła (wiersze brył, rodzaj 2) z zapasem obwiedni; powstają przy każdej budowie siatki, osobno od par brył.
+    var bubbleCandidates: MTLBuffer { buffers["bubbleCandidates"]! }
+    var bubbleRowCounts: MTLBuffer { buffers["bubbleRowCounts"]! }
+    /// Rekordy kontaktów bańka–bryła końca kroku, po dwa `float4` na miejsce wiersza kandydatów (`nativeBubbleBodyContacts`).
+    var bubbleContacts: MTLBuffer { buffers["bubbleContacts"]! }
+    /// Liczby dla jądra kandydatów: tryb par brył (`NativeRigidCandidateMode.bodies`) i tryb baniek (`.bubbles`).
     var control: MTLBuffer { buffers["control"]! }
+    var bubbleControl: MTLBuffer { buffers["bubbleControl"]! }
+    var walls: MTLBuffer { buffers["walls"]! }
     /// Bajty pamięci kontaktów brył: wiersze kandydatów z korektami i ściany (O(P·k), niezależnie od liczby baniek).
     var contactMemoryBytes: Int {
-        ["contacts", "candidates", "rowCounts", "walls"].reduce(0) { $0 + (buffers[$1]?.length ?? 0) }
+        ["contacts", "candidates", "rowCounts", "walls", "bubbleCandidates", "bubbleRowCounts", "bubbleContacts"].reduce(0) { $0 + (buffers[$1]?.length ?? 0) }
     }
 
     init(device: MTLDevice) { self.device = device }
@@ -185,9 +192,9 @@ final class NativeRigidPolygonState {
         return value
     }
 
-    /// `bubbleCandidates: false` wyłącza kandydatów bańka–bryła w `nativeRigidEmitCandidates` (`control.w` = 1): w silniku 4.0.0 wiersze
-    /// brył niosą tylko pary brył, a bańki dostają kontakt z pętli podkroków.
-    func prepare(_ inputs: [NativeRigidPolygonInput], bubbleCount: Int, timeStep: Float, bubbleCandidates: Bool = true) throws {
+    /// Wiersze brył niosą tylko pary brył (`control.w` = 1): bańki nie wchodzą do solvera brył, a ich kontakt z bryłami liczy pętla podkroków
+    /// na kandydatach z osobnych wierszy (`bubbleCandidates`, `bubbleControl.w` = 2).
+    func prepare(_ inputs: [NativeRigidPolygonInput], bubbleCount: Int, timeStep: Float) throws {
         current = inputs; count = inputs.count
         let limit = NativeMetalSolver.candidateLimitPerObject
         let total = UInt64(count) * UInt64(limit)
@@ -200,9 +207,18 @@ final class NativeRigidPolygonState {
         _ = try buffer("contacts", count: rowCapacity, stride: MemoryLayout<NativeRigidCorrection>.stride)
         _ = try buffer("candidates", count: rowCapacity, stride: 32)
         _ = try buffer("rowCounts", count: count, stride: MemoryLayout<SIMD2<UInt32>>.stride)
+        _ = try buffer("bubbleCandidates", count: rowCapacity, stride: 32)
+        let bubbleRowCounts = try buffer("bubbleRowCounts", count: count, stride: MemoryLayout<SIMD2<UInt32>>.stride)
+        // Wiersze baniek powstają przy budowie siatki (nie ma ich w kroku bez baniek), więc liczniki poprzedniego kroku nie mogą przetrwać.
+        memset(bubbleRowCounts.contents(), 0, bubbleRowCounts.length)
+        _ = try buffer("bubbleContacts", count: rowCapacity * 2, stride: MemoryLayout<SIMD4<Float>>.stride)
         _ = try buffer("walls", count: count, stride: MemoryLayout<NativeRigidWall>.stride)
         let control = try buffer("control", count: 1, stride: 16)
-        control.contents().storeBytes(of: SIMD4(UInt32(count), UInt32(bubbleCount), UInt32(limit), bubbleCandidates ? 0 : 1), as: SIMD4<UInt32>.self)
+        control.contents().storeBytes(of: SIMD4(UInt32(count), UInt32(bubbleCount), UInt32(limit), NativeRigidCandidateMode.bodies.rawValue),
+                                      as: SIMD4<UInt32>.self)
+        let bubbleControl = try buffer("bubbleControl", count: 1, stride: 16)
+        bubbleControl.contents().storeBytes(of: SIMD4(UInt32(count), UInt32(bubbleCount), UInt32(limit), NativeRigidCandidateMode.bubbles.rawValue),
+                                            as: SIMD4<UInt32>.self)
         records = []; changes = []; remaps = []
         var vertices: [SIMD2<Float>] = [], triangles: [SIMD4<UInt32>] = []
         let old = Dictionary(uniqueKeysWithValues: publishedInputs.enumerated().map { ($0.element.object.descriptor.id, ($0.offset, $0.element)) })
@@ -362,6 +378,21 @@ final class NativeRigidPolygonState {
                 if kind == 3 { emittedBodyPairs.insert(SIMD2(first.rawValue, second.rawValue)) }
                 let impulse = Float(bitPattern: keys.load(fromByteOffset: index * 32 + 28, as: UInt32.self))
                 result.append(.init(first: first, second: second, point: point, normal: normal, impulseSum: impulse))
+            }
+        }
+        // Kontakty bańka–bryła z końca kroku (statyczne koło i kapsuła, bryła kinematyczna): normalna od bańki do bryły, impuls siły w kroku.
+        let bubbleCounts = bubbleRowCounts.contents().bindMemory(to: SIMD2<UInt32>.self, capacity: max(1, count))
+        let bubbleKeys = bubbleCandidates.contents()
+        let bubbleRecords = bubbleContacts.contents().bindMemory(to: SIMD4<Float>.self, capacity: max(1, rowCapacity * 2))
+        for body in 0..<count {
+            for slot in 0..<Int(bubbleCounts[body].x) {
+                let index = body * limit + slot
+                let first = bubbleRecords[2 * index], second = bubbleRecords[2 * index + 1]
+                guard first.x != 0 || first.y != 0 else { continue }
+                let bubble = ObjectID(rawValue: UInt64(bitPattern: bubbleKeys.load(fromByteOffset: index * 32, as: Int64.self)))
+                let bodyID = ObjectID(rawValue: UInt64(bitPattern: bubbleKeys.load(fromByteOffset: index * 32 + 8, as: Int64.self)))
+                result.append(.init(first: bubble, second: bodyID, point: WorldPoint(first.z, first.w),
+                                    normal: WorldPoint(first.x, first.y), impulseSum: second.x))
             }
         }
         let position = Dictionary(uniqueKeysWithValues: current.enumerated().map { ($0.element.object.descriptor.id, $0.offset) })
