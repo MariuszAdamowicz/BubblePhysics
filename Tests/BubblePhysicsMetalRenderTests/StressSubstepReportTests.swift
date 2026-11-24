@@ -49,7 +49,27 @@ final class StressSubstepReportTests: XCTestCase {
         XCTAssertEqual(report.substepHistogram, Dictionary(counts.map { ($0, 1) }, uniquingKeysWith: +))
         XCTAssertEqual(report.substepHistogram.values.reduce(0, +), run.measured.count, "histogram obejmuje każdą klatkę mierzoną")
         XCTAssertEqual(report.gridRebuildMax, run.measured.compactMap(\.gridRebuildCount).max())
-        XCTAssertGreaterThanOrEqual(report.gridRebuildMax, 1, "każda klatka buduje siatkę co najmniej raz")
+    }
+
+    /// P-B-40: stress-300 (287 baniek) liczy się jedną dyspozycją, więc raport podaje 1 bufor podkroków w każdej klatce, ścieżkę
+    /// `singleDispatch` i szerokość grupy z potoku; klucze tekstu mają wartości raportu.
+    func testExecutionPathKeysDescribeTheSingleDispatchPath() async throws {
+        let report = try await run().report
+        XCTAssertEqual(report.substepBuffersMax, 1, "jedna dyspozycja ma jeden bufor podkroków w każdej klatce")
+        XCTAssertEqual(report.executionPath, "singleDispatch")
+        XCTAssertTrue((1...1024).contains(report.singleGroupWidth), "szerokość grupy \(report.singleGroupWidth)")
+        let text = report.text
+        XCTAssertEqual(try value(of: "substep_buffers_max", in: text), String(report.substepBuffersMax))
+        XCTAssertEqual(try value(of: "execution_path", in: text), report.executionPath)
+        XCTAssertEqual(try value(of: "single_group_width", in: text), String(report.singleGroupWidth))
+    }
+
+    /// P-B-40: `grid_rebuild_max` liczy przebudowy wymuszone zapasem, a nie pary buforów; jedna dyspozycja nie może mieć ich więcej
+    /// niż podkroków w klatce.
+    func testGridRebuildMaxCountsMarginRebuildsOnly() async throws {
+        let run = try await run(scene: .restingCrowd)
+        XCTAssertEqual(run.report.gridRebuildMax, 0, "tłum w spoczynku nie wyczerpuje zapasu obwiedni")
+        XCTAssertEqual(run.report.executionPath, "singleDispatch")
     }
 
     func testLongestFrameAndGPUTimesComeFromTheMeasuredFrames() async throws {

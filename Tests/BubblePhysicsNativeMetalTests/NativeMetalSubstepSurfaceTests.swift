@@ -12,6 +12,30 @@ final class NativeMetalSubstepSurfaceTests: XCTestCase {
         XCTAssertFalse(configuration.captureSubsteps)
         XCTAssertFalse(configuration.assertEverySubstep)
         XCTAssertNil(configuration.injectedSubstepState)
+        // G8-AC4: przełączniki ścieżek wykonania są domyślnie wyłączone; kubełki siatki w grupie mają 2048, limit kandydatów to pojemność 128.
+        XCTAssertFalse(configuration.forceMultipleDispatches)
+        XCTAssertEqual(configuration.candidateLimitPerObject, 128)
+        XCTAssertEqual(configuration.gridHashBucketCount, 2048)
+    }
+
+    /// P-B-40: przełączniki ścieżek wykonania przechodzą przez `sanitized`, a limit kandydatów i liczba kubełków mają dopuszczalny zakres.
+    func testSanitizedKeepsExecutionPathSwitchesAndClampsTheirRanges() {
+        var configuration = NativeMetalConfiguration.default
+        configuration.forceMultipleDispatches = true
+        configuration.candidateLimitPerObject = 8
+        configuration.gridHashBucketCount = 1
+        let kept = configuration.sanitized
+        XCTAssertTrue(kept.forceMultipleDispatches)
+        XCTAssertEqual(kept.candidateLimitPerObject, 8)
+        XCTAssertEqual(kept.gridHashBucketCount, 1, "1 kubełek wymusza kolizję każdej komórki (P-B-46)")
+        for (invalid, expected) in [(0, 1), (-5, 1), (129, 128), (100_000, 128)] {
+            configuration.candidateLimitPerObject = invalid
+            XCTAssertEqual(configuration.sanitized.candidateLimitPerObject, expected, "limit kandydatów \(invalid): najwyżej pojemność 128")
+        }
+        for invalid in [0, -1] {
+            configuration.gridHashBucketCount = invalid
+            XCTAssertEqual(configuration.sanitized.gridHashBucketCount, 1, "kubełki \(invalid)")
+        }
     }
 
     func testSanitizedKeepsSwitchesAndClampsSplitMultiplier() {
@@ -50,6 +74,29 @@ final class NativeMetalSubstepSurfaceTests: XCTestCase {
         XCTAssertEqual(filled.physicsGPUMilliseconds, 1.5)
         XCTAssertEqual(filled.contourGPUMilliseconds, 0.75)
         XCTAssertEqual(filled.gpuMilliseconds, 3)
+    }
+
+    // P-B-40: telemetria niesie osobno bufory podkroków, ścieżkę i szerokość grupy; zero i ścieżka wielu dyspozycji to wartości domyślne.
+    func testTelemetryCarriesExecutionPathFields() {
+        let empty = NativeMetalFrameTelemetry()
+        XCTAssertEqual(empty.substepBufferCount, 0)
+        XCTAssertEqual(empty.executionPath, .multipleDispatches)
+        XCTAssertEqual(empty.singleGroupWidth, 0)
+        let filled = NativeMetalFrameTelemetry(backend: .nativeMetal, substepCount: 30, gridRebuildCount: 2, substepBufferCount: 1,
+                                               executionPath: .singleDispatch, singleGroupWidth: 1024)
+        XCTAssertEqual(filled.substepBufferCount, 1)
+        XCTAssertEqual(filled.executionPath, .singleDispatch)
+        XCTAssertEqual(filled.singleGroupWidth, 1024)
+        XCTAssertEqual(NativeMetalExecutionPath.singleDispatch.rawValue, "singleDispatch")
+        XCTAssertEqual(NativeMetalExecutionPath.multipleDispatches.rawValue, "multipleDispatches")
+    }
+
+    // P-B-40: `gridRebuildCount` to przebudowy wymuszone zapasem; osobny licznik `marginRebuildCount` znika (zadanie 30), więc telemetria
+    // ma jedno pole przebudów i osobne `substepBufferCount` dla par buforów.
+    func testTelemetryHasOneRebuildFieldAndNoSeparateMarginCounter() {
+        let labels = Set(Mirror(reflecting: NativeMetalFrameTelemetry()).children.compactMap(\.label))
+        XCTAssertFalse(labels.contains("marginRebuildCount"), "gridRebuildCount liczy przebudowy z zapasu, osobny licznik jest zbędny")
+        XCTAssertTrue(labels.isSuperset(of: ["gridRebuildCount", "substepBufferCount", "executionPath", "singleGroupWidth"]))
     }
 
     // G6-AC2, G6-AC5: awaria silnika niesie obiekty, krawędź, odległość i człon h.
