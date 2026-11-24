@@ -111,4 +111,33 @@ final class StressSubstepReportTests: XCTestCase {
                        "1:290,2:6,3-4:3,9-16:1,513-1024:1")
         XCTAssertEqual(PublicWorldStressReport.substepHistogramText([5: 2, 8: 1, 6: 1]), "5-8:4")
     }
+
+    /// Krok bez ciał nie uruchamia solvera, więc czekanie na render z profilu poprzedniego kroku nie może zostać w pomiarze.
+    func testRenderWaitOfTheSolverIsNotKeptByAStepWithoutBodies() async throws {
+        guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else { throw XCTSkip("brak urządzenia Metal") }
+        let scene = PublicWorldStressBenchmark.Scene.restingCrowd
+        let world = try BubbleWorld.makeBenchmarkWorld(configuration: scene.configuration(), device: device)
+        let transaction = try scene.initialTransaction(assets: XCTUnwrap(world.assets))
+        world.submit(transaction)
+        func advance() async throws {
+            let command = try XCTUnwrap(queue.makeCommandBuffer())
+            _ = await world.advance(by: 1.0 / 60, commandBuffer: command) {}
+            XCTAssertEqual(command.status, .completed)
+        }
+        try await advance()
+        XCTAssertGreaterThan(try XCTUnwrap(world.benchmarkFrameProfile).renderWaitMilliseconds, 0, "krok z solverem czeka na bufor renderu")
+        var removal = WorldTransaction()
+        for case .add(let object) in transaction.operations {
+            switch object {
+            case .bubble(let bubble): removal = removal.remove(bubble.id)
+            case .rigidBody(let body): removal = removal.remove(body.id)
+            default: break
+            }
+        }
+        world.submit(removal)
+        try await advance()
+        XCTAssertEqual(world.benchmarkFrameProfile?.renderWaitMilliseconds ?? 0, 0, "krok bez ciał nie uruchomił solvera")
+        try await advance()
+        XCTAssertEqual(world.benchmarkFrameProfile?.renderWaitMilliseconds ?? 0, 0, "kolejny krok bez ciał")
+    }
 }

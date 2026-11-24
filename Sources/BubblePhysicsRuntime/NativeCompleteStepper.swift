@@ -125,6 +125,7 @@ package final class NativeCompleteStepper: CompleteStepper {
             // Bez bańki i bryły nie ma czego trafić: każdy punkt hit-testu daje puste miejsce.
             let noHits = [ObjectID?](repeating: nil, count: hitTests.count)
             native?.forgetContactHistory()
+            native?.discardPublishedRenderWait()
             guard !previousContacts.isEmpty else {
                 return .init(state: state, hitTestResults: noHits, snappedObjectIDs: batch.appearedObjectIDs)
             }

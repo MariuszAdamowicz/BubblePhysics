@@ -148,6 +148,8 @@ package final class NativePublicWorld {
     /// Krok bez GPU (brak ciał z masą) kończy wszystkie pary w `EventCompactor`, więc i tu historia par musi zniknąć;
     /// inaczej para o tych samych ID dodana później nie dostałaby `contactBegan`.
     package func forgetContactHistory() { contactHistory = [] }
+    /// Krok bez solvera nie czekał na bufor renderu, więc czekanie z profilu poprzedniego kroku nie może trafić do pomiaru tego kroku.
+    package func discardPublishedRenderWait() { publishedProfile?.renderWaitMilliseconds = 0 }
     package var publishedRenderHandoff: NativeMetalRenderHandoff? { solver.publishedRenderHandoff }
     package var publishedContourCPUReadbackCount: Int { solver.publishedContourCPUReadbackCount }
     package var publishedTelemetry: NativeMetalFrameTelemetry? { solver.publishedSolverFrame?.telemetry }
