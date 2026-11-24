@@ -5,9 +5,16 @@ import BubblePhysicsReference
 /// Tłumaczy świat diagnostyczny (`ReferenceWorld`) na neutralne wejście solvera i wynik z powrotem na typy Reference.
 /// Tylko diagnostyka zna oba światy; produkcyjny solver nie zna typów Reference.
 enum ReferenceSolverInputAdapter {
-    static func input(from world: ReferenceWorld) -> NativeSolverInput {
+    /// K_c baniek świata diagnostycznego: start gry (229), jak w scenie stress-300. `ReferenceBubble` nie ma K_c, a bez niego solver 4.0.0
+    /// nie liczy kontaktu (K_c = 0 to bańka bez kontaktu).
+    static let bubbleContactStiffness: Float = 229
+
+    /// `contactStiffness` nadpisuje K_c baniek; 0 daje bańki bez kontaktu (wejście do badania samego broadphase i konturu bez ruchu).
+    static func input(from world: ReferenceWorld, contactStiffness: Float = bubbleContactStiffness) -> NativeSolverInput {
         NativeSolverInput(configuration: .init(world.configuration),
-                          bubbles: world.bubbles.map(NativeSolverBubble.init),
+                          bubbles: world.bubbles.map {
+                              NativeSolverBubble($0, contactStiffness: contactStiffness, damping: world.configuration.linearDamping)
+                          },
                           segments: world.segments.map(NativeSolverSegment.init))
     }
 
@@ -15,12 +22,14 @@ enum ReferenceSolverInputAdapter {
 }
 
 extension NativeSolverBubble {
-    init(_ bubble: ReferenceBubble) {
+    /// `damping` to γ baniek świata diagnostycznego: `linearDamping` konfiguracji Reference (dawny opór liniowy, teraz γ siły kontaktowej).
+    init(_ bubble: ReferenceBubble, contactStiffness: Float, damping: Float) {
         self.init(id: .init(rawValue: bubble.id.rawValue), center: SIMD2(bubble.center.x, bubble.center.y),
                   previousCenter: SIMD2(bubble.previousCenter.x, bubble.previousCenter.y),
                   velocity: SIMD2(bubble.velocity.x, bubble.velocity.y), mass: bubble.mass,
                   inverseMass: bubble.inverseMass, targetRadius: bubble.targetRadius, stiffness: bubble.stiffness,
-                  rotation: bubble.rotation, angularVelocity: bubble.angularVelocity)
+                  rotation: bubble.rotation, angularVelocity: bubble.angularVelocity,
+                  contactStiffness: contactStiffness, damping: damping)
     }
 }
 
@@ -110,8 +119,10 @@ extension NativeMetalSolver {
     /// Ostatnia opublikowana klatka w typach diagnostycznych.
     var publishedFrame: NativeMetalWorldFrame? { publishedSolverFrame.map(NativeMetalWorldFrame.init) }
 
-    func executeFrame(world: ReferenceWorld, scenarioStep: Int) async throws -> NativeMetalWorldFrame {
-        .init(try await executeFrame(input: ReferenceSolverInputAdapter.input(from: world), scenarioStep: scenarioStep))
+    func executeFrame(world: ReferenceWorld, scenarioStep: Int,
+                      contactStiffness: Float = ReferenceSolverInputAdapter.bubbleContactStiffness) async throws -> NativeMetalWorldFrame {
+        .init(try await executeFrame(input: ReferenceSolverInputAdapter.input(from: world, contactStiffness: contactStiffness),
+                                     scenarioStep: scenarioStep))
     }
 
     func executeFrame(snapshot: NativeMetalSnapshot, scenarioStep: Int) async throws -> NativeMetalWorldFrame {

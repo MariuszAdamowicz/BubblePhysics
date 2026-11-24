@@ -19,14 +19,11 @@ final class AcceptanceRenderEquivalenceTests: XCTestCase {
     private static let referenceDeviceName = "Apple M1 Pro"
     private static let referenceSteps = 120
     private static let referenceWidth = 1125, referenceHeight = 2436
-    /// Commit, na którym policzono aktualne hashe wzorca (poprawka 3.0.1, krawędź wejścia): kod renderera bez żadnej zmiany etapu 9.
-    private static let referenceCommit = "f65b13c"
-    /// Wzorzec zapisany przed zadaniem 96 (pula areny) i zadaniem 99 (zmiany renderu).
-    /// Hashe zaktualizowane w wycinku 3 wydania 3.0.0 (jednostronne krawędzie statycznych wielokątów): ściany sceny mają grubość 1,
-    /// więc bez drugiej sprężyny od tylnej krawędzi bańki przy ścianach stoją gdzie indziej (Apple M1 Pro, ta sama scena i kroki).
-    /// Hashe zaktualizowane ponownie w 3.0.1 (krawędź wejścia, BF-D-1): przewidziany środek szybkiej bańki mija krawędź ściany
-    /// grubości 1, a krawędź wejścia nadal go odpycha, więc bańki przy ścianach stoją gdzie indziej (Apple M1 Pro).
-    private static let referencePixelHash: UInt64 = 0xc947960553219dd3
+    /// Wzorzec policzony od nowa na silniku 4.0.0 (prawo kontaktu K_c w podkrokach, Apple M1 Pro, ta scena i kroki). Hash z silnika 3.x
+    /// (`0xc947960553219dd3`, poprawka 3.0.1) nie ma już sensu: spec. 4 zmienia fizykę kontaktu, więc bańki stoją gdzie indziej,
+    /// a scena kładzie 287 baniek zamiast 300. Wzorzec pilnuje tylko tego, że zmiana renderu nie zmienia ani piksela obrazu silnika 4.0.0.
+    private static let referenceCommit = "silnik 4.0.0 (feature/engine-4-0-0)"
+    private static let referencePixelHash: UInt64 = 0x7107d3404a48d192
     private struct RenderedImage {
         let width: Int
         let height: Int

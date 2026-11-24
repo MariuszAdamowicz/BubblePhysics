@@ -63,12 +63,14 @@ final class NativeMetalPerceptualProbeTests: XCTestCase {
         XCTAssertFalse(nativeVsCPUShape.isEmpty)
         XCTAssertFalse(cpuContactAcceleration.isEmpty)
         XCTAssertFalse(gpuContactAcceleration.isEmpty)
-        // Kontur GPU może różnić się od CPU, ale nie może tworzyć własnego
-        // lokalnego pofałdowania ani zmieniać kształtu wielokrotnie szybciej.
-        XCTAssertLessThanOrEqual(shapeP95, 0.01)
-        XCTAssertLessThanOrEqual(nativeStepP95, 0.07)
-        // PBD koryguje pozycję natychmiast, ale ta korekta nie może być wprost
-        // zamieniana na wielokrotnie większy od CPU impuls prędkości.
+        // 4.0.0: kontur to cięciwa r · (1 − ε) z prawa kontaktu, a generator Reference odtwarza dawny model deformacji, więc różnica kształtu
+        // jest z założenia większa niż w 3.x (zmierzone p95 ok. 0,017; próg 3.x to 0,01). Kontur GPU nie może jednak tworzyć własnego
+        // lokalnego pofałdowania: jego zmiana kształtu w klatce równa się zmianie konturu CPU z tej samej geometrii (oba biorą z fizyki).
+        XCTAssertLessThanOrEqual(shapeP95, 0.03)
+        XCTAssertEqual(nativeStepP95, cpuStepP95, accuracy: 0.01, "kontur GPU nie zmienia kształtu szybciej niż geometria, z której powstaje")
+        // Skok kształtu w klatce wynika z fizyki sceny (trójkąt kinematyczny 18 j na klatkę przecina bańki, a siła kontaktu przy K_c
+        // odpycha je w jednym kroku), nie z konturu; dawny próg 0,07 opisywał miękką korektę pozycji XPBD, która już nie istnieje.
+        // Siła kontaktu daje skończone zmiany prędkości: bańka nie dostaje wielokrotnie większego impulsu niż CPU.
         XCTAssertLessThanOrEqual(gpuAccelerationP95, 160)
     }
 

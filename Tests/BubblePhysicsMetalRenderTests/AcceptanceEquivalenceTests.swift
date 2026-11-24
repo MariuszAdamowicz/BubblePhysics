@@ -17,17 +17,14 @@ final class AcceptanceEquivalenceTests: XCTestCase {
     /// Urządzenie, na którym zapisano wzorzec.
     private static let referenceDeviceName = "Apple M1 Pro"
     private static let referenceSteps = 120
-    /// Commit, na którym policzono aktualne hashe wzorca (poprawka 3.0.1, krawędź wejścia), bez żadnej optymalizacji ścieżki CPU etapu 8.
-    private static let referenceCommit = "f65b13c"
-    /// Wzorzec zapisany przed zadaniem 84 (bez żadnej optymalizacji ścieżki CPU etapu 8).
-    /// Hashe zaktualizowane w wycinku 3 wydania 3.0.0 (jednostronne krawędzie statycznych wielokątów, CD-D-3, CD-D-4): ściany tej sceny mają
-    /// grubość 1, więc dawna druga sprężyna od tylnej krawędzi i podwójny kontakt wierzchołka znikają i pozycje baniek przy ścianach
-    /// się zmieniają (Apple M1 Pro, ta sama scena i kroki). Po 10 krokach stan jest jeszcze bit w bit ten sam co przed zmianą.
-    /// Hashe zaktualizowane ponownie w 3.0.1 (krawędź wejścia, BF-D-1): kontakty tej sceny są twarde, ale przy ścianach grubości 1
-    /// przewidziany środek szybkiej bańki mija krawędź, która teraz nadal go odpycha (dotąd tylko strażnik środka cofał go na krawędź).
-    /// Tłumienie kontaktu miękkiego (BF-D-2) tej sceny nie dotyczy; bez krawędzi wejścia hashe 3.0.0 się zgadzają (Apple M1 Pro).
-    private static let referenceObjectHash: UInt64 = 0xd210b98c533bcf2d
-    private static let referenceContourHash: UInt64 = 0xaef9481d20dcacd5
+    /// Commit, na którym policzono aktualne hashe wzorca: silnik 4.0.0 (prawo kontaktu K_c w podkrokach). Hashe z silnika 3.x
+    /// (ostatnie `0xd210b98c533bcf2d` i `0xaef9481d20dcacd5` z poprawki 3.0.1) nie mają już sensu: spec. 4 zmienia fizykę kontaktu
+    /// (XPBD i łaty odeszły), więc każda bańka kończy w innym miejscu. Wzorzec jest policzony od nowa na Apple M1 Pro na tej gałęzi
+    /// i pilnuje już tylko tego, że optymalizacja ścieżki CPU nie zmienia ani bitu opublikowanego stanu silnika 4.0.0.
+    /// Scena akceptacyjna kładzie `Stress300Scene.placedBubbleCount()` baniek (287), bo reszta z 300 nie ma miejsca poza obrysem trójkąta.
+    private static let referenceCommit = "silnik 4.0.0 (feature/engine-4-0-0)"
+    private static let referenceObjectHash: UInt64 = 0x6feaf1c4e855b2a3
+    private static let referenceContourHash: UInt64 = 0x2c276c3f6edfa6eb
     private struct Published {
         let frame: WorldFrame
         let objectHash: UInt64
@@ -68,9 +65,10 @@ final class AcceptanceEquivalenceTests: XCTestCase {
         let contourHash = Self.referenceContourHash
         let origin = "wzorzec: \(Self.referenceDeviceName), \(Self.referenceSteps) kroków, commit \(Self.referenceCommit)"
         XCTAssertEqual(published.frame.stepIndex, UInt64(Self.referenceSteps))
-        // 300 baniek, 4 ściany i trójkąt kinematyczny.
-        XCTAssertEqual(published.frame.objects.count, 305)
-        XCTAssertEqual(published.contourCount, 300)
+        // Położone bańki, 4 ściany i trójkąt kinematyczny.
+        let placed = Stress300Scene.placedBubbleCount()
+        XCTAssertEqual(published.frame.objects.count, placed + 5)
+        XCTAssertEqual(published.contourCount, placed)
         XCTAssertEqual(String(published.objectHash, radix: 16), String(objectHash, radix: 16),
             "stan obiektów (frame.objects) sceny akceptacyjnej różni się od wzorca sprzed optymalizacji (\(origin))")
         XCTAssertEqual(String(published.contourHash, radix: 16), String(contourHash, radix: 16),
@@ -99,6 +97,6 @@ final class AcceptanceEquivalenceTests: XCTestCase {
         XCTAssertNotEqual(early.contourHash, first.contourHash)
         XCTAssertEqual(first.objectHash, second.objectHash, "stan obiektów różni się między przebiegami")
         XCTAssertEqual(first.contourHash, second.contourHash, "kontury różnią się między przebiegami")
-        XCTAssertEqual(first.frame.objects.count, 305)
+        XCTAssertEqual(first.frame.objects.count, Stress300Scene.placedBubbleCount() + 5)
     }
 }

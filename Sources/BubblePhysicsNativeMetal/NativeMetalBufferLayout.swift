@@ -21,6 +21,9 @@ struct NativeMetalBubble: Equatable, Sendable {
         motion = SIMD4(bubble.velocity.x, bubble.velocity.y, bubble.rotation, bubble.angularVelocity)
         physical = SIMD4(bubble.mass, bubble.inverseMass, bubble.targetRadius, bubble.stiffness)
         deformation = .zero
+        // Ścieżka bez ustawień publicznych (diagnostyka) niesie K_c w bańce; bańka z K_c > 0 jest napędzana siłami kontaktu.
+        contact = bubble.contactStiffness > 0 ? NativePublicProperties.contact(stiffness: bubble.contactStiffness, forceDriven: bubble.inverseMass > 0) : .zero
+        material.x = bubble.damping
     }
 
     func unpack(into bubble: inout NativeSolverBubble) {

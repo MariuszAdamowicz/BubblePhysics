@@ -24,20 +24,26 @@ final class NativeMetalContourTests: XCTestCase {
         XCTAssertEqual(solver.publishedFrame?.contours, frame.contours)
     }
 
-    func testDeepNarrowContactHonorsEveryEdgeLengthWithAndWithoutSurfaceTension() async throws {
+    // Głębokie ściśnięcie z dwóch stron: bańka w imadle z dwóch ścian w odległości 0,4 j od środka (d < r, ε = 0,6). Siły są równe i przeciwne,
+    // więc bańka stoi i kontur na końcu kroku ma dwie płaskie cięciwy r · (1 − ε) = 0,4. Każda krawędź konturu zostaje w limicie długości,
+    // z napięciem powierzchniowym i bez niego. (Dawna scena z bańką na krawędzi 0,002 j kończyła krok odbitą od ściany, bez ściśnięcia.)
+    func testDeepSqueezeBetweenTwoWallsHonorsEveryEdgeLengthWithAndWithoutSurfaceTension() async throws {
         for tension: Float in [20, 0] {
             let solver = try makeSolver()
             var world = ReferenceWorld(configuration: .init(timeStep: 1 / 60, linearDamping: 0,
                 angularDamping: 0, maxContourSegmentLength: 0.1, contourSurfaceTension: tension),
                 broadPhase: BruteForceBroadPhase())
-            world.addBubble(try .init(id: .init(rawValue: 1), center: .init(x: -0.001, y: 0), mass: 1, targetRadius: 1))
-            world.addSegment(.staticSegment(id: .init(rawValue: 1), a: .init(x: 0, y: -0.001), b: .init(x: 0, y: 0.001)))
+            world.addBubble(try .init(id: .init(rawValue: 1), center: .zero, mass: 1, targetRadius: 1))
+            world.addSegment(.staticSegment(id: .init(rawValue: 1), a: .init(x: -0.4, y: -10), b: .init(x: -0.4, y: 10)))
+            world.addSegment(.staticSegment(id: .init(rawValue: 2), a: .init(x: 0.4, y: -10), b: .init(x: 0.4, y: 10)))
             let frame = try await solver.executeFrame(world: world, scenarioStep: 1)
             let bubble = frame.bubbles[0]
             let points = try XCTUnwrap(frame.contours[bubble.id])
             XCTAssertTrue(frame.isComplete)
-            XCTAssertLessThan((points[0] - bubble.center).length, 0.1)
-            XCTAssertTrue(points.contains { abs($0.y) > 0.5 && ($0 - bubble.center).length > 0.9 })
+            XCTAssertEqual(bubble.center.x, 0, accuracy: 1e-4, "siły z obu ścian się równoważą")
+            XCTAssertEqual((points[0] - bubble.center).length, 0.4, accuracy: 0.01, "cięciwa w odległości d od środka, tension=\(tension)")
+            XCTAssertEqual((points[points.count / 2] - bubble.center).length, 0.4, accuracy: 0.01, tension == 0 ? "bez napięcia" : "z napięciem")
+            XCTAssertTrue(points.contains { abs($0.y) > 0.5 && ($0 - bubble.center).length > 0.9 }, "poza cięciwami kontur zostaje kołem")
             for index in points.indices {
                 XCTAssertLessThanOrEqual((points[(index + 1) % points.count] - points[index]).length,
                     0.1, "tension=\(tension), edge=\(index)")
@@ -45,22 +51,21 @@ final class NativeMetalContourTests: XCTestCase {
         }
     }
 
-    func testDefaultHardContactDoesNotLeaveCacheDrivenContourDeformation() async throws {
+    // 4.0.0: kontur jest rysowany z geometrii końca kroku. Bańka odpychana od ściany ma po kroku cięciwę w odległości d = −x od środka
+    // (ε = 1 − d / r z prawa kontaktu), czyli płaską na ścianie, a po przeciwnej stronie kołową. Bez śladu dawnej pamięci nacisku.
+    func testContactChordLiesOnTheWallAtTheEndOfTheStep() async throws {
         let solver = try NativeMetalSolver(device: XCTUnwrap(MTLCreateSystemDefaultDevice()))
         var world = try makeWorld()
         world.addSegment(wall())
         let frame = try await solver.executeFrame(world: world, scenarioStep: 1)
         let points = try XCTUnwrap(frame.contours[.init(rawValue: 1)])
         let bubble = frame.bubbles[0]
-        XCTAssertEqual(bubble.center.x, -1, accuracy: 0.00001)
-        XCTAssertLessThanOrEqual(frame.contacts[0].penetration, 0.0001)
-        XCTAssertGreaterThan(frame.contacts[0].accumulatedCompression, 0.3)
-        XCTAssertEqual((points[0] - bubble.center).length, 1, accuracy: 0.001)
-        XCTAssertEqual((points[points.count / 2] - bubble.center).length, 1, accuracy: 0.001)
-        // Raport liczy również śladową, wygaszaną pamięć po poprzedniej
-        // geometrii. Kontrakt wizualny to brak widocznego odkształcenia, nie
-        // bezwzględne wyzerowanie tej pomocniczej wartości float32.
-        XCTAssertLessThanOrEqual(frame.report.solver.maximumRelativeDeformation, 0.001)
+        let distance = -bubble.center.x
+        XCTAssertGreaterThan(distance, 0.6, "siła kontaktu odepchnęła bańkę od ściany")
+        XCTAssertLessThan(distance, 1, "po jednym kroku bańka wciąż dotyka ściany")
+        XCTAssertEqual((points[0] - bubble.center).length, distance, accuracy: 0.001, "cięciwa leży na ścianie")
+        XCTAssertLessThanOrEqual(frame.contacts[0].penetration, 1 - distance + 0.0001)
+        XCTAssertEqual((points[points.count / 2] - bubble.center).length, 1, accuracy: 0.001, "strona przeciwna kołowa")
     }
 
     // Brak nacisku kierunkowego pozostawi naturalny promień po stronie ściany.

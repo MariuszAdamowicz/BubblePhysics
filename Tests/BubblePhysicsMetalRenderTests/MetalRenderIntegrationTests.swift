@@ -253,7 +253,9 @@ final class MetalRenderIntegrationTests: XCTestCase {
             cleanEvents += expected.events; retriedEvents += actual.events
         }
         XCTAssertEqual(retriedEvents, cleanEvents)
-        XCTAssertEqual(B.began(cleanEvents).count, 1, "scena ma dać contactBegan, inaczej test nic nie dowodzi")
+        // Pod prawem kontaktu 4.0.0 bańka odbija się od podłogi i styk zaczyna się więcej niż raz; wystarczy, że scena daje contactBegan,
+        // a równość zdarzeń obu światów (wyżej) jest właściwym dowodem.
+        XCTAssertGreaterThanOrEqual(B.began(cleanEvents).count, 1, "scena ma dać contactBegan, inaczej test nic nie dowodzi")
         XCTAssertNil(retried.diagnostics.failureReason)
     }
 

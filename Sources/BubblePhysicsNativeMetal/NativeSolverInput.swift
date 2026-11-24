@@ -26,10 +26,16 @@ package struct NativeSolverBubble: Equatable, Sendable {
     package var stiffness: Float
     package var rotation: Float
     package var angularVelocity: Float
+    /// K_c bańki w ścieżce bez ustawień publicznych (diagnostyka): 0 oznacza bańkę bez kontaktu, bo prawo kontaktu 4.0.0 potrzebuje K_c > 0.
+    /// Ścieżka publiczna podaje K_c w `NativePublicProperties.contact` i to pole pomija.
+    package var contactStiffness: Float
+    /// γ bańki (1/s) w ścieżce bez ustawień publicznych; jak K_c, ścieżka publiczna podaje je w materiale.
+    package var damping: Float
 
     package init(id: NativeSolverBubbleID, center: SIMD2<Float>, previousCenter: SIMD2<Float>? = nil,
                  velocity: SIMD2<Float> = .zero, mass: Float, inverseMass: Float? = nil, targetRadius: Float,
-                 stiffness: Float = 1, rotation: Float = 0, angularVelocity: Float = 0) {
+                 stiffness: Float = 1, rotation: Float = 0, angularVelocity: Float = 0, contactStiffness: Float = 0,
+                 damping: Float = 0) {
         self.id = id
         self.center = center
         self.previousCenter = previousCenter ?? center
@@ -40,6 +46,8 @@ package struct NativeSolverBubble: Equatable, Sendable {
         self.stiffness = stiffness
         self.rotation = rotation
         self.angularVelocity = angularVelocity
+        self.contactStiffness = contactStiffness
+        self.damping = damping
     }
 
     var isFiniteState: Bool {

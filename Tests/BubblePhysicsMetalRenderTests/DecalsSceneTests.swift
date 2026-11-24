@@ -34,7 +34,7 @@ final class DecalsSceneTests: XCTestCase {
             default: break
             }
         }
-        XCTAssertEqual(bubbles, 300)
+        XCTAssertEqual(bubbles, Stress300Scene.placedBubbleCount(), "300 miejsc siatki bez miejsc w obrysie startowym trójkąta (G7-AC1)")
         let material = try XCTUnwrap(materials.first { $0.texture != nil }, "materiał z teksturą")
         XCTAssertEqual(material.bubbleMapping, .attached)
         XCTAssertTrue(try assets.contains(XCTUnwrap(material.texture)))

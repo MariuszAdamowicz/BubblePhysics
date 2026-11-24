@@ -19,7 +19,10 @@ final class AcceptanceSceneTests: XCTestCase {
         return try scene.initialTransaction(assets: XCTUnwrap(world.assets)).operations
     }
 
-    func testSceneHasThreeHundredTexturedBubblesWithTextDecalsOnTwoLayersOfAlphaMaterials() throws {
+    /// Scena kładzie 300 miejsc siatki, ale w 4.0.0 miejsca w obrysie startowym trójkąta zostają puste (bryła nie staje nad środkiem
+    /// bańki, G7-AC1), więc baniek jest `Stress300Scene.placedBubbleCount()` (287). Połowa sceny na warstwie 1 to bańki o parzystym ID
+    /// (nieparzysty numer siatki), a nie dokładnie 150.
+    func testSceneHasThePlacedTexturedBubblesWithTextDecalsOnTwoLayersOfAlphaMaterials() throws {
         let operations = try acceptanceOperations()
         var materials: [RenderMaterialID: RenderMaterial] = [:]
         var bubbles: [BubbleDescriptor] = []
@@ -30,7 +33,9 @@ final class AcceptanceSceneTests: XCTestCase {
             default: break
             }
         }
-        XCTAssertEqual(bubbles.count, 300)
+        XCTAssertEqual(bubbles.count, Stress300Scene.placedBubbleCount())
+        XCTAssertLessThan(bubbles.count, Stress300Scene.defaultBubbleCount, "miejsca w obrysie trójkąta są puste")
+        XCTAssertGreaterThan(bubbles.count, Stress300Scene.defaultBubbleCount * 9 / 10)
         for bubble in bubbles {
             guard case .text? = bubble.decal?.content else { XCTFail("bańka \(bubble.id) bez naklejki tekstowej"); continue }
             let material = try XCTUnwrap(materials[bubble.renderMaterialID], "materiał bańki \(bubble.id)")
@@ -39,8 +44,10 @@ final class AcceptanceSceneTests: XCTestCase {
             XCTAssertEqual(material.blend, .alpha, "bańka \(bubble.id) na warstwie \(bubble.layer) ma materiał alfa")
         }
         XCTAssertEqual(Set(bubbles.map(\.layer)), [0, 1])
-        XCTAssertEqual(bubbles.filter { $0.layer == 1 }.count, 150)
-        XCTAssertEqual(bubbles.filter { $0.layer == 0 }.count, 150)
+        for bubble in bubbles {
+            XCTAssertEqual(bubble.layer, bubble.id.rawValue % 2 == 0 ? 1 : 0, "warstwa bańki \(bubble.id) wynika z numeru siatki")
+        }
+        XCTAssertEqual(bubbles.filter { $0.layer == 1 }.count + bubbles.filter { $0.layer == 0 }.count, bubbles.count)
     }
 
     func testSceneHasFourWallsAndAKinematicTriangleWithADrive() throws {

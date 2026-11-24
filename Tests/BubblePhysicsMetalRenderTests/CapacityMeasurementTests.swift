@@ -98,16 +98,33 @@ final class CapacityMeasurementTests: XCTestCase {
         }
     }
 
-    func testFirstNBubblesAreIdenticalOnEveryLevel() throws {
+    /// W 4.0.0 miejsca siatki w obrysie startowym trójkąta zostają puste (bryła nie staje nad środkiem bańki, G7-AC1), a trójkąt startuje
+    /// w środku regionu poziomu, więc poziom N ma `placedBubbleCount(N)` baniek, a nie N, i zbiory pustych miejsc różnią się między
+    /// poziomami. Miejsce siatki o danym numerze ma na każdym poziomie, który je zapełnia, tę samą bańkę (jeden ciąg losowań).
+    func testBubblesOfAGridSlotAreIdenticalOnEveryLevelThatFillsIt() throws {
         let device = try device()
-        let largest = bubbles(try operations(.capacity(bubbleCount: 400), device: device))
-        XCTAssertEqual(largest.count, 400)
+        var byLevel: [Int: [ObjectID: BubbleDescriptor]] = [:]
         for count in levelCounts {
             let level = bubbles(try operations(.capacity(bubbleCount: count), device: device))
-            XCTAssertEqual(level.count, count, "poziom \(count)")
+            XCTAssertEqual(level.count, Stress300Scene.placedBubbleCount(bubbleCount: count), "poziom \(count)")
+            XCTAssertEqual(BenchmarkSceneSpec.capacity(bubbleCount: count).expectedBubbleCount, level.count, "poziom \(count)")
+            XCTAssertLessThan(level.count, count, "poziom \(count): miejsca w obrysie trójkąta są puste")
+            XCTAssertGreaterThan(level.count, count * 8 / 10, "poziom \(count): puste jest tylko miejsce pod trójkątem")
             XCTAssertTrue(level.allSatisfy { $0.decal != nil }, "poziom \(count): naklejka tekstowa na każdej bańce")
             XCTAssertEqual(Set(level.map(\.layer)), [0, 1], "poziom \(count): dwie warstwy")
-            XCTAssertEqual(level, Array(largest.prefix(count)), "pierwsze \(count) baniek jak na poziomie 400")
+            XCTAssertTrue(level.allSatisfy { $0.id.rawValue >= 1 && $0.id.rawValue <= UInt64(count) }, "poziom \(count): numery siatki")
+            byLevel[count] = Dictionary(uniqueKeysWithValues: level.map { ($0.id, $0) })
+        }
+        let largest = try XCTUnwrap(byLevel[400])
+        for count in levelCounts {
+            let level = try XCTUnwrap(byLevel[count])
+            var shared = 0
+            for (id, bubble) in level {
+                guard let other = largest[id] else { continue }
+                shared += 1
+                XCTAssertEqual(bubble, other, "poziom \(count): bańka \(id) jak na poziomie 400")
+            }
+            XCTAssertGreaterThan(shared, count * 6 / 10, "poziom \(count): większość miejsc wspólna z poziomem 400")
         }
     }
 
@@ -179,7 +196,7 @@ final class CapacityMeasurementTests: XCTestCase {
                 let frames = samples.filter { $0.series == series }
                 XCTAssertEqual(frames.count, 3, "poziom \(count), seria \(series): rozgrzewka i klatki mierzone")
                 for sample in frames {
-                    XCTAssertEqual(countBubbles(sample.frame), count, "poziom \(count), seria \(series), klatka \(sample.index)")
+                    XCTAssertEqual(countBubbles(sample.frame), Stress300Scene.placedBubbleCount(bubbleCount: count), "poziom \(count), seria \(series), klatka \(sample.index)")
                     XCTAssertEqual(sample.renderEncoded, series == .full, "tylko seria z renderem koduje render")
                 }
             }
@@ -191,7 +208,7 @@ final class CapacityMeasurementTests: XCTestCase {
         }
     }
 
-    /// Poziom 100 z usuniętą bańką w kroku 1: od tej klatki świat ma 99 baniek, w obu seriach.
+    /// Poziom 100 z usuniętą bańką w kroku 1: od tej klatki świat ma o jedną bańkę mniej, niż poziom kładzie, w obu seriach.
     private func specLosingABubble() -> BenchmarkSceneSpec {
         BenchmarkSceneSpec.capacity(bubbleCount: 100).addingStepTransaction { step in
             step == 1 ? WorldTransaction().remove(ObjectID(rawValue: 1)) : nil
@@ -214,7 +231,7 @@ final class CapacityMeasurementTests: XCTestCase {
         let report = try await PublicWorldStressBenchmark.run(device: device, spec: specLosingABubble(), renderSplit: false,
             frameObserver: { samples.append($0) }, warmupFrames: 1, measuredFrames: 2, progress: { _, _ in })
         func mismatches(_ series: PublicWorldStressFrameSample.Series) -> Int {
-            samples.filter { $0.series == series && countBubbles($0.frame) != 100 }.count
+            samples.filter { $0.series == series && countBubbles($0.frame) != Stress300Scene.placedBubbleCount(bubbleCount: 100) }.count
         }
         XCTAssertGreaterThan(mismatches(.full), 0)
         XCTAssertEqual(mismatches(.physicsOnly), mismatches(.full), "obie serie tracą bańkę w tych samych klatkach")

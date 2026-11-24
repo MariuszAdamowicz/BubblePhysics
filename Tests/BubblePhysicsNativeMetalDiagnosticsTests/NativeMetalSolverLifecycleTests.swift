@@ -19,7 +19,9 @@ final class NativeMetalSolverLifecycleTests: XCTestCase {
             // Sąsiednie rekordy są łączone w jedno polecenie blit.
             XCTAssertEqual(runner.profile.bubbleUploadCommandCount, step == 0 ? 1 : 0)
             XCTAssertEqual(world.bubbles.count, 300)
-            XCTAssertEqual(runner.profile.commandBufferCount, 2)
+            // 4.0.0: pary buforów (podkroki + koniec kroku), więc co najmniej 2 i parzyście, zależnie od liczby podkroków klatki.
+            XCTAssertGreaterThanOrEqual(runner.profile.commandBufferCount, 2)
+            XCTAssertEqual(runner.profile.commandBufferCount % 2, 0)
         }
     }
 
@@ -272,8 +274,10 @@ final class NativeMetalSolverLifecycleTests: XCTestCase {
             XCTAssertEqual(runner.renderData, frame.renderData)
             XCTAssertEqual(runner.telemetry.backend, .nativeMetal)
             XCTAssertNil(runner.telemetry.fallbackReason)
-            XCTAssertEqual(runner.profile.commandBufferCount, 2)
-            XCTAssertEqual(runner.profile.encoderCount, 2)
+            // Bańki w tej scenie nachodzą na siebie, więc klatka potrzebuje kilku podkroków: bufory idą parami, po jednym enkoderze.
+            XCTAssertGreaterThanOrEqual(runner.profile.commandBufferCount, 2)
+            XCTAssertEqual(runner.profile.commandBufferCount % 2, 0)
+            XCTAssertEqual(runner.profile.encoderCount, runner.profile.commandBufferCount)
         }
     }
 
