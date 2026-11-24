@@ -599,20 +599,119 @@ Zadania 18–22 wykonuje agent. Zadania 23–25 wymagają człowieka albo wychod
 Zadania są małe, bo w wycinku 1 pojedyncze zadanie zajmowało workerowi 150–200 tys. tokenów kontekstu. Niezaliczona próba z zadania 26 wstrzymuje wycinek i wraca do autora. Do zadania 36 ścieżka jednej dyspozycji nadal koduje pary buforów, a zadanie 37 zastępuje je jądrem pętli. Ten stan przejściowy nie trafia do `main`. Zadania 26–39 wykonuje agent, a zadanie 40 człowiek.
 
 26. Próba `NativeMetalSingleGroupBarrierTests`: jedna grupa o największej szerokości potoku przez 1000 rund pisze do bufora urządzenia, wywołuje `threadgroup_barrier(mem_flags::mem_device | mem_flags::mem_threadgroup)` i czyta zapis sąsiedniego wątku, przy `maxThreadgroupMemoryLength` ≥ 32 768 · verify: `test -f Tests/BubblePhysicsNativeMetalTests/NativeMetalSingleGroupBarrierTests.swift && swift test --filter NativeMetalSingleGroupBarrierTests`
+
+    ```text
+    $ test -f …NativeMetalSingleGroupBarrierTests.swift && swift test --filter NativeMetalSingleGroupBarrierTests
+    Executed 2 tests, with 0 failures (0 unexpected)
+    exit=0
+    ```
 27. Powierzchnia bez działania: przełączniki `forceMultipleDispatches`, `candidateLimitPerObject` i `gridHashBucketCount`, `NativeMetalExecutionPath`, pola telemetrii `substepBufferCount`, `executionPath` i `singleGroupWidth` oraz klucze raportu `substep_buffers_max`, `execution_path` i `single_group_width` z zerami · verify: `swift build --build-tests && grep -q forceMultipleDispatches Sources/BubblePhysicsNativeMetal/NativeMetalBackend.swift && grep -q substep_buffers_max Sources/BubblePhysicsMetalRenderBenchmark/PublicWorldStressBenchmark.swift`
+
+    ```text
+    $ swift build --build-tests && grep -q forceMultipleDispatches … && grep -q substep_buffers_max …
+    Build complete!
+    exit=0
+    ```
 28. Czerwone testy telemetrii i raportu w `SubstepTelemetryTests`, `NativeMetalSubstepSurfaceTests`, `SubstepSeamTests` i `StressSubstepReportTests`, covering [P-B-40](#p-b-40) · verify: `swift build --build-tests && ! swift test --filter "SubstepTelemetryTests|NativeMetalSubstepSurfaceTests|SubstepSeamTests|StressSubstepReportTests"`
+
+    ```text
+    $ swift build --build-tests && ! swift test --filter "SubstepTelemetryTests|NativeMetalSubstepSurfaceTests|SubstepSeamTests|StressSubstepReportTests"
+    @0d66108 (faza czerwona, raport porcji): 9 z 25 testów czerwonych → verify exit 0
+    @8d20927 (po wycinku): Executed 26 tests, with 0 failures (0 unexpected)
+    exit=1 — oczekiwane: negacja dowodziła czerwonej fazy; testy są teraz zielone
+    ```
 29. Czerwone klasy `SingleDispatchLoopTests`, `MultiDispatchContinuationTests`, `ExecutionPathTwinTests`, `ExecutionPathThresholdTests` i `InGroupGridCollisionTests` ze scenami z R3 i z warunkami samych testów jako asercjami (klatka z ≥ 20 podkrokami, ≥ 2 przebudowy, przebudowa w klatce kontaktu z bryłą, ≥ 2 pary bez przebudowy, przeszkoda jako kandydat bez aktywnego kontaktu), covering [P-B-41](#p-b-41)–[P-B-46](#p-b-46) · verify: `swift build --build-tests && ! swift test --filter "SingleDispatchLoopTests|MultiDispatchContinuationTests|ExecutionPathTwinTests|ExecutionPathThresholdTests|InGroupGridCollisionTests"`
+
+    ```text
+    $ swift build --build-tests && ! swift test --filter "SingleDispatchLoopTests|…|InGroupGridCollisionTests"
+    @f9912f4 (faza czerwona, raport porcji): 19 testów, 33 błędy → verify exit 0
+    @8d20927 (po wycinku): Executed 19 tests, with 0 failures (0 unexpected)
+    exit=1 — oczekiwane: negacja dowodziła czerwonej fazy; testy są teraz zielone
+    ```
 30. `gridRebuildCount` liczy znaczniki przebudowy w miejsce usuniętego `marginRebuildCount` (także w `GridRebuildTests`), a `substepBufferCount` liczy pary buforów, covering [P-B-40](#p-b-40) · verify: `swift test --filter "SubstepTelemetryTests|NativeMetalSubstepSurfaceTests|GridRebuildTests" && ! grep -rq marginRebuildCount Sources Tests`
+
+    ```text
+    $ swift test --filter "SubstepTelemetryTests|NativeMetalSubstepSurfaceTests|GridRebuildTests" && ! grep -rq marginRebuildCount Sources Tests
+    Executed 16 tests, with 0 failures (0 unexpected)
+    exit=0
+    ```
 31. Przełącznik `candidateLimitPerObject` skraca wiersz kandydatów w `contactParameters.cache.w` i w wierszach brył (`NM/NativeRigidPolygonState.swift:199, 361`) przy pojemności buforów 128, covering [P-B-40](#p-b-40) · verify: `swift test --filter "SubstepSeamTests|NativeMetalBroadPhaseTests|ContactCandidateMarginTests"`
+
+    ```text
+    $ swift test --filter "SubstepSeamTests|NativeMetalBroadPhaseTests|ContactCandidateMarginTests"
+    Executed 12 tests, with 0 failures (0 unexpected)
+    exit=0
+    ```
 32. Klucze `grid_rebuild_max`, `substep_buffers_max`, `execution_path` i `single_group_width` z nowych pól `PublicWorldStressFrameSample` oraz wiersze telemetrii w `docs/MIGRATION-v4.md` :81–84, covering [P-B-40](#p-b-40) · verify: `swift test --filter "StressSubstepReportTests|BudgetSceneTests|MigrationGuideTests" && grep -q substepBufferCount docs/MIGRATION-v4.md`
+
+    ```text
+    $ swift test --filter "StressSubstepReportTests|BudgetSceneTests|MigrationGuideTests" && grep -q substepBufferCount docs/MIGRATION-v4.md
+    Executed 28 tests, with 0 failures (0 unexpected)
+    exit=0
+    ```
 33. Bufor końca kroku pary niekońcowej ma na GPU tylko `nativePrepareEndGates`, które zeruje bramki i nowe sloty `EndArgument`, a dyspozycje bezpośrednie z listy R2 (z oboma `nativePrepareIndirectArguments`) przechodzą na bramkowane ([CD-D-29](change-design.md#cd-d-29)) · verify: `grep -q EndArgument Sources/BubblePhysicsNativeMetal/NativeForceRecords.swift && swift test --filter "NativeMetalSubstepPairsTests|ContactAssertionTests|NativeMetalRenderHandoffTests|RenderHookTests|AcceptanceSceneTests|SubstepTelemetryTests"`
+
+    ```text
+    $ grep -q EndArgument …NativeForceRecords.swift && swift test --filter "NativeMetalSubstepPairsTests|…|SubstepTelemetryTests"
+    Executed 52 tests, with 0 failures (0 unexpected)
+    exit=0
+    ```
 34. Para k > 0 ścieżki wielu dyspozycji zaczyna od `encodeBroadphase` i `prepareContinuation` tylko po znaczniku przebudowy, a inaczej kontynuuje na sąsiedztwie poprzedniej pary, covering [P-B-43](#p-b-43) · verify: `swift test --filter "MultiDispatchContinuationTests|NativeMetalSubstepPairsTests|GridRebuildTests|NoCrossingTests|ContactAssertionTests"`
+
+    ```text
+    $ swift test --filter "MultiDispatchContinuationTests|NativeMetalSubstepPairsTests|GridRebuildTests|NoCrossingTests|ContactAssertionTests"
+    Executed 38 tests, with 0 failures (0 unexpected)
+    exit=0
+    ```
 35. Wydzielenie funkcji urządzenia z tabeli R2 bez zmiany zachowania, z jądrami ścieżki wielu dyspozycji jako nakładkami · verify: `for f in nativeBubbleContactForce nativeIntegratePhase nativeReduceSubstepInGroup nativeBubbleMargin nativeEmitBubbleCandidates nativeEmitBodyCandidates nativeCandidateRowCount nativeCompactCandidateRow nativeScanInGroup nativeIndirectArguments nativeEmitCandidateEdges nativeEmitBodyEdges nativeBuildAdjacencyRow; do test "$(grep -rho "$f(" Sources/BubblePhysicsNativeMetal/Shaders | wc -l)" -ge 2 || exit 1; done && swift test --filter "NativeMetalSubstepKernelTests|NativeMetalShaderABITests|NativeMetalContactLawTests|NativeMetalBroadPhaseTests|SubstepForceTests|NoCrossingTests|RigidContactTests"`
+
+    ```text
+    $ for f in nativeBubbleContactForce … nativeBuildAdjacencyRow; do test "$(grep -rho "$f(" …Shaders | wc -l)" -ge 2 || exit 1; done && swift test --filter "NativeMetalSubstepKernelTests|…|RigidContactTests"
+    Executed 98 tests, with 0 failures (0 unexpected)
+    exit=0
+    ```
 36. Funkcja `nativeBroadphaseInGroup` w jądrze `nativeBroadphaseSingleGroup` zastępuje `encodeBroadphase` w ścieżce jednej dyspozycji, wybieranej progiem 1024 i przełącznikiem z polem `executionPath`, z kubełkami siatki przechowującymi swoją komórkę, covering [P-B-44](#p-b-44)–[P-B-46](#p-b-46) · verify: `swift test --filter "InGroupGridCollisionTests|ExecutionPathThresholdTests|ExecutionPathTwinTests|MultiDispatchContinuationTests|NoCrossingTests|GridRebuildTests|RigidContactTests|NativeMetalBroadPhaseTests"`
+
+    ```text
+    $ swift test --filter "InGroupGridCollisionTests|…|NativeMetalBroadPhaseTests"
+    Executed 38 tests, with 0 failures (0 unexpected)
+    exit=0
+    ```
 37. Jądro `nativeSubstepLoopSingleGroup` liczy siły początkowe i całą pętlę z przebudową przez `nativeBroadphaseInGroup`, limitem 1024 i przełącznikami diagnostycznymi w jednej parze bez podwajania, a `nativeBroadphaseSingleGroup` znika, z testem pamięci grupy ≤ 16 KB w `NativeMetalSubstepPipelineTests`, covering [P-B-41](#p-b-41), [P-B-42](#p-b-42) · verify: `! grep -rq nativeBroadphaseSingleGroup Sources && swift test --filter "SingleDispatchLoopTests|ExecutionPathTwinTests|ExecutionPathThresholdTests|SubstepCountTests|ContactAssertionTests|SubstepTelemetryTests|NativeMetalSubstepPipelineTests|InGroupGridCollisionTests"`
+
+    ```text
+    $ ! grep -rq nativeBroadphaseSingleGroup Sources && swift test --filter "SingleDispatchLoopTests|…|InGroupGridCollisionTests"
+    Executed 46 tests, with 0 failures (0 unexpected)
+    exit=0
+    ```
 38. Opis ścieżek wykonania w `docs/integration-guide.md` wiersz 17, `docs/MIGRATION-v4.md` (próg 1024, `forceMultipleDispatches` tylko pakietowy), `README.md` :49 i :62, `CHANGELOG.md` i `PublicWorldStressView.swift:37` · verify: `swift test --filter "MigrationGuideTests|IntegrationGuideTests" && for f in docs/integration-guide.md docs/MIGRATION-v4.md README.md CHANGELOG.md; do grep -q 'jednej dyspozycji' $f || exit 1; done && grep -q '1024 baniek' docs/MIGRATION-v4.md && grep -q forceMultipleDispatches docs/MIGRATION-v4.md && ! grep -qE 'jednym command bufferze|najwyżej jeden krok na command buffer' README.md && ! grep -q 'ten sam command buffer' Benchmarks/iOS/BubblePhysicsBench/App/PublicWorldStressView.swift`
+
+    ```text
+    $ swift test --filter "MigrationGuideTests|IntegrationGuideTests" && for f in …; do grep -q 'jednej dyspozycji' $f || exit 1; done && … ! grep -q 'ten sam command buffer' …PublicWorldStressView.swift
+    Executed 14 tests, with 0 failures (0 unexpected)
+    exit=0
+    ```
 39. Kontrola wycinka: pełne `swift test` i build Showcase oraz benchmarku iOS w Release, z informacyjnymi p95, `substep_buffers_max` i `execution_path` czterech scen budżetu na Macu w dowodzie · verify: `swift test && xcodebuild -project Examples/BubblePhysicsShowcase/BubblePhysicsShowcase.xcodeproj -scheme BubblePhysicsShowcase -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build && xcodebuild -project Benchmarks/iOS/BubblePhysicsBench/BubblePhysicsBench.xcodeproj -scheme BubblePhysicsBench -configuration Release -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build`
+
+    ```text
+    $ swift test && xcodebuild … BubblePhysicsShowcase … && xcodebuild … BubblePhysicsBench -configuration Release …
+    Executed 1606 tests, with 1 test skipped and 0 failures (0 unexpected) in 739.558 seconds
+    ** BUILD SUCCEEDED **
+    ** BUILD SUCCEEDED **
+    exit=0
+    Informacyjnie, Mac M1 Pro @b55afcc, 300 klatek (raport porcji):
+    scene=resting-crowd    p95_ms=6.26  substep_buffers_max=1  execution_path=singleDispatch  single_group_width=640
+    scene=band-to-wall     p95_ms=4.95  substep_buffers_max=1  execution_path=singleDispatch  single_group_width=640
+    scene=head-on-128      p95_ms=5.66  substep_buffers_max=1  execution_path=singleDispatch  single_group_width=640
+    scene=shot-into-crowd  p95_ms=8.21  substep_buffers_max=1  execution_path=singleDispatch  single_group_width=640  substep_p95=49
+    ```
 40. **Człowiek (push z własnego konta):** szkic PR gałęzi `feature/engine-4-0-0` do `main` do przeglądu wycinków 1–3, scalany dopiero w wycinku 4 · verify: `gh pr list --head feature/engine-4-0-0 --state open --json number | grep -q number`
+
+    ```text
+    $ gh pr list --head feature/engine-4-0-0 --state open --json number
+    []
+    exit=1 — niewykonane (krok człowieka); gałąź 36 commitów przed origin
+    ```
 
 ## Deviations from Design
 
@@ -687,3 +786,16 @@ Zadania są małe, bo w wycinku 1 pojedyncze zadanie zajmowało workerowi 150–
 | 31 | 2 | 22 | gap | **Do decyzji:** pomiar A/B i bazy `perf-guard.json` zapisane przy load average 3–7 (plan: ≤ 2; Spotlight, Docker, inne sesje). v3.0.2 skakało o ok. 40 % między rundami, `mixed` jest dwumodalne (2,3 / 3,9 ms). Verify zadania 22 w weryfikacji końcowej (load ok. 6) nie przeszło: `mixed` +26 % ponad bazę 2,32 ms; pozostałe trzy sceny PASS. Do wyboru: ponowny `--record` i A/B na bezczynnej maszynie albo przyjęcie baz jak są. | approved — opcja (b): bazy przyjęte jak są | 2026-11-24 |
 | 32 | 2 | 22 | gap | **Do decyzji (ustalenie pomiaru):** gęste sceny na Macu ok. 4× wolniejsze niż w v3.0.2: p95 `stress-300` 3,4 → 15,3 ms, `decals` 3,7 → 15,5, `acceptance` 4,9 → 15,7; `gpu_physics` w `acceptance` ok. 1,1 → 12,7 ms. Przyczyna: `substep_p95=49`, `substep_max=69` (9–64 podkroków na klatkę). Sceny G8-AC2 na Macu (informacyjnie): `shot-into-crowd` p95 10,2 ms przy 53 podkrokach. Wpływa na ocenę na iPhonie X (zadanie 23) i decyzję o lokalnym h. Prognoza iPhone'a X ze starej kalibracji (113,6 ms) jest bez znaczenia. | approved | 2026-11-24 |
 | 33 | 2 | 20, uwaga autora | change | Przełącznik scen w `PublicWorldStressView` jako menu (`.pickerStyle(.menu)`) zamiast segmentów: przy 9 scenach na iPhonie X segmenty pokazywały tylko pierwszą literę i „…”. Menu pokazuje pełną nazwę wybranej sceny i listę wszystkich; lista `scenes`, uruchamianie i raport bez zmian (58dd1ea). | approved | 2026-11-24 |
+| 34 | 3 | 27, 36 | change | `NativeMetalConfiguration.sanitized` obcina `candidateLimitPerObject` do 1…128 i `gridHashBucketCount` do 1…2048 (kubełki zajmują 8 KB pamięci grupy). Nowe stałe spoza R2: `NativeMetalSubstep.singleGroupMemoryLength` = 16 384 i `broadphaseBufferCount` = 38. | pending | 2026-11-24 |
+| 35 | 3 | 28, 29, 34 | change | Sceny testów inne niż w R3: [P-B-41](#p-b-41) „2” startuje 390 j od ściany (przy 100 j nie było klatki z ≥ 20 podkrokami bez przebudowy); [P-B-43](#p-b-43) 3 · 10³ j/s z odstępem 36 j (przy 10³ j/s reguła h = d/(4v) nie daje ≥ 2 par bez kontaktu); przepełnienie [P-B-42](#p-b-42) z oddaloną gromadą 5 baniek (4 odlatują z 3 · 10³ j/s) przy limicie 3, bo bańki przy ścianie zmieniały dynamikę wybicia. Usunięta asercja `gridRebuildMax ≥ 1` (sprzeczna z nowym znaczeniem). Nowe pliki pomocnicze `ExecutionPathSupport.swift` i `KickScenePlanner.swift` (wydzielony z `GridRebuildTests`). | pending | 2026-11-24 |
+| 36 | 3 | 32 | change | `PublicWorldStressFrameSample` ma pola `substepBufferCount: Int?`, `executionPath: String?`, `singleGroupWidth: Int?` (jak odchylenie nr 28). `execution_path` w raporcie to wspólna wartość klatek, `mixed` przy różnych i `none` bez telemetrii (`mixed` spoza planu); `substep_buffers_max` i `single_group_width` to maksimum po klatkach. | pending | 2026-11-24 |
+| 37 | 3 | 31 | change | `NativeRigidPolygonState.prepare(candidateLimit:)` i właściwość `candidateLimit` (R2 wskazywał tylko wiersze :199 i :361); `NativeMetalSolver.candidateLimitPerObject` jako `nonisolated`. | pending | 2026-11-24 |
+| 38 | 3 | 33, przegląd | change | Koniec kroku: `nativePrepareIndirectArguments` w trybie końca kroku (nowy argument `endMode`, buffer 4) dwa razy, po `nativePrepareEndGates` i po `nativeCompactActiveContacts`, a wywołanie po skanie trybu 1 usunięte, bo nikt go nie czytał. `EndArgument` ma 6 slotów w `indirectArguments` od `NativeMetalPersistentState.endArgumentBase`. `EndGate` ma 10 nowych przypadków, w tym `structuralContours` spoza listy R2. Nowe `NativeMetalDispatchGate` i parametr `gate:` w `NativeMetalContourSmoothing`, `NativeMetalRenderPreparation` i `NativeMetalScan.encode` (`NM/NativeMetalChainKernels.swift`, pliku nie ma w R2 wycinka 3); po przeglądzie bramkę mają też ścieżki zapasowe (kontur bez fuzji, render wątek na bańkę) z `gateGroups(...)`. | pending | 2026-11-24 |
+| 39 | 3 | 34 | change | Para kontynuująca bez znacznika pomija też siły początkowe (`nativeContactForces` i `.initialAcceleration`, nowy parametr `initialForces`), bo przyspieszenie z a₀ z początku kroku nadpisałoby przyspieszenie z ostatniego podkroku poprzedniej pary; `encodePair` ma parametr `rebuild`. | pending | 2026-11-24 |
+| 40 | 3 | 34 | change | **Do potwierdzenia:** po kontynuacji par bez przebudowy hashe wzorca sceny akceptacyjnej (287 baniek, M1 Pro) przypięte na nowo (dc36714): obiekty `0xab78cf0552d521d9`, kontur `0x333d5fe6f5cf7d16`, piksele `0xa09a3905a8a42e43`. Hash jest bitowy, więc nie wiadomo, czy to szum zaokrągleń, czy zmiana fizyki; po zadaniu 37 hashe się nie zmieniły. | pending | 2026-11-24 |
+| 41 | 3 | 35, 36, 37 | change | Funkcje urządzenia spoza tabeli R2: `nativeWriteScanHeader`, `nativeBubbleAcceleration`, `nativeBubblePairCandidate`, `nativeFinishBubbleRow`, `nativeEmitBubbleCandidatesHashed`, `nativeGroupBucket*`, `nativeSingleGroup*`, `nativeAssertContactsOf`. Jądro jednej grupy nie woła `nativeIndirectArguments` ani `nativeEmitBubbleCandidates` (woła wersję haszowaną ze wspólnymi częściami wiersza) i nie pisze slotu 0 `indirectArguments`, bo koniec kroku czyta sloty `EndArgument`. `nativeScanInGroup`: wątki poza szerokością skanu (256) biorą udział tylko w barierach. | pending | 2026-11-24 |
+| 42 | 3 | 36, 37, przegląd | change | Jądro jednej grupy potrzebuje ponad 31 slotów Metal, więc bufory idą przez strukturę wskaźników `NativeBroadphaseBuffers` (38 adresów `gpuAddress` przez `setBytes`, `useResource` dla każdego bufora), a flagi i przełączniki diagnostyczne przez `NativeSingleGroupParameters` / `NativeMetalSingleGroupParameters`; sondy ABI w `NativeMetalShaderABITests`. `NativeMetalSubstepLoop.run(bubbleCount:forceMultipleDispatches:)`, `encodePair` z parametrem `path`, `NativeMetalSubstepRun.executionPath`, `NativeMetalSolver.singleGroupWidth(_:)`. `encodeSingleDispatch` w `NativeMetalSubstepLoop` dopiero po przeglądzie (wcześniej funkcja zagnieżdżona w `executeSnapshot`). | pending | 2026-11-24 |
+| 43 | 3 | 37 | change | Jądro pętli zapisuje maksimum przepełnienia z budowy w `candidateOverflow.z`, a liczbę przebudów w `.w`; przy przebudowie samo zeruje `contactControl.counts` i `candidateOverflow.x` (praca `prepareContinuation`); host zgłasza błąd, gdy jądro nie skończy kroku. `NativeMetalSubstepPairsTests` i test przepełnienia w `NativeMetalContactMemoryTests` ustawiają `forceMultipleDispatches`, bo domyślny świat idzie teraz jedną dyspozycją. | pending | 2026-11-24 |
+| 44 | 3 | przegląd | change | Nowe publiczne pole `NativeMetalFrameTelemetry.candidatePairCount` (liczba kandydatów po kompaktowaniu, z `contactControl.counts.x` ostatniej budowy), poza listą [P-B-40](#p-b-40), jako szew testów [P-B-42](#p-b-42) i [P-B-46](#p-b-46). Ścisła asercja par bez przebudowy w [P-B-43](#p-b-43) sprawdzana od klatki wybicia w kolejnych klatkach (klatka wybicia ma 3 pary i 2 przebudowy); warunek „przeszkoda jest kandydatem” obserwowany w silniku dla ściany, dla statycznego koła zostaje na stałych sceny (wiersze bańka–bryła nie wchodzą do `candidatePairCount`). | pending | 2026-11-24 |
+| 45 | 3 | 39, przegląd | gap | Na Macu M1 Pro szerokość grupy wynosi 640 (`maxTotalThreadsPerThreadgroup` jądra pętli), więc redukcja i całe jądro nie biegną przy szerokościach 1000–1024 ani przy szerokości A11; sprawdza to dopiero pomiar na iPhonie X w wycinku 4. | pending | 2026-11-24 |
+| 46 | 3 | 38 | change | Poza wierszami planu: `README.md` :62 „na command buffer” → „na wywołanie” ze zdaniem o ścieżkach; punkt o ścieżkach wykonania w sekcji zachowania `docs/MIGRATION-v4.md`. Nagłówek raportu stress `path=… same command buffer` zostaje (odchylenie nr 29). | pending | 2026-11-24 |
